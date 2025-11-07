@@ -1,0 +1,1243 @@
+[
+  {
+    "id": "sd-core-concepts-consistent-hashing-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "problem",
+    "q": "一致性哈希要解决的核心问题是什么？",
+    "options": [
+      "让哈希函数更难被碰撞攻击",
+      "加密分布式系统里的数据",
+      "把数据分布到一组服务器上，并在节点增减时把重新分布的数据量降到最小",
+      "提高单机数据库的查询速度"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "一致性哈希是分布式系统的基础算法：解决「数据放哪台服务器」的问题，且在节点数量变化时只移动一小部分数据。",
+    "why_en": "Consistent hashing distributes data across a cluster while minimizing how much data must move when servers are added or removed.",
+    "tags": [
+      "consistent-hashing",
+      "sharding"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "problem",
+    "q": "单库扛不住负载时，把数据分布到多个数据库实例的过程叫什么？",
+    "options": [
+      "复制（replication）",
+      "分片（sharding）",
+      "归档（archiving）",
+      "缓存（caching）"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "分片是把数据水平拆分到多个实例；随之而来的第一个问题就是「哪条数据存到哪个实例」——这正是哈希分配策略要回答的。",
+    "why_en": "Sharding means distributing data across multiple database instances, which raises the question of which data lives on which instance.",
+    "tags": [
+      "consistent-hashing",
+      "sharding"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-003",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "modulo",
+    "q": "补全最朴素的取模分片流程：",
+    "text": "取模分片：先对 event ID 做{{哈希}}得到一个数字，再对{{数据库数量}}取模（%），结果就是目标实例编号：database_id = hash(event_id) % N。",
+    "why": "取模哈希实现最简单、分布也均匀，但它把「节点数量」写死进了映射关系——这就是后面所有问题的根源。",
+    "why_en": "Modulo sharding hashes the key and takes it modulo the number of databases, which bakes the cluster size into the mapping.",
+    "tags": [
+      "consistent-hashing",
+      "modulo"
+    ],
+    "diagram": "flowchart LR\n  A[\"key\"] --> B[\"hash key\"]\n  B --> C[\"mod N\"]\n  C --> D[\"DB index\"]"
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-004",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "modulo",
+    "q": "取模分片下从 3 台库扩到 4 台（% 3 改成 % 4），会发生什么？",
+    "options": [
+      "只有新库需要接收数据",
+      "几乎每个 key 的目标库都变了——绝大部分数据要跨库搬迁，所有实例负载暴涨",
+      "什么都不用动",
+      "只有四分之一的数据移动"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "模数一变，几乎所有 key 的哈希结果落点都变了：不只是新实例，而是全部实例之间的大规模数据搬迁，数据库活动全面飙升。",
+    "why_en": "Changing the modulus remaps almost every key, forcing massive data movement across all instances, not just the new one.",
+    "tags": [
+      "consistent-hashing",
+      "modulo",
+      "rebalancing"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "modulo",
+    "q": "举例：事件 #1234 原来 hash(1234) % 3 = 1 存在 DB1；扩容后 hash(1234) % 4 = 0，说明什么？",
+    "options": [
+      "这条数据必须从 DB1 搬到 DB0——而且这不是个例，是普遍现象",
+      "数据会同时存在两个库",
+      "这条数据丢了",
+      "只有新数据受影响"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同一个 key 在新模数下落到了不同实例，旧位置的数据必须搬走；取模分片下绝大多数 key 都是这样。",
+    "why_en": "Under the new modulus the same key maps to a different database, so its data must move, and most keys share this fate.",
+    "tags": [
+      "consistent-hashing",
+      "modulo"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "modulo",
+    "q": "取模分片下一台数据库宕机（硬件故障/软件 bug），把它移出池子后会怎样？",
+    "options": [
+      "剩余节点自动均分它的数据，其他数据不动",
+      "系统自动恢复，无需搬数据",
+      "只丢失宕机节点的数据",
+      "% 3 变成 % 2，和扩容一样触发几乎全量的重新分布"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "缩容和扩容是同一个病：模数从 3 变 2，几乎所有 key 重新映射——故障时最脆弱的时刻反而要做最大规模的搬迁。",
+    "why_en": "Removing a failed node changes the modulus and triggers the same near-total redistribution as adding one.",
+    "tags": [
+      "consistent-hashing",
+      "modulo",
+      "failure"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "modulo",
+    "q": "大规模数据重新分布对线上系统的直接伤害是？",
+    "options": [
+      "数据库负载出现巨大尖峰，用户要么访问不到数据、要么响应变慢",
+      "只是磁盘占用翻倍",
+      "没有实际影响",
+      "数据永久丢失"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "搬迁本身要吃大量 IO 和带宽：数据库活动飙升，正常请求被挤压，表现为不可用或高延迟。",
+    "why_en": "Mass redistribution spikes database load so users see slow responses or cannot access data at all.",
+    "tags": [
+      "consistent-hashing",
+      "rebalancing",
+      "availability"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "q": "一致性哈希的关键洞见是什么？",
+    "options": [
+      "用更强的哈希函数",
+      "把所有数据复制到所有节点",
+      "把数据和服务器节点都安排在同一个环形哈希空间（hash ring）上",
+      "用二叉树组织节点"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "核心思想：数据和数据库都映射到同一个圆环上；key 的归属由「环上顺时针遇到的第一个节点」决定，而不是由节点总数决定。",
+    "why_en": "The key insight is to place both data and servers on a circular hash ring so ownership no longer depends on the total node count.",
+    "tags": [
+      "consistent-hashing",
+      "hash-ring"
+    ],
+    "diagram": "flowchart TD\n  A[\"hash key\"] --> B[\"point on ring\"]\n  B --> C[\"walk clockwise\"]\n  C --> D[\"first node owns key\"]"
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-009",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "q": "补全一致性哈希的查找流程：",
+    "text": "先把 key 做哈希、定位到环上的一个点，然后沿{{顺时针}}方向走，遇到的第一个{{节点}}就是这个 key 的归属；节点增减时只有{{相邻区间}}的 key 需要移动。",
+    "why": "「环 + 顺时针找下一个节点」就是一致性哈希的全部核心；正因为归属只看相邻关系，节点变化的影响才是局部的。",
+    "why_en": "Hash the key onto the ring and walk clockwise to the first node, so membership changes only affect the adjacent range of keys.",
+    "tags": [
+      "consistent-hashing",
+      "hash-ring",
+      "lookup"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-010",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "q": "实际系统中，哈希环的取值空间通常是？",
+    "options": [
+      "0 到 100",
+      "0 到 2^32 - 1",
+      "0 到 1000",
+      "0 到 2^8 - 1"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "教学例子常用 0-100 方便画图，真实实现一般用 0 到 2^32-1 的哈希空间——概念完全一样。",
+    "why_en": "Real hash rings typically span zero to two to the thirty-second minus one, though examples use zero to one hundred for simplicity.",
+    "tags": [
+      "consistent-hashing",
+      "hash-ring",
+      "numbers"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-011",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "q": "环大小 100，4 台数据库在位置 0、25、50、75。某 key 哈希到位置 60，归谁？",
+    "options": [
+      "位置 50 的数据库",
+      "位置 75 的数据库",
+      "位置 0 的数据库",
+      "位置 25 的数据库"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "从 60 出发顺时针走，遇到的第一个节点在 75——key 归位置 75 的数据库。注意是「向前找下一个」，不是「找最近的」。",
+    "why_en": "Walking clockwise from sixty, the first node you meet is at seventy-five, so that database owns the key.",
+    "tags": [
+      "consistent-hashing",
+      "hash-ring",
+      "lookup"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "q": "同样的环（节点在 0、25、50、75），某 key 哈希到位置 80，归谁？",
+    "options": [
+      "位置 75 的数据库",
+      "位置 50 的数据库",
+      "没有归属，报错",
+      "位置 0 的数据库（顺时针回绕）"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "80 之后顺时针没有更大的节点位置了，于是回绕（wrap around）到环的起点——位置 0 的节点接住它。环是首尾相接的。",
+    "why_en": "Past the last node the walk wraps around the ring, so a key at eighty belongs to the node at position zero.",
+    "tags": [
+      "consistent-hashing",
+      "hash-ring",
+      "wrap-around"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "add-remove",
+    "q": "环上节点在 0、25、50、75，现在在位置 90 加入 DB5。哪些数据需要移动？",
+    "options": [
+      "所有数据重新分布",
+      "位置 0-25 之间的数据",
+      "只有哈希到 75-90 区间的 key——它们原本顺时针归位置 0 的 DB1，现在归 DB5",
+      "位置 50-75 之间的数据"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "新节点只「切走」它逆时针方向到上一个节点之间的区间（75-90）；这些 key 原本回绕给 DB1，现在就近归 DB5，其余数据原地不动。",
+    "why_en": "Only keys hashing between seventy-five and ninety move, since they previously wrapped to the node at zero and now belong to the new node.",
+    "diagram": "flowchart LR\n    K[\"75-90 区间的 key\"] -->|before| DB1[\"DB1 位置 0\"]\n    K -->|after DB5 joins| DB5[\"DB5 位置 90\"]\n    O[\"其余所有 key\"] --> S[\"原地不动\"]",
+    "tags": [
+      "consistent-hashing",
+      "add-node"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-014",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "add-remove",
+    "q": "上例中在位置 90 加入 DB5，移动的数据量大约是多少？",
+    "options": [
+      "全部数据的约 50%",
+      "DB1 上约 60% 的数据（其 25 单位跨度中的 15），即全部数据的约 15%",
+      "全部数据的约 90%",
+      "不到 1%"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "只动 75-90 这 15 个单位：占 DB1 跨度（25 单位）的 60%、占整个环的约 15%——对比取模哈希的「几乎全量」，这就是一致性哈希的价值。",
+    "why_en": "Only about sixty percent of one node's keys, roughly fifteen percent of all data, moves, versus nearly everything under modulo hashing.",
+    "tags": [
+      "consistent-hashing",
+      "add-node",
+      "numbers"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-015",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "add-remove",
+    "q": "环上节点在 0、25、50、75，位置 25 的 DB2 宕机后，它的数据去哪？",
+    "options": [
+      "全部顺时针滑给下一个节点——位置 50 的 DB3；其他数据原地不动",
+      "均分给所有剩余节点",
+      "回绕给位置 0 的 DB1",
+      "永久丢失"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "节点消失后，原本落在它区间的 key 继续顺时针走，全部落到下一个节点 DB3；环上其他区间完全不受影响。",
+    "why_en": "When a node fails its keys simply continue clockwise to the next node, and everything else stays put.",
+    "tags": [
+      "consistent-hashing",
+      "remove-node",
+      "failure"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-016",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "virtual-nodes",
+    "q": "没有虚拟节点时，DB2 宕机、数据全给了顺时针邻居 DB3，带来什么新问题？",
+    "options": [
+      "DB3 的数据会损坏",
+      "环会断裂",
+      "DB1 负载下降",
+      "DB3 承担了双倍负载，而 DB1、DB4 闲着——失效负载全砸在一个邻居身上"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "朴素一致性哈希的软肋：节点失效时它的全部负载只由顺时针的那一个邻居接盘，负载瞬间翻倍——这正是虚拟节点要解决的。",
+    "why_en": "Without virtual nodes a failed node dumps its entire load onto its single clockwise neighbor, doubling that node's load.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes",
+      "load-imbalance"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-017",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "virtual-nodes",
+    "q": "虚拟节点（virtual nodes）是怎么实现的？",
+    "options": [
+      "为每个节点购买多台物理备机",
+      "对节点名的不同变体（DB1-vn1、DB1-vn2、DB1-vn3…）分别哈希，让每台服务器出现在环上的多个位置",
+      "把环分成固定的 100 份",
+      "用虚拟机代替物理机"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "一台物理节点 = 环上多个点：哈希「DB1-vn1」「DB1-vn2」等得到多个位置，各节点的虚拟节点自然交错混排在环上。",
+    "why_en": "Each server is hashed under several name variants so it appears at many ring positions, naturally interleaving with other servers.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes"
+    ],
+    "diagram": "flowchart LR\n  A[\"DB1 vnode A\"] --> B[\"DB2 vnode A\"]\n  B --> C[\"DB1 vnode B\"]\n  C --> D[\"DB3 vnode A\"]"
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "virtual-nodes",
+    "q": "有了虚拟节点后，DB2 宕机时会发生什么？",
+    "options": [
+      "DB2 各个虚拟节点的区间分别由不同节点接手（vn1→DB1、vn2→DB3、vn3→DB4…），失效负载均匀摊给所有幸存节点",
+      "所有数据仍然只给一个邻居",
+      "环需要整体重建",
+      "必须先人工迁移数据"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "DB2 的虚拟节点散布在环上各处，每一段的顺时针邻居都不同，所以失效负载被自然摊薄——不再压垮单个邻居。",
+    "why_en": "Because a failed node's virtual positions are scattered, each segment falls to a different survivor and the load spreads evenly.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes",
+      "failure"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "virtual-nodes",
+    "q": "加新节点时，虚拟节点带来什么好处？",
+    "options": [
+      "新节点不需要接收任何数据",
+      "新节点可以延迟上线",
+      "新节点的多个虚拟位置散布全环，从多个现有节点各吸走一小块数据——集群一开始就均衡，而不是只给一个过载邻居减压",
+      "新节点自动成为主节点"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "没有虚拟节点时，新节点只从它唯一的顺时针邻居分流；有了虚拟节点，它从环上多处均匀取水，扩容效果立刻全局化。",
+    "why_en": "A new node's virtual positions absorb small chunks from many existing nodes, balancing the cluster from the start instead of relieving only one neighbor.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes",
+      "add-node"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-020",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "virtual-nodes",
+    "q": "想让负载分布更均匀，虚拟节点数量应该怎么调？",
+    "options": [
+      "越少越均匀",
+      "每个节点的虚拟节点越多，负载分布越均匀",
+      "虚拟节点数量与均匀度无关",
+      "必须恰好等于物理节点数"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "虚拟节点数是均匀度的旋钮：每台服务器的虚拟点越多，区间切得越碎、混排越充分，失效/扩容时的负载分摊越平滑。",
+    "why_en": "The more virtual nodes per server, the more evenly load distributes across the ring.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes",
+      "tuning"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-021",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "modulo-vs-ring",
+    "q": "「节点数变化时要移动多少数据」——取模哈希 vs 一致性哈希？",
+    "options": [
+      "两者都移动全部数据",
+      "取模移动约一半，一致性哈希移动全部",
+      "取模几乎全量重排；一致性哈希只移动受影响相邻区间的 key（有界的一小部分）",
+      "两者都只移动新节点的数据"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "这就是一致性哈希存在的意义：把「节点数变化 → 几乎全量搬迁」变成「只动相邻区间」，其余 key 原地不动。",
+    "why_en": "Modulo hashing remaps nearly every key when the node count changes, while consistent hashing moves only the bounded range next to the change.",
+    "tags": [
+      "consistent-hashing",
+      "modulo",
+      "contrast"
+    ],
+    "table": {
+      "headers": [
+        "Scheme",
+        "Node changes move",
+        "Why"
+      ],
+      "rows": [
+        [
+          "mod N",
+          "most keys",
+          "mod result changes"
+        ],
+        [
+          "consistent hash",
+          "neighbor range only",
+          "ring ownership"
+        ],
+        [
+          "fixed slots",
+          "chosen slots only",
+          "slot map changes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "modulo-vs-ring",
+    "scenario": "从零设计一个分布式缓存：节点会因扩容、故障频繁增减，缓存重建成本高，希望节点变化时尽量少的 key 失位。",
+    "q": "数据到节点的映射应该用？",
+    "options": [
+      "一致性哈希（哈希环 + 虚拟节点）",
+      "hash(key) % 节点数",
+      "轮询（round-robin）",
+      "按 key 首字母分配"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "节点集合动态变化的场景正是一致性哈希的主场：增减节点只影响环上相邻区间，绝大多数缓存条目不失效。",
+    "why_en": "With nodes frequently joining and leaving, consistent hashing keeps most cache entries in place since only adjacent ranges move.",
+    "whenOtherWins": "若节点集合固定不变（或像 Redis Cluster 那样用固定哈希槽集中调度），简单取模/固定槽位反而更容易推理。",
+    "tags": [
+      "consistent-hashing",
+      "distributed-cache",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-023",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "hash-ring",
+    "scenario": "你在从零实现分布式缓存的路由层，节点位置已按环上坐标排序存放，要为一个 key 找到归属节点。",
+    "q": "哪个查找逻辑是正确的一致性哈希？",
+    "options": [
+      "node = nodes[hash(key) % len(nodes)]",
+      "node = 与 hash(key) 数值最接近的节点",
+      "node = random.choice(nodes)",
+      "pos = hash(key)，取环上从 pos 顺时针遇到的第一个节点（找不到则回绕到最小位置的节点）"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "一致性哈希 = 在有序节点位置里找第一个 ≥ pos 的节点，越界则回绕到第一个；选项 A 是取模分片，「最接近」也不对——方向必须是顺时针。",
+    "why_en": "Correct lookup finds the first node clockwise from the key's position, wrapping to the smallest position if none is larger.",
+    "whenOtherWins": "若用固定哈希槽方案（如 Redis Cluster 的 CRC16 mod 16384），查表槽位映射即可，不需要环上二分查找。",
+    "codeSample": "pos = hash(key) % RING_SIZE\n# node_positions 已排序；找第一个 >= pos 的位置\nidx = bisect_left(node_positions, pos)\nnode = ring_nodes[idx % len(ring_nodes)]  # 越界回绕到环起点",
+    "lang": "python",
+    "tags": [
+      "consistent-hashing",
+      "implementation"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-024",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "什么是热点（hot spot）？",
+    "options": [
+      "环上没有节点的空白区间",
+      "哈希函数的碰撞",
+      "磁盘温度过高",
+      "某个节点因为承载了远比其他 key 热门的 key（如霉霉演唱会 100 倍读量）而流量失衡"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "热点是流量维度的失衡：个别 key 的访问量碾压其他 key，承载它的节点被打爆——即使 key 的数量分布是均匀的。",
+    "why_en": "A hot spot is a node overwhelmed by disproportionate traffic because some keys, like a Taylor Swift concert, are far more popular.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-025",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "为什么一致性哈希（含虚拟节点）自己解决不了热点问题？",
+    "options": [
+      "因为环太小",
+      "它均衡的是 key 的分布，不是每个 key 的流量——一个超热 key 仍然整体落在一个节点上",
+      "因为哈希函数不随机",
+      "它其实能解决，只要节点够多"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "一致性哈希保证 key 数量分得均匀，但单个 key 的全部流量仍指向同一个节点；流量失衡要靠复制或加盐这类额外手段。",
+    "why_en": "Consistent hashing distributes keys evenly, not traffic, so one extremely popular key still lands entirely on a single node.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-026",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "真实系统缓解热点的常用策略有哪些？（多选）",
+    "options": [
+      "读副本：把热门 key 复制到多个节点，读请求在副本间负载均衡（最常用）",
+      "key 加盐：给热 key 追加随机后缀（taylor-swift-{0..9}）使其散到不同节点",
+      "自适应再均衡：实时监控流量，把过载节点上的 key 区间挪走（DynamoDB 自动做）",
+      "增加虚拟节点数量就能消除热点"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "三板斧：复制热 key 分摊读、加盐打散、自适应搬迁。加虚拟节点只能让 key 分布更均匀，对单个超热 key 无能为力。",
+    "why_en": "Real systems use read replicas, key salting, and adaptive rebalancing, while more virtual nodes cannot fix a single hot key.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "mitigation"
+    ],
+    "table": {
+      "headers": [
+        "Imbalance",
+        "Vnodes help?",
+        "Better fix"
+      ],
+      "rows": [
+        [
+          "Uneven node ranges",
+          "yes",
+          "more vnodes"
+        ],
+        [
+          "One hot key",
+          "no",
+          "replicate or salt key"
+        ],
+        [
+          "Large tenant",
+          "partly",
+          "split tenant keyspace"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "scenario": "票务系统：霉霉演唱会的读流量是其他活动的 100 倍，承载它的节点被读请求打爆，需要最常用、最直接的缓解手段。",
+    "q": "首选方案是？",
+    "options": [
+      "把整个集群扩容一倍",
+      "删掉这个 key",
+      "把这个热门 key 复制到多个节点，读请求在这些副本间负载均衡",
+      "调小哈希环"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "读热点的标准答案是读副本：多节点持有同一热 key，读请求分摊——这是实际系统中最常用的做法。",
+    "why_en": "Replicating the popular key across multiple nodes and load-balancing reads among them is the most common hot-spot fix.",
+    "whenOtherWins": "若热点随时间漂移、难以预测，自适应再均衡（如 DynamoDB 的自动迁移）更合适；聚合类读也可用 key 加盐打散再汇总。",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "replication"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-028",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "key 加盐（key-space salting）是怎么运作的？",
+    "options": [
+      "给热 key 追加随机后缀（如 taylor-swift-0 到 taylor-swift-9），让它们哈希到不同节点；读时分散查询再聚合",
+      "把 key 加密防止被访问",
+      "给 key 加时间戳防止过期",
+      "把 key 改成小写"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "加盐把一个热 key 拆成多个物理 key，散布到不同节点，单点压力被打散；代价是读取要 scatter-gather（分发再聚合）。",
+    "why_en": "Salting appends random suffixes so a hot key hashes to several nodes, scattering reads that are then aggregated.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "salting"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-029",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "自适应再均衡（adaptive rebalancing）的特点是？",
+    "options": [
+      "在写入时随机换节点",
+      "只在半夜执行",
+      "实时监控流量、把特定 key 区间从过载节点挪走；运维复杂，但 DynamoDB 等系统能自动做",
+      "需要停机维护"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "它按真实流量动态搬迁 key 区间，效果最精准但工程上最复杂——DynamoDB 这类托管系统把它自动化了。",
+    "why_en": "Adaptive rebalancing monitors traffic in real time and moves hot key ranges off overloaded nodes, which DynamoDB automates.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "dynamodb"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-030",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "面试中必须分清：虚拟节点 vs 复制/加盐，各自防的是哪种失衡？",
+    "options": [
+      "两者都防流量失衡",
+      "虚拟节点防结构性失衡（key 分布不均）；复制和加盐防负载失衡（流量不均）",
+      "虚拟节点防流量失衡；复制防 key 分布不均",
+      "两者作用完全相同"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "这是本文的关键区分：虚拟节点让「key 的数量」分得均匀（结构），复制/加盐让「key 的访问量」分得均匀（负载）。",
+    "why_en": "Virtual nodes prevent structural imbalance in key distribution, while replication and salting prevent workload imbalance in traffic.",
+    "tags": [
+      "consistent-hashing",
+      "virtual-nodes",
+      "hot-spot",
+      "contrast"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-031",
+    "format": "cloze",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "hot-spots",
+    "q": "补全两种失衡的对应解法：",
+    "text": "{{虚拟节点}}解决结构性失衡——key 在节点间分布不均；{{复制/加盐}}解决负载失衡——个别 key 的流量远高于其他。",
+    "why": "一句话记忆：结构问题靠虚拟节点，流量问题靠复制与加盐。面试把这两层分开说，立刻显出层次。",
+    "why_en": "Virtual nodes fix uneven key distribution while replication and salting fix uneven traffic.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "virtual-nodes"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-032",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "「一致性哈希告诉你数据该住哪，但不会瞬移 TB 级数据」——实践中节点失效怎么处理？",
+    "options": [
+      "连夜把数据拷贝到邻居节点",
+      "大多数分布式数据库把复制（replication）和一致性哈希配合使用：失效时靠现成副本顶上，根本不用搬数据",
+      "让失效节点的数据暂时不可用",
+      "立即触发全环重建"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "故障处理靠副本而不是搬迁：数据早已复制在多个节点/可用区，失效瞬间由副本接管，零数据移动。",
+    "why_en": "In practice distributed databases pair consistent hashing with replication so a failure is handled by promoting an existing replica, not by moving data.",
+    "tags": [
+      "consistent-hashing",
+      "replication",
+      "failure"
+    ],
+    "diagram": "flowchart TD\n  A[\"Node fails\"] --> B[\"Replica serves reads\"]\n  B --> C[\"Repair or replace\"]\n  C --> D[\"Rebalance later\"]"
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-033",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "DynamoDB 是怎么做到「节点失效但数据不搬家」的？",
+    "options": [
+      "每个分区跨多个可用区复制；主副本失效时通过复制组的 leader election / quorum 机制让健康副本继续服务",
+      "把数据备份到磁带",
+      "失效时快速从 S3 恢复",
+      "每次失效都重建哈希环"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "分区预先多副本（通常跨 AZ），失效时由复制组的 leader election / quorum 机制恢复可用性；公开资料能支持这种模型，但不要把具体协议名（如 Raft）说成产品承诺。一致性哈希负责「放哪」，复制负责「坏了怎么办」。",
+    "why_en": "DynamoDB keeps partition replicas across availability zones and relies on leader election and quorum-style replication to recover from failures; avoid presenting a specific protocol name such as Raft as a product guarantee.",
+    "tags": [
+      "consistent-hashing",
+      "dynamodb",
+      "replication"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-034",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "Cassandra 在环上是怎么复制数据的？",
+    "options": [
+      "只在主节点存一份",
+      "复制到随机挑选的节点",
+      "把数据复制到环上连续的 N 个节点，节点失效时由幸存副本继续提供读",
+      "把所有数据复制到所有节点"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Cassandra 沿环顺时针取 N 个连续节点存副本：某节点失效时，读请求直接打到幸存副本，与 DynamoDB 思路一致。",
+    "why_en": "Cassandra replicates each key to N consecutive nodes on the ring so reads continue from surviving replicas after a failure.",
+    "tags": [
+      "consistent-hashing",
+      "cassandra",
+      "replication"
+    ],
+    "diagram": "flowchart LR\n  A[\"Key range\"] --> B[\"Primary node\"]\n  B --> C[\"Next node replica\"]\n  C --> D[\"Next node replica\"]"
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-035",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "既然故障靠副本顶，什么时候才会真的搬数据？",
+    "options": [
+      "每次读请求时",
+      "每天定时",
+      "从不搬数据",
+      "计划内的成员变更时——扩容加节点、或永久替换节点以恢复复制因子；且一致性哈希保证只动有界的一小部分 key"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "数据搬迁只发生在计划性变更（加容量、永久换节点补齐副本数）；即便如此，一致性哈希也把需要再复制的 key 控制在有界比例内。",
+    "why_en": "Data only moves during planned membership changes like adding capacity, and even then consistent hashing bounds the fraction of keys re-replicated.",
+    "tags": [
+      "consistent-hashing",
+      "replication",
+      "rebalancing"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-036",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "real-world",
+    "q": "以下哪些系统使用一致性哈希（或其变体）？（多选）",
+    "options": [
+      "Apache Cassandra（环上分布数据）",
+      "Amazon DynamoDB（底层分区放置）",
+      "Redis Cluster",
+      "CDN（决定哪个边缘节点缓存哪些内容）"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "Cassandra、DynamoDB、CDN 都用一致性哈希（或变体）；Redis Cluster 是反例——它用固定哈希槽（16384 个 slot），不是环。",
+    "why_en": "Cassandra, DynamoDB, and CDNs use consistent hashing, while Redis Cluster instead uses fixed hash slots.",
+    "tags": [
+      "consistent-hashing",
+      "real-world"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-037",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hash-slots",
+    "q": "Redis Cluster 的数据分布方案是？",
+    "options": [
+      "教科书式的一致性哈希环",
+      "固定哈希槽：用 CRC16(key) mod 16384 把 key 空间划成 16384 个槽，再把槽区间分配给节点",
+      "按 key 长度分配",
+      "完全随机分配"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Redis Cluster 不用环：key 先映射到 16384 个固定槽之一，节点各自认领槽区间——更容易推理，但再均衡时需要更多协调。",
+    "why_en": "Redis Cluster divides the key space into 16384 fixed slots using CRC16 modulo 16384 and assigns slot ranges to nodes.",
+    "tags": [
+      "consistent-hashing",
+      "redis-cluster",
+      "hash-slots"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-038",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "hash-slots",
+    "q": "Redis Cluster 把 key 空间划分成多少个哈希槽？",
+    "options": [
+      "1,024",
+      "65,536",
+      "16,384",
+      "4,096"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "16384 个槽（CRC16 mod 16384）是 Redis Cluster 的固定常数，面试提到它能体现你了解「一致性哈希之外的替代方案」。",
+    "why_en": "Redis Cluster uses exactly sixteen thousand three hundred eighty-four hash slots.",
+    "tags": [
+      "consistent-hashing",
+      "redis-cluster",
+      "numbers"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-039",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "hash-slots",
+    "q": "一致性哈希 vs 固定哈希槽（Redis Cluster 式）的取舍是？",
+    "options": [
+      "固定槽更容易推理，但再均衡时需要更多协调；一致性哈希去中心化地最小化数据移动",
+      "固定槽在所有方面更优",
+      "一致性哈希更简单但移动更多数据",
+      "两者没有实质区别"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "固定槽位的映射一目了然、调试友好，但搬槽要集中协调；一致性哈希天然把节点变化的影响局部化。这是面试可以主动谈的真实设计取舍。",
+    "why_en": "Fixed hash slots are simpler to reason about but need more coordination when rebalancing, a real trade-off against consistent hashing.",
+    "tags": [
+      "consistent-hashing",
+      "redis-cluster",
+      "contrast"
+    ],
+    "table": {
+      "headers": [
+        "Approach",
+        "Mapping",
+        "Operational style"
+      ],
+      "rows": [
+        [
+          "Consistent hash",
+          "key to ring node",
+          "move adjacent ranges"
+        ],
+        [
+          "Fixed slots",
+          "key to slot to node",
+          "move explicit slots"
+        ],
+        [
+          "Modulo",
+          "key mod N",
+          "simple but disruptive"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-040",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-method",
+    "scenario": "常规产品系统设计面试：你选了 DynamoDB / Cassandra 做存储，面试官没有要求深入数据分布机制。",
+    "q": "关于一致性哈希，说到什么程度合适？",
+    "options": [
+      "现场推导虚拟节点的数学期望",
+      "提一句「这些系统底层用一致性哈希（或其变体）处理扩缩容」，然后继续推进",
+      "画完整的哈希环并标出所有虚拟节点",
+      "完全不提"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "现代分布式数据库已把分片托管：常规面试只需点到「底层是一致性哈希」为止——识别「何时深入、何时带过」本身就是加分项。",
+    "why_en": "For managed stores like DynamoDB just note that consistent hashing handles scaling under the hood and move on.",
+    "whenOtherWins": "基础设施向的「从零设计分布式数据库/缓存/消息队列」面试则相反——要能完整展开环、虚拟节点、故障与热点处理。",
+    "tags": [
+      "consistent-hashing",
+      "interview-method"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-041",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "interview-method",
+    "q": "哪些面试题里一致性哈希是必须深入讲的核心话题？（多选）",
+    "options": [
+      "设计分布式数据库",
+      "设计分布式缓存",
+      "设计分布式消息队列（broker）",
+      "用托管 Postgres 做一个普通 CRUD 应用"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "从零设计分布式基础设施（数据库/缓存/消息队列）时必须深入；普通业务系统直接用托管方案，点到为止即可。",
+    "why_en": "Consistent hashing is crucial when designing a distributed database, cache, or message broker from scratch.",
+    "tags": [
+      "consistent-hashing",
+      "interview-method"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-042",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "interview-method",
+    "q": "基础设施向面试中，围绕一致性哈希要能讲清哪些点？（多选）",
+    "options": [
+      "为什么它比简单取模分片好（最小化重分布）",
+      "虚拟节点如何改善集群负载均衡",
+      "节点失效/新增的处理策略，以及热点的成因与缓解（复制、加盐）",
+      "它与复制（replication）配合实现容错的关系"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这五件事构成完整叙事：胜过取模的原因 → 虚拟节点 → 增删节点 → 热点缓解 → 与复制的配合。全说清就是满分回答。",
+    "why_en": "Be ready to explain why it beats modulo, how virtual nodes balance load, how failures and hot spots are handled, and how it pairs with replication.",
+    "tags": [
+      "consistent-hashing",
+      "interview-method"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-043",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "real-world",
+    "q": "一致性哈希的适用范围，正确的说法是？",
+    "options": [
+      "任何要把数据/请求分布到一组服务器的场景都适用——数据库、缓存、消息队列、甚至应用服务器",
+      "只能用于数据库分片",
+      "只能用于 CDN",
+      "只适合内存系统"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "环上放的「节点」不限于数据库：缓存节点、broker、应用服务器都可以——本质是通用的「key → 服务器」映射方案。",
+    "why_en": "Consistent hashing applies to any scenario distributing data across a cluster, whether databases, caches, message brokers, or app servers.",
+    "tags": [
+      "consistent-hashing",
+      "real-world"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "real-world",
+    "scenario": "CDN 有成百上千个边缘服务器，要决定「哪个边缘节点缓存哪些内容」，且边缘节点会不断上下线，不希望节点变化导致缓存大面积失效。",
+    "q": "内容到节点的映射用什么？",
+    "options": [
+      "中心数据库记录每个 URL 的位置",
+      "每次随机挑一个节点",
+      "轮询分配",
+      "一致性哈希：内容 URL 哈希到环上，就近顺时针归属边缘节点"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "CDN 是一致性哈希的经典应用：节点上下线只影响相邻区间的内容，绝大多数缓存命中不受影响。",
+    "why_en": "CDNs use consistent hashing to decide which edge server caches which content so node churn invalidates only a small range.",
+    "whenOtherWins": "若节点集合小且几乎不变，简单哈希或静态映射表也够用——一致性哈希的价值随节点动态性增长。",
+    "tags": [
+      "consistent-hashing",
+      "cdn",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-045",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "real-world",
+    "q": "Kleppmann（DDIA）对「一致性哈希」这个词的提醒是？",
+    "options": [
+      "这个词已经被弃用",
+      "只有学术实现才算真正的一致性哈希",
+      "这个词在实践中用得很宽泛：一些自称用一致性哈希的系统实际是「固定槽区间的哈希分区」——重要的是「再均衡时最小化数据移动」这个原则，而非教科书式的环",
+      "所有系统都精确实现了教科书环"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "别较真术语：实现可以是环、也可以是固定槽变体，核心原则始终是「节点变化时尽量少搬数据」。",
+    "why_en": "The term is used loosely in practice; what matters is the principle of minimizing data movement during rebalancing, not the textbook ring.",
+    "tags": [
+      "consistent-hashing",
+      "terminology",
+      "ddia"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-046",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "summary",
+    "q": "补全一致性哈希的一句话总结：",
+    "text": "把数据和服务器都放到{{环}}上、沿{{顺时针}}走找归属节点；节点增减时只有{{相邻区间}}的数据需要移动，其余原地不动。",
+    "why": "实现细节可以复杂，核心图景极简：一个圆环 + 顺时针行走。这句话就是面试里 30 秒讲清一致性哈希的骨架。",
+    "why_en": "Arrange everything on a ring and walk clockwise, so only the adjacent range of keys moves when membership changes.",
+    "tags": [
+      "consistent-hashing",
+      "summary"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-047",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把「从取模分片演进到一致性哈希 + 虚拟节点」的决策链排成正确顺序：",
+    "steps": [
+      "选型：一致性哈希——数据与节点放同一个环上，顺时针定位",
+      "缓解：虚拟节点把每个节点打散到环上多个位置，失效负载均摊",
+      "需求：数据分片到多台实例，且节点会因扩容/故障增减",
+      "残留代价：节点失效时其全部数据砸给唯一的顺时针邻居，负载翻倍",
+      "问题：取模哈希在节点数变化时几乎全量 key 重新映射"
+    ],
+    "answerOrder": [
+      2,
+      4,
+      0,
+      3,
+      1
+    ],
+    "why": "需求（动态节点）→ 问题（取模全量重排）→ 选型（哈希环）→ 代价（邻居接盘过载）→ 缓解（虚拟节点）。这条链就是面试的标准叙事。",
+    "why_en": "Dynamic membership breaks modulo hashing, the ring localizes movement, its neighbor-overload cost is then fixed by virtual nodes.",
+    "diagram": "flowchart LR\n    R[\"需求：节点会增减\"] --> P[\"问题：取模几乎全量重排\"]\n    P --> C[\"选型：哈希环+顺时针\"]\n    C --> K[\"代价：失效负载砸给单个邻居\"]\n    K --> M[\"缓解：虚拟节点均摊\"]",
+    "tags": [
+      "consistent-hashing",
+      "decision-chain"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-048",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把「热点问题的识别与缓解」推理链排成正确顺序：",
+    "steps": [
+      "缓解：把热 key 复制到多个节点，读请求负载均衡（最常用）",
+      "现象：个别 key（如霉霉演唱会）流量是其他 key 的 100 倍",
+      "后果：承载热 key 的那个节点被流量打爆，成为热点",
+      "进阶：key 加盐打散，或自适应再均衡自动搬迁",
+      "认识：一致性哈希均衡的是 key 分布，不是流量"
+    ],
+    "answerOrder": [
+      1,
+      4,
+      2,
+      0,
+      3
+    ],
+    "why": "现象（超热 key）→ 认识（哈希只均衡 key 不均衡流量）→ 后果（单节点被打爆）→ 缓解（复制读副本）→ 进阶（加盐/自适应）。",
+    "why_en": "A wildly popular key overwhelms one node because hashing balances keys not traffic, mitigated first by replication and then by salting or adaptive rebalancing.",
+    "tags": [
+      "consistent-hashing",
+      "hot-spot",
+      "decision-chain"
+    ]
+  },
+  {
+    "id": "sd-core-concepts-consistent-hashing-049",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-method",
+    "scenario": "面试官追问：「你的分布式缓存节点挂了一台，怎么保证既不丢缓存价值又不搬大量数据？」",
+    "q": "最完整的回答思路是？",
+    "options": [
+      "重启那台节点就好",
+      "一致性哈希保证只有该节点区间受影响 + 虚拟节点把这部分均摊 + 关键数据靠副本直接顶上（无需搬数据）",
+      "全量重建缓存",
+      "把流量全部切到数据库"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "三层递进：环把影响局部化、虚拟节点把冲击摊薄、复制让故障处理零搬迁——这正是「一致性哈希与复制配合实现容错」的关系。",
+    "why_en": "Combine the ring's localized impact, virtual nodes spreading the load, and replication so failures are absorbed without moving data.",
+    "whenOtherWins": "若数据可容忍全部重建（纯缓存、回源成本低），也可以接受简单方案：挂了就让相应 key 未命中、自然回填。",
+    "tags": [
+      "consistent-hashing",
+      "failure",
+      "replication",
+      "interview-method"
+    ]
+  }
+]
