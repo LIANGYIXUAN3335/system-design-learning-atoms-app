@@ -8,8 +8,8 @@ export interface AnswerOptionDetail {
   isCorrect: boolean;
   wasPicked: boolean;
   meaning: string;
+  fitContext: string;
   scenarioImpact: string;
-  directness: string;
   explanationEn?: string;
 }
 
@@ -32,12 +32,12 @@ export function AnswerDetailPad({ details }: { details: AnswerOptionDetail[] }) 
             : detail.wasPicked
               ? colors.badBg
               : colors.card;
-          const status = detail.isCorrect ? '最佳答案' : detail.wasPicked ? '你选了它：看差异' : '备选方案：差在哪';
+          const status = detail.isCorrect ? '最佳答案' : detail.wasPicked ? '你选了它：看含义' : '备选方案';
           const statusColor = detail.isCorrect ? colors.ok : detail.wasPicked ? colors.bad : colors.muted;
-          // One flowing paragraph per option (是什么 → 放到场景 → 为何[不]直接), not
+          // One flowing paragraph per option (是什么 → 何时更合适 → 放到本场景), not
           // three labeled sections — the structure lives in sentence order, the
           // per-option section headers were pure visual tax.
-          const zh = [detail.meaning, detail.scenarioImpact, detail.directness]
+          const zh = [detail.meaning, detail.fitContext, detail.scenarioImpact]
             .map((s) => s.trim())
             .filter(Boolean)
             .join(' ');

@@ -33,12 +33,14 @@ export function TagRow({ card }: { card: Card }) {
   );
 }
 
-export function ScenarioBox({ text }: { text: string }) {
+export function ScenarioBox({ text, textEn }: { text: string; textEn?: string }) {
   const { colors } = useTheme();
+  const english = textEn?.trim();
   return (
     <View style={[styles.scenario, { backgroundColor: colors.chip }]}>
       <Text style={[styles.scenarioLabel, { color: colors.muted }]}>SCENARIO 场景</Text>
       <Text style={{ color: colors.ink, fontSize: 14, lineHeight: 21 }}>{text}</Text>
+      {english ? <Text style={[styles.scenarioEn, { color: colors.muted }]}>{english}</Text> : null}
     </View>
   );
 }
@@ -123,6 +125,7 @@ export function GhostButton({
 const styles = StyleSheet.create({
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 },
   scenario: { borderRadius: 10, paddingVertical: 11, paddingHorizontal: 13, marginBottom: 14 },
+  scenarioEn: { fontSize: 12.5, lineHeight: 18, marginTop: 5 },
   scenarioLabel: {
     fontWeight: '600',
     fontSize: 11,
