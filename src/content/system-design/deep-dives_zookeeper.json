@@ -7,56 +7,26 @@
     "sub": "motivation",
     "q": "聊天应用用「一张数据库表存 用户→服务器 映射」来做消息路由，会引入什么问题？",
     "options": [
-      "消息内容会丢失",
-      "数据库成为单点故障 + 每条消息都多一次查库延迟 + 规模大了被查爆成为瓶颈",
-      "无法支持多聊天室",
-      "没有任何问题"
+      "只要给这张映射表建好索引，查询性能瓶颈自然就不存在了",
+      "数据库变成单点故障，还给每条消息多一次查库延迟，规模一大查询就把库打爆成瓶颈",
+      "换成主从读写分离部署之后，这个方案就完全没有隐患了",
+      "这套方案完全没有任何问题，可以直接原样上线到生产环境"
+    ],
+    "options_en": [
+      "Just add an index to that mapping table and the query bottleneck simply goes away.",
+      "The database becomes a single point of failure, adds a lookup to every message, and gets hammered into a bottleneck at scale.",
+      "Switch to a primary-replica read/write split and the design has no more issues at all.",
+      "There is no problem at all — ship this as-is straight to production."
     ],
     "answer": [
       1
     ],
-    "why": "库挂了整个聊天系统瘫痪；每条消息先查库再路由；百万用户级别查询压力巨大——协调问题不是「加张表」能优雅解决的。",
+    "why": "库挂了整个聊天系统瘫痪；每条消息先查库再路由；百万用户级别的查询压力巨大——协调问题不是「加张表」能优雅解决的。",
     "why_en": "A database mapping becomes a single point of failure, adds a lookup to every message, and turns into a bottleneck at scale.",
     "tags": [
       "zookeeper",
       "motivation",
       "spof"
-    ],
-    "optionMeanings": [
-      "选项 1 含义",
-      "选项 2 含义",
-      "选项 3 含义",
-      "选项 4 含义"
-    ],
-    "optionScenarioImpacts": [
-      "选项 1 在场景中的影响",
-      "选项 2 在场景中的影响",
-      "选项 3 在场景中的影响",
-      "选项 4 在场景中的影响"
-    ],
-    "optionDirectness": [
-      "选项 1 的直接性",
-      "选项 2 的直接性",
-      "选项 3 的直接性",
-      "选项 4 的直接性"
-    ],
-    "optionMeanings_en": [
-      "Option 1 meaning",
-      "Option 2 meaning",
-      "Option 3 meaning",
-      "Option 4 meaning"
-    ],
-    "optionScenarioImpacts_en": [
-      "Option 1 scenario impact",
-      "Option 2 scenario impact",
-      "Option 3 scenario impact",
-      "Option 4 scenario impact"
-    ],
-    "optionDirectness_en": [
-      "Option 1 directness",
-      "Option 2 directness",
-      "Option 3 directness",
-      "Option 4 directness"
     ]
   },
   {
@@ -67,10 +37,16 @@
     "sub": "motivation",
     "q": "给「用户→服务器」的数据库加缓存来提速，新问题是什么？",
     "options": [
-      "缓存太贵",
-      "缓存放不下映射表",
-      "缓存一致性：用户从 Server 2 换到 Server 3 后，Server 1 的缓存还指向旧服务器，消息会丢",
-      "缓存会拖慢写库"
+      "缓存服务器需要额外的机器采购和长期运维投入，团队预算完全扛不住这笔额外开销",
+      "用户到服务器的映射表数据体量太大，普通的内存型缓存根本存不下这么多条目",
+      "缓存一致性问题：用户从 Server 2 换到 Server 3 后，Server 1 的缓存仍指向旧服务器，消息因此发丢",
+      "引入缓存之后，每一次写库操作都必须先等待缓存完成同步才能返回给调用方"
+    ],
+    "options_en": [
+      "Cache servers need extra machine purchases and ongoing ops investment the budget cannot absorb.",
+      "The user-to-server mapping is far too large for an ordinary in-memory cache to hold.",
+      "Cache consistency: after a user moves from Server 2 to Server 3, Server 1's cache still points at the old server, so messages get lost.",
+      "After adding a cache, every write must first wait for the cache sync to complete before returning to the caller."
     ],
     "answer": [
       2
@@ -91,10 +67,16 @@
     "sub": "motivation",
     "q": "改成「服务器之间直接广播变更」呢？规模变大后的问题是？",
     "options": [
-      "每台服务器都要与其它所有服务器保持连接——n² 连接数和大量广播流量，扩展性差",
-      "广播消息会被加密",
-      "只能有两台服务器",
-      "广播比数据库还慢"
+      "每台服务器都要和其它所有服务器保持连接，形成 n² 条连接和海量广播流量，扩展性很差",
+      "广播出去的每条变更消息都会被强制加密，导致传播延迟明显上升，和扩展性无关",
+      "这套方案的硬性限制是最多只能有两台服务器同时在线广播",
+      "服务器间直接广播天生比查一次数据库还慢，所以规模变大反而不是问题"
+    ],
+    "options_en": [
+      "Every server has to keep a connection to every other server — n-squared connections and a flood of broadcast traffic that does not scale.",
+      "Every broadcast change gets force-encrypted, raising latency, but that has nothing to do with scalability.",
+      "The hard limit of this design is only two servers can broadcast at once.",
+      "Direct server-to-server broadcast is inherently slower than a database query, so scaling up is not actually a problem."
     ],
     "answer": [
       0
@@ -115,10 +97,16 @@
     "sub": "motivation",
     "q": "自己实现心跳做故障检测，会撞上什么经典难题？",
     "options": [
-      "心跳太占带宽",
-      "心跳会唤醒休眠服务器",
-      "服务器无法发送心跳包",
-      "网络分区：Server 2 活着但与 Server 1 之间网络不通——有的节点认为它死了、有的认为活着，系统状态视图不一致"
+      "心跳包发送频率一旦调高，会把内网带宽完全占满导致网络抖动加剧",
+      "频繁的心跳探测请求会把正在休眠省电模式的服务器意外唤醒过来",
+      "服务器只要 CPU 短暂过载，就会彻底无法发出任何心跳包",
+      "网络分区：Server 2 活着，但与 Server 1 网络不通，节点间对「谁死了」的判断不一致"
+    ],
+    "options_en": [
+      "Cranking up heartbeat frequency saturates the internal network bandwidth and causes jitter.",
+      "Frequent heartbeat probes accidentally wake servers that are in low-power sleep mode.",
+      "A server that is briefly CPU-overloaded becomes completely unable to send any heartbeat.",
+      "Network partition: Server 2 is alive but unreachable from Server 1, so nodes disagree about who is dead."
     ],
     "answer": [
       3
@@ -129,6 +117,14 @@
       "zookeeper",
       "network-partition",
       "failure-detection"
+    ],
+    "termDefinitions": [
+      {
+        "term": "网络分区",
+        "fullName": "Network Partition",
+        "meaning": "网络分区：集群内部分服务器之间的网络连接中断，但各自仍在运行，导致不同节点看到不一致的存活视图。",
+        "meaningEn": "A network partition is when part of a cluster loses connectivity to another part while both sides keep running, so nodes disagree about who is alive."
+      }
     ]
   },
   {
@@ -144,6 +140,12 @@
       "分布式共识",
       "海量图片的存储与分发"
     ],
+    "options_en": [
+      "Service discovery and shared configuration",
+      "Failure detection and leader election",
+      "Distributed consensus",
+      "Storing and distributing massive photo libraries"
+    ],
     "answer": [
       0,
       1,
@@ -155,6 +157,20 @@
       "zookeeper",
       "coordination",
       "capabilities"
+    ],
+    "termDefinitions": [
+      {
+        "term": "leader 选举",
+        "fullName": "Leader Election",
+        "meaning": "leader 选举：在一组节点里选出一个节点专门负责协调关键操作。",
+        "meaningEn": "Leader election is choosing one node in a group to coordinate critical operations."
+      },
+      {
+        "term": "分布式共识",
+        "fullName": "Distributed Consensus",
+        "meaning": "分布式共识：多台机器在网络延迟和部分故障下，就同一个状态达成一致的过程。",
+        "meaningEn": "Distributed consensus is the process by which multiple machines agree on one state despite network delay and partial failures."
+      }
     ]
   },
   {
@@ -165,10 +181,16 @@
     "sub": "mental-model",
     "q": "理解 ZooKeeper 最好的心智模型是？",
     "options": [
-      "一个消息队列",
-      "一个「同步的元数据文件系统」：每个接入节点看到同一份一致的数据视图",
-      "一个对象存储",
-      "一个关系型数据库"
+      "一套专门做任务异步分发和排队的消息队列系统",
+      "一个「同步的元数据文件系统」：每个接入节点看到的都是同一份一致数据视图",
+      "一个专门存海量图片、视频等二进制大文件的对象存储服务",
+      "一个支持复杂 SQL 联表查询的传统关系型数据库"
+    ],
+    "options_en": [
+      "A message queue for asynchronous task dispatch and buffering.",
+      "A synchronized metadata filesystem where every connected node sees the same consistent view.",
+      "An object store for massive binary files like images and video.",
+      "A traditional relational database with complex SQL joins."
     ],
     "answer": [
       1
@@ -189,10 +211,16 @@
     "sub": "znodes",
     "q": "关于 ZNode 的数据特征，正确的是？",
     "options": [
-      "ZNode 存大文件，数量很少",
-      "ZNode 只能存数字",
-      "ZNode 存小量协调数据（通常 <1MB），节点数量可以很多（数千量级）；不是用来放图片/大文档的",
-      "ZNode 不能有子节点"
+      "ZNode 是专门用来存放大体积文件的，因此节点数量通常很少",
+      "ZNode 的取值类型受限，只能存放整数或浮点数这类数字",
+      "ZNode 只存小量协调数据（通常 <1MB），节点数量可到数千量级；不放图片、大文档",
+      "ZNode 组织是扁平结构，任何节点都不能挂载子节点"
+    ],
+    "options_en": [
+      "ZNodes are meant for storing large files, so there are usually only a few of them.",
+      "ZNode values are restricted to numeric types like integers or floats.",
+      "ZNodes hold small coordination data, typically under one megabyte, with counts up to the thousands — not images or large documents.",
+      "ZNodes form a flat structure and cannot have any child nodes."
     ],
     "answer": [
       2
@@ -203,6 +231,14 @@
       "zookeeper",
       "znodes",
       "data-model"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZNode",
+        "fullName": "ZooKeeper Node",
+        "meaning": "ZNode：ZooKeeper 树形命名空间里的一个数据节点，既能存少量数据也能有子节点。",
+        "meaningEn": "A znode is a node in ZooKeeper's hierarchical namespace that can hold a small amount of data and also have child nodes."
+      }
     ]
   },
   {
@@ -243,7 +279,24 @@
           "locks and election"
         ]
       ]
-    }
+    },
+    "termDefinitions": [
+      {
+        "term": "Persistent ZNode",
+        "meaning": "持久节点：显式删除前会一直存在，不受客户端会话影响。",
+        "meaningEn": "A persistent znode stays until explicitly deleted, regardless of client sessions."
+      },
+      {
+        "term": "Ephemeral ZNode",
+        "meaning": "临时节点：创建它的客户端会话一结束（断连或超时）就自动被删除。",
+        "meaningEn": "An ephemeral znode is automatically deleted when the client session that created it ends."
+      },
+      {
+        "term": "Sequential ZNode",
+        "meaning": "顺序节点：ZooKeeper 自动在节点名后追加单调递增的计数器。",
+        "meaningEn": "A sequential znode gets a monotonically increasing counter automatically appended to its name by ZooKeeper."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-009",
@@ -254,10 +307,16 @@
     "scenario": "要在 ZK 里存聊天应用的配置：最大消息长度、限速参数——改了才变，不随会话消失。",
     "q": "该用哪种 ZNode？",
     "options": [
-      "Ephemeral（临时）",
-      "Sequential ephemeral（顺序临时）",
-      "不用 ZNode，放消息队列",
-      "Persistent（持久）"
+      "Ephemeral（临时）节点——但它会随客户端会话结束而消失",
+      "Sequential ephemeral（顺序临时）节点——既顺序编号又跟会话绑定",
+      "不用 ZNode，把配置塞进外部消息队列里发布",
+      "Persistent（持久）节点——不随会话变化，显式删除前一直存在"
+    ],
+    "options_en": [
+      "Ephemeral — but it disappears the moment the client session ends.",
+      "Sequential ephemeral — numbered in order and still tied to a session.",
+      "Skip znodes entirely and push the config through an external message queue.",
+      "Persistent — stays until explicitly deleted, unaffected by session changes."
     ],
     "answer": [
       3
@@ -265,10 +324,49 @@
     "why": "配置数据要求「直到显式删除/修改前一直存在」，持久节点正合适；临时节点会随会话断开而消失。",
     "why_en": "Configuration like max message size belongs in persistent nodes that survive until explicitly changed.",
     "whenOtherWins": "跟踪「谁活着」（服务器/用户在线状态）时要用临时节点，让崩溃自动清理。",
+    "tradeoff": "持久节点「一直存在」的可靠配置 vs 临时节点「随会话消失」的活性跟踪",
+    "codeSample": "# 存最大消息长度等配置（默认就是 Persistent）\ncreate /chat-app/config/max_message_size \"1024\"\ncreate /chat-app/config/rate_limit \"100/sec\"\n# 不带 -e / -s 标志",
+    "lang": "bash",
     "tags": [
       "zookeeper",
       "persistent-znode",
       "configuration"
+    ],
+    "optionMeanings": [
+      "临时节点：绑定客户端会话，会话结束即删除。",
+      "顺序临时节点：在临时节点基础上再加自动递增序号。",
+      "把配置数据完全挪出 ZooKeeper，改用消息队列传递。",
+      "持久节点：只在显式删除/修改前一直存在，与会话无关。"
+    ],
+    "optionScenarioImpacts": [
+      "配置会在服务器重启会话时被误删，下次读不到限速参数。",
+      "同样会随会话消失，且顺序编号对纯配置毫无意义。",
+      "消息队列是流式管道不是可查询存储，读不到「当前配置值」。",
+      "服务器随便什么时候连上，都能读到同一份最新配置。"
+    ],
+    "optionDirectness": [
+      "不直接：配置要求持久保存，临时节点违背这一点。",
+      "不直接：多了没用的顺序特性，还是会话绑定。",
+      "不直接：偏离了「用 ZooKeeper 存配置」这个前提。",
+      "最直接：完全匹配「改了才变，不随会话消失」的要求。"
+    ],
+    "optionMeanings_en": [
+      "Ephemeral: tied to the client session, deleted when it ends.",
+      "Sequential ephemeral: an ephemeral node with an auto-incrementing suffix.",
+      "Move config entirely out of ZooKeeper into a message queue.",
+      "Persistent: exists until explicitly deleted or changed, independent of sessions."
+    ],
+    "optionScenarioImpacts_en": [
+      "The config gets wiped out whenever a server's session restarts.",
+      "Also disappears with the session, and ordering adds nothing for plain config.",
+      "A queue is a stream, not queryable storage — you cannot read 'the current value'.",
+      "Any server can connect at any time and read the same current config."
+    ],
+    "optionDirectness_en": [
+      "Not direct: config needs to persist, which ephemeral nodes contradict.",
+      "Not direct: adds a useless ordering property while staying session-bound.",
+      "Not direct: abandons the premise of storing config in ZooKeeper at all.",
+      "Most direct: matches 'changes only when edited, survives sessions' exactly."
     ]
   },
   {
@@ -280,10 +378,16 @@
     "scenario": "每台聊天服务器启动时在 ZK 注册自己（IP:端口），要求服务器崩溃后注册信息自动消失，别人能据此发现故障。",
     "q": "该用哪种 ZNode？",
     "options": [
-      "Ephemeral（临时）节点：会话结束自动删除",
-      "Persistent（持久）节点",
-      "只用 Sequential 计数",
-      "普通文件"
+      "Ephemeral（临时）节点——服务器的会话一结束就自动被删除",
+      "Persistent（持久）节点——注册信息会一直留着，除非手动清理",
+      "只加 Sequential 顺序编号，不用临时特性",
+      "用操作系统里的普通文件记录服务器状态"
+    ],
+    "options_en": [
+      "Ephemeral — the registration is deleted automatically the moment the server's session ends.",
+      "Persistent — the registration stays around until someone manually cleans it up.",
+      "Just add sequential numbering and skip the ephemeral property.",
+      "Track server state in a plain OS-level file."
     ],
     "answer": [
       0
@@ -291,10 +395,23 @@
     "why": "临时节点与会话绑定：服务器崩溃 → 会话超时 → 节点自动消失 → watcher 收到通知。这是 ZK 故障检测的核心机制。",
     "why_en": "Ephemeral nodes disappear automatically when the creator's session ends, which is exactly how ZooKeeper detects dead servers.",
     "whenOtherWins": "存配置这类「不该随会话消失」的数据必须用持久节点。",
+    "tradeoff": "会话绑定的自动清理（临时）vs 需要手动维护的长期记录（持久）",
     "tags": [
       "zookeeper",
       "ephemeral-znode",
       "failure-detection"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Ephemeral ZNode",
+        "meaning": "临时节点：与创建者的客户端会话绑定，会话结束就被自动删除。",
+        "meaningEn": "An ephemeral znode is bound to its creator's session and is deleted automatically when that session ends."
+      },
+      {
+        "term": "Persistent ZNode",
+        "meaning": "持久节点：不跟随会话变化，需要显式删除或修改。",
+        "meaningEn": "A persistent znode is unaffected by sessions and requires an explicit delete or update."
+      }
     ]
   },
   {
@@ -306,10 +423,16 @@
     "scenario": "需要给一组并发创建的节点排出全局顺序（比如消息排序、锁队列、选举排队）。",
     "q": "该用哪种 ZNode 特性？",
     "options": [
-      "Persistent",
-      "Sequential（顺序）节点：ZK 自动在名字后追加单调递增计数器",
-      "随机 UUID 命名",
-      "按客户端本地时间戳命名"
+      "Persistent（持久）节点——数据一直存在，但不提供任何排序能力",
+      "Sequential（顺序）节点——ZooKeeper 自动在名字后追加单调递增的计数器",
+      "自己生成随机 UUID 拼进节点名，指望它天然有序",
+      "用客户端本地系统时间戳给节点命名排序"
+    ],
+    "options_en": [
+      "Persistent — the data stays forever but provides no ordering at all.",
+      "Sequential — ZooKeeper automatically appends a monotonically increasing counter to the name.",
+      "Generate a random UUID yourself and hope it happens to sort in order.",
+      "Name nodes using each client's local system timestamp."
     ],
     "answer": [
       1
@@ -317,10 +440,26 @@
     "why": "顺序节点由 ZK 统一分配递增编号（msg-0000000001…），天然形成全局顺序——锁与选举配方都建立在它上面。",
     "why_en": "Sequential nodes get a monotonically increasing counter appended by ZooKeeper, giving a global order for locks and elections.",
     "whenOtherWins": "客户端本地时间戳会因时钟漂移乱序，不能用来定全局顺序。",
+    "tradeoff": "服务端统一分配的单调序号（Sequential）vs 客户端自算的标识（UUID/时间戳）不保证全局顺序",
+    "codeSample": "# 顺序节点：ZooKeeper 自动追加计数器\ncreate -s /chat-app/channels/global/msg- \"Alice: Hello everyone!\"\n# 实际路径 -> /chat-app/channels/global/msg-0000000001",
+    "lang": "bash",
     "tags": [
       "zookeeper",
       "sequential-znode",
       "ordering"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Sequential ZNode",
+        "meaning": "顺序节点：ZooKeeper 在创建时自动追加单调递增计数器后缀。",
+        "meaningEn": "A sequential znode automatically gets a monotonically increasing counter suffix from ZooKeeper at creation time."
+      },
+      {
+        "term": "UUID",
+        "fullName": "Universally Unique Identifier",
+        "meaning": "UUID（通用唯一识别码）：一种几乎不会重复但没有顺序含义的随机标识符。",
+        "meaningEn": "A UUID is a nearly-unique random identifier that carries no ordering information."
+      }
     ]
   },
   {
@@ -337,18 +476,37 @@
       "create -e /chat-app/servers/server2 \"192.168.1.102:8080\"",
       "set /chat-app/servers/server2 \"192.168.1.102:8080\""
     ],
+    "options_en": [
+      "Run create with no flag — a persistent node at that path.",
+      "Run create with -s — a persistent node with an auto-appended sequence number.",
+      "Run create with -e — an ephemeral node tied to this session.",
+      "Run set — update the value of an existing node instead of creating one."
+    ],
     "answer": [
       2
     ],
     "why": "-e 创建临时节点：Server 2 崩溃后它注册的节点（含它名下用户的节点）自动消失，其他服务器经 watch 得到通知。",
     "why_en": "The -e flag creates an ephemeral node that vanishes automatically if server two crashes.",
     "whenOtherWins": "不带 -e 的普通 create 用于持久配置；-s 用于需要顺序编号的场景。",
+    "tradeoff": "带 -e 的临时节点（会话绑定、崩溃自动清理）vs 不带标志的持久节点（需要手动清理）",
     "codeSample": "# 服务器注册（临时节点）\ncreate -e /chat-app/servers/server2 \"192.168.1.102:8080\"\n\n# Bob 连接到 Server 2 时：\ncreate -e /chat-app/users/bob \"server2\"\n\n# Server 2 崩溃 => 两个节点都自动消失!",
     "lang": "bash",
     "tags": [
       "zookeeper",
       "ephemeral-znode",
       "service-registration"
+    ],
+    "termDefinitions": [
+      {
+        "term": "create -e",
+        "meaning": "ZooKeeper CLI 创建临时节点的命令，-e 表示 ephemeral，随会话结束删除。",
+        "meaningEn": "create -e is the ZooKeeper CLI command that makes an ephemeral node, tied to the client session."
+      },
+      {
+        "term": "create -s",
+        "meaning": "ZooKeeper CLI 创建顺序节点的命令，-s 表示 sequential，自动加递增计数器。",
+        "meaningEn": "create -s is the ZooKeeper CLI command that makes a sequential node with an auto-incrementing counter."
+      }
     ]
   },
   {
@@ -359,15 +517,21 @@
     "sub": "chat-routing",
     "q": "有了 ZK 之后，Server 1 上的 Alice 给 Bob 发消息，路由怎么走？",
     "options": [
-      "广播给所有服务器",
-      "查询中心数据库",
-      "轮询每台服务器问「Bob 在你那吗」",
-      "Server 1 查 /chat-app/users/bob 得知 Bob 在 Server 2，直接把消息路由过去；Bob 换服务器时该节点自动更新"
+      "把这条消息广播给集群里全部在线服务器，让目标服务器自己认领并处理",
+      "先查询一个独立维护的中心数据库表，从中拿到 Bob 当前所在的服务器地址",
+      "依次轮询集群里的每一台服务器，逐个询问『Bob 是不是连在你这台机器上』",
+      "Server 1 查 /chat-app/users/bob 得知 Bob 在 Server 2，据此直接路由消息"
+    ],
+    "options_en": [
+      "Broadcast the message to every online server in the cluster and let the right one claim it.",
+      "First query a separately maintained central database table to find Bob's current server address.",
+      "Poll every server in the cluster one by one, asking 'is Bob connected to your machine?'",
+      "Server 1 looks up /chat-app/users/bob, learns Bob is on Server 2, and routes there directly."
     ],
     "answer": [
       3
     ],
-    "why": "用户→服务器 的映射就是一个 ZNode；配合 watch 与本地缓存，路由既准确又不用每条消息都查 ZK。",
+    "why": "用户→服务器映射本身就是一个 ZNode；Server 1 靠本地缓存+watch 拿到最新值，Bob 换服务器时该节点自动更新，不用每条消息现查。",
     "why_en": "Server one looks up Bob's znode to learn he is on server two and routes the message there, with the mapping kept current automatically.",
     "tags": [
       "zookeeper",
@@ -385,10 +549,16 @@
     "scenario": "聊天应用有数百万在线用户。有人提议给每个在线用户建一个 ZNode 来做路由。",
     "q": "更可扩展的做法是？",
     "options": [
-      "照做，ZK 能扛",
-      "只让服务器注册进 ZK，用户用一致性哈希按 user ID 映射到服务器——ZK 只需跟踪服务器",
-      "把用户列表放进一个大 ZNode",
-      "每个用户建 5 个 ZNode 做冗余"
+      "照原计划做，ZooKeeper 的写入能力足够扛住百万级节点",
+      "只让服务器注册进 ZK，用户按 ID 用一致性哈希映射到服务器，ZK 只跟踪服务器",
+      "把全部在线用户列表塞进同一个大 ZNode 里存着",
+      "给每个用户建 5 个 ZNode 做冗余备份来防丢失"
+    ],
+    "options_en": [
+      "Go ahead as planned — ZooKeeper's write throughput can handle millions of nodes.",
+      "Register only servers in ZooKeeper and map users to servers by consistent hashing on user ID.",
+      "Stuff the entire list of online users into one big znode.",
+      "Create five znodes per user for redundancy."
     ],
     "answer": [
       1
@@ -396,10 +566,55 @@
     "why": "ZK 管协调元数据不管海量条目：跟踪几十台服务器（临时节点，故障秒级发现）+ 哈希函数定位用户，量级立刻可控。",
     "why_en": "Register only servers in ZooKeeper and map millions of users to servers with consistent hashing, keeping fast failure detection without per-user znodes.",
     "whenOtherWins": "用户量小（几千）时按用户建节点也行，简单直接。",
+    "tradeoff": "ZK 只跟踪少量服务器节点（可扩展）vs 给每个用户建节点（写路径压垮 + 内存爆）",
     "tags": [
       "zookeeper",
       "consistent-hashing",
       "scalability"
+    ],
+    "termDefinitions": [
+      {
+        "term": "一致性哈希",
+        "fullName": "Consistent Hashing",
+        "meaning": "一致性哈希：把 key 和节点都映射到一个哈希环上，节点增减时只影响环上邻近的一小段映射。",
+        "meaningEn": "Consistent hashing maps keys and nodes onto a hash ring so adding or removing a node only reshuffles a small neighboring slice of the mapping."
+      }
+    ],
+    "optionMeanings": [
+      "维持每用户一个 ZNode 的原设计不变。",
+      "服务器注册进 ZK，用户按哈希算到服务器。",
+      "把用户列表当成一份数据整体存放。",
+      "给每个用户创建多份节点做备份。"
+    ],
+    "optionScenarioImpacts": [
+      "百万级 ZNode 加上高频用户上下线写入，会把 leader 的写路径压垮。",
+      "ZK 只需管理几十个服务器节点，量级完全可控，故障发现依旧秒级。",
+      "单个 ZNode 要保持 <1MB，百万用户列表根本装不下。",
+      "节点数直接乘以 5，写压力更大，可扩展性问题没解决。"
+    ],
+    "optionDirectness": [
+      "不直接：没有解决量级过大这个根本问题。",
+      "最直接：把 ZK 用在它擅长的『少量协调节点』上。",
+      "不直接：违反 ZNode 只存小数据的设计前提。",
+      "不直接：冗余解决不了可扩展性问题，只会加重负担。"
+    ],
+    "optionMeanings_en": [
+      "Keep the original per-user znode design unchanged.",
+      "Register servers in ZooKeeper and hash users onto them.",
+      "Treat the user list as one big blob of data.",
+      "Create multiple redundant znodes per user."
+    ],
+    "optionScenarioImpacts_en": [
+      "Millions of znodes plus constant connect/disconnect writes overwhelm the leader's write path.",
+      "ZooKeeper only manages a few dozen server nodes, staying well within its limits.",
+      "A single znode must stay under one megabyte, far too small for a million-user list.",
+      "Node count is multiplied by five, adding write pressure without fixing scalability."
+    ],
+    "optionDirectness_en": [
+      "Not direct: it never addresses the underlying scale problem.",
+      "Most direct: it uses ZooKeeper for the small set of nodes it is built for.",
+      "Not direct: it violates the small-data design premise of a znode.",
+      "Not direct: redundancy does not solve a scalability problem."
     ]
   },
   {
@@ -410,10 +625,16 @@
     "sub": "ensemble",
     "q": "生产环境的 ZooKeeper 部署形态是？",
     "options": [
-      "一台高配服务器",
-      "两台主备",
+      "一台配置拉满的单一服务器，省去多机之间同步的麻烦",
+      "两台服务器做主备部署，一台挂了立刻切到另一台顶上",
       "一组服务器（ensemble），典型 3、5 或 7 台——奇数便于多数派决策",
-      "至少 100 台"
+      "至少需要上百台服务器组成一个超大规模的集群"
+    ],
+    "options_en": [
+      "One maxed-out single server, avoiding multi-machine sync overhead entirely.",
+      "Two servers in a primary-backup pair, failing over the moment one dies.",
+      "A group of servers, an ensemble, typically three, five, or seven — odd counts make majority decisions clean.",
+      "At least a hundred servers needed to form one giant cluster."
     ],
     "answer": [
       2
@@ -424,6 +645,18 @@
       "zookeeper",
       "ensemble",
       "quorum"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ensemble",
+        "meaning": "ensemble：ZooKeeper 集群里协同工作的一组服务器，共同对外提供一致视图。",
+        "meaningEn": "An ensemble is the group of ZooKeeper servers that work together to provide one consistent view."
+      },
+      {
+        "term": "quorum",
+        "meaning": "quorum（多数派）：ensemble 中过半数存活并达成一致的服务器数量，是继续对外服务的底线。",
+        "meaningEn": "A quorum is the majority of ensemble servers that must be alive and agree before the cluster keeps serving."
+      }
     ]
   },
   {
@@ -434,10 +667,16 @@
     "sub": "ensemble",
     "q": "ensemble 内部 Leader 和 Follower 的分工是？",
     "options": [
-      "Leader 处理所有更新（写）请求；Follower 跟随 leader 指令并帮助服务读请求（读可打到任意节点）",
-      "Leader 只做备份",
-      "Follower 处理写，Leader 处理读",
-      "所有节点平等处理读写"
+      "Leader 处理所有更新（写）请求；Follower 跟随指令并帮助服务读请求，读可打到任意节点",
+      "Leader 只做冷备份，平时完全不参与读写请求的处理",
+      "Follower 负责处理全部写请求，Leader 只负责处理读请求",
+      "所有节点角色完全平等，写请求随便打到哪台都行"
+    ],
+    "options_en": [
+      "The leader processes all writes; followers follow its instructions and help serve reads from any node.",
+      "The leader is a cold standby that does not participate in read or write handling at all.",
+      "Followers handle every write request while the leader only handles reads.",
+      "All nodes are fully equal and a write can land on any server at random."
     ],
     "answer": [
       0
@@ -449,7 +688,19 @@
       "leader",
       "follower"
     ],
-    "diagram": "flowchart TD\n  A[\"Leader\"] --> B[\"Follower\"]\n  A --> C[\"Follower\"]\n  A --> D[\"Follower\"]\n  A --> E[\"Follower\"]"
+    "diagram": "flowchart TD\n  A[\"Leader\"] --> B[\"Follower\"]\n  A --> C[\"Follower\"]\n  A --> D[\"Follower\"]\n  A --> E[\"Follower\"]",
+    "termDefinitions": [
+      {
+        "term": "Leader",
+        "meaning": "Leader：ensemble 中被选出、负责处理全部写请求并向 follower 广播变更的服务器。",
+        "meaningEn": "The leader is the elected server that processes all writes and broadcasts changes to followers."
+      },
+      {
+        "term": "Follower",
+        "meaning": "Follower：ensemble 中跟随 leader 指令、可对外提供读服务的其余服务器。",
+        "meaningEn": "Followers are the rest of the ensemble's servers that follow the leader and can serve reads."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-017",
@@ -457,22 +708,36 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "quorum",
+    "scenario": "聊天平台要求即便同时有服务器故障，路由用的 ZooKeeper ensemble 依然能继续处理读写；团队把 ensemble 定为 5 台。",
     "q": "5 台服务器的 ZooKeeper ensemble 最多能容忍几台故障仍正常工作？",
     "options": [
-      "1 台",
-      "2 台（仍剩 3 台多数派）",
-      "3 台",
-      "4 台"
+      "1 台，因为多一台都会丢失多数派",
+      "2 台，因为剩下的 3 台仍是多数派（quorum）",
+      "3 台，只要还剩 2 台在线就能工作",
+      "4 台，只要还有 1 台在线就能工作"
+    ],
+    "options_en": [
+      "One, because losing a second server would break the majority.",
+      "Two, because the remaining three servers still form a quorum majority.",
+      "Three, as long as two servers stay online.",
+      "Four, as long as one server stays online."
     ],
     "answer": [
       1
     ],
-    "why": "存活多数派（quorum）是底线：5 台容忍 2 台故障、3 台容忍 1 台。这也是选 3/5/7 奇数的原因。",
-    "why_en": "A five-server ensemble tolerates two failures because three remaining servers still form a majority.",
+    "why": "容忍故障数 = ⌈N/2⌉-1；5 台的多数派门槛是 3 台，所以最多能失去 2 台。这个门槛也是选 3/5/7 奇数 ensemble 的原因。",
+    "why_en": "A five-server ensemble tolerates two failures because three remaining servers still form a majority, or quorum.",
     "tags": [
       "zookeeper",
       "quorum",
       "numbers"
+    ],
+    "termDefinitions": [
+      {
+        "term": "quorum",
+        "meaning": "quorum（多数派）：ensemble 里过半数服务器，是继续接受写请求的最低存活门槛。",
+        "meaningEn": "A quorum is the majority of ensemble servers that must stay alive for the cluster to keep accepting writes."
+      }
     ]
   },
   {
@@ -483,20 +748,40 @@
     "sub": "client-connection",
     "q": "客户端连接 ZooKeeper 时的连接串长什么样？为什么？",
     "options": [
-      "只填 leader 的地址",
-      "填负载均衡器地址",
-      "填整个 ensemble 的地址列表（如 zk1:2181,zk2:2181,zk3:2181）+ 会话超时 + watcher 回调——任一节点可用即可接入",
-      "填 DNS 泛域名即可"
+      "只填当前 leader 那一台服务器的地址，其余 follower 地址客户端完全不需要知道",
+      "填一个统一的负载均衡器地址，把连哪台 ZooKeeper 的决定权完全交给负载均衡器",
+      "填整个 ensemble 的地址列表（如 zk1:2181,zk2:2181,zk3:2181）+ 会话超时 + watcher 回调",
+      "只填一个 DNS 泛域名地址，具体解析到哪台机器完全交给 DNS 服务去决定"
+    ],
+    "options_en": [
+      "Only the current leader's address; client does not need to know the followers at all.",
+      "A unified load balancer address, leaving which ZooKeeper server to route to entirely up to it.",
+      "The full ensemble address list plus a session timeout and a watcher callback.",
+      "Just a wildcard DNS name, leaving which machine gets resolved entirely up to DNS."
     ],
     "answer": [
       2
     ],
     "why": "客户端知道全部节点，某台挂了可以换一台重连并恢复会话；构造参数里还有会话超时和 watch 回调。",
     "why_en": "Clients connect with the full ensemble address list plus a session timeout and watcher callback, so any live server can serve them.",
+    "codeSample": "// Chat Server 1 连接 ZooKeeper\nZooKeeper zk = new ZooKeeper(\n  \"zk1:2181,zk2:2181,zk3:2181\", // 全部 ensemble 地址\n  3000,     // 会话超时（毫秒）\n  watcher); // 变更通知回调",
+    "lang": "java",
     "tags": [
       "zookeeper",
       "client",
       "sessions"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ensemble",
+        "meaning": "ensemble：客户端连接串里列出的一组 ZooKeeper 服务器地址，任一台存活即可接入。",
+        "meaningEn": "The ensemble is the set of ZooKeeper server addresses in the connection string; any live one can serve the client."
+      },
+      {
+        "term": "watcher",
+        "meaning": "watcher：客户端注册的回调函数，节点变化时由 ZooKeeper 主动调用通知。",
+        "meaningEn": "A watcher is a client-registered callback that ZooKeeper invokes when a watched node changes."
+      }
     ]
   },
   {
@@ -507,10 +792,16 @@
     "sub": "watches",
     "q": "watch 机制是什么？",
     "options": [
-      "定时轮询 ZNode 的定时器",
-      "在 ZNode 上登记的一次性通知：节点变化时 ZK 主动回调客户端，免去持续轮询和服务器间复杂通信",
-      "ZK 的监控大盘",
-      "一种加密握手"
+      "客户端本地定时轮询 ZNode 状态的一个定时器",
+      "在 ZNode 上登记的一次性通知：节点变化时 ZK 主动回调客户端，免去持续轮询",
+      "ZooKeeper 自带的运维监控大盘，展示集群健康状态",
+      "客户端与 ZooKeeper 建立连接时用的一种加密握手协议"
+    ],
+    "options_en": [
+      "A local timer on the client that periodically polls a znode's state.",
+      "A one-time notification registered on a znode: ZooKeeper calls the client back when it changes, replacing constant polling.",
+      "ZooKeeper's built-in ops dashboard showing cluster health.",
+      "An encryption handshake protocol used when a client connects to ZooKeeper."
     ],
     "answer": [
       1
@@ -522,7 +813,14 @@
       "watches",
       "notifications"
     ],
-    "diagram": "sequenceDiagram\n  participant C as Client\n  participant Z as ZooKeeper\n  C->>Z: read znode with watch\n  Z-->>C: data\n  Z-->>C: change event\n  C->>Z: re-read and re-watch"
+    "diagram": "sequenceDiagram\n  participant C as Client\n  participant Z as ZooKeeper\n  C->>Z: read znode with watch\n  Z-->>C: data\n  Z-->>C: change event\n  C->>Z: re-read and re-watch",
+    "termDefinitions": [
+      {
+        "term": "watch",
+        "meaning": "watch：客户端在读取 ZNode 时顺带登记的一次性变更通知，触发后需要重新设置才能继续监听。",
+        "meaningEn": "A watch is a one-time change notification registered while reading a znode; it must be re-armed after it fires."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-020",
@@ -532,10 +830,16 @@
     "sub": "watches",
     "q": "如果没有 watch，每发一条消息都查一次 ZK 拿路由，会发生什么？",
     "options": [
-      "消息会乱序",
-      "ZK 会自动扩容",
-      "没有影响，ZK 读性能无限",
-      "显著延迟 + ZK 被每秒数千次查询压垮——协调服务自己变成瓶颈"
+      "消息会因为查询顺序问题而乱序到达",
+      "ZooKeeper 会自动检测到压力并无缝扩容出更多节点",
+      "没有明显影响，因为 ZooKeeper 的读性能理论上没有上限",
+      "显著延迟 + ZK 被每秒数千次查询压垮，协调服务自己变成瓶颈"
+    ],
+    "options_en": [
+      "Messages would arrive out of order because of query timing.",
+      "ZooKeeper automatically detects the load and scales itself out seamlessly.",
+      "No real impact, since ZooKeeper's read throughput is effectively unbounded.",
+      "Noticeable latency plus thousands of queries per second overwhelm the cluster, turning the coordinator into the bottleneck."
     ],
     "answer": [
       3
@@ -556,10 +860,16 @@
     "sub": "watches",
     "q": "watch 支撑的关键使用模式是？",
     "options": [
-      "每次读数据都实时查 ZK",
+      "每次要读数据都实时发一次请求查 ZooKeeper，不做任何缓存",
       "服务器保留一份 ZK 状态的本地缓存，平时读本地；数据变化时收到通知再更新缓存",
-      "把 ZK 当消息队列转发聊天消息",
-      "watch 会把数据自动同步到数据库"
+      "把 ZooKeeper 直接当消息队列，用它转发聊天消息本体",
+      "watch 触发后会把变化的数据自动同步写进后端数据库"
+    ],
+    "options_en": [
+      "Send a fresh request to ZooKeeper for every read, with no local caching at all.",
+      "Keep a local cache of ZooKeeper state, read from it locally, and update it on watch notifications.",
+      "Treat ZooKeeper as a message queue and forward chat message bodies through it.",
+      "A watch firing automatically syncs the changed data straight into a backend database."
     ],
     "answer": [
       1
@@ -580,16 +890,23 @@
     "sub": "positioning",
     "q": "为什么说 ZooKeeper 是「协调服务」而不是「数据库」？",
     "options": [
-      "它不能持久化数据",
-      "它没有查询语言",
+      "因为它的数据不支持持久化，重启后就会丢失全部内容",
+      "因为它完全没有任何查询语言，客户端连读数据都做不到",
       "它的设计目标是把变更通知给各系统，而不是承接高流量读请求",
-      "它只能存字符串"
+      "因为它只能存字符串类型，不支持存放数字或二进制数据"
+    ],
+    "options_en": [
+      "Because its data is not durable and everything disappears after a restart.",
+      "Because it has no query language at all, so clients cannot even read data.",
+      "It is built to notify systems of changes, not to serve high-volume read traffic.",
+      "Because it can only store strings and cannot hold numbers or binary data."
     ],
     "answer": [
       2
     ],
     "why": "ZK 的价值在一致视图 + 变更通知；高频读写请自备缓存或换存储，别把它当 KV 数据库用。",
     "why_en": "ZooKeeper is built to notify systems of changes, not to serve high-volume read traffic like a database.",
+    "tradeoff": "变更通知型协调服务（低吞吐、强一致视图）vs 高吞吐读写数据库（大数据量、无内置推送）",
     "tags": [
       "zookeeper",
       "positioning",
@@ -605,10 +922,16 @@
     "scenario": "Server 1 想在「任何用户的位置变化」时收到通知并更新自己的路由表。",
     "q": "正确的做法是？",
     "options": [
-      "zk.getChildren(\"/chat-app/users\", true, null) 注册 watch，回调里读新值更新本地路由表（并重新注册 watch）",
-      "每 100ms 轮询一次 /chat-app/users",
-      "订阅 Kafka topic",
-      "让每台服务器互发心跳"
+      "zk.getChildren(\"/chat-app/users\", true, null) 注册 watch，回调里读新值并更新路由表",
+      "每隔 100ms 就用一个本地轮询定时器主动查询一次 /chat-app/users 整个目录",
+      "让 Server 1 额外去订阅一个独立的 Kafka topic，专门转发用户位置变化事件",
+      "让每台服务器之间持续互相发送心跳探测包，顺带在心跳里夹带用户位置信息"
+    ],
+    "options_en": [
+      "Register a watch with zk.getChildren on /chat-app/users, then read and update the routing table in the callback.",
+      "Use a local polling timer to actively query the entire /chat-app/users path every 100 milliseconds.",
+      "Have Server 1 additionally subscribe to a separate Kafka topic dedicated to forwarding location changes.",
+      "Have every server continuously exchange heartbeat probes with each other, piggybacking user location on them."
     ],
     "answer": [
       0
@@ -616,12 +939,67 @@
     "why": "getChildren/getData 的 watch 参数登记监听；回调触发后读取新数据、更新本地缓存并再次设置 watch。",
     "why_en": "Register a watch on the users path and update the local routing table in the callback when a znode changes.",
     "whenOtherWins": "如果只需要一次性读取而不关心后续变化，不带 watch 的普通读取即可。",
+    "tradeoff": "watch 推送更新（事件触发、零轮询开销）vs 定时轮询（简单但延迟高、浪费请求）",
     "codeSample": "// 注册 watch\nzk.getChildren(\"/chat-app/users\", true, null);\n\n// 回调\npublic void process(WatchedEvent event) {\n    if (event.getType() == EventType.NodeDataChanged &&\n        event.getPath().equals(\"/chat-app/users/bob\")) {\n        byte[] data = zk.getData(\"/chat-app/users/bob\", true, null);\n        routingTable.put(\"bob\", new String(data));\n    }\n}",
     "lang": "java",
     "tags": [
       "zookeeper",
       "watches",
       "api"
+    ],
+    "termDefinitions": [
+      {
+        "term": "getChildren",
+        "meaning": "getChildren：读取某个 ZNode 下所有子节点列表的 API，第二个参数传 true 即同时注册 watch。",
+        "meaningEn": "getChildren reads the list of a znode's children; passing true also registers a watch on that path."
+      },
+      {
+        "term": "getData",
+        "meaning": "getData：读取某个 ZNode 数据内容的 API，同样可以顺带注册 watch。",
+        "meaningEn": "getData reads a znode's data content and can also register a watch on it."
+      },
+      {
+        "term": "Kafka",
+        "fullName": "Apache Kafka",
+        "meaning": "Kafka：一个分布式消息队列/流处理系统，用于高吞吐地传输事件流，不是协调服务。",
+        "meaningEn": "Kafka is a distributed messaging and stream-processing system for high-throughput event streams, not a coordination service."
+      }
+    ],
+    "optionMeanings": [
+      "用 watch 参数注册监听，变化时回调更新路由表。",
+      "用定时器每 100ms 主动查一次用户目录。",
+      "把用户位置变化事件转发进 Kafka 消息队列。",
+      "让服务器间的心跳消息顺带携带位置数据。"
+    ],
+    "optionScenarioImpacts": [
+      "变化才触发一次网络往返，空闲时零开销。",
+      "无论有没有变化都固定发请求，浪费带宽还有延迟。",
+      "多引入一套消息队列基础设施，且 ZK 已经能做到同样效果。",
+      "心跳频率通常较低，位置变化响应会明显滞后。"
+    ],
+    "optionDirectness": [
+      "最直接：watch 正是为这种「变化才通知」场景设计的。",
+      "不直接：轮询是 watch 出现之前的笨办法。",
+      "不直接：引入了不必要的额外组件。",
+      "不直接：把两件不相关的事混在一起做，响应慢。"
+    ],
+    "optionMeanings_en": [
+      "Register a watch and update the routing table in the callback on change.",
+      "Poll the user directory on a fixed 100ms timer.",
+      "Forward location-change events through a Kafka queue.",
+      "Piggyback location data onto inter-server heartbeats."
+    ],
+    "optionScenarioImpacts_en": [
+      "Only one round trip fires per actual change; idle time costs nothing.",
+      "Sends a request on a fixed schedule regardless of change, wasting bandwidth and adding latency.",
+      "Adds a whole extra messaging system when ZooKeeper already does this.",
+      "Heartbeat cadence is usually low, so location updates lag noticeably."
+    ],
+    "optionDirectness_en": [
+      "Most direct: watches exist exactly for change-triggered notification.",
+      "Not direct: polling is the old approach watches replaced.",
+      "Not direct: introduces an unnecessary extra component.",
+      "Not direct: conflates two unrelated concerns and responds slowly."
     ]
   },
   {
@@ -635,7 +1013,13 @@
       "配置管理（Configuration Management）",
       "服务发现（Service Discovery）",
       "Leader 选举与分布式锁",
-      "全文搜索"
+      "全文搜索（Full-text Search）"
+    ],
+    "options_en": [
+      "Configuration management",
+      "Service discovery",
+      "Leader election and distributed locks",
+      "Full-text search"
     ],
     "answer": [
       0,
@@ -653,23 +1037,28 @@
       "headers": [
         "Use",
         "Primitive",
-        "Why ZK fits"
+        "Why ZK"
       ],
       "rows": [
         [
           "Discovery",
-          "znodes plus watches",
-          "fresh membership"
+          "znode + watch",
+          "fresh view"
         ],
         [
           "Leader election",
-          "ephemeral sequential",
-          "ordered contenders"
+          "eph. sequential",
+          "ordered queue"
+        ],
+        [
+          "Locks",
+          "eph. sequential",
+          "auto release"
         ],
         [
           "Config",
-          "small znodes",
-          "watch updates"
+          "small znode",
+          "watch push"
         ]
       ]
     }
@@ -683,10 +1072,16 @@
     "scenario": "要给整个聊天平台上线一个新功能开关，希望所有服务器实时生效、不用重启。",
     "q": "用 ZooKeeper 怎么做？",
     "options": [
-      "SSH 到每台机器改配置文件再滚动重启",
-      "更新一个 ZNode（如 set /chat-app/config/enable_reactions \"true\"），所有 watch 该节点的服务器收到通知后即时改变行为",
-      "发全员邮件通知",
-      "把开关写进代码重新发布"
+      "SSH 逐台登录到每一台服务器机器，手动修改本地配置文件后再滚动重启服务进程",
+      "更新一个 ZNode（如 enable_reactions 设为 true），watch 该节点的服务器收到通知后即时改变行为",
+      "给运维和研发团队群发一封全员邮件，逐个通知大家自行手动修改本地配置",
+      "把开关值直接硬编码进代码常量里面，走一次完整的重新打包和发布上线流程"
+    ],
+    "options_en": [
+      "SSH into every single server machine, manually edit the local config file, then roll a restart process by process.",
+      "Update one znode (say, enable_reactions to true) and every watching server reacts instantly.",
+      "Send an all-hands email to ops and engineering, telling everyone to manually change their local config one by one.",
+      "Hard-code the flag as a constant right in the code and go through a full rebuild-and-redeploy cycle."
     ],
     "answer": [
       1
@@ -694,6 +1089,9 @@
     "why": "集中配置 + watch 通知 = 实时传播、版本化、原子更新；这是 ZK 配置管理的招牌场景。",
     "why_en": "Update one znode and every watching server gets notified and changes behavior without restarting.",
     "whenOtherWins": "只在部署时才变的静态配置放文件或环境变量更合适；云上可用 AWS Parameter Store / Azure App Configuration 等托管方案。",
+    "tradeoff": "集中 ZNode + watch 推送（秒级生效、免重启）vs 改文件重启（简单但要停机滚动）",
+    "codeSample": "# 更新配置节点\nset /chat-app/config/enable_reactions \"true\"\n\n# 所有 watch 该路径的服务器收到 NodeDataChanged 事件\n# 在回调里读取新值、切换功能开关，无需重启",
+    "lang": "bash",
     "tags": [
       "zookeeper",
       "config-management",
@@ -708,16 +1106,23 @@
     "sub": "config-management",
     "q": "哪类配置适合放 ZooKeeper，哪类不适合？",
     "options": [
-      "所有配置都放 ZK",
-      "所有配置都放代码里",
-      "ZK 只放密码",
+      "所有配置不论是否会变，一律放进 ZooKeeper 统一管理",
+      "所有配置都硬编码进代码里，靠重新发布来更新",
+      "ZooKeeper 只用来存密码这类敏感信息，其它都不放",
       "运行时可能变化的动态配置放 ZK；只在部署时变化的静态配置放文件或环境变量"
+    ],
+    "options_en": [
+      "Put every config value in ZooKeeper regardless of whether it ever changes.",
+      "Hard-code every config value into the code and rely on redeploys to change it.",
+      "Only put secrets like passwords in ZooKeeper and keep everything else out.",
+      "Put runtime-changeable dynamic config in ZooKeeper; keep deploy-time static config in files or environment variables."
     ],
     "answer": [
       3
     ],
     "why": "ZK 的价值在「变化时的实时传播」；不变的东西放文件/环境变量成本更低。云上优先考虑 provider 原生方案。",
     "why_en": "Put dynamic runtime configuration in ZooKeeper and keep static deploy-time configuration in files or environment variables.",
+    "tradeoff": "动态配置走 ZK（实时推送，多一次网络依赖）vs 静态配置放文件/环境变量（零依赖，改了要重新部署）",
     "tags": [
       "zookeeper",
       "config-management",
@@ -733,10 +1138,16 @@
     "scenario": "微服务架构：上传服务要找到当前可用的视频转码器实例，实例随时扩缩容和故障。",
     "q": "用 ZooKeeper 的标准做法是？",
     "options": [
-      "写死转码器 IP 列表",
-      "每次调用前 ping 所有可能的 IP",
-      "转码器实例注册临时节点；调用方读 /streaming/services/video-transcoder 的子节点选一个连接，并设 watch 感知实例增减",
-      "由转码器主动轮询上传服务"
+      "把转码器的 IP 列表写死在上传服务的配置文件里",
+      "上传服务每次调用前先 ping 一遍所有可能的转码器 IP",
+      "转码器实例注册临时节点；调用方读子节点列表选一个连接，并设 watch 感知实例增减",
+      "让转码器实例反过来主动轮询上传服务，报告自己是否空闲"
+    ],
+    "options_en": [
+      "Hard-code the transcoder IP list into the upload service's config file.",
+      "Have the upload service ping every possible transcoder IP before each call.",
+      "Transcoder instances register ephemeral nodes; the caller reads the children and watches for changes.",
+      "Have transcoder instances poll the upload service to report whether they are free."
     ],
     "answer": [
       2
@@ -744,10 +1155,49 @@
     "why": "服务上线注册（临时节点）、下线自动消失（会话过期）、调用方 watch 子节点列表——动态扩缩容、负载均衡、健康检查一举拿下。",
     "why_en": "Instances register ephemeral nodes, consumers read the children to pick one, and a watch keeps the list current as instances come and go.",
     "whenOtherWins": "现代栈里 Consul、etcd、Kubernetes Service、AWS Cloud Map 等专用/平台方案更常见——模式与 ZK 一致，有些内部甚至就用 ZK。",
+    "tradeoff": "动态注册+watch（自动感知扩缩容）vs 静态写死 IP（简单但扩缩容要改配置重发）",
+    "codeSample": "// 转码器启动时注册自己：会话断开后自动消失\nzk.create(\n  \"/transcoders/worker-\",\n  \"10.0.1.7:9000\".getBytes(),\n  OPEN_ACL_UNSAFE,\n  CreateMode.EPHEMERAL_SEQUENTIAL);\n\n// 调用方维护本地可用实例列表；watch 触发后重新读取并再次注册 watch\nvoid refreshWorkers() {\n  List<String> children = zk.getChildren(\"/transcoders\", event -> refreshWorkers());\n  workers = children.stream()\n    .map(child -> readString(\"/transcoders/\" + child))\n    .toList();\n}",
+    "lang": "java",
     "tags": [
       "zookeeper",
       "service-discovery",
       "ephemeral-znode"
+    ],
+    "optionMeanings": [
+      "把转码器地址固定写在配置文件里，不做动态发现。",
+      "调用前逐个探测转码器是否存活。",
+      "转码器注册临时节点，调用方读取子节点并 watch。",
+      "反过来由转码器轮询上游服务汇报状态。"
+    ],
+    "optionScenarioImpacts": [
+      "扩缩容或故障后配置文件立刻过期，需要人工改配置重发。",
+      "调用延迟叠加多次探测请求，且探测结果可能在使用前就已过期。",
+      "新实例上线秒级可见，故障实例的临时节点自动消失。",
+      "上传服务失去主动权，还得维护一套反向汇报协议。"
+    ],
+    "optionDirectness": [
+      "不直接：无法应对随时扩缩容和故障的场景。",
+      "不直接：增加延迟，也无法保证实时性。",
+      "最直接：临时节点+watch 正是服务发现的标准配方。",
+      "不直接：颠倒了调用方与被调用方的职责。"
+    ],
+    "optionMeanings_en": [
+      "Hard-code transcoder addresses in a config file with no dynamic discovery.",
+      "Probe every transcoder for liveness before each call.",
+      "Transcoders register ephemeral nodes; callers read children and watch.",
+      "Have transcoders poll the upstream service to report status instead."
+    ],
+    "optionScenarioImpacts_en": [
+      "The config file goes stale the moment instances scale or fail, needing a manual redeploy.",
+      "Adds probing latency to every call, and results can be stale by the time they are used.",
+      "New instances become visible within seconds; crashed ones vanish automatically.",
+      "The upload service loses control and now needs a reverse reporting protocol too."
+    ],
+    "optionDirectness_en": [
+      "Not direct: cannot react to scaling or failures happening at any time.",
+      "Not direct: adds latency without guaranteeing freshness.",
+      "Most direct: ephemeral nodes plus watches are the standard discovery recipe.",
+      "Not direct: inverts who should own service discovery."
     ]
   },
   {
@@ -772,10 +1222,19 @@
     "why": "创建顺序临时节点 → 最小序号当 leader → 各自 watch 前一个 → 前面的消失就接班。自动故障转移，同一时刻只有一个 leader。",
     "why_en": "Each server creates a sequential ephemeral node, the lowest number leads, everyone watches the next lower node, and when the leader dies the next in line takes over.",
     "diagram": "flowchart LR\n    A[\"node-0001 (leader)\"] -.被 watch.- B[\"node-0002\"]\n    B -.被 watch.- C[\"node-0003\"]\n    A -- 崩溃消失 --> B2[\"node-0002 成为新 leader\"]",
+    "codeSample": "String myNode = zk.create(\n  \"/election/candidate-\",\n  serverId.getBytes(),\n  OPEN_ACL_UNSAFE,\n  CreateMode.EPHEMERAL_SEQUENTIAL);\n\nvoid elect() {\n  List<String> nodes = sorted(zk.getChildren(\"/election\", false));\n  if (myNode.equals(\"/election/\" + nodes.get(0))) {\n    becomeLeader();\n    return;\n  }\n  String prev = predecessorOf(myNode, nodes);\n  if (zk.exists(prev, event -> elect()) == null) {\n    elect(); // predecessor already disappeared; re-check immediately\n  }\n}",
+    "lang": "java",
     "tags": [
       "zookeeper",
       "leader-election",
       "recipe"
+    ],
+    "termDefinitions": [
+      {
+        "term": "顺序+临时节点",
+        "meaning": "顺序+临时节点：同时具备顺序节点的递增编号和临时节点的会话绑定特性，是选举与锁配方的原料。",
+        "meaningEn": "A sequential ephemeral node combines an auto-incrementing suffix with session-bound auto-deletion, the building block for election and lock recipes."
+      }
     ]
   },
   {
@@ -786,10 +1245,16 @@
     "sub": "leader-election",
     "q": "选举配方里，为什么 Server 3 watch 的是 node-0000000002（前一个），而不是 leader 的 node-0000000001？",
     "options": [
-      "为了监控 leader 的性能",
-      "随便 watch 哪个都一样",
-      "watch 数量有限制",
-      "形成「每人只盯前一位」的链条：任何节点消失只惊动它的下一位，接任顺序清晰且通知量最小"
+      "watch leader 节点是为了持续监控它的 CPU 和内存性能",
+      "两种 watch 方式在效果上完全等价，选哪个都可以",
+      "因为单个客户端在 ZooKeeper 上能注册的 watch 数量有硬性上限",
+      "链式监听：每人只盯前一位，任何节点消失只惊动它的下一位，通知量最小"
+    ],
+    "options_en": [
+      "Watching the leader's node is meant to monitor its CPU and memory usage.",
+      "The two watch strategies are functionally equivalent, so either works fine.",
+      "There is a hard cap on how many watches a single client can register.",
+      "A chain: each server watches only the next lower node, so a failure notifies exactly one successor."
     ],
     "answer": [
       3
@@ -810,10 +1275,16 @@
     "sub": "leader-election",
     "q": "哪些真实系统用过 ZooKeeper 的这种 leader 选举模式？",
     "options": [
-      "HBase 的 schema 变更协调，以及早期 Kafka 的 controller broker（管理分区领导权）",
-      "Redis 的主从切换",
-      "Nginx 的负载均衡",
-      "Git 的分支合并"
+      "HBase 的 schema 变更协调，以及早期 Kafka 用它选出管理分区领导权的 controller broker",
+      "Redis 的主从故障切换机制，同样是靠这套顺序临时节点选举模式挑出新主节点",
+      "Nginx 做请求负载均衡的时候，也是用它在多个后端实例间选一个当前活跃节点",
+      "Git 在合并多个分支的时候，也是用它决定哪一条分支的提交历史应该优先保留"
+    ],
+    "options_en": [
+      "HBase's schema-change coordination, and early Kafka's controller broker that manages partition leadership.",
+      "Redis also uses this exact sequential-ephemeral election recipe to pick its new primary during failover.",
+      "Nginx also uses it to elect one active backend instance among several for request load balancing.",
+      "Git also uses it to decide which branch's commit history should be kept as priority during a merge."
     ],
     "answer": [
       0
@@ -824,6 +1295,61 @@
       "zookeeper",
       "leader-election",
       "real-world"
+    ],
+    "termDefinitions": [
+      {
+        "term": "HBase",
+        "fullName": "Apache HBase",
+        "meaning": "HBase：构建在 Hadoop 之上的分布式列式数据库，历史上用 ZooKeeper 做协调。",
+        "meaningEn": "HBase is a distributed column-family database built on Hadoop that has historically used ZooKeeper for coordination."
+      },
+      {
+        "term": "Kafka",
+        "fullName": "Apache Kafka",
+        "meaning": "Kafka：分布式消息队列/事件流平台，早期版本依赖 ZooKeeper 管理集群元数据。",
+        "meaningEn": "Kafka is a distributed messaging and event-streaming platform whose early versions relied on ZooKeeper for cluster metadata."
+      },
+      {
+        "term": "controller broker",
+        "meaning": "controller broker：Kafka 集群中被选出、专门负责管理分区 leader 分配的那台 broker。",
+        "meaningEn": "The controller broker is the elected Kafka broker responsible for managing partition leader assignment."
+      }
+    ],
+    "optionMeanings": [
+      "HBase 与早期 Kafka 都用顺序临时节点选举实现单点协调。",
+      "Redis 主从切换的哨兵机制并非基于 ZooKeeper 选举配方。",
+      "Nginx 的负载均衡是请求分发算法，不涉及 leader 选举。",
+      "Git 合并靠提交图和合并策略，与分布式选举无关。"
+    ],
+    "optionScenarioImpacts": [
+      "两个系统都借助临时节点的会话特性做崩溃自动检测。",
+      "Redis Sentinel/Cluster 有自己的一套投票机制，不依赖 ZK。",
+      "Nginx 本身是无状态转发，没有『谁是 leader』这个概念。",
+      "分支合并是版本控制里的操作，和运行时协调服务不是一回事。"
+    ],
+    "optionDirectness": [
+      "最直接：这是文章点名的两个真实案例。",
+      "不直接：混淆了不同系统各自的容错机制。",
+      "不直接：张冠李戴，负载均衡不是选举。",
+      "不直接：跨领域概念混用，Git 不做运行时协调。"
+    ],
+    "optionMeanings_en": [
+      "HBase and early Kafka both used sequential ephemeral nodes for single-coordinator election.",
+      "Redis failover uses Sentinel/Cluster voting, not the ZooKeeper election recipe.",
+      "Nginx load balancing is a request-distribution algorithm, not leader election.",
+      "Git merging relies on commit graphs and merge strategies, unrelated to distributed election."
+    ],
+    "optionScenarioImpacts_en": [
+      "Both systems lean on ephemeral-node session semantics for automatic crash detection.",
+      "Redis has its own voting mechanism and does not depend on ZooKeeper.",
+      "Nginx is stateless request forwarding with no notion of a leader.",
+      "Branch merging is a version-control operation, unrelated to runtime coordination."
+    ],
+    "optionDirectness_en": [
+      "Most direct: these are the two real-world cases the article names.",
+      "Not direct: conflates unrelated fault-tolerance mechanisms.",
+      "Not direct: confuses load balancing with leader election.",
+      "Not direct: mixes in an unrelated version-control concept."
     ]
   },
   {
@@ -832,24 +1358,112 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "distributed-locks",
+    "scenario": "多个支付 worker 都想处理同一笔 payment，但同一时刻只能有一个 worker 进入临界区。worker 可能崩溃，所以锁必须能自动释放。",
     "q": "ZooKeeper 分布式锁的配方是？",
     "options": [
-      "所有客户端抢写同一个节点，写成功者持锁",
-      "每个客户端在锁路径下创建顺序+临时节点；最小序号者持锁；各自 watch 前一个序号；释放或崩溃时节点删除，下一位收到通知获锁",
-      "leader 手动分配锁",
-      "用时间戳先到先得"
+      "所有客户端抢写同一个固定节点，成功者持锁",
+      "每个客户端建临时顺序节点，最小号持锁",
+      "由 ensemble leader 手动挑一个客户端发锁",
+      "按客户端本地时间戳排序，最早者持锁"
+    ],
+    "options_en": [
+      "All clients race to write the same fixed node; whoever succeeds holds the lock.",
+      "Each client creates an ephemeral sequential node; the lowest number holds the lock.",
+      "The ensemble leader manually chooses one client and grants the lock.",
+      "Sort by each client's local timestamp; the earliest one holds the lock."
     ],
     "answer": [
       1
     ],
-    "why": "顺序节点排队 + 临时节点防死锁（崩溃自动放锁）+ 链式 watch 逐个唤醒——与选举配方同源。",
-    "why_en": "Clients queue with sequential ephemeral nodes, the lowest holds the lock, each watches the next lower node, and crashes release the lock automatically.",
+    "why": "把锁想成排队拿号：每个客户端拿一个会自动递增、会话结束会消失的节点号。号最小的人持锁；其他人只 watch 自己前一个号，前一个消失后再检查是否轮到自己。",
+    "why_en": "Think of the lock as taking a queue ticket: each client creates an ephemeral sequential node, the lowest ticket holds the lock, and everyone else watches only the previous ticket.",
+    "whenOtherWins": "如果只是同一进程内互斥，用本地 mutex；如果是高频短锁，Redis 或数据库条件写通常更轻。",
+    "tradeoff": "公平排队+崩溃自动释放 vs 每次加解锁都走 ZooKeeper 写路径",
     "tags": [
       "zookeeper",
       "distributed-locks",
       "recipe"
     ],
-    "diagram": "flowchart TD\n  A[\"Create ephemeral sequential\"] --> B[\"List children\"]\n  B --> C{\"Smallest?\"}\n  C -->|\"yes\"| D[\"Own lock\"]\n  C -->|\"no\"| E[\"Watch predecessor\"]"
+    "diagram": "flowchart TD\n  A[\"Client creates lock-0007\"] --> B[\"List lock queue\"]\n  B --> C{\"Am I smallest?\"}\n  C -->|\"yes\"| D[\"Enter critical section\"]\n  C -->|\"no\"| E[\"Watch lock-0006\"]\n  E --> F[\"0006 deleted or session expired\"]\n  F --> B",
+    "codeSample": "String myNode = zk.create(\n  \"/locks/payment/lock-\",\n  clientId.getBytes(),\n  OPEN_ACL_UNSAFE,\n  CreateMode.EPHEMERAL_SEQUENTIAL);\n\nvoid checkLock() {\n  List<String> queue = sorted(zk.getChildren(\"/locks/payment\", false));\n  if (myNode.equals(\"/locks/payment/\" + queue.get(0))) {\n    enterCriticalSection();\n    return;\n  }\n\n  String prev = pathOfPredecessor(myNode, queue);\n  if (zk.exists(prev, event -> checkLock()) == null) {\n    checkLock(); // 前一个刚好已经消失，立刻重新检查\n  }\n}\n\nvoid release() {\n  zk.delete(myNode, -1);\n}",
+    "lang": "java",
+    "table": {
+      "headers": [
+        "动作",
+        "含义"
+      ],
+        "rows": [
+        [
+          "create ES",
+          "拿排队号"
+        ],
+        [
+          "smallest node",
+          "当前持锁者"
+        ],
+        [
+          "watch prev",
+          "只盯前一位"
+        ],
+        [
+          "session expires",
+          "自动放锁"
+        ]
+      ]
+    },
+    "optionMeanings": [
+      "大家同时争同一个固定节点。",
+      "每个客户端拿一个 ZooKeeper 分配的排队号。",
+      "误以为 ZooKeeper leader 直接管理业务锁。",
+      "用各机器自己的时钟决定先后。"
+    ],
+    "optionScenarioImpacts": [
+      "锁释放时可能所有等待者一起醒来，形成惊群。",
+      "只唤醒下一位；持锁者崩溃时临时节点自动消失。",
+      "ensemble leader 负责共识写入，不负责业务层发锁。",
+      "机器时钟会漂移，跨机器顺序不可靠。"
+    ],
+    "optionDirectness": [
+      "不直接；能做简单抢占，但不如排队 watch 可控。",
+      "最直接；它同时解决排队、公平和崩溃释放。",
+      "不直接；这是把内部 leader 和业务锁混淆。",
+      "不直接；本地时间不能做分布式全序。"
+    ],
+    "optionMeanings_en": [
+      "Everyone races on one fixed node.",
+      "Each client takes a ZooKeeper-assigned queue ticket.",
+      "It assumes the ZooKeeper leader directly manages application locks.",
+      "It orders clients by their own local clocks."
+    ],
+    "optionScenarioImpacts_en": [
+      "When the lock releases, all waiters may wake up and stampede.",
+      "Only the next waiter wakes; if the holder crashes, its ephemeral node disappears.",
+      "The ensemble leader coordinates writes, not application-level lock grants.",
+      "Machine clocks drift, so local timestamps cannot define a reliable global order."
+    ],
+    "optionDirectness_en": [
+      "Not direct; it can race, but queueing with watches is more controlled.",
+      "Most direct; it covers queueing, fairness, and crash release.",
+      "Not direct; it confuses the internal leader with application locks.",
+      "Not direct; local time cannot provide distributed total order."
+    ],
+    "termDefinitions": [
+      {
+        "term": "临界区",
+        "meaning": "同一时刻只能由一个 worker 执行的代码段，例如处理同一笔 payment。",
+        "meaningEn": "A critical section is code that only one worker may execute at a time, such as processing one payment."
+      },
+      {
+        "term": "EPHEMERAL_SEQUENTIAL",
+        "meaning": "临时顺序节点：名字带递增编号，创建者会话结束时自动删除。",
+        "meaningEn": "An ephemeral sequential node has an increasing suffix and is deleted when its creator session ends."
+      },
+      {
+        "term": "watch predecessor",
+        "meaning": "只监听自己前一个排队节点。这样释放锁时只唤醒下一位，避免全部等待者一起抢。",
+        "meaningEn": "Watching the predecessor means listening only to the queue node just before yours, so only the next waiter wakes."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-032",
@@ -859,10 +1473,16 @@
     "sub": "distributed-locks",
     "q": "ZooKeeper 锁不适合什么场景？该用什么替代？",
     "options": [
-      "长时间持有的锁；应换成内存锁",
-      "任何生产场景",
+      "只要持锁时间超过几分钟，就应该换成本地内存锁替代",
+      "任何生产场景都不该用 ZooKeeper 锁，风险太高",
       "高频加解锁（每秒数百次）；这种场景考虑 Redis 锁或数据库事务",
-      "跨机房的锁"
+      "跨机房场景不适合，应该改成每个机房各自独立加锁"
+    ],
+    "options_en": [
+      "Any hold time over a few minutes should switch to a local in-memory lock.",
+      "ZooKeeper locks should never be used in any production scenario at all.",
+      "High-frequency locking, hundreds of times per second, where Redis locks or database transactions fit better.",
+      "Cross-datacenter locking is unsuitable, so each datacenter should lock independently instead."
     ],
     "answer": [
       2
@@ -873,6 +1493,13 @@
       "zookeeper",
       "distributed-locks",
       "performance"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis 锁",
+        "meaning": "Redis 锁：用 SETNX/TTL 等 Redis 命令实现的轻量分布式锁，吞吐高但依赖超时管理。",
+        "meaningEn": "A Redis lock is a lightweight distributed lock built with commands like SETNX and TTL, offering high throughput but relying on timeout management."
+      }
     ]
   },
   {
@@ -885,20 +1512,97 @@
     "q": "选 ZooKeeper 锁还是 Redis 锁？",
     "options": [
       "ZooKeeper 锁：一致性保证更强，临时节点自动检测崩溃，长锁不依赖小心翼翼的超时管理",
-      "Redis 锁：更快",
-      "两者随便选",
-      "不加锁，靠重试"
+      "Redis 锁：吞吐更高、延迟更低，看起来很适合这种长时间持有的场景",
+      "两者随便选一个都可以，反正最终业务结果都是一样的",
+      "干脆不加锁，靠业务失败之后重试来兜底数据一致性"
+    ],
+    "options_en": [
+      "ZooKeeper locks — stronger consistency, ephemeral nodes detect crashes automatically, no fragile timeout tuning for long holds.",
+      "Redis locks — higher throughput and lower latency, which looks like a fit for this long-hold scenario.",
+      "Either one is fine to pick, the final business outcome ends up the same.",
+      "Skip locking entirely and just rely on retry-after-failure to backstop consistency."
     ],
     "answer": [
       0
     ],
     "why": "Redis 锁赢在性能与简单（Ticketmaster/Uber 场景）；但正确性优先 + 长持有 + 崩溃自动释放的需求下，ZK 的会话机制远比 Redis 的超时+心跳可靠。",
     "why_en": "Choose ZooKeeper locks when correctness trumps performance and locks are long-lived, since ephemeral nodes detect crashes more robustly than Redis timeouts.",
-    "whenOtherWins": "秒杀/抢票这类高频短锁场景 Redis 锁性能和简单性占优——Hello Interview 的 Ticketmaster 和 Uber 都选了 Redis。",
+    "whenOtherWins": "高频短锁场景（秒杀、抢票）Redis 性能更占优，Ticketmaster、Uber 都选了它。",
+    "tradeoff": "ZooKeeper 锁的强一致 + 会话式崩溃检测 vs Redis 锁的高吞吐 + 手动超时管理",
+    "table": {
+      "headers": [
+        "方案",
+        "一致性保证",
+        "崩溃处理",
+        "吞吐/延迟"
+      ],
+      "rows": [
+        [
+          "ZooKeeper 锁",
+          "强一致，quorum 写",
+          "会话超时自动删除节点",
+          "较慢，几十 ms 级"
+        ],
+        [
+          "Redis 锁",
+          "依赖实现，通常较弱",
+          "TTL 到期自动释放",
+          "很快，亚 ms 级"
+        ]
+      ]
+    },
     "tags": [
       "zookeeper",
       "redis",
       "lock-selection"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis 锁",
+        "meaning": "Redis 锁：常用 SET key value NX EX ttl 实现，靠 TTL 超时兜底释放。",
+        "meaningEn": "A Redis lock is typically built with SET NX EX and relies on a TTL timeout as its safety net for release."
+      },
+      {
+        "term": "quorum",
+        "meaning": "quorum（多数派）：ZooKeeper 写操作需要 ensemble 过半服务器确认后才算成功。",
+        "meaningEn": "A quorum is the majority of ensemble servers whose acknowledgment a ZooKeeper write needs before it succeeds."
+      }
+    ],
+    "optionMeanings": [
+      "选 ZooKeeper：靠会话和临时节点保证强一致与自动崩溃检测。",
+      "选 Redis：靠 TTL 实现，吞吐更高但一致性较弱。",
+      "认为两个方案在这个场景下等价。",
+      "放弃加锁，改用重试兜底。"
+    ],
+    "optionScenarioImpacts": [
+      "锁持有数小时也不怕漏检崩溃，会话超时是可靠信号。",
+      "TTL 需要精确设置成远超预期持锁时长，否则锁会提前失效引发并发写。",
+      "金融交易场景一旦并发写入，后果是资金错误，不能『随便选』。",
+      "没有锁保护的并发交易可能导致重复扣款或超卖资金。"
+    ],
+    "optionDirectness": [
+      "最直接：完全匹配『正确性优先、长持有、可靠崩溃检测』。",
+      "不直接：性能优先在这个场景权重最低。",
+      "不直接：回避了做决策，掩盖了真实取舍。",
+      "不直接：重试不能替代互斥这一根本需求。"
+    ],
+    "optionMeanings_en": [
+      "Choose ZooKeeper: sessions and ephemeral nodes give strong consistency and automatic crash detection.",
+      "Choose Redis: TTL-based, higher throughput but weaker consistency guarantees.",
+      "Treat both options as equivalent for this scenario.",
+      "Skip locking and rely on retries instead."
+    ],
+    "optionScenarioImpacts_en": [
+      "Locks can sit for hours without missing a crash, since session expiry is a reliable signal.",
+      "The TTL must be set far longer than the expected hold time, or the lock expires early and lets in concurrent writes.",
+      "In finance, a concurrent write means real monetary error, not something to leave to chance.",
+      "Unprotected concurrent transactions risk duplicate charges or overspending funds."
+    ],
+    "optionDirectness_en": [
+      "Most direct: matches correctness-first, long-hold, reliable-crash-detection exactly.",
+      "Not direct: throughput is the lowest priority in this scenario.",
+      "Not direct: avoids the decision and hides the real tradeoff.",
+      "Not direct: retries cannot substitute for mutual exclusion."
     ]
   },
   {
@@ -909,10 +1613,16 @@
     "sub": "zab",
     "q": "ZooKeeper 内部靠什么协议达成共识？",
     "options": [
-      "Raft",
-      "ZAB（ZooKeeper Atomic Broadcast）：让全体服务器在故障与网络问题下仍对系统状态达成一致",
-      "Gossip",
-      "两阶段锁"
+      "Raft 协议，据说和 etcd 内部所使用的共识协议完全是同一套实现",
+      "ZAB（ZooKeeper Atomic Broadcast）：让全体服务器在故障下仍对系统状态达成一致",
+      "Gossip 协议，节点之间随机两两交换状态信息、逐步扩散全局视图",
+      "关系型数据库里常见的两阶段锁协议，专门用来处理并发事务控制"
+    ],
+    "options_en": [
+      "Raft, supposedly the exact same implementation of the consensus protocol that etcd uses internally.",
+      "ZAB, ZooKeeper Atomic Broadcast, which lets all servers agree on system state despite failures.",
+      "Gossip, where nodes randomly exchange state with each other in pairs to gradually spread a global view.",
+      "Two-phase locking, the classic relational-database protocol for concurrent transaction control."
     ],
     "answer": [
       1
@@ -923,6 +1633,24 @@
       "zookeeper",
       "zab",
       "consensus"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZAB",
+        "fullName": "ZooKeeper Atomic Broadcast",
+        "meaning": "ZAB：ZooKeeper 内部使用的共识协议，负责 leader 选举与写操作的原子广播。",
+        "meaningEn": "ZAB, ZooKeeper Atomic Broadcast, is the consensus protocol ZooKeeper's own servers use for leader election and atomic write propagation."
+      },
+      {
+        "term": "Raft",
+        "meaning": "Raft：一种被广泛使用的分布式共识协议，etcd 等系统基于它实现。",
+        "meaningEn": "Raft is a widely used distributed consensus protocol that systems like etcd are built on."
+      },
+      {
+        "term": "Gossip",
+        "meaning": "Gossip 协议：节点间随机两两交换状态、逐步扩散信息的去中心化通信方式。",
+        "meaningEn": "Gossip protocols spread state by having nodes randomly exchange information with each other in a decentralized way."
+      }
     ]
   },
   {
@@ -933,10 +1661,16 @@
     "sub": "zab",
     "q": "ZAB 协议的两个主要阶段是？",
     "options": [
-      "映射和归约",
-      "压缩和解压",
-      "Leader 选举（选出协调者）+ 原子广播（写走 leader，广播到 follower，多数派持久化才算成功）",
-      "加密和解密"
+      "大数据批处理里常见的映射（Map）和归约（Reduce）两个阶段",
+      "存储引擎设计里常见的压缩和解压这两个流程阶段",
+      "先选出 leader 协调者，再由它做原子广播：写请求经 leader 广播，多数派确认才算成功",
+      "网络传输协议里常见的加密和解密这两个流程阶段"
+    ],
+    "options_en": [
+      "Map and Reduce, the familiar two phases from big-data batch processing.",
+      "Compress and decompress, the two phases common in storage engine design.",
+      "First elect a leader coordinator, then it does atomic broadcast: writes go through the leader and commit once a majority confirms.",
+      "Encrypt and decrypt, the two phases common in network transport protocols."
     ],
     "answer": [
       2
@@ -948,7 +1682,15 @@
       "zab",
       "phases"
     ],
-    "diagram": "flowchart LR\n  A[\"Leader election\"] --> B[\"Discovery\"]\n  B --> C[\"Sync\"]\n  C --> D[\"Broadcast writes\"]"
+    "diagram": "flowchart LR\n  A[\"Leader election\"] --> B[\"Discovery\"]\n  B --> C[\"Sync\"]\n  C --> D[\"Broadcast writes\"]",
+    "termDefinitions": [
+      {
+        "term": "原子广播",
+        "fullName": "Atomic Broadcast",
+        "meaning": "原子广播：leader 把一条写操作发给所有 follower，且保证要么大家都按同一顺序应用，要么不生效。",
+        "meaningEn": "Atomic broadcast is the leader sending a write to all followers with the guarantee that everyone applies it in the same order, or not at all."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-036",
@@ -958,16 +1700,23 @@
     "sub": "zab",
     "q": "ZK 内部的 leader 选举标准，与应用层「最小顺序节点当 leader」的配方有什么有趣的差别？",
     "options": [
-      "两者标准完全一样",
+      "两者的判断标准其实完全一样，内部选举和应用层都是序号最小的那个胜出",
       "内部选举优先「事务历史最新」的服务器，历史相同时选 ID 最高的——方向恰好与应用层「最小序号获胜」相反",
-      "内部选举按机器名字典序",
-      "内部选举由人工指定"
+      "内部选举其实是按服务器主机名做字典序排序，直接取排在最前面的那一台",
+      "内部选举的结果其实完全由运维人员手工写进配置文件里去指定"
+    ],
+    "options_en": [
+      "Both use the exact same rule internally and at the application layer: the lowest sequence number wins.",
+      "Internally the server with the most up-to-date transaction history wins, ties broken by highest ID, the opposite of the application-layer rule.",
+      "Internal election actually just sorts servers by hostname in dictionary order and picks the first one.",
+      "The internal election result is actually entirely hand-written by an operator into a config file."
     ],
     "answer": [
       1
     ],
     "why": "内部要的是「数据最全的节点当 leader」（防丢更新），平局取最高 ID；应用层配方取最小序号——内部机制与其上构建的模式可以完全不同。",
     "why_en": "Internally ZooKeeper elects the server with the most up-to-date transaction history, preferring the highest ID on ties, the opposite of the lowest-sequence application recipe.",
+    "tradeoff": "内部选举「数据最全者优先」（防丢写）vs 应用层配方「最小序号优先」（排队公平）",
     "tags": [
       "zookeeper",
       "zab",
@@ -982,10 +1731,16 @@
     "sub": "zab",
     "q": "ZAB 与 Paxos / Raft 的关系是？",
     "options": [
-      "毫无关系",
-      "ZAB 是 Raft 的封装",
-      "ZAB 已被 Paxos 取代",
+      "三者的目标和实现完全不相关，只是名字看起来像",
+      "ZAB 只是对 Raft 协议做了一层简单封装",
+      "ZAB 的功能已经被 Paxos 完全取代，现在没人用了",
       "同类目标：都是分布式共识协议；ZAB 早于 Raft，实现细节不同但高层目标一致"
+    ],
+    "options_en": [
+      "The three are unrelated in goal and implementation; they just sound similar.",
+      "ZAB is just a thin wrapper around the Raft protocol.",
+      "ZAB has been completely superseded by Paxos and nobody uses it now.",
+      "Same family: all are distributed consensus protocols; ZAB predates Raft and differs in details but shares the high-level goal."
     ],
     "answer": [
       3
@@ -996,6 +1751,13 @@
       "zookeeper",
       "zab",
       "raft"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Paxos",
+        "meaning": "Paxos：最早提出的分布式共识协议之一，理论严谨但实现较复杂。",
+        "meaningEn": "Paxos is one of the earliest distributed consensus protocols, theoretically rigorous but notoriously hard to implement."
+      }
     ]
   },
   {
@@ -1036,7 +1798,21 @@
           "extra round trip"
         ]
       ]
-    }
+    },
+    "termDefinitions": [
+      {
+        "term": "顺序一致性",
+        "fullName": "Sequential Consistency",
+        "meaning": "顺序一致性：同一客户端发出的多个更新，所有服务器都按发送顺序应用。",
+        "meaningEn": "Sequential consistency means updates from one client are applied by every server in the order that client sent them."
+      },
+      {
+        "term": "单一系统映像",
+        "fullName": "Single System Image",
+        "meaning": "单一系统映像：无论客户端连到 ensemble 里哪台服务器，同步后看到的数据视图都一样。",
+        "meaningEn": "A single system image means a client sees the same data view regardless of which ensemble server it connects to, once synced."
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-039",
@@ -1046,10 +1822,16 @@
     "sub": "consistency",
     "q": "从 follower 读数据可能读到旧值。需要最强一致的读时怎么办？",
     "options": [
-      "只能连 leader",
+      "把所有读请求都强制改发给 leader 一台机器处理",
       "读前先调用 sync 操作，确保该服务器已与 leader 同步再读",
-      "读三次取多数",
-      "无解"
+      "同一份数据读三次，取出现次数最多的那个结果",
+      "这个问题无解，只能接受可能读到旧数据"
+    ],
+    "options_en": [
+      "Force every read request to go only to the leader.",
+      "Call sync before reading, ensuring the server has caught up with the leader first.",
+      "Read the same value three times and take the majority result.",
+      "There is no fix — you just accept that reads may be stale."
     ],
     "answer": [
       1
@@ -1060,6 +1842,13 @@
       "zookeeper",
       "stale-reads",
       "sync"
+    ],
+    "termDefinitions": [
+      {
+        "term": "sync",
+        "meaning": "sync：一个强制 follower 先追平 leader 最新状态、再返回读结果的操作，用于换取最强一致读。",
+        "meaningEn": "sync is an operation that forces a follower to catch up with the leader's latest state before serving a read, trading latency for the strongest consistency."
+      }
     ]
   },
   {
@@ -1068,17 +1857,24 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "workload",
-    "q": "ZooKeeper 最适合怎样的读写比例？",
+    "scenario": "选型时要判断 ZooKeeper 是否适合当前系统：读多写少的服务发现场景，还是写多读少的日志采集场景。",
+    "q": "ZooKeeper 架构最适合怎样的读写比例？",
     "options": [
-      "写多读少",
-      "读写各半",
+      "写多读少：大部分请求是更新配置或路由信息",
+      "读写各占一半，二者请求量基本相当",
       "读远多于写，约 10:1 的读写比",
-      "只写不读"
+      "只有读请求，几乎不产生任何写请求"
+    ],
+    "options_en": [
+      "Write-heavy: most requests update config or routing information.",
+      "Roughly even split between reads and writes.",
+      "Read-dominant, around a ten-to-one read-to-write ratio.",
+      "Read-only, with almost no write requests at all."
     ],
     "answer": [
       2
     ],
-    "why": "读由任意节点从内存直接服务（快），写必须过 leader 走 ZAB（贵）——架构天生偏向读主导负载。",
+    "why": "读由任意节点从内存直接服务（快、不用等 quorum），写必须过 leader 走 ZAB 等多数派确认（贵）——架构天生偏向读主导负载，约 10:1 是经验值，决定了该不该用 ZK 承载你的负载。",
     "why_en": "ZooKeeper excels at read-dominant workloads around ten reads per write, since any server serves reads but all writes go through the leader.",
     "tags": [
       "zookeeper",
@@ -1094,10 +1890,16 @@
     "sub": "sessions",
     "q": "ZooKeeper 会话（session）机制的要点是？",
     "options": [
-      "会话永不过期",
-      "会话就是 TCP 连接，断开即失效",
-      "会话由 leader 手动管理",
-      "客户端建立带超时（典型 10-30 秒）的会话，靠心跳维持；断连后可在超时前换一台服务器恢复会话；会话过期则其全部临时节点被删、watch 被移除"
+      "会话一旦建立成功就永不过期，客户端可以一直保持连接下去",
+      "会话本质上就是一条 TCP 连接，这条连接一断会话就立刻失效",
+      "会话完全由 ensemble 的 leader 手动维护，客户端不参与任何交互",
+      "客户端建立带超时（典型 10-30 秒）的会话，靠心跳维持；断连后可换服务器恢复会话，过期则清理其临时节点和 watch"
+    ],
+    "options_en": [
+      "Once established, a session never expires and the client can stay connected forever.",
+      "A session is essentially just one TCP connection, and it dies the instant that connection drops.",
+      "Sessions are entirely managed by the ensemble leader with no client-side involvement at all.",
+      "Clients hold a heartbeat-maintained session with a typical 10-30 second timeout; expiry cleans up its ephemeral nodes and watches."
     ],
     "answer": [
       3
@@ -1109,7 +1911,56 @@
       "sessions",
       "heartbeats"
     ],
-    "diagram": "flowchart LR\n  A[\"Client session\"] --> B[\"Heartbeat\"]\n  B --> C{\"Timeout?\"}\n  C -->|\"no\"| A\n  C -->|\"yes\"| D[\"Delete ephemeral nodes\"]"
+    "diagram": "flowchart LR\n  A[\"Client session\"] --> B[\"Heartbeat\"]\n  B --> C{\"Timeout?\"}\n  C -->|\"no\"| A\n  C -->|\"yes\"| D[\"Delete ephemeral nodes\"]",
+    "termDefinitions": [
+      {
+        "term": "session",
+        "meaning": "session（会话）：客户端与 ZooKeeper 之间靠心跳维持的逻辑连接，可以跨越多次 TCP 重连而存续。",
+        "meaningEn": "A session is a heartbeat-maintained logical connection between client and ZooKeeper that can survive multiple TCP reconnects."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "TCP：一种保证有序、可靠传输的底层网络协议；ZooKeeper 会话建立在 TCP 连接之上，但会话本身能跨越重连存续。",
+        "meaningEn": "TCP is the underlying reliable, ordered transport protocol; a ZooKeeper session sits on top of a TCP connection but can outlive a single reconnect."
+      }
+    ],
+    "optionMeanings": [
+      "认为会话没有过期机制。",
+      "把会话等同于底层 TCP 连接本身。",
+      "认为客户端在会话机制里毫无参与。",
+      "会话有超时、靠心跳续期，可跨连接恢复，过期触发清理。"
+    ],
+    "optionScenarioImpacts": [
+      "崩溃的客户端永远占着它注册的临时节点，故障检测彻底失效。",
+      "网络抖动引发的短暂断连会被误判为客户端死亡，引发不必要的切换。",
+      "无法解释为什么客户端要发心跳、为什么能在超时前换机重连。",
+      "既能容忍网络抖动（超时内重连即可恢复），又能在真崩溃时清理干净。"
+    ],
+    "optionDirectness": [
+      "不直接：违背『超时清理』这一故障检测基础。",
+      "不直接：混淆了传输层连接和会话这两个概念。",
+      "不直接：会话机制本就需要客户端心跳配合。",
+      "最直接：完整覆盖超时、心跳、恢复、过期清理四个要点。"
+    ],
+    "optionMeanings_en": [
+      "Claims sessions never expire.",
+      "Equates a session with the underlying TCP connection itself.",
+      "Claims the client plays no role in session handling.",
+      "Sessions time out, renew via heartbeat, can recover across reconnects, and clean up on expiry."
+    ],
+    "optionScenarioImpacts_en": [
+      "A crashed client would hold its ephemeral nodes forever, breaking failure detection entirely.",
+      "A brief network blip gets misread as client death, triggering needless failover.",
+      "Fails to explain why clients heartbeat or how they can reconnect to a new server before timeout.",
+      "Tolerates network blips (reconnect within timeout) while still cleaning up after real crashes."
+    ],
+    "optionDirectness_en": [
+      "Not direct: contradicts the timeout-based cleanup that failure detection relies on.",
+      "Not direct: conflates the transport-layer connection with the session concept.",
+      "Not direct: session handling inherently needs client heartbeats.",
+      "Most direct: covers timeout, heartbeat, recovery, and expiry cleanup fully."
+    ]
   },
   {
     "id": "sd-deep-dives-zookeeper-042",
@@ -1120,9 +1971,15 @@
     "q": "会话超时（session timeout）设置的两难是？",
     "options": [
       "设太短：临时网络抖动就误判死亡引发不必要的失效/切换；设太长：真故障要等很久才被发现",
-      "设长设短都一样",
-      "只影响内存占用",
-      "只影响日志量"
+      "无论把这个值设得再长或者再短，实际观察到的效果完全一样",
+      "会话超时值只会小幅影响服务器进程的内存占用大小",
+      "会话超时值只会影响 ZooKeeper 每天写出的日志文件总量"
+    ],
+    "options_en": [
+      "Too short causes false failovers on network blips; too long delays detecting real failures.",
+      "Setting the value longer or shorter produces exactly the same observed effect either way.",
+      "The timeout value only has a minor effect on how much memory the server process uses.",
+      "The timeout value only affects how much log file volume ZooKeeper writes out per day."
     ],
     "answer": [
       0
@@ -1143,10 +2000,16 @@
     "sub": "storage",
     "q": "ZooKeeper 靠什么保证「确认过的更新永不丢失」？",
     "options": [
-      "把数据同步到 S3",
+      "把每一次写操作产生的数据都顺手额外同步一份到远端云对象存储服务里去",
       "每个状态变更先写持久化的事务日志（WAL，须先落盘再响应）；周期性做内存数据库快照，重启时加载快照+重放日志恢复",
-      "三副本内存互备即可",
-      "客户端本地也存一份"
+      "只要在三台服务器各自的内存里都稳定保留一份副本数据就已经足够可靠",
+      "让每一个连接进来的客户端都在本地缓存一份完整数据作为额外的备份手段"
+    ],
+    "options_en": [
+      "Every write also gets an extra sync out to a remote cloud object storage service.",
+      "Each change is first written to a persistent write-ahead transaction log, then periodic snapshots speed up recovery by replaying the log.",
+      "Keeping one steady in-memory replica on each of three servers is already reliable enough.",
+      "Every connected client also keeps a full local cache of the data as an extra backup measure."
     ],
     "answer": [
       1
@@ -1157,6 +2020,20 @@
       "zookeeper",
       "wal",
       "snapshots"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "WAL（预写日志）：先把变更写进持久化日志、确认落盘后才响应客户端的技术，保证崩溃不丢已确认的更新。",
+        "meaningEn": "A write-ahead log records a change durably before responding to the client, guaranteeing acknowledged updates survive a crash."
+      },
+      {
+        "term": "快照",
+        "fullName": "Snapshot",
+        "meaning": "快照：内存数据库某一时刻的完整落盘副本，重启时先加载快照再重放之后的日志，加速恢复。",
+        "meaningEn": "A snapshot is a point-in-time on-disk copy of the in-memory database; restart loads it first and then replays the log for faster recovery."
+      }
     ]
   },
   {
@@ -1167,10 +2044,16 @@
     "sub": "storage",
     "q": "为什么内存交换（swapping）对 ZooKeeper 性能是灾难性的？",
     "options": [
-      "swap 会损坏数据",
-      "swap 会断开客户端",
-      "ZK 的所有操作是全序执行的：一个请求因 swap 卡在磁盘，后面排队的所有请求都被拖住——所以要合理设置堆大小避免 swap",
-      "swap 使 watch 失效"
+      "swap 会直接损坏磁盘上已经持久化的事务日志数据",
+      "swap 发生时 ZooKeeper 会强制断开所有已连接的客户端",
+      "ZK 的所有操作是全序执行的：一个请求因 swap 卡在磁盘，后面排队的所有请求都被拖住",
+      "swap 只会让 watch 通知机制暂时失效几秒钟"
+    ],
+    "options_en": [
+      "Swapping directly corrupts the transaction log already persisted on disk.",
+      "Swapping forces ZooKeeper to disconnect every connected client immediately.",
+      "All operations execute in total order: one request stuck on disk due to swap delays every request queued behind it.",
+      "Swapping only makes the watch notification mechanism briefly stop working for a few seconds."
     ],
     "answer": [
       2
@@ -1191,10 +2074,16 @@
     "sub": "failures",
     "q": "网络分区导致任何一组服务器都凑不齐多数派时，ZooKeeper 会怎样？",
     "options": [
-      "两边各自继续服务写请求",
-      "自动扩容出新节点",
-      "随机选一边继续写",
+      "分区两边的服务器各自继续独立处理写请求，等分区恢复后再合并数据",
+      "自动在云上现拉起几台新的服务器节点来补足所需的多数派",
+      "由系统随机挑其中一边的服务器组，继续处理这一边的写请求",
       "停止处理写请求直到分区恢复——宁可不可用也要避免 split-brain（脑裂）"
+    ],
+    "options_en": [
+      "Both sides of the partition keep processing writes independently and merge the data after it heals.",
+      "It automatically spins up a few new servers in the cloud to restore a majority.",
+      "The system randomly picks one side of the partition to keep processing its writes.",
+      "It stops processing writes until the partition heals, choosing unavailability over split-brain."
     ],
     "answer": [
       3
@@ -1205,6 +2094,19 @@
       "zookeeper",
       "split-brain",
       "partitions"
+    ],
+    "termDefinitions": [
+      {
+        "term": "split-brain",
+        "meaning": "split-brain（脑裂）：网络分区后系统两半各自独立接受写入，产生两份互相矛盾的数据。",
+        "meaningEn": "Split-brain is when a network partition lets both halves of a system independently accept writes, producing two conflicting copies of the data."
+      },
+      {
+        "term": "CP 系统",
+        "fullName": "Consistency and Partition tolerance system",
+        "meaning": "CP 系统：在 CAP 权衡中优先保证一致性和分区容忍、宁可牺牲可用性的系统。",
+        "meaningEn": "A CP system is one that, in the CAP tradeoff, prioritizes consistency and partition tolerance even at the cost of availability."
+      }
     ]
   },
   {
@@ -1233,6 +2135,14 @@
       "zookeeper",
       "failure-handling",
       "ephemeral-znode"
+    ],
+    "termDefinitions": [
+      {
+        "term": "会话超时",
+        "fullName": "Session Timeout",
+        "meaning": "会话超时：客户端超过约定时间没有发送心跳，ZooKeeper 判定其会话失效并清理其临时节点。",
+        "meaningEn": "Session timeout is when a client misses heartbeats for the agreed window, so ZooKeeper marks its session expired and cleans up its ephemeral nodes."
+      }
     ]
   },
   {
@@ -1243,10 +2153,16 @@
     "sub": "ecosystem",
     "q": "今天哪些系统仍然依赖 ZooKeeper？",
     "options": [
-      "Apache 生态核心组件：HBase、Hadoop、SolrCloud、Storm、NiFi、Pulsar；ClickHouse 的复制协调/分布式 DDL/元数据也需要它",
-      "Kubernetes 的核心",
-      "所有云数据库",
-      "已经没有系统在用了"
+      "Apache 生态核心组件：HBase、Hadoop、Storm、Pulsar 等；ClickHouse 复制协调也依赖它",
+      "有人误以为 Kubernetes 的核心调度组件是直接构建在 ZooKeeper 协调服务之上的",
+      "几乎所有主流的云托管数据库和缓存产品线，据说如今都还依赖它来做协调",
+      "有人认为已经完全没有任何生产系统还在实际使用 ZooKeeper 了"
+    ],
+    "options_en": [
+      "Core Apache-ecosystem components: HBase, Hadoop, Storm, Pulsar and more; ClickHouse also relies on it for replication coordination.",
+      "Some mistakenly believe Kubernetes' core scheduler is built directly on top of the ZooKeeper coordination service.",
+      "Some claim nearly every mainstream cloud-managed database and cache product line today still depends on it.",
+      "Some believe there is no production system left anywhere that actually still uses ZooKeeper."
     ],
     "answer": [
       0
@@ -1267,10 +2183,16 @@
     "sub": "ecosystem",
     "q": "Kafka 摆脱 ZooKeeper 的举动（KRaft）说明了什么趋势？",
     "options": [
-      "共识协议不再重要",
-      "所有系统都该用 ZK",
-      "转向「自带内置共识协议的自包含系统」：KRaft 消除了外部协调服务带来的运维复杂度、扩展瓶颈和额外故障点",
-      "Kafka 放弃了分布式"
+      "说明共识协议这类机制在分布式系统里已经变得不再重要",
+      "说明所有系统今后都应该反过来外挂一个 ZooKeeper 集群才对",
+      "转向「自带内置共识协议的自包含系统」：KRaft 消除了外部协调服务带来的运维复杂度、扩展瓶颈和故障点",
+      "说明 Kafka 已经彻底放弃了分布式架构，改回单机部署模式"
+    ],
+    "options_en": [
+      "It shows consensus mechanisms like this no longer matter in distributed systems.",
+      "It shows every system should now instead bolt on an external ZooKeeper cluster.",
+      "A shift toward self-contained systems with built-in consensus: KRaft removes the ops complexity, scaling bottlenecks, and failure points of an external coordinator.",
+      "It shows Kafka has completely abandoned distributed architecture and gone back to single-node deployment."
     ],
     "answer": [
       2
@@ -1281,6 +2203,56 @@
       "zookeeper",
       "kafka",
       "kraft"
+    ],
+    "termDefinitions": [
+      {
+        "term": "KRaft",
+        "fullName": "Kafka Raft metadata mode",
+        "meaning": "KRaft：Kafka 内置的基于 Raft 的元数据管理模式，用来取代外部 ZooKeeper 依赖。",
+        "meaningEn": "KRaft is Kafka's built-in Raft-based metadata mode that replaces its former dependency on external ZooKeeper."
+      },
+      {
+        "term": "Kafka",
+        "fullName": "Apache Kafka",
+        "meaning": "Kafka：分布式消息队列/事件流平台，曾长期用 ZooKeeper 管理集群元数据。",
+        "meaningEn": "Kafka is a distributed messaging and event-streaming platform that long relied on ZooKeeper for cluster metadata."
+      }
+    ],
+    "optionMeanings": [
+      "认为共识协议整体已经过时。",
+      "认为所有系统都该反过来依赖 ZooKeeper。",
+      "Kafka 用内置 Raft（KRaft）取代外部 ZooKeeper 协调。",
+      "误以为 KRaft 是放弃分布式的信号。"
+    ],
+    "optionScenarioImpacts": [
+      "但 KRaft 恰恰是用另一种共识协议（Raft）替代，说明共识依然核心。",
+      "现实相反：Kafka 正在移除对 ZooKeeper 的外部依赖。",
+      "运维只需管理 Kafka 自身进程，不再需要单独运维一套 ZK 集群。",
+      "KRaft 之后 Kafka 依旧是多 broker 分布式集群，只是元数据管理方式变了。"
+    ],
+    "optionDirectness": [
+      "不直接：与 KRaft 本身就是共识协议的事实矛盾。",
+      "不直接：方向与实际趋势完全相反。",
+      "最直接：准确描述了 KRaft 消除外部协调依赖的动机和效果。",
+      "不直接：混淆了元数据管理方式变化和架构模式变化。"
+    ],
+    "optionMeanings_en": [
+      "Claims consensus protocols are obsolete overall.",
+      "Claims every system should now depend on ZooKeeper instead.",
+      "Kafka replaces external ZooKeeper coordination with built-in Raft (KRaft).",
+      "Mistakes KRaft for Kafka abandoning distributed architecture."
+    ],
+    "optionScenarioImpacts_en": [
+      "But KRaft replaces it with another consensus protocol, Raft, so consensus is still core.",
+      "The reality is the opposite: Kafka is removing its external ZooKeeper dependency.",
+      "Operators now only manage Kafka's own processes, no separate ZooKeeper cluster.",
+      "Post-KRaft Kafka is still a multi-broker distributed cluster; only metadata management changed."
+    ],
+    "optionDirectness_en": [
+      "Not direct: contradicts the fact that KRaft is itself a consensus protocol.",
+      "Not direct: the direction is the opposite of the real trend.",
+      "Most direct: accurately captures why KRaft removes the external coordination dependency.",
+      "Not direct: conflates a metadata-management change with an architectural retreat."
     ]
   },
   {
@@ -1291,20 +2263,104 @@
     "sub": "alternatives",
     "q": "etcd 相对 ZooKeeper 的定位是？",
     "options": [
-      "etcd 是 ZK 的 Java 重写",
-      "云原生世界的协调新贵：强一致分布式 KV，现代 HTTP/JSON 与 gRPC API，为「小数据集+高读量」优化，是 Kubernetes 的底座",
-      "etcd 只做服务发现",
-      "etcd 不保证一致性"
+      "很多人误以为 etcd 只是把 ZooKeeper 原封不动地用 Java 语言重新实现了一遍而已",
+      "云原生世界的协调新贵：强一致分布式 KV，现代 HTTP/JSON 与 gRPC API，是 Kubernetes 的底座",
+      "很多人以为 etcd 只能拿来做服务发现，完全不支持用它存放配置数据",
+      "很多人误以为 etcd 本质是最终一致的存储系统，不提供任何强一致性保证"
+    ],
+    "options_en": [
+      "Many mistakenly believe etcd is just ZooKeeper reimplemented in Java, unchanged, one to one.",
+      "The cloud-native coordinator: a strongly consistent distributed key-value store with modern HTTP/JSON and gRPC APIs, the base of Kubernetes.",
+      "Many believe etcd can only be used for service discovery and does not support storing configuration at all.",
+      "Many mistakenly believe etcd is fundamentally an eventually consistent store with no strong consistency guarantee."
     ],
     "answer": [
       1
     ],
     "why": "etcd 与 ZK 解决同类问题（配置管理、服务发现），但 API 更现代、与云原生生态深度绑定。",
     "why_en": "Etcd offers strongly consistent key-value coordination with modern HTTP and gRPC APIs and powers Kubernetes.",
+    "tradeoff": "etcd 的现代云原生 API + Kubernetes 深度集成 vs ZooKeeper 的 Apache 生态成熟度 + 更丰富的原生配方（选举/锁）",
+    "table": {
+      "headers": [
+        "协调服务",
+        "一致性",
+        "API 风格",
+        "招牌场景"
+      ],
+      "rows": [
+        [
+          "ZooKeeper",
+          "强一致，ZAB",
+          "自有客户端协议",
+          "Apache 生态协调"
+        ],
+        [
+          "etcd",
+          "强一致，Raft",
+          "HTTP/JSON、gRPC",
+          "Kubernetes 底座"
+        ]
+      ]
+    },
     "tags": [
       "zookeeper",
       "etcd",
       "alternatives"
+    ],
+    "termDefinitions": [
+      {
+        "term": "etcd",
+        "meaning": "etcd：基于 Raft 协议的强一致分布式键值存储，是 Kubernetes 的核心元数据存储。",
+        "meaningEn": "etcd is a strongly consistent distributed key-value store built on Raft that serves as Kubernetes' core metadata store."
+      },
+      {
+        "term": "gRPC",
+        "fullName": "gRPC Remote Procedure Call",
+        "meaning": "gRPC：Google 开源的高性能 RPC 框架，基于 HTTP/2 和 Protocol Buffers。",
+        "meaningEn": "gRPC is Google's high-performance remote-procedure-call framework built on HTTP/2 and Protocol Buffers."
+      },
+      {
+        "term": "HTTP/JSON",
+        "fullName": "HTTP with JSON payloads",
+        "meaning": "HTTP/JSON：用标准 HTTP 请求携带 JSON 格式数据的接口风格，浏览器和多数语言都能直接用。",
+        "meaningEn": "HTTP/JSON is an API style using standard HTTP requests with JSON payloads, directly usable from browsers and most languages."
+      }
+    ],
+    "optionMeanings": [
+      "误以为 etcd 是 ZooKeeper 的语言移植版。",
+      "etcd：现代 API、强一致 KV，是 Kubernetes 的底座。",
+      "低估了 etcd 的配置存储能力。",
+      "误判 etcd 的一致性模型为最终一致。"
+    ],
+    "optionScenarioImpacts": [
+      "两者协议、数据模型、API 完全不同，不是简单的语言移植。",
+      "云原生团队选它做配置中心和服务发现的统一存储。",
+      "etcd 的 KV 接口天然适合存配置，且是很多平台配置中心的底层实现。",
+      "etcd 基于 Raft，和 ZAB 一样提供强一致写，不是最终一致。"
+    ],
+    "optionDirectness": [
+      "不直接：混淆了『解决同类问题』和『同一个实现』。",
+      "最直接：准确概括了 etcd 的 API、一致性模型与定位。",
+      "不直接：低估了 etcd 作为通用 KV 的配置存储能力。",
+      "不直接：与 etcd 实际的强一致设计相反。"
+    ],
+    "optionMeanings_en": [
+      "Mistakes etcd for a language port of ZooKeeper.",
+      "etcd: modern APIs, strongly consistent KV store, the base of Kubernetes.",
+      "Underestimates etcd's ability to store configuration.",
+      "Misjudges etcd's consistency model as eventual."
+    ],
+    "optionScenarioImpacts_en": [
+      "The protocol, data model, and API are all different — not a simple language port.",
+      "Cloud-native teams pick it as the unified store for config and service discovery.",
+      "etcd's key-value interface fits configuration naturally and backs many platform config centers.",
+      "etcd is built on Raft and, like ZAB, gives strongly consistent writes, not eventual consistency."
+    ],
+    "optionDirectness_en": [
+      "Not direct: conflates 'solves similar problems' with 'is the same implementation'.",
+      "Most direct: accurately summarizes etcd's API, consistency model, and positioning.",
+      "Not direct: underestimates etcd's general-purpose KV configuration use.",
+      "Not direct: the opposite of etcd's actual strongly consistent design."
     ]
   },
   {
@@ -1315,20 +2371,62 @@
     "sub": "alternatives",
     "q": "Consul 与 ZooKeeper 相比的特色是？",
     "options": [
-      "只是 ZK 的 Go 语言版",
-      "只提供分布式锁",
-      "不支持健康检查",
-      "超出基础协调：服务发现 + 健康检查 + KV 存储，招牌是网络基础设施自动化（按服务变化动态配置负载均衡器和防火墙）"
+      "Consul 只是把 ZooKeeper 用 Go 语言重新实现了一遍",
+      "Consul 的能力范围比 ZooKeeper 更窄，只提供分布式锁一项功能",
+      "Consul 不做健康检查，这方面反而不如 ZooKeeper",
+      "超出基础协调：服务发现 + 健康检查 + KV 存储，招牌是按服务变化自动重配负载均衡器和防火墙"
+    ],
+    "options_en": [
+      "Consul is just ZooKeeper reimplemented in Go with the same feature set.",
+      "Consul's scope is narrower than ZooKeeper's, offering only distributed locks.",
+      "Consul does not do health checking, which is actually a gap compared to ZooKeeper.",
+      "It goes beyond basic coordination: service discovery, health checking, and a KV store, with automatic load-balancer and firewall reconfiguration as its signature feature."
     ],
     "answer": [
       3
     ],
     "why": "Consul 走「更全家桶」路线；云厂商方案（AWS Parameter Store、Azure App Configuration 等）则以托管省心取胜。",
     "why_en": "Consul goes beyond coordination with service discovery, health checks, and network automation that reconfigures load balancers as services change.",
+    "tradeoff": "Consul 的服务网格全家桶（服务发现+健康检查+网络自动化）vs ZooKeeper 的专注协调原语（ZNode+watch）",
+    "table": {
+      "headers": [
+        "协调服务",
+        "一致性",
+        "覆盖范围",
+        "招牌场景"
+      ],
+      "rows": [
+        [
+          "ZooKeeper",
+          "强一致，ZAB",
+          "协调原语",
+          "Apache 生态协调"
+        ],
+        [
+          "Consul",
+          "强一致，Raft",
+          "发现+健康检查+网络自动化",
+          "服务网格基础设施"
+        ]
+      ]
+    },
     "tags": [
       "zookeeper",
       "consul",
       "alternatives"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Consul",
+        "meaning": "Consul：HashiCorp 出品的协调服务，除服务发现外还内置健康检查和网络自动化能力。",
+        "meaningEn": "Consul is HashiCorp's coordination service that adds built-in health checking and network automation on top of service discovery."
+      },
+      {
+        "term": "健康检查",
+        "fullName": "Health Check",
+        "meaning": "健康检查：持续探测服务实例是否正常运行，异常时自动从可用列表摘除。",
+        "meaningEn": "A health check continuously probes whether a service instance is functioning and removes it from the available list when it is not."
+      }
     ]
   },
   {
@@ -1339,10 +2437,16 @@
     "sub": "limitations",
     "q": "ZooKeeper 的「热点问题（hot spotting）」指什么？",
     "options": [
-      "CPU 过热降频",
+      "服务器 CPU 长期处于持续高负载运行状态，触发了系统自动降频保护机制",
       "大量客户端 watch 同一个 ZNode（选举、锁的常态）时，通知流量可能压垮服务器——热门节点成为瓶颈",
-      "热数据自动迁移",
-      "磁盘热点扇区"
+      "系统会自动把被频繁访问的热数据迁移到内存容量更大的机器上去",
+      "磁盘上的某个存储扇区因为被反复频繁写入而提前发生物理损坏"
+    ],
+    "options_en": [
+      "Servers throttle their own CPU frequency after sustained continuous high load.",
+      "When many clients watch the same znode, common in election or locks, notification traffic can overwhelm servers — popular nodes become bottlenecks.",
+      "The system automatically migrates frequently accessed hot data onto machines with larger memory capacity.",
+      "A specific storage sector wears out and fails early from being written to over and over."
     ],
     "answer": [
       1
@@ -1353,6 +2457,13 @@
       "zookeeper",
       "hot-spotting",
       "limitations"
+    ],
+    "termDefinitions": [
+      {
+        "term": "hot spotting",
+        "meaning": "hot spotting（热点问题）：大量请求或 watch 集中在同一个节点上，导致该节点及其所在服务器成为瓶颈。",
+        "meaningEn": "Hot spotting is when a large volume of requests or watches concentrate on a single node, turning it and its server into a bottleneck."
+      }
     ]
   },
   {
@@ -1366,19 +2477,33 @@
       "写昂贵：必须经 leader 传播到多数派",
       "内存存储模型限制容量：ZNode 要 <1MB、数据集须装进内存",
       "运维复杂：JVM 参数、磁盘布局、超时与连接监控——「用起来简单，运维起来复杂」",
-      "不支持 watch 通知"
+      "不支持 watch 通知，只能靠轮询感知变化"
+    ],
+    "options_en": [
+      "Writes are expensive: they must propagate through the leader to a majority.",
+      "Capacity is memory-bound: znodes must stay under one megabyte and the dataset must fit in memory.",
+      "Operationally complex: JVM tuning, disk layout, timeout and connection monitoring — simple to use, complex to operate.",
+      "It does not support watch notifications, so changes can only be detected by polling."
     ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "存大量数据、扛超高写入、或想最小化运维时，都该考虑替代方案；watch 恰恰是它的招牌能力。",
+    "why": "存大量数据、扛超高写入、或想最小化运维时，都该考虑替代方案；watch 恰恰是它的招牌能力，不是局限。",
     "why_en": "ZooKeeper writes are expensive through leader and quorum, capacity is memory-bound with small znodes, and it is simple to use but complex to operate.",
     "tags": [
       "zookeeper",
       "limitations",
       "operations"
+    ],
+    "termDefinitions": [
+      {
+        "term": "JVM",
+        "fullName": "Java Virtual Machine",
+        "meaning": "JVM：运行 Java 程序的虚拟机；ZooKeeper 用 Java 实现，堆大小等 JVM 参数需要仔细调优。",
+        "meaningEn": "The JVM is the runtime that executes Java programs; ZooKeeper is written in Java, so JVM settings like heap size need careful tuning."
+      }
     ]
   },
   {
@@ -1390,10 +2515,16 @@
     "scenario": "设计 Facebook Live Comments / YouTube Live Chat：百万观众看同一直播，希望同一直播间的 websocket 连接尽量集中到同一台（组）服务器以减少跨服务器通信。",
     "q": "ZooKeeper 在这里扮演什么角色？",
     "options": [
-      "直接转发聊天消息",
-      "存储所有历史评论",
-      "作为 API 网关的协调点：维护「哪个房间/直播由哪台服务器负责」的映射；服务器带容量注册，新连接按房间查 ZK 定向；房间满员时协调选新服务器扩展",
-      "给每条评论加锁"
+      "让 ZooKeeper 直接充当消息队列，转发全部实时评论的消息本体内容",
+      "把每一条历史评论的完整内容都存进 ZooKeeper 里，方便日后回放",
+      "作为 API 网关的协调点：维护「哪个房间/直播由哪台服务器负责」的映射；服务器带容量注册，新连接按房间查 ZK 定向",
+      "给每一条实时评论单独加一把分布式锁，用来防止重复展示"
+    ],
+    "options_en": [
+      "Have ZooKeeper act directly as the message queue forwarding every live comment's payload content.",
+      "Store the full content of every historical comment inside ZooKeeper for later replay.",
+      "Act as the API gateway's coordination point, mapping which server handles which room, with capacity-aware registration and routing.",
+      "Put an individual distributed lock on each live comment to prevent it from being shown twice."
     ],
     "answer": [
       2
@@ -1401,10 +2532,19 @@
     "why": "这是「智能路由/同房间同服务器（colocation）」的高级用法——Staff+ 或深度分布式面试的加分项。",
     "why_en": "ZooKeeper coordinates smart routing by mapping rooms to servers so a gateway can colocate all viewers of a stream on the same server group.",
     "whenOtherWins": "普通规模的聊天用 pub/sub 广播就能绕开大部分协调问题，不必上这套。",
+    "tradeoff": "ZK 做房间→服务器的协调映射（轻量、可扩展）vs 把评论本体也塞进 ZK（违反小数据原则、写爆）",
     "tags": [
       "zookeeper",
       "smart-routing",
       "colocation"
+    ],
+    "termDefinitions": [
+      {
+        "term": "colocation",
+        "fullName": "Colocation Routing",
+        "meaning": "colocation（同机集中路由）：把同一房间/直播的所有连接尽量路由到同一台或同一组服务器，减少跨服务器通信。",
+        "meaningEn": "Colocation routing means directing all connections for the same room or stream to the same server or server group, minimizing cross-server chatter."
+      }
     ]
   },
   {
@@ -1418,19 +2558,38 @@
       "broker 注册与发现、topic 元数据（分区数、副本因子）存储",
       "每个分区的 leader 选举（顺序临时节点保证单一 leader）",
       "consumer group 成员关系与分区分配，broker 故障经临时节点触发分区重分配",
-      "存储全部消息本体"
+      "存储全部消息本体，让 broker 直接从 ZK 读写消息内容"
+    ],
+    "options_en": [
+      "Broker registration and discovery, plus topic metadata like partition count and replication factor.",
+      "Per-partition leader election, using sequential ephemeral nodes to guarantee a single leader.",
+      "Consumer group membership and partition assignment, with broker failure triggering reassignment via ephemeral nodes.",
+      "Storing the full message payloads so brokers read and write message content directly from ZooKeeper."
     ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "KRaft 之前的 Kafka 正是这么用 ZK 的；HBase、Hadoop、Solr 也是类似模式。消息本体走 broker 的日志存储，绝不放 ZK。",
+    "why": "KRaft 之前的 Kafka 正是这么用 ZK 的；HBase、Hadoop、Solr 也是类似模式。消息本体走 broker 自己的日志存储，绝不放 ZK。",
     "why_en": "In a distributed queue design ZooKeeper handles broker registration, topic metadata, partition leader election, consumer membership, and failure detection, never the message payloads.",
+    "tradeoff": "ZK 管协调元数据（小、强一致）vs broker 自管消息日志（大、高吞吐）——两者不能互换",
     "tags": [
       "zookeeper",
       "message-queue",
       "infra-design"
+    ],
+    "termDefinitions": [
+      {
+        "term": "broker",
+        "meaning": "broker：消息队列集群里负责接收、存储、转发消息的服务器节点。",
+        "meaningEn": "A broker is a server node in a message-queue cluster responsible for receiving, storing, and forwarding messages."
+      },
+      {
+        "term": "consumer group",
+        "meaning": "consumer group（消费组）：一组共同消费同一批分区、彼此分摊负载的消费者客户端。",
+        "meaningEn": "A consumer group is a set of consumer clients that jointly consume a set of partitions, sharing the load among themselves."
+      }
     ]
   },
   {
@@ -1442,10 +2601,16 @@
     "scenario": "分布式文件系统需要「目录及其文件」的嵌套锁获取，要防死锁，还要能监控整个锁层级的变化。",
     "q": "为什么这里 ZooKeeper 严格优于 Redis？",
     "options": [
-      "ZK 更便宜",
-      "ZK 的层级命名空间天然表达父子锁结构，能同时 watch 多个节点监控整个锁层级，即时获知任何变化；Redis 缺少层级与联动通知",
-      "Redis 不能加锁",
-      "ZK 的锁吞吐更高"
+      "因为部署 ZooKeeper 集群的机器成本比部署 Redis 更加便宜",
+      "ZK 的层级命名空间天然表达父子锁结构，能同时 watch 多个节点监控整个锁层级；Redis 缺少层级与联动通知",
+      "因为 Redis 这个产品根本就没有实现过分布式锁的能力",
+      "因为 ZooKeeper 锁的整体写入吞吐量比 Redis 锁要高得多"
+    ],
+    "options_en": [
+      "Because running a ZooKeeper cluster costs less hardware than running Redis.",
+      "ZooKeeper's hierarchical namespace naturally expresses parent-child lock structure and can watch multiple nodes across the whole hierarchy; Redis lacks that hierarchy and linked notification.",
+      "Because Redis as a product has never implemented any distributed-lock capability.",
+      "Because ZooKeeper locks have much higher overall write throughput than Redis locks."
     ],
     "answer": [
       1
@@ -1453,10 +2618,77 @@
     "why": "资源有父子关系、锁获取要尊重层级时，ZK 的树形结构 + 多点 watch 是量身定制；Redis 锁是平面的。",
     "why_en": "ZooKeeper's hierarchical namespace and multi-node watches express nested directory-file locks with deadlock prevention, which flat Redis locks cannot.",
     "whenOtherWins": "普通的单资源短锁（订单、座位）Redis 又快又简单，是默认选择。",
+    "tradeoff": "ZooKeeper 的层级命名空间+多点 watch（表达父子锁结构）vs Redis 的平面 key 空间（无天然层级）",
+    "table": {
+      "headers": [
+        "方案",
+        "一致性保证",
+        "崩溃处理",
+        "吞吐/延迟"
+      ],
+      "rows": [
+        [
+          "ZooKeeper 锁",
+          "强一致，quorum 写",
+          "会话超时自动删除节点",
+          "较慢，几十 ms 级"
+        ],
+        [
+          "Redis 锁",
+          "依赖实现，通常较弱",
+          "TTL 到期自动释放",
+          "很快，亚 ms 级"
+        ]
+      ]
+    },
     "tags": [
       "zookeeper",
       "hierarchical-locks",
       "redis"
+    ],
+    "termDefinitions": [
+      {
+        "term": "层级命名空间",
+        "fullName": "Hierarchical Namespace",
+        "meaning": "层级命名空间：像文件系统一样用路径组织节点的结构，天然表达父子/嵌套关系。",
+        "meaningEn": "A hierarchical namespace organizes nodes by path like a filesystem, naturally expressing parent-child nested relationships."
+      }
+    ],
+    "optionMeanings": [
+      "把决策因素错误地归结为机器成本。",
+      "ZK 靠树形结构与多点 watch 表达并监控锁层级。",
+      "错误地否定 Redis 具备锁能力。",
+      "把决策因素错误地归结为吞吐量。"
+    ],
+    "optionScenarioImpacts": [
+      "成本从来不是这道题的决定性约束，场景问的是『能不能表达层级』。",
+      "父目录和子文件的锁可以同时被观察，任何一层变化都能立刻感知。",
+      "Redis 完全可以做锁（SETNX/TTL），只是没有原生层级结构。",
+      "这个场景压倒性约束是正确性和层级表达，不是吞吐量。"
+    ],
+    "optionDirectness": [
+      "不直接：文不对题，没有回答『为什么严格优于』。",
+      "最直接：精确指出层级命名空间和多点 watch 这两个决定性能力。",
+      "不直接：事实错误，Redis 有成熟的锁方案。",
+      "不直接：吞吐量恰恰是 ZK 锁的弱项，不是它赢的原因。"
+    ],
+    "optionMeanings_en": [
+      "Wrongly attributes the decision to hardware cost.",
+      "ZooKeeper's tree structure and multi-node watches express and monitor the lock hierarchy.",
+      "Wrongly claims Redis has no locking capability.",
+      "Wrongly attributes the decision to throughput."
+    ],
+    "optionScenarioImpacts_en": [
+      "Cost was never the deciding constraint here; the question is about expressing hierarchy.",
+      "Parent-directory and child-file locks can be watched simultaneously, so any level's change is caught instantly.",
+      "Redis can absolutely implement locks with SETNX and TTL, it just lacks native hierarchy.",
+      "The overriding constraint here is correctness and hierarchy expression, not throughput."
+    ],
+    "optionDirectness_en": [
+      "Not direct: it does not answer why ZooKeeper is strictly better here.",
+      "Most direct: pinpoints the two decisive capabilities, hierarchy and multi-node watches.",
+      "Not direct: factually wrong, Redis has mature locking patterns.",
+      "Not direct: throughput is actually ZooKeeper's weak point, not its advantage here."
     ]
   },
   {
@@ -1468,10 +2700,16 @@
     "scenario": "普通产品向系统设计面试（非深度基础设施），你在考虑要不要把 ZooKeeper 画进架构图。",
     "q": "正确的姿态是？",
     "options": [
-      "每道题都先画一个 ZK 集群",
-      "用 ZK 替代所有数据库",
-      "别急着上 ZK：除非在设计深度基础设施系统、需要讨论多服务器间的精细协调，或需求超出现代负载均衡器/内置服务发现的能力",
-      "面试里永远不要提 ZK"
+      "不管拿到什么题目，一上来就先在架构图里画一个 ZooKeeper 集群",
+      "干脆用 ZooKeeper 去替代设计里原本该用的所有数据库",
+      "别急着上 ZK：除非在设计深度基础设施系统、需要精细协调，或需求超出现代负载均衡器/内置服务发现的能力",
+      "不管遇到什么场景，面试全程都绝口不提 ZooKeeper 这个词"
+    ],
+    "options_en": [
+      "No matter what the prompt is, start every design by drawing a ZooKeeper cluster first.",
+      "Just go ahead and replace every database in the design with ZooKeeper instead.",
+      "Do not reach for ZooKeeper unless designing deep infrastructure, needing fine-grained coordination, or the need exceeds modern load balancers and built-in discovery.",
+      "No matter what scenario comes up, never mention the word ZooKeeper at all during the interview."
     ],
     "answer": [
       2
@@ -1479,10 +2717,47 @@
     "why": "ZK 很少是第一选择：现代 LB、平台服务发现、云托管方案覆盖了多数场景；它的主场是深度 infra 题和高级协调需求。",
     "why_en": "Do not reach for ZooKeeper unless you are designing deep infrastructure or need coordination beyond what modern load balancers and built-in service discovery offer.",
     "whenOtherWins": "设计分布式消息队列/任务调度器、或需要智能路由与层级锁时，ZK 就是合理选择。",
+    "tradeoff": "ZK 的精细协调能力（重、需要额外运维）vs 现代 LB/托管服务发现（轻量、覆盖大多数产品场景）",
     "tags": [
       "zookeeper",
       "interview",
       "when-to-use"
+    ],
+    "optionMeanings": [
+      "把 ZooKeeper 当成每道题的默认起手式。",
+      "误解 ZooKeeper 的定位，当成数据库替代品。",
+      "只在深度协调需求出现时才引入 ZooKeeper。",
+      "走向另一个极端，完全回避这个知识点。"
+    ],
+    "optionScenarioImpacts": [
+      "面试官会认为你没有分辨『何时真正需要协调服务』的判断力。",
+      "ZooKeeper 不擅长高吞吐读写和大数据量存储，这是方向性错误。",
+      "展示了『先问需求，再选组件』的成熟设计思路。",
+      "遇到真正需要它的深度 infra 题时会完全说不出方案。"
+    ],
+    "optionDirectness": [
+      "不直接：把一个专用工具当成万能起手式。",
+      "不直接：混淆了协调服务和数据存储两个不同定位。",
+      "最直接：准确划定了 ZK 该出场和不该出场的边界。",
+      "不直接：矫枉过正，放弃了一个有效的知识点。"
+    ],
+    "optionMeanings_en": [
+      "Treats ZooKeeper as the default opening move for every question.",
+      "Misunderstands ZooKeeper's role and treats it as a database replacement.",
+      "Introduces ZooKeeper only when deep coordination needs actually appear.",
+      "Overcorrects to the opposite extreme and avoids the topic entirely."
+    ],
+    "optionScenarioImpacts_en": [
+      "Interviewers will read this as an inability to judge when coordination is actually needed.",
+      "ZooKeeper is not built for high-throughput read/write or large data volumes, a directional mistake.",
+      "Demonstrates the mature pattern of asking requirements first, then picking components.",
+      "Leaves you unable to propose anything when a deep infra question genuinely calls for it."
+    ],
+    "optionDirectness_en": [
+      "Not direct: turns a specialized tool into a universal opening move.",
+      "Not direct: conflates a coordination service with a data-storage role.",
+      "Most direct: accurately draws the line for when ZooKeeper belongs and when it does not.",
+      "Not direct: overcorrects and discards a genuinely useful piece of knowledge."
     ]
   },
   {
@@ -1493,10 +2768,16 @@
     "sub": "zab",
     "q": "一次写请求（如注册 Bob 的 ZNode）在 ensemble 内部的流转是？",
     "options": [
-      "任意 follower 直接写本地即可返回",
+      "任意一台 follower 收到写请求后直接写本地磁盘，就可以立刻返回写成功",
       "请求到 leader → leader 向所有 follower 广播变更 → 多数派确认已接受并保存 → leader 确认写成功",
-      "客户端同时写所有节点",
-      "先写磁盘再问 leader"
+      "客户端把同一条写请求原样同时发送给 ensemble 里的每一台服务器",
+      "每台服务器先各自把数据写到本地磁盘，之后再统一去问 leader 这次写是否有效"
+    ],
+    "options_en": [
+      "Any follower that receives the write just writes to its local disk and returns success right away.",
+      "The request reaches the leader, which broadcasts the change to followers, and it succeeds once a majority has accepted and saved it.",
+      "The client sends the exact same write request to every single server in the ensemble at once.",
+      "Every server first writes to its own local disk, then afterward asks the leader whether that write was valid."
     ],
     "answer": [
       1
@@ -1516,18 +2797,25 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "znodes",
-    "q": "单个 ZNode 的数据大小应控制在多少以内？",
+    "scenario": "团队在讨论要不要把一份几 MB 大小的完整用户资料 JSON 直接存进一个 ZNode，还是只存一个指向对象存储的引用；ZooKeeper 的设计前提是 ZNode 只放协调元数据，不放大文件。",
+    "q": "遵循这个设计边界，单个 ZNode 承载的数据量上限应该设为？",
     "options": [
-      "1KB",
-      "10MB",
-      "1MB",
-      "1GB"
+      "1KB，比官方建议严格得多，几乎存不下任何真实配置",
+      "10MB，远超官方建议，容易在快照/日志里造成额外压力",
+      "1MB，符合官方建议：ZNode 只放小量协调数据，数据集要能整个装进内存",
+      "1GB，把 ZNode 当文件存储用，完全违背 ZooKeeper 的设计前提"
+    ],
+    "options_en": [
+      "1KB, far stricter than the guideline, barely enough for any real config.",
+      "10MB, well past the guideline, adding extra pressure to snapshots and logs.",
+      "1MB, matching the guideline: znodes hold only small coordination data and the dataset must fit in memory.",
+      "1GB, treating a znode like file storage, which defeats ZooKeeper's whole design premise."
     ],
     "answer": [
       2
     ],
-    "why": "ZNode 定位是小协调数据：保持在 1MB 以下，且整个数据集要能装进内存。",
-    "why_en": "Keep each znode under one megabyte and ensure the whole dataset fits in memory.",
+    "why": "ZNode 定位是小协调数据：保持在 1MB 以下，整个数据集要能装进内存；超过这个量级就该把大对象放对象存储/DB，ZNode 只存一个引用指针。",
+    "why_en": "Keep each znode under one megabyte and ensure the whole dataset fits in memory; anything bigger belongs in object storage with just a reference stored in the znode.",
     "tags": [
       "zookeeper",
       "znodes",
@@ -1540,18 +2828,25 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "sessions",
+    "scenario": "配置聊天服务器的 ZooKeeper 客户端会话超时参数，要在「网络抖动误判」和「故障发现太慢」之间找平衡。",
     "q": "ZooKeeper 会话超时的典型配置区间是？",
     "options": [
-      "10-30 毫秒",
-      "10-30 秒",
-      "10-30 分钟",
-      "10-30 小时"
+      "10-30 毫秒，几乎任何一次网络抖动都会触发误判",
+      "10-30 秒，兼顾故障发现速度和抗网络抖动能力",
+      "10-30 分钟，故障发现会慢到影响用户体验",
+      "10-30 小时，几乎等于关闭了故障检测能力"
+    ],
+    "options_en": [
+      "10-30 milliseconds, where almost any network blip triggers a false failure.",
+      "10-30 seconds, balancing fast failure detection against tolerance for network blips.",
+      "10-30 minutes, slow enough to noticeably hurt user experience during a real failure.",
+      "10-30 hours, which effectively disables failure detection."
     ],
     "answer": [
       1
     ],
-    "why": "10-30 秒是「误报 vs 检测速度」的常见折中；也是服务器崩溃后临时节点消失、故障被发现的时间量级。",
-    "why_en": "Session timeouts are typically ten to thirty seconds, which is how long failure detection via ephemeral nodes takes.",
+    "why": "10-30 秒是「误报 vs 检测速度」的常见折中——短于此网络抖动就会引发误判切换，长于此真故障要等太久才被发现，而这个窗口也正是临时节点消失、下游 watcher 收到通知的时间量级。",
+    "why_en": "Session timeouts are typically ten to thirty seconds, balancing false-positive failovers against how long real failure detection via ephemeral nodes takes.",
     "tags": [
       "zookeeper",
       "sessions",
@@ -1572,6 +2867,24 @@
       "zookeeper",
       "primitives",
       "summary"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZNode",
+        "fullName": "ZooKeeper Node",
+        "meaning": "ZNode：层级命名空间里的一个数据节点，能存少量数据、能有子节点。",
+        "meaningEn": "A znode is a node in the hierarchical namespace that can hold a small amount of data and have children."
+      },
+      {
+        "term": "ensemble",
+        "meaning": "ensemble：一组协同工作、以多数派（quorum）容错的 ZooKeeper 服务器。",
+        "meaningEn": "An ensemble is the group of ZooKeeper servers working together with majority-based fault tolerance."
+      },
+      {
+        "term": "watch",
+        "meaning": "watch：客户端登记在 ZNode 上的一次性变更通知。",
+        "meaningEn": "A watch is a one-time change notification a client registers on a znode."
+      }
     ]
   }
 ]

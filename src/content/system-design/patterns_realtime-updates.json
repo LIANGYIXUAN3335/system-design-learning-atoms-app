@@ -7,20 +7,39 @@
     "sub": "definition",
     "q": "Real-time Updates 模式主要解决什么问题？",
     "options": [
-      "事件发生后，服务器如何低延迟把通知或数据变化推送给客户端",
-      "如何把大文件上传到 S3",
-      "如何给数据库建 B-tree 索引",
-      "如何压缩静态 HTML"
+      "客户端如何把大文件分片上传到对象存储并支持断点续传",
+      "事件发生后，服务器如何用低延迟把状态变化推送给已连接的客户端",
+      "数据库如何用 B-tree 索引加速范围查询",
+      "静态 HTML/CSS 资源如何压缩后经 CDN 分发给用户"
     ],
     "answer": [
-      0
+      1
     ],
-    "why": "实时更新关注用户无需主动刷新就能看到新消息、位置、协作编辑、行情或 dashboard 数据。它本质上是低延迟通信和更新传播问题。",
+    "why": "实时更新的核心是服务器主动推送状态变化，而不是客户端反复拉取或询问；关注低延迟和推送两件事。",
     "why_en": "Real-time updates deliver server-side events or data changes to clients with low latency.",
     "tags": [
       "realtime-updates",
       "definition",
       "low-latency"
+    ],
+    "options_en": [
+      "How the client uploads a large file to object storage in chunks with resume support.",
+      "How the server pushes state changes to already-connected clients with low latency after something happens.",
+      "How a database uses a B-tree index to speed up range queries.",
+      "How static HTML and CSS assets are compressed and served through a CDN."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存到靠近用户的边缘节点的网络。",
+        "meaningEn": "A CDN is a network of edge servers that caches content close to users."
+      },
+      {
+        "term": "B-tree",
+        "meaning": "数据库常用的平衡树索引结构，用于加速范围查询。",
+        "meaningEn": "A B-tree is a balanced tree index structure that speeds up database range queries."
+      }
     ]
   },
   {
@@ -40,14 +59,27 @@
       0,
       1
     ],
-    "why": "第一跳是 client-server protocol：polling/SSE/WebSocket/WebRTC。第二跳是 source-to-server propagation：DB polling、consistent hashing、pub/sub 等。",
+    "why": "第一跳是 client-server 协议选型；第二跳是更新如何从产生处传播到持有连接的 server；两跳取舍相互独立。",
     "why_en": "Real-time design has two hops: client-server delivery and source-to-server update propagation.",
     "tags": [
       "two-hops",
       "protocols",
       "propagation"
     ],
-    "diagram": "flowchart LR\n    A[\"事件源\"] -->|hop 1| B[\"连接服务器\"]\n    B -->|hop 2| C[\"客户端\"]\n    D[\"协议选择\"] -.-> B\n    E[\"传播方式\"] -.-> A"
+    "diagram": "flowchart LR\n    A[\"事件源\"] -->|hop 1| B[\"连接服务器\"]\n    B -->|hop 2| C[\"客户端\"]\n    D[\"协议选择\"] -.-> B\n    E[\"传播方式\"] -.-> A",
+    "options_en": [
+      "The connection protocol between server and client.",
+      "How updates propagate from their source to the server holding the connection.",
+      "How to compile JavaScript down to machine code.",
+      "How to generate thumbnails for images."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hop",
+        "meaning": "更新在到达客户端路上要经过的一段传输环节。",
+        "meaningEn": "A hop is one leg of the path an update travels on its way to the client."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-003",
@@ -68,14 +100,15 @@
       0,
       3
     ],
-    "why": "实时系统不是只选 WebSocket。还要把更新从产生处路由到当前持有用户连接的 server。",
+    "why": "实时系统不只是选协议，还要把更新从产生处路由到当前持有用户连接的 server，这是常被忽略的第二跳。",
     "why_en": "A realtime update is produced, propagated to the right server, delivered over a client connection, and rendered by the client.",
     "diagram": "flowchart LR\n  Source[Update Source] --> Prop[Server-side propagation]\n  Prop --> Conn[Connection Server]\n  Conn --> Client[Client UI]",
     "tags": [
       "two-hops",
       "flow",
       "realtime"
-    ]
+    ],
+    "tradeoff": "低延迟直连交付 vs 多服务器间事件路由的额外开销"
   },
   {
     "id": "sd-patterns-realtime-updates-004",
@@ -85,22 +118,48 @@
     "sub": "http-limits",
     "q": "标准 HTTP request-response 为什么不适合真正实时的服务器主动推送？",
     "options": [
+      "HTTP 流量必须绕开 load balancer，否则请求会被丢弃",
+      "HTTP 请求体只能是纯文本，无法携带 JSON 这类结构化数据",
       "客户端请求后服务器响应并关闭连接，服务器没有自然渠道主动发后续事件",
-      "HTTP 不能传 JSON",
-      "HTTP 无法经过 load balancer",
-      "HTTP 只能用于图片"
+      "HTTP 协议本身只定义了图片传输，不支持其他数据类型"
     ],
     "answer": [
-      0
+      2
     ],
-    "why": "传统 HTTP 是客户端拉取模型。实时系统要么让客户端持续拉取，要么建立持久连接让服务器推送。",
+    "why": "传统 HTTP 是一次性拉取模型，响应后连接关闭；要推送后续事件就得反复拉取，或建立持久连接换服务器主动权。",
     "why_en": "Traditional HTTP is request-response, so servers need polling or persistent connections to deliver later events.",
     "tags": [
       "http",
       "request-response",
       "limits"
     ],
-    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: HTTP request\n    S-->>C: response\n    Note over C,S: 连接结束\n    S--xC: 后续事件无法自然推送"
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: HTTP request\n    S-->>C: response\n    Note over C,S: 连接结束\n    S--xC: 后续事件无法自然推送",
+    "options_en": [
+      "HTTP traffic must avoid load balancers or requests get dropped.",
+      "HTTP request bodies are plain text only and cannot carry structured data like JSON.",
+      "The server responds once and closes the connection, leaving no natural channel to push later events.",
+      "HTTP as a protocol only defines image transfer, not other data types."
+    ],
+    "tradeoff": "一次性请求响应 vs 持续开放的推送通道",
+    "termDefinitions": [
+      {
+        "term": "HTTP",
+        "fullName": "HyperText Transfer Protocol",
+        "meaning": "应用层的请求-响应协议，是大多数 Web 通信的基础。",
+        "meaningEn": "HTTP, HyperText Transfer Protocol, is the request-response protocol most web communication is built on."
+      },
+      {
+        "term": "JSON",
+        "fullName": "JavaScript Object Notation",
+        "meaning": "一种轻量级的结构化数据格式。",
+        "meaningEn": "JSON is a lightweight structured data format."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-005",
@@ -110,13 +169,13 @@
     "sub": "networking",
     "q": "在面试讨论实时连接时，TCP 相比 UDP 的关键语义是什么？",
     "options": [
-      "TCP 是 connection-oriented，保证有序可靠传输，但连接建立和维护有成本",
-      "TCP 不需要建立连接且不保证顺序",
-      "TCP 只能用于 DNS",
-      "TCP 不能承载 WebSocket"
+      "TCP 无法支撑 WebSocket 这类需要双向发送消息的持久连接",
+      "TCP 是 connectionless 协议，发送数据不需要事先握手，也不保证到达顺序",
+      "TCP 只服务于 DNS 查询这类短请求，不适合承载持续的数据流",
+      "TCP 是 connection-oriented，保证有序可靠传输，但连接建立和维护有成本"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "WebSocket、HTTP、SSE 等都建立在 TCP 语义之上。持久连接带来低延迟，也带来服务端连接状态成本。",
     "why_en": "TCP provides ordered reliable connections, which help realtime protocols but require connection state.",
@@ -124,6 +183,62 @@
       "networking",
       "tcp",
       "connection-state"
+    ],
+    "scenario": "面试官问你为什么 WebSocket、HTTP 这些实时协议都构建在 TCP 而不是 UDP 之上。",
+    "options_en": [
+      "TCP cannot support persistent connections like WebSocket that need bidirectional messaging.",
+      "TCP is a connectionless protocol that needs no handshake and does not guarantee arrival order.",
+      "TCP only serves short requests like DNS lookups and cannot carry a sustained data stream.",
+      "TCP is connection-oriented and guarantees ordered, reliable delivery, but setting up and maintaining the connection has a cost."
+    ],
+    "tradeoff": "有序可靠但要维护连接状态（TCP） vs 无连接更轻但不保证送达顺序（UDP）",
+    "optionMeanings": [
+      "否认 TCP 能承载持久双向连接，这与事实相反。",
+      "把 UDP 的 connectionless 特性错按到了 TCP 头上。",
+      "把 TCP 的适用范围错误缩小成只服务 DNS。",
+      "TCP 需要先握手建立连接，之后保证有序可靠。"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "连接",
+        "顺序保证",
+        "典型用途"
+      ],
+      "rows": [
+        [
+          "TCP",
+          "面向连接，需握手",
+          "保证有序可靠",
+          "HTTP/WebSocket/SSE"
+        ],
+        [
+          "UDP",
+          "无连接，不握手",
+          "不保证顺序/送达",
+          "视频/游戏等能容忍丢包"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      },
+      {
+        "term": "UDP",
+        "fullName": "User Datagram Protocol",
+        "meaning": "无连接、不保证顺序或送达的传输层协议。",
+        "meaningEn": "UDP, User Datagram Protocol, is a connectionless transport protocol that does not guarantee order or delivery."
+      },
+      {
+        "term": "DNS",
+        "fullName": "Domain Name System",
+        "meaning": "把域名解析成 IP 地址的系统。",
+        "meaningEn": "DNS, the Domain Name System, resolves domain names into IP addresses."
+      }
     ]
   },
   {
@@ -135,20 +250,88 @@
     "q": "L4 和 L7 load balancer 对实时连接的关键区别是什么？",
     "options": [
       "L4 在 TCP/UDP 层转发，天然更贴近持久连接；L7 理解 HTTP 内容但可能终止连接并重建到后端",
-      "L7 只能转发 UDP，L4 只能转发 JSON",
-      "L4 可以按 URL path 路由，L7 不能",
-      "两者都不能用于实时系统"
+      "L7 只理解二进制 UDP 报文，L4 只能转发 JSON 格式的应用数据",
+      "L4 能读懂 HTTP header 按 URL path 路由，L7 只能看 IP 和端口",
+      "L4 和 L7 都必须终止 TCP 连接，所以都无法支撑长连接实时系统"
     ],
     "answer": [
       0
     ],
-    "why": "WebSocket 这类持久连接常要关注连接被绑定到哪台 server。L4 mental model 更像 client 和后端保持同一 TCP 连接。",
+    "why": "L4 更贴近“直连同一台后端”的心智模型，适合 WebSocket 等持久连接；L7 能按内容路由，但可能拆断重建后端连接。",
     "why_en": "L4 load balancers are closer to persistent TCP connections, while L7 load balancers provide application routing but can complicate connection semantics.",
     "tags": [
       "load-balancer",
       "l4",
       "l7",
       "contrast"
+    ],
+    "scenario": "系统要给 WebSocket 这类长连接选负载均衡层，你要比较 L4 和 L7 load balancer 的行为差异。",
+    "options_en": [
+      "L4 forwards at the TCP/UDP layer and fits persistent connections naturally; L7 understands HTTP content but may terminate and re-establish the backend connection.",
+      "L7 can only forward raw UDP packets, and L4 can only forward JSON application data.",
+      "L4 can read HTTP headers and route by URL path, while L7 only sees IP and port.",
+      "Both L4 and L7 must terminate the TCP connection, so neither can support long-lived realtime systems."
+    ],
+    "tradeoff": "L4 贴近持久连接、转发快 vs L7 能按内容路由但可能拆分连接",
+    "optionMeanings": [
+      "L4 在传输层转发，L7 在应用层理解 HTTP 内容。",
+      "把 L7/L4 的协议能力说反了。",
+      "把谁能读 HTTP header 的角色说反了。",
+      "否认两者都能承载实时长连接，与事实相反。"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "转发层",
+        "连接语义",
+        "适合协议"
+      ],
+      "rows": [
+        [
+          "L4 LB",
+          "TCP/UDP 层",
+          "同一连接直通后端",
+          "WebSocket 等长连接"
+        ],
+        [
+          "L7 LB",
+          "HTTP 应用层",
+          "可能终止并重建连接",
+          "HTTP/long polling"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "L4 load balancer",
+        "fullName": "Layer 4 (Transport Layer) Load Balancer",
+        "meaning": "在 TCP/UDP 层转发流量，不解析应用层内容。",
+        "meaningEn": "An L4 load balancer forwards traffic at the TCP/UDP layer without parsing application content."
+      },
+      {
+        "term": "L7 load balancer",
+        "fullName": "Layer 7 (Application Layer) Load Balancer",
+        "meaning": "理解 HTTP 等应用层协议，可按内容路由。",
+        "meaningEn": "An L7 load balancer understands application-layer protocols like HTTP and can route based on content."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      },
+      {
+        "term": "UDP",
+        "fullName": "User Datagram Protocol",
+        "meaning": "无连接、不保证顺序或送达的传输层协议。",
+        "meaningEn": "UDP, User Datagram Protocol, is a connectionless transport protocol that does not guarantee order or delivery."
+      },
+      {
+        "term": "HTTP",
+        "fullName": "HyperText Transfer Protocol",
+        "meaning": "应用层的请求-响应协议，是大多数 Web 通信的基础。",
+        "meaningEn": "HTTP, HyperText Transfer Protocol, is the request-response protocol most web communication is built on."
+      }
     ]
   },
   {
@@ -160,13 +343,13 @@
     "scenario": "某功能只需要每 2-5 秒刷新一次状态，低延迟不是核心；你想保留面试时间给更重要的系统部分。",
     "q": "最务实的起点是什么？",
     "options": [
-      "Simple polling",
-      "WebRTC mesh",
-      "自研 TCP 协议",
-      "强制所有客户端保持 WebSocket"
+      "WebRTC mesh（客户端两两直连）",
+      "Simple polling（客户端定期拉取）",
+      "自研一套 TCP 协议",
+      "强制所有客户端都建立 WebSocket 长连接"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "不是所有“更新”都要求真正实时。简单轮询无特殊基础设施、stateless、容易解释，是很好的 baseline。",
     "why_en": "If low latency is not critical, simple polling is a pragmatic baseline that avoids realtime infrastructure complexity.",
@@ -176,7 +359,73 @@
       "fit",
       "baseline"
     ],
-    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: poll\n    S-->>C: no change\n    C->>S: poll later\n    S-->>C: new status"
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: poll\n    S-->>C: no change\n    C->>S: poll later\n    S-->>C: new status",
+    "options_en": [
+      "WebRTC mesh — browsers connect directly to each other peer to peer.",
+      "Simple polling — the client asks the server on a regular interval.",
+      "Build a custom TCP protocol from scratch.",
+      "Force every client to hold open a WebSocket connection."
+    ],
+    "tradeoff": "先用最省心的轮询保住面试时间 vs 提前上重基础设施换低延迟",
+    "optionMeanings": [
+      "浏览器之间直接建立点对点连接。",
+      "定期发 HTTP 请求查询最新状态，无需持久连接。",
+      "从零实现传输层协议来传数据。",
+      "让每个客户端都维持一条服务器长连接。"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "基础设施",
+        "延迟",
+        "复杂度"
+      ],
+      "rows": [
+        [
+          "Simple polling",
+          "无特殊设施",
+          "秒级",
+          "很低"
+        ],
+        [
+          "WebRTC mesh",
+          "信令+STUN/TURN",
+          "很低",
+          "很高"
+        ],
+        [
+          "自研 TCP 协议",
+          "从零维护协议栈",
+          "不确定",
+          "极高"
+        ],
+        [
+          "强制 WebSocket",
+          "连接层+LB 改造",
+          "低",
+          "中高"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-008",
@@ -202,6 +451,31 @@
       "simple-polling",
       "tradeoffs",
       "latency"
+    ],
+    "options_en": [
+      "Simple to implement, stateless, and compatible with any standard HTTP infrastructure.",
+      "Latency is the highest, up to one polling interval plus request handling time.",
+      "Infrequent updates with many clients create a lot of wasted empty reads.",
+      "It naturally supports full-duplex low-latency communication."
+    ],
+    "tradeoff": "响应更新的简单性 vs 延迟与浪费请求",
+    "optionMeanings": [
+      "实现代价低、兼容性好是它的核心优势。",
+      "延迟风险：更新可能要等一整个轮询周期才被看到。",
+      "资源浪费风险：没有更新时的轮询请求都是无效开销。",
+      "反例判断：轮询不是双向持续通道，这条不成立。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "stateless",
+        "meaning": "服务器不为单个客户端保留连接状态。",
+        "meaningEn": "Stateless means the server keeps no per-client connection state between requests."
+      },
+      {
+        "term": "full-duplex",
+        "meaning": "双方可以同时发送和接收数据。",
+        "meaningEn": "Full-duplex means both sides can send and receive at the same time."
+      }
     ]
   },
   {
@@ -210,22 +484,37 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "polling-scale",
-    "q": "如果 100 万客户端每 10 秒 polling 一次，大约产生多少读 QPS？",
+    "q": "这个量级最支持哪条设计判断？",
     "options": [
-      "100 QPS",
-      "1,000 QPS",
-      "100,000 QPS",
-      "10,000,000 QPS"
+      "轮询产生的读压力可能被低估，需要专门评估数据库/网关能否扛住",
+      "轮询天然比 WebSocket 省资源，不用考虑扩容",
+      "10 万 QPS 对任何数据库都无压力，无需缓存或限流",
+      "客户端数量越多，单次轮询延迟就越低"
     ],
     "answer": [
       2
     ],
-    "why": "1,000,000 / 10 = 100,000 TPS。轮询简单，但客户端数大时读压力很容易被低估。",
-    "why_en": "One million clients polling every ten seconds generate about one hundred thousand requests per second.",
+    "why": "公式：100 万 ÷ 10 秒 = 10 万 QPS（每秒查询数）；轮询的简单性掩盖了真实读压力，这个数字决定要不要给网关/DB 加限流或缓存。",
+    "why_en": "One million clients polling every ten seconds is about one hundred thousand queries per second, so polling's simplicity can hide a real read-load problem that capacity planning must account for.",
     "tags": [
       "simple-polling",
       "numbers",
       "scale"
+    ],
+    "scenario": "系统用 simple polling，100 万客户端每 10 秒轮询一次；换算下来后端要扛约 10 万 QPS 的读请求。",
+    "options_en": [
+      "The read load from polling can be underestimated, so you must check whether the database or gateway can absorb it.",
+      "Polling is naturally cheaper than WebSocket, so no extra capacity planning is needed.",
+      "One hundred thousand QPS is trivial for any database, so no caching or throttling is needed.",
+      "More clients polling automatically makes each poll's latency lower."
+    ],
+    "termDefinitions": [
+      {
+        "term": "QPS",
+        "fullName": "Queries Per Second",
+        "meaning": "每秒钟处理的查询次数，用来衡量读压力。",
+        "meaningEn": "QPS, or Queries Per Second, measures how many read requests a system handles every second."
+      }
     ]
   },
   {
@@ -236,20 +525,48 @@
     "sub": "keep-alive",
     "q": "HTTP keep-alive 如何降低 simple polling 的开销？",
     "options": [
-      "让多次 polling 复用 TCP 连接，减少重复握手和 teardown",
-      "让服务器主动推送无限消息",
-      "让 polling interval 变成 0",
-      "自动消除数据库读取"
+      "让每次轮询都自动跳过数据库读取直接返回缓存",
+      "让服务器绕开 HTTP 直接给客户端推送无限条消息",
+      "把 polling interval 自动缩短到 0 让请求变成实时",
+      "让多次 polling 复用 TCP 连接，减少重复握手和 teardown"
     ],
     "answer": [
-      0
+      3
     ],
-    "why": "如果 keep-alive 比 polling interval 长，多次请求可复用连接，减少连接建立延迟和资源开销。",
+    "why": "如果 keep-alive 比 polling interval 长，多次请求能复用同一条 TCP 连接，省掉重复握手和 teardown 的开销。",
     "why_en": "HTTP keep-alive lets polling reuse TCP connections and avoid repeated setup costs.",
     "tags": [
       "keep-alive",
       "simple-polling",
       "tcp"
+    ],
+    "scenario": "客户端每 2 秒轮询一次；team 想知道能不能不必每次都重新握手 TCP 连接。",
+    "options_en": [
+      "Make every poll automatically skip the database and return from cache.",
+      "Let the server bypass HTTP and push unlimited messages directly to the client.",
+      "Automatically shrink the polling interval to zero to make it realtime.",
+      "Keep-alive lets repeated polls reuse the same TCP connection instead of repeating the handshake and teardown."
+    ],
+    "optionMeanings": [
+      "这其实是数据库读取路径，和连接复用无关。",
+      "这其实是在描述服务器推送机制，不是连接复用。",
+      "这其实是在说轮询频率，而不是连接复用。",
+      "keep-alive 让连续请求复用同一条 TCP 连接。"
+    ],
+    "codeSample": "GET /api/updates HTTP/1.1\nHost: api.example.com\nConnection: keep-alive\nKeep-Alive: timeout=30\n# timeout=30 表示连接空闲 30s 内可复用\n# polling interval 需小于 30s 才能真正省掉握手",
+    "lang": "http",
+    "termDefinitions": [
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      },
+      {
+        "term": "keep-alive",
+        "meaning": "让同一条 TCP 连接在多次请求间保持打开、可复用。",
+        "meaningEn": "Keep-alive keeps one TCP connection open and reusable across multiple requests."
+      }
     ]
   },
   {
@@ -261,21 +578,42 @@
     "q": "Long polling 的基本机制是什么？",
     "options": [
       "客户端发请求，服务器 hold 住直到有新数据或超时，然后客户端立即发下一次请求",
-      "服务器永久保持双向二进制连接",
-      "客户端每毫秒发请求",
-      "客户端直接连接其他客户端"
+      "服务器和客户端之间永久保持一条双向二进制消息通道",
+      "客户端完全不等待，每隔 1 毫秒就发起一次新请求",
+      "客户端绕开服务器，直接和其他客户端建立连接通信"
     ],
     "answer": [
       0
     ],
-    "why": "Long polling 是标准 HTTP 上的近实时技巧。它比固定间隔 polling 延迟低，但每条消息后仍要重新发请求。",
+    "why": "Long polling 是标准 HTTP 上的近实时技巧：服务器 hold 住请求直到有数据，客户端收到后立即重开一次请求。",
     "why_en": "Long polling holds an HTTP request until data is available, then the client immediately issues the next request.",
     "tags": [
       "long-polling",
       "http",
       "definition"
     ],
-    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: long poll\n    Note over S: hold request\n    S-->>C: event or timeout\n    C->>S: next long poll"
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: long poll\n    Note over S: hold request\n    S-->>C: event or timeout\n    C->>S: next long poll",
+    "options_en": [
+      "The client sends a request, the server holds it until new data or a timeout, then the client immediately sends the next request.",
+      "The server keeps one permanent bidirectional binary channel with the client.",
+      "The client sends a new request every single millisecond without waiting.",
+      "The client connects directly to other clients, bypassing the server."
+    ],
+    "optionMeanings": [
+      "hold 住请求直到有数据或超时，是 long polling 的核心。",
+      "这其实是在描述 WebSocket 的行为，不是 long polling。",
+      "这是不现实的轮询频率，不是 long polling 的机制。",
+      "这是在描述 P2P，long polling 仍然经过服务器。"
+    ],
+    "codeSample": "async function longPoll() {\n  const res = await fetch('/api/updates');\n  const data = await res.json();\n  processData(data);\n  longPoll(); // 收到响应后立即发起下一次请求\n}",
+    "lang": "javascript",
+    "termDefinitions": [
+      {
+        "term": "timeout",
+        "meaning": "请求等待过久后被强制结束的时间上限。",
+        "meaningEn": "A timeout is the maximum time a request waits before being forced to end."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-012",
@@ -296,13 +634,14 @@
       0,
       2
     ],
-    "why": "Long polling 的“实时感”来自服务器持有请求和客户端收到响应后立即重新请求。",
+    "why": "Long polling 的实时感来自服务器 hold 住请求，以及客户端收到响应后立即重新请求，二者缺一不可。",
     "why_en": "Long polling works by holding a request open, responding when data arrives, and immediately opening the next request.",
     "tags": [
       "long-polling",
       "flow",
       "sequence"
-    ]
+    ],
+    "tradeoff": "少握手次数换取“看起来实时” vs 每条消息后仍要重开一次请求"
   },
   {
     "id": "sd-patterns-realtime-updates-013",
@@ -313,13 +652,13 @@
     "scenario": "支付处理完成时间不确定，用户在 success 页面前只需尽快知道 payment status 改变，更新不频繁。",
     "q": "哪种方案简单合适？",
     "options": [
-      "Long polling payment status",
-      "WebRTC",
-      "每 1ms simple polling",
-      "让用户等同步 HTTP 直到银行返回"
+      "WebRTC 建 P2P 连接查支付状态",
+      "Long polling 查询 payment status",
+      "每 1 毫秒 simple polling 查一次状态",
+      "让用户等一个同步 HTTP 请求，直到银行返回结果才应答"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "Long polling 很适合低频但希望及时知道完成的场景，例如支付状态、异步 job 完成。",
     "why_en": "Long polling is a simple fit for infrequent status changes that should be shown as soon as they happen.",
@@ -328,6 +667,27 @@
       "long-polling",
       "payment",
       "fit"
+    ],
+    "options_en": [
+      "Use WebRTC to open a peer-to-peer connection to check payment status.",
+      "Long polling the payment status.",
+      "Simple polling for status every one millisecond.",
+      "Block the user on one synchronous HTTP request until the bank responds."
+    ],
+    "tradeoff": "低频但要及时知道结果 vs 引入持久连接的额外复杂度",
+    "optionMeanings": [
+      "P2P 连接是为音视频设计，不适合查询后端状态。",
+      "请求 hold 住直到状态变化，够用且简单。",
+      "轮询过密会打爆后端，且大多数是空转。",
+      "同步阻塞会让请求超时，且服务端要挂起连接等银行。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
     ]
   },
   {
@@ -354,6 +714,19 @@
       "long-polling",
       "tradeoffs",
       "connections"
+    ],
+    "options_en": [
+      "At high update frequency, each message needs a new request, which adds extra latency.",
+      "Many hanging requests make monitoring and resource management harder.",
+      "Browsers cap concurrent connections per domain, which can limit multiple long-poll connections.",
+      "It cannot work on standard HTTP infrastructure."
+    ],
+    "tradeoff": "标准 HTTP 兼容性 vs 高频场景下的连接和监控开销",
+    "optionMeanings": [
+      "高频更新时每条消息后都要新请求，累积额外延迟。",
+      "大量 hanging request 让监控和资源管理更麻烦。",
+      "浏览器限制每域并发连接数，多个 long-poll 会互相挤占。",
+      "反例：long polling 恰恰是建立在标准 HTTP 基础设施之上的。"
     ]
   },
   {
@@ -362,22 +735,41 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "long-polling",
-    "q": "文章建议 long polling 的常见请求超时/轮询区间大概是多少，以减少基础设施 timeout 麻烦？",
+    "q": "这个区间选择主要是在平衡什么？",
     "options": [
-      "15-30 秒",
-      "1 毫秒",
-      "10 分钟",
-      "24 小时"
+      "区间必须严格等于数据库连接池大小",
+      "只是因为 15-30 是一个好记的数字，没有工程含义",
+      "太短会让请求频繁重开，太长会被 load balancer/网关提前掐断",
+      "区间越长，客户端收到消息的延迟就越低"
     ],
     "answer": [
-      0
+      2
     ],
-    "why": "15-30 秒是常见折中：避免 load balancer 过早断开，也不会让请求挂太久。",
-    "why_en": "A long-poll interval around 15 to 30 seconds is a common practical starting point.",
+    "why": "15-30 秒是常见折中：短了失去 long polling 省请求次数的优势，长了容易撞上 LB/网关的默认空闲超时被提前断开。",
+    "why_en": "A fifteen-to-thirty-second window balances avoiding too many repeated requests against getting cut off by a load balancer's idle timeout.",
     "tags": [
       "long-polling",
       "numbers",
       "timeout"
+    ],
+    "scenario": "Long polling 请求要跑在标准 HTTP 基础设施上；team 把请求超时定在 15-30 秒，而不是几秒或几十分钟。",
+    "options_en": [
+      "The window must exactly equal the database connection pool size.",
+      "It's just a memorable number with no engineering reason.",
+      "Too short reopens requests too often; too long risks being cut off early by the load balancer or gateway.",
+      "A longer window always means lower latency for the client."
+    ],
+    "termDefinitions": [
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      },
+      {
+        "term": "timeout",
+        "meaning": "请求等待过久后被强制结束的时间上限。",
+        "meaningEn": "A timeout is the maximum time a request waits before being forced to end."
+      }
     ]
   },
   {
@@ -388,13 +780,13 @@
     "sub": "sse",
     "q": "Server-Sent Events（SSE）是什么？",
     "options": [
-      "基于 HTTP 的服务器到客户端单向事件流",
+      "只用于上传大文件",
       "客户端到客户端的 P2P 视频协议",
       "数据库事务隔离级别",
-      "只用于上传大文件"
+      "基于 HTTP 的服务器到客户端单向事件流"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "SSE 让服务器在一个 HTTP response 中持续写 chunk，客户端用 EventSource 接收事件。",
     "why_en": "SSE is an HTTP-based one-way event stream from server to client.",
@@ -403,7 +795,23 @@
       "definition",
       "http-streaming"
     ],
-    "diagram": "flowchart LR\n    S[\"Server\"] -->|event 1| C[\"EventSource\"]\n    S -->|event 2| C\n    S -->|event 3| C\n    C -.reconnect + last id.-> S"
+    "diagram": "flowchart LR\n    S[\"Server\"] -->|event 1| C[\"EventSource\"]\n    S -->|event 2| C\n    S -->|event 3| C\n    C -.reconnect + last id.-> S",
+    "options_en": [
+      "Something used only for uploading large files.",
+      "A peer-to-peer video protocol between clients.",
+      "A database transaction isolation level.",
+      "An HTTP-based one-way event stream from server to client."
+    ],
+    "codeSample": "GET /api/updates HTTP/1.1\nAccept: text/event-stream\n\nHTTP/1.1 200 OK\nContent-Type: text/event-stream\n\ndata: {\"token\":\"Hello\"}\n\n# Content-Type 声明这是持续的 chunk 流\n# 每个事件以 data: 开头，双换行分隔事件",
+    "lang": "http",
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-017",
@@ -414,10 +822,10 @@
     "scenario": "AI chat 需要把模型生成的 token 一个个流式展示给用户，客户端主要接收，不频繁向服务器发消息。",
     "q": "最合适的连接方案通常是什么？",
     "options": [
-      "SSE",
-      "WebRTC",
-      "每 5 秒 simple polling",
-      "FTP"
+      "SSE 流式推送 token",
+      "WebRTC 建 P2P 音视频通道",
+      "每 5 秒 simple polling 查一次结果",
+      "用 FTP 传输生成结果文件"
     ],
     "answer": [
       0
@@ -429,6 +837,39 @@
       "sse",
       "ai-chat",
       "fit"
+    ],
+    "options_en": [
+      "SSE streams tokens to the client one by one.",
+      "WebRTC opens a peer-to-peer audio/video channel.",
+      "Simple polling for the result every five seconds.",
+      "Use FTP to transfer the generated result file."
+    ],
+    "tradeoff": "单向持续推送 vs 双向/批量方案的额外复杂度",
+    "optionMeanings": [
+      "服务端单向持续推送，天然适合逐 token 流式输出。",
+      "P2P 音视频通道，不是为文本 token 流设计。",
+      "轮询间隔太粗，token 会成批出现而不是流式。",
+      "FTP 是文件传输协议，不支持持续增量推送。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      },
+      {
+        "term": "FTP",
+        "fullName": "File Transfer Protocol",
+        "meaning": "用于传输整份文件的协议，不支持流式增量推送。",
+        "meaningEn": "FTP, File Transfer Protocol, transfers whole files and has no notion of streaming incremental updates."
+      }
     ]
   },
   {
@@ -455,6 +896,37 @@
       "sse",
       "tradeoffs",
       "streaming"
+    ],
+    "options_en": [
+      "Browsers have built-in EventSource support with automatic reconnection.",
+      "It has less repeated connection setup and teardown than long polling.",
+      "Communication only flows from server to client, never the other way.",
+      "Every proxy and load balancer is guaranteed to support streaming correctly."
+    ],
+    "tradeoff": "浏览器内置、连接开销低 vs 单向通信且依赖基础设施支持流式",
+    "optionMeanings": [
+      "浏览器内置 EventSource，断线能自动重连。",
+      "比 long polling 少了反复建立/关闭连接的开销。",
+      "只能服务器推给客户端，不能反向发消息。",
+      "反例：不少代理/LB 会缓冲响应，破坏流式传输。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "EventSource",
+        "meaning": "浏览器内置的 SSE 客户端 API，自动处理重连和 last event ID。",
+        "meaningEn": "EventSource is the browser's built-in SSE client API that handles reconnection and Last-Event-ID automatically."
+      },
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      }
     ]
   },
   {
@@ -465,13 +937,13 @@
     "sub": "sse-reconnect",
     "q": "SSE 断线重连时，`last event ID` 的作用是什么？",
     "options": [
+      "让服务器强行保持这条 TCP 连接永不断开",
       "客户端带上最后收到的 event ID，服务器补发断线期间遗漏的事件",
-      "让服务器永久保持连接不掉",
-      "把 SSE 变成 WebRTC",
-      "删除所有旧事件"
+      "把这条连接从 SSE 协议直接切换成 WebRTC",
+      "重连时把服务器保存的旧事件全部删除"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "EventSource 支持重连语义。服务端若保留事件序列，就能根据 last event ID 补齐 gap。",
     "why_en": "The last event ID lets a reconnecting SSE client request events it missed while disconnected.",
@@ -479,6 +951,51 @@
       "sse",
       "reconnection",
       "last-event-id"
+    ],
+    "scenario": "AI chat 用 SSE 推送生成结果；中途网络抖动导致连接断开几秒后重连。",
+    "options_en": [
+      "Force the server to keep this TCP connection open forever.",
+      "The client sends the last event ID it received, and the server replays events it missed while disconnected.",
+      "Switch this connection from SSE to WebRTC.",
+      "Delete all old events on the server when the client reconnects."
+    ],
+    "optionMeanings": [
+      "连接总会断，问题是断后怎么补，而不是不让它断。",
+      "last event ID 是补发机制的关键，靠它定位断点。",
+      "协议切换不是重连要解决的问题。",
+      "删除旧事件恰恰会让补发失败。"
+    ],
+    "codeSample": "data: {\"msg\":\"hi\"}\nid: 42\n\n# 断线重连时浏览器自动带上：\nGET /api/updates HTTP/1.1\nLast-Event-ID: 42",
+    "lang": "http",
+    "termDefinitions": [
+      {
+        "term": "last event ID / Last-Event-ID",
+        "meaning": "SSE 事件自带的编号；重连时浏览器自动带上它，服务器据此补发漏掉的事件。",
+        "meaningEn": "Last-Event-ID is the SSE event identifier the browser resends on reconnect so the server can replay missed events."
+      },
+      {
+        "term": "EventSource",
+        "meaning": "浏览器内置的 SSE 客户端 API，自动处理重连和 last event ID。",
+        "meaningEn": "EventSource is the browser's built-in SSE client API that handles reconnection and Last-Event-ID automatically."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      },
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      }
     ]
   },
   {
@@ -489,13 +1006,13 @@
     "sub": "websocket",
     "q": "WebSocket 的关键能力是什么？",
     "options": [
+      "这条连接只能用来下载图片，不能传其他数据",
+      "只支持服务器往客户端单向推送文本，不能反向发送",
       "在一个持久连接上支持 client 和 server 双向发送消息",
-      "只支持服务器到客户端单向文本流",
-      "只能用于下载图片",
-      "每条消息都必须新建 HTTP 连接"
+      "每发一条消息都要重新建立一次 HTTP 连接"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "WebSocket 是 full-duplex 通道，适合聊天、协作编辑、游戏等高频双向通信。",
     "why_en": "WebSocket provides full-duplex communication over a persistent connection.",
@@ -504,7 +1021,32 @@
       "full-duplex",
       "definition"
     ],
-    "diagram": "flowchart LR\n    C[\"Client\"] <-->|WebSocket| W[\"WS Server\"]\n    W --> B[\"Backend\"]\n    B --> W\n    W --> C"
+    "diagram": "flowchart LR\n    C[\"Client\"] <-->|WebSocket| W[\"WS Server\"]\n    W --> B[\"Backend\"]\n    B --> W\n    W --> C",
+    "options_en": [
+      "This connection can only be used to download images.",
+      "It only supports a one-way text stream from server to client.",
+      "It supports the client and server sending messages both ways over one persistent connection.",
+      "Every message requires establishing a brand-new HTTP connection."
+    ],
+    "codeSample": "GET /socket HTTP/1.1\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Key: dGhlIHNhbXBsZQ==\n\nHTTP/1.1 101 Switching Protocols\nUpgrade: websocket\n# 101 表示协议已从 HTTP 升级为 WebSocket\n# 此后同一条 TCP 连接上双向收发消息帧",
+    "lang": "http",
+    "termDefinitions": [
+      {
+        "term": "full-duplex",
+        "meaning": "双方可以同时发送和接收数据。",
+        "meaningEn": "Full-duplex means both sides can send and receive at the same time."
+      },
+      {
+        "term": "Upgrade header",
+        "meaning": "HTTP 请求头，用来把连接从 HTTP 协议切换到另一个协议如 WebSocket。",
+        "meaningEn": "The Upgrade header asks HTTP to switch the connection to another protocol such as WebSocket."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-021",
@@ -531,6 +1073,13 @@
       "websocket",
       "handshake",
       "sequence"
+    ],
+    "termDefinitions": [
+      {
+        "term": "handshake",
+        "meaning": "建立连接前，双方交换信息确认协议和参数的过程。",
+        "meaningEn": "A handshake is the initial exchange that establishes a connection and agrees on protocol parameters."
+      }
     ]
   },
   {
@@ -542,13 +1091,13 @@
     "scenario": "聊天应用中，用户既要实时收消息，也要频繁发消息、typing indicators 和 presence updates。",
     "q": "客户端连接协议最适合什么？",
     "options": [
-      "WebSocket",
-      "每日批处理",
-      "只用简单轮询",
-      "S3 presigned URL"
+      "用 S3 presigned URL 直传消息文件",
+      "每日批处理消息",
+      "只用简单轮询查新消息",
+      "WebSocket 双向长连接"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "聊天是典型高频双向通信。WebSocket 降低每条消息的 HTTP overhead，也支持 server push 和 client writes。",
     "why_en": "Chat is a classic high-frequency bidirectional use case for WebSockets.",
@@ -557,6 +1106,31 @@
       "websocket",
       "chat",
       "fit"
+    ],
+    "options_en": [
+      "Use S3 presigned URLs to upload message files directly.",
+      "Batch-process messages once a day.",
+      "Use only simple polling to check for new messages.",
+      "A bidirectional persistent WebSocket connection."
+    ],
+    "tradeoff": "高频双向消息的实时性 vs 持久连接的状态管理成本",
+    "optionMeanings": [
+      "presigned URL 是给客户端直传对象存储用的，不是消息通道。",
+      "批处理延迟以天计，完全不是实时聊天。",
+      "轮询对高频双向消息来说延迟高、请求量大。",
+      "双向长连接天然适合收发都很频繁的聊天。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "presigned URL",
+        "meaning": "带临时签名的 URL，让客户端能直接读写对象存储而不经过后端。",
+        "meaningEn": "A presigned URL is a temporary signed link that lets a client read or write object storage directly."
+      }
     ]
   },
   {
@@ -583,6 +1157,19 @@
       "websocket",
       "stateful",
       "tradeoffs"
+    ],
+    "options_en": [
+      "Stateful connections add complexity to load balancing and scaling.",
+      "Deployments must handle disconnecting old connections and reconnecting clients.",
+      "Messages can be missed during a disconnect and need a replay mechanism.",
+      "It needs no special infrastructure support at all."
+    ],
+    "tradeoff": "持久连接带来的性能收益 vs 状态管理和部署复杂度",
+    "optionMeanings": [
+      "有状态连接让 LB 和扩缩容都要考虑粘住哪台服务器。",
+      "部署时旧连接怎么断、怎么重连需要专门设计。",
+      "断线期间的消息可能漏掉，需要补发机制。",
+      "反例：WebSocket 恰恰需要专门基础设施支持长连接。"
     ]
   },
   {
@@ -595,9 +1182,9 @@
     "q": "常见架构选择是什么？",
     "options": [
       "在入口处终止到专门 WebSocket service，后端业务服务保持 stateless",
-      "每个微服务都直接维护客户端连接",
-      "把连接状态存在前端代码里",
-      "禁止用户重连"
+      "让系统里每一个微服务都各自独立直接维护自己的客户端长连接和状态",
+      "把原本应该在服务端保存的连接状态直接放进前端浏览器代码里",
+      "禁止系统里所有用户重新连接，断线之后必须重新登录整个系统"
     ],
     "answer": [
       0
@@ -616,6 +1203,31 @@
       "flowchart LR\n    C[\"Clients\"] --> A[\"Service A\"]\n    C --> B[\"Service B\"]\n    C --> D[\"Service C\"]",
       "flowchart LR\n    C[\"Clients\"] --> F[\"前端代码\"]\n    F -.不能保存服务端连接.-> X[\"丢状态\"]",
       "flowchart LR\n    C[\"断线\"] -.禁止重连.-> X[\"消息丢失\"]"
+    ],
+    "options_en": [
+      "Terminate connections in a dedicated WebSocket service at the edge, keeping backend services stateless.",
+      "Have every single microservice in the system independently maintain its own client long-lived connections and state.",
+      "Take the connection state that should live on the server and put it directly inside the frontend browser code.",
+      "Forbid every user in the system from reconnecting; force a full re-login after any disconnect."
+    ],
+    "tradeoff": "把状态收敛到一个专门服务 vs 让状态散布到所有业务服务里",
+    "optionMeanings": [
+      "专门服务承担连接状态，其余服务可以保持无状态。",
+      "每个微服务都要自己维护连接，状态到处扩散。",
+      "前端代码保存不了服务端连接状态，刷新即丢失。",
+      "禁止重连只会让体验变差，不解决状态扩散问题。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "stateless",
+        "meaning": "服务器不为单个客户端保留连接状态。",
+        "meaningEn": "Stateless means the server keeps no per-client connection state between requests."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
     ]
   },
   {
@@ -626,13 +1238,13 @@
     "sub": "webrtc",
     "q": "WebRTC 最适合什么场景？",
     "options": [
+      "偶尔刷新一次的 dashboard 数字展示",
       "浏览器之间直接音视频、屏幕共享、游戏或高频 P2P 数据通信",
-      "低频 dashboard 数字刷新",
-      "只需要每 10 秒查一次状态",
-      "数据库事务提交"
+      "每 10 秒查一次状态，延迟不敏感的场景",
+      "数据库把一批写入合并成一次事务提交"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "WebRTC 是最复杂选项，适合需要 P2P 降低延迟/服务器带宽的场景。普通实时通知通常用 SSE/WebSocket。",
     "why_en": "WebRTC fits peer-to-peer audio, video, screen sharing, gaming, or high-frequency collaboration.",
@@ -641,7 +1253,28 @@
       "p2p",
       "definition"
     ],
-    "diagram": "flowchart LR\n    A[\"Browser A\"] <-->|P2P 媒体/数据| B[\"Browser B\"]\n    A -.信令.-> S[\"Server\"]\n    B -.信令.-> S"
+    "diagram": "flowchart LR\n    A[\"Browser A\"] <-->|P2P 媒体/数据| B[\"Browser B\"]\n    A -.信令.-> S[\"Server\"]\n    B -.信令.-> S",
+    "options_en": [
+      "A dashboard that refreshes a number infrequently.",
+      "Direct browser-to-browser audio/video, screen sharing, gaming, or high-frequency P2P data.",
+      "Checking status once every ten seconds where latency does not matter.",
+      "A database committing a batch of writes as one transaction."
+    ],
+    "optionMeanings": [
+      "这类场景 simple polling 就够，不需要 P2P。",
+      "P2P 直连适合音视频、屏幕共享这类高频重数据场景。",
+      "低频查询不值得引入 WebRTC 的建连复杂度。",
+      "事务提交是数据库内部机制，和 P2P 通信无关。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
+    ],
+    "scenario": "候选方案要选一个协议来支撑浏览器间的高清音视频通话、屏幕共享和文档协作场景。"
   },
   {
     "id": "sd-patterns-realtime-updates-026",
@@ -669,6 +1302,49 @@
       "stun",
       "turn",
       "signaling"
+    ],
+    "options_en": [
+      "A signaling server exchanges connection info between peers.",
+      "ICE candidates.",
+      "STUN discovers a routable address for NAT traversal.",
+      "A TURN relay forwards traffic when a direct connection fails."
+    ],
+    "optionMeanings": [
+      "signaling server 帮助双方交换连接信息，建连前必须先经过它。",
+      "ICE candidate 是每个 peer 能被访问到的地址候选。",
+      "STUN 帮助发现可公网路由的地址，用来打洞穿透 NAT。",
+      "TURN 在直连失败时充当中继，转发全部流量。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "signaling server",
+        "meaning": "帮助两个 peer 交换连接信息的服务器，不承担媒体流量。",
+        "meaningEn": "A signaling server helps two peers exchange connection info; it does not carry the media traffic itself."
+      },
+      {
+        "term": "ICE",
+        "fullName": "Interactive Connectivity Establishment",
+        "meaning": "收集和交换候选连接地址、尝试建立可用路径的框架。",
+        "meaningEn": "ICE, Interactive Connectivity Establishment, is the framework that gathers and tries candidate addresses to find a working path."
+      },
+      {
+        "term": "STUN",
+        "fullName": "Session Traversal Utilities for NAT",
+        "meaning": "帮助 peer 发现自己的公网可路由地址，用于 NAT 穿透。",
+        "meaningEn": "STUN, Session Traversal Utilities for NAT, helps a peer discover its own publicly routable address for NAT traversal."
+      },
+      {
+        "term": "TURN",
+        "fullName": "Traversal Using Relays around NAT",
+        "meaning": "直连失败时作为中继服务器转发全部流量。",
+        "meaningEn": "TURN, Traversal Using Relays around NAT, relays all traffic through a server when a direct connection fails."
+      },
+      {
+        "term": "NAT",
+        "fullName": "Network Address Translation",
+        "meaning": "让多台内网设备共用一个公网地址的机制，常阻碍 P2P 直连。",
+        "meaningEn": "NAT, Network Address Translation, lets many private devices share one public address, which often blocks direct P2P connections."
+      }
     ]
   },
   {
@@ -679,13 +1355,13 @@
     "sub": "webrtc",
     "q": "STUN 和 TURN 的区别是什么？",
     "options": [
+      "TURN 只服务于 SQL 事务提交，和媒体流无关",
+      "STUN 其实是一种数据库，TURN 其实是一种 CDN 服务",
       "STUN 帮助发现可路由地址/打洞；TURN 作为中继服务器转发流量",
-      "STUN 是数据库，TURN 是 CDN",
-      "TURN 只用于 SQL 事务",
-      "两者都只用于 SSE"
+      "STUN 和 TURN 都只是 SSE 协议里的可选参数"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "STUN 尝试促成 P2P 直连；TURN 是直连失败时的 relay，成本和延迟更高但可靠性更好。",
     "why_en": "STUN helps peers discover routable paths, while TURN relays traffic when direct peer connections fail.",
@@ -694,6 +1370,67 @@
       "stun",
       "turn",
       "contrast"
+    ],
+    "options_en": [
+      "TURN is only used for SQL transaction commits.",
+      "STUN is actually a database, and TURN is actually a CDN.",
+      "STUN helps discover a routable address for hole punching; TURN relays traffic as a fallback server.",
+      "Both STUN and TURN are just optional parameters of SSE."
+    ],
+    "tradeoff": "STUN 优先促成直连、省服务器带宽 vs TURN 兜底可靠但要转发全部流量",
+    "optionMeanings": [
+      "把 TURN 的用途错安到数据库事务上。",
+      "把两者错当成完全不相关的存储/分发产品。",
+      "STUN 帮助打洞发现地址，TURN 失败兜底转发。",
+      "把两者错当成 SSE 的配置项。"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "作用",
+        "流量路径",
+        "成本"
+      ],
+      "rows": [
+        [
+          "STUN",
+          "发现公网地址",
+          "尝试后走 P2P 直连",
+          "低，几乎不转发"
+        ],
+        [
+          "TURN",
+          "直连失败时中继",
+          "流量经服务器转发",
+          "高，占服务器带宽"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "STUN",
+        "fullName": "Session Traversal Utilities for NAT",
+        "meaning": "帮助 peer 发现自己的公网可路由地址，用于 NAT 穿透。",
+        "meaningEn": "STUN, Session Traversal Utilities for NAT, helps a peer discover its own publicly routable address for NAT traversal."
+      },
+      {
+        "term": "TURN",
+        "fullName": "Traversal Using Relays around NAT",
+        "meaning": "直连失败时作为中继服务器转发全部流量。",
+        "meaningEn": "TURN, Traversal Using Relays around NAT, relays all traffic through a server when a direct connection fails."
+      },
+      {
+        "term": "NAT",
+        "fullName": "Network Address Translation",
+        "meaning": "让多台内网设备共用一个公网地址的机制，常阻碍 P2P 直连。",
+        "meaningEn": "NAT, Network Address Translation, lets many private devices share one public address, which often blocks direct P2P connections."
+      },
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      }
     ]
   },
   {
@@ -705,13 +1442,13 @@
     "scenario": "live dashboard 只需要服务器不断推送指标，用户很少向服务器发送消息。",
     "q": "协议选择上更偏向什么？",
     "options": [
-      "SSE",
-      "WebRTC",
-      "双向 WebSocket 一定必要",
-      "只用 UDP 自研"
+      "自己在 UDP 上从零实现推送协议",
+      "WebRTC 建 P2P 通道传指标",
+      "认为双向 WebSocket 是唯一选择",
+      "SSE 单向推送指标"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "单向 server-to-client 更新是 SSE 的强项。它比 WebSocket 少很多状态和双向通信复杂度。",
     "why_en": "SSE is a good fit for one-way server-to-client dashboard updates.",
@@ -720,6 +1457,44 @@
       "protocol-choice",
       "sse",
       "dashboard"
+    ],
+    "options_en": [
+      "Build a custom push protocol from scratch on top of UDP.",
+      "WebRTC opens a peer-to-peer channel to carry metrics.",
+      "Assume bidirectional WebSocket is the only option.",
+      "SSE pushes metrics one way to the client."
+    ],
+    "tradeoff": "单向推送够用就选轻量方案 vs 上双向/自研方案的额外复杂度",
+    "optionMeanings": [
+      "UDP 不保证送达顺序，自研协议还要重新解决可靠性。",
+      "P2P 通道是为客户端互连设计的，这里只有服务器推数据。",
+      "双向能力这里用不上，是多余的状态管理成本。",
+      "这条只推指标给客户端，不需要客户端反向发送。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "UDP",
+        "fullName": "User Datagram Protocol",
+        "meaning": "无连接、不保证顺序或送达的传输层协议。",
+        "meaningEn": "UDP, User Datagram Protocol, is a connectionless transport protocol that does not guarantee order or delivery."
+      }
     ]
   },
   {
@@ -732,9 +1507,9 @@
     "q": "可能考虑哪种协议？",
     "options": [
       "WebRTC 或 WebSocket，取决于是否需要 P2P",
-      "每日 batch export",
-      "只用 30 秒 polling",
-      "S3 lifecycle rule"
+      "把游戏状态做成每日 batch export",
+      "只用 30 秒一次的 simple polling 同步状态",
+      "靠 S3 lifecycle rule 管理游戏存档"
     ],
     "answer": [
       0
@@ -746,6 +1521,37 @@
       "protocol-choice",
       "gaming",
       "webrtc"
+    ],
+    "options_en": [
+      "WebRTC or WebSocket, depending on whether peer-to-peer is needed.",
+      "Turn game state into a daily batch export.",
+      "Use only thirty-second simple polling to sync state.",
+      "Manage game saves with an S3 lifecycle rule."
+    ],
+    "tradeoff": "P2P 降延迟 vs server-coordinated 更好管控一致性",
+    "optionMeanings": [
+      "按是否需要 P2P 在 WebRTC 和 WebSocket 间选择。",
+      "batch export 延迟以天计，游戏根本等不起。",
+      "30 秒轮询对交互游戏来说延迟高到不能玩。",
+      "lifecycle rule 是存储对象过期策略，和实时同步无关。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "S3 lifecycle rule",
+        "meaning": "对象存储里按时间自动转储或删除对象的规则，不是实时机制。",
+        "meaningEn": "An S3 lifecycle rule automatically transitions or deletes stored objects over time; it is not a realtime mechanism."
+      }
     ]
   },
   {
@@ -762,6 +1568,59 @@
       "protocol-summary",
       "cloze",
       "choice"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "方向",
+        "延迟"
+      ],
+      "rows": [
+        [
+          "Simple polling",
+          "单向拉取",
+          "秒级"
+        ],
+        [
+          "Long polling",
+          "单向拉取",
+          "近实时"
+        ],
+        [
+          "SSE",
+          "单向推送",
+          "低"
+        ],
+        [
+          "WebSocket",
+          "双向",
+          "很低"
+        ],
+        [
+          "WebRTC",
+          "P2P 双向",
+          "最低"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
     ]
   },
   {
@@ -772,13 +1631,13 @@
     "sub": "server-side-propagation",
     "q": "Server-side propagation 解决的核心问题是什么？",
     "options": [
+      "客户端浏览器如何解析并渲染 CSS 样式表",
       "更新源如何把事件送到当前持有目标客户端连接的 server",
-      "客户端如何渲染 CSS",
-      "WebSocket 如何升级 HTTP",
-      "数据库如何压缩 BLOB"
+      "WebSocket 握手如何把 HTTP 连接升级成长连接",
+      "数据库如何对大二进制 BLOB 字段做压缩存储"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "即使有 WebSocket，消息源也要知道用户连接在哪台 server，或通过 pub/sub 广播到相关 endpoint server。",
     "why_en": "Server-side propagation routes updates from their source to the server that can deliver them to the connected client.",
@@ -787,7 +1646,33 @@
       "routing",
       "connections"
     ],
-    "diagram": "flowchart LR\n    E[\"事件源\"] --> Q{\"目标连接在哪?\"}\n    Q --> S1[\"Server 1\"]\n    Q --> S2[\"Server 2\"]\n    Q --> S3[\"Server 3\"]\n    S2 --> C[\"目标客户端\"]"
+    "diagram": "flowchart LR\n    E[\"事件源\"] --> Q{\"目标连接在哪?\"}\n    Q --> S1[\"Server 1\"]\n    Q --> S2[\"Server 2\"]\n    Q --> S3[\"Server 3\"]\n    S2 --> C[\"目标客户端\"]",
+    "scenario": "系统已经能建立 client-server 连接，但更新产生的地方和持有该连接的 server 常常不是同一台机器。",
+    "options_en": [
+      "How the client's browser parses and renders CSS.",
+      "How the update source gets an event to the server currently holding the target client's connection.",
+      "How a WebSocket handshake upgrades an HTTP connection.",
+      "How a database compresses large BLOB fields for storage."
+    ],
+    "optionMeanings": [
+      "这是前端渲染问题，和服务端更新传播无关。",
+      "核心问题：更新怎么找到持有连接的那台 server。",
+      "这是第一跳协议问题，不是第二跳传播问题。",
+      "这是存储优化问题，和实时路由无关。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "BLOB",
+        "fullName": "Binary Large Object",
+        "meaning": "数据库里存储大块二进制数据的字段类型。",
+        "meaningEn": "A BLOB, Binary Large Object, is a database field type for storing large binary data."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-032",
@@ -798,13 +1683,13 @@
     "scenario": "系统不需要真正实时，客户端可以每 5 秒拉一次“上次之后的新消息”。",
     "q": "server-side propagation 可以怎么简化？",
     "options": [
+      "必须引入 ZooKeeper 做 consistent hashing 才能简化",
+      "必须额外维护一张用户到 WebSocket server 的映射表",
       "把更新存数据库，客户端按 last_seen timestamp/sequence polling 拉取",
-      "必须维护用户到 WebSocket server 的映射",
-      "必须使用 ZooKeeper consistent hashing",
-      "必须用 WebRTC"
+      "必须切换到 WebRTC 让客户端互相直连才能简化"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "pull-based polling 用数据库作为中断点，更新源和客户端接收完全解耦。代价是延迟和读压力。",
     "why_en": "With pull-based polling, updates are stored in a database and clients fetch changes after their last seen point.",
@@ -813,6 +1698,37 @@
       "pull-propagation",
       "database",
       "fit"
+    ],
+    "options_en": [
+      "You must introduce ZooKeeper-based consistent hashing.",
+      "You must maintain a mapping from each user to their WebSocket server.",
+      "Store updates in the database and have clients poll by last-seen timestamp or sequence number.",
+      "You must switch to WebRTC so clients connect directly to each other."
+    ],
+    "tradeoff": "解耦更新源与连接、延迟换简单 vs 持久连接换低延迟但要处理路由",
+    "optionMeanings": [
+      "consistent hashing 是为持久连接路由设计的，这里不需要。",
+      "这是持久连接方案的复杂度，和简化方向相反。",
+      "更新只有真被拉取时才对外可见，源和读取互不感知。",
+      "WebRTC 是给客户端间通信设计的，不解决轮询简化问题。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
     ]
   },
   {
@@ -823,13 +1739,13 @@
     "sub": "persistent-connection-routing",
     "q": "使用 WebSocket/SSE 这类持久连接后，发送给某个用户的更新为什么需要路由？",
     "options": [
-      "因为该用户连接只存在某台 endpoint server 的内存中，更新源必须找到或广播到那台 server",
-      "因为客户端不能接收消息",
-      "因为所有连接都存在数据库里",
-      "因为 HTTP 无法携带用户 ID"
+      "因为 HTTP 协议本身的请求格式设计上根本无法携带用户 ID 这样的业务字段",
+      "因为客户端所在的网络设备和运营商链路原则上完全无法接收任何服务器主动推送的消息",
+      "因为所有持久连接的完整状态其实都会被系统自动持久化保存进后端关系型数据库里",
+      "因为该用户连接只存在某台 endpoint server 的内存中，更新源必须找到或广播到那台 server"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "连接本身是 server-side state。要么让用户稳定连接到可预测 server，要么用 pub/sub 让 endpoint server 订阅相关 topic。",
     "why_en": "Persistent connections create server-side state, so updates must reach the server holding that user's connection.",
@@ -837,7 +1753,33 @@
       "persistent-connections",
       "routing",
       "state"
-    ]
+    ],
+    "options_en": [
+      "Because HTTP's request format is fundamentally unable to carry a business field like a user ID.",
+      "Because the client's network device and carrier link fundamentally cannot receive any server-pushed message.",
+      "Because every persistent connection's full state is actually auto-persisted into a backend relational database.",
+      "Because that user's connection lives only in one endpoint server's memory, the update source must find or broadcast to that server."
+    ],
+    "optionMeanings": [
+      "反例：HTTP 能带用户 ID，这不是路由要解决的问题。",
+      "反例：客户端能收消息，问题是消息怎么找到它。",
+      "反例：连接状态在内存，不在数据库。",
+      "连接状态只活在某台 server 内存里，这就是要路由的原因。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "endpoint server",
+        "meaning": "只负责持有客户端连接、订阅 topic 并转发消息的轻量服务器。",
+        "meaningEn": "An endpoint server is a lightweight server that just holds client connections, subscribes to topics, and forwards messages."
+      },
+      {
+        "term": "HTTP",
+        "fullName": "HyperText Transfer Protocol",
+        "meaning": "应用层的请求-响应协议，是大多数 Web 通信的基础。",
+        "meaningEn": "HTTP, HyperText Transfer Protocol, is the request-response protocol most web communication is built on."
+      }
+    ],
+    "scenario": "系统已经用 WebSocket/SSE 给用户建立了持久连接；现在要往某个用户推送一条更新。"
   },
   {
     "id": "sd-patterns-realtime-updates-034",
@@ -848,9 +1790,9 @@
     "q": "用 consistent hashing 做实时连接路由的基本想法是什么？",
     "options": [
       "把用户/文档和 server 映射到 hash ring，某个 key 总由可预测 server 持有连接状态",
-      "把所有消息写入同一个 Redis key",
-      "让客户端随机连接且永不重定向",
-      "用 CDN 缓存 WebSocket"
+      "把所有客户端发来的消息不做任何区分地统一写进同一个 Redis key 排队",
+      "让客户端每一次建立连接都随机挑选一台 server，并且从不做任何重定向处理",
+      "用 CDN 边缘节点去缓存住 WebSocket 长连接上产生的所有消息内容"
     ],
     "answer": [
       0
@@ -862,7 +1804,44 @@
       "connection-routing",
       "hash-ring"
     ],
-    "diagram": "flowchart LR\n    K[\"user/doc id\"] --> H[\"hash\"]\n    H --> R((\"ring\"))\n    R --> S[\"owner server\"]\n    S --> C[\"该 key 的连接\"]"
+    "diagram": "flowchart LR\n    K[\"user/doc id\"] --> H[\"hash\"]\n    H --> R((\"ring\"))\n    R --> S[\"owner server\"]\n    S --> C[\"该 key 的连接\"]",
+    "options_en": [
+      "Map users or documents and servers onto a hash ring, so a given key is always owned by a predictable server.",
+      "Write every client's messages, without distinction, into the same single Redis key to queue up.",
+      "Let clients pick a random server on every single connection and never redirect them at all.",
+      "Use a CDN edge node to cache all the message content produced over a WebSocket connection."
+    ],
+    "optionMeanings": [
+      "hash ring 让每个 key 有可预测的归属 server。",
+      "单 key 顶不住高并发写入，也不解决路由问题。",
+      "随机连接会导致消息找不到持有连接的那台 server。",
+      "CDN 缓存静态内容，不能缓存有状态的长连接。"
+    ],
+    "codeSample": "def owner_server(key, ring):\n    h = hash(key)\n    return next((s for s in ring if s >= h), ring[0])\n# ring 是排序后的 server hash 列表\n# 新增/下线 server 时只有相邻区间的 key 需要迁移",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "hash ring",
+        "meaning": "consistent hashing 用来把 key 和 server 都映射到同一个环上的结构。",
+        "meaningEn": "A hash ring is the structure consistent hashing uses to map both keys and servers onto the same circular space."
+      },
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      },
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存到靠近用户的边缘节点的网络。",
+        "meaningEn": "A CDN is a network of edge servers that caches content close to users."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-035",
@@ -889,7 +1868,8 @@
       "consistent-hashing",
       "flow",
       "connection-routing"
-    ]
+    ],
+    "tradeoff": "先连任意 server 再重定向的简单性 vs 客户端直接知道正确 server 的效率"
   },
   {
     "id": "sd-patterns-realtime-updates-036",
@@ -915,6 +1895,26 @@
       "consistent-hashing",
       "tradeoffs",
       "coordination"
+    ],
+    "options_en": [
+      "Server assignment is predictable.",
+      "Only a fraction of connections move when scaling up or down.",
+      "It fits cases where each connection carries expensive server-side state.",
+      "It needs no coordination service or migration process at all."
+    ],
+    "tradeoff": "路由可预测、迁移量小 vs 协调服务与迁移编排的实现复杂度",
+    "optionMeanings": [
+      "server assignment 可预测，谁负责哪个 key 一目了然。",
+      "扩缩容时只迁移一部分连接，不用全员重连。",
+      "适合每个连接有昂贵 server-side state 的场景。",
+      "反例：consistent hashing 恰恰离不开协调服务和迁移流程。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      }
     ]
   },
   {
@@ -926,13 +1926,13 @@
     "scenario": "Google Docs 协作编辑中，一个文档连接需要维护大量操作历史、pending operations 和协作者状态，迁移成本高。",
     "q": "server-side propagation 更可能考虑什么？",
     "options": [
+      "把每一次编辑更新都不加区分地随机发给任意一台 server 去处理",
       "按 document_id 做 consistent hashing，让同一文档连接集中在负责 server",
-      "随机把每条更新发给任意 server",
-      "只用客户端本地状态",
-      "每个字符都全库 polling"
+      "完全依赖每个客户端本地保存的状态，从不同步给任何服务器",
+      "每敲下一个字符就要对整个数据库执行一次全表范围的 polling 查询"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "当每个实体有重 server-side state，稳定 owner server 能减少状态复制和重建成本。",
     "why_en": "For heavy per-document connection state, consistent hashing keeps the state on a predictable owner server.",
@@ -941,6 +1941,26 @@
       "consistent-hashing",
       "google-docs",
       "fit"
+    ],
+    "options_en": [
+      "Randomly send every single editing update to any server without distinction.",
+      "Hash by document_id so the same document's connections concentrate on one owner server.",
+      "Rely entirely on state saved locally on each client, never syncing to any server.",
+      "Run a full-table polling query against the entire database on every single keystroke."
+    ],
+    "tradeoff": "稳定 owner server 省去状态重建 vs 引入协调服务和迁移编排",
+    "optionMeanings": [
+      "随机发送找不到持有该文档 pending operations 的 server。",
+      "按 document_id 把同一文档的连接和历史操作都收拢到一台机器上。",
+      "本地状态无法让协作者看到彼此的编辑。",
+      "全表 polling 对逐字符编辑来说延迟和负载都不可接受。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      }
     ]
   },
   {
@@ -967,6 +1987,18 @@
       "consistent-hashing",
       "scaling",
       "migration"
+    ],
+    "options_en": [
+      "Mark the start of a scaling event and record both old and new server assignments.",
+      "Slowly disconnect some clients so they reconnect to their new owner.",
+      "During the transition, send messages to both the old and new owner.",
+      "Disconnect all connections instantly with no replay of missed messages."
+    ],
+    "optionMeanings": [
+      "标记 scaling event，记录旧/新 server assignment，是编排的起点。",
+      "慢慢断开部分客户端，让它们重连到新 owner，避免瞬时冲击。",
+      "过渡期消息同时发往旧/新 owner，防止迁移窗口丢消息。",
+      "反例：瞬间断开且不补发，会直接丢失在途消息。"
     ]
   },
   {
@@ -977,13 +2009,13 @@
     "sub": "pubsub",
     "q": "Pub/Sub 传播实时更新的基本模型是什么？",
     "options": [
+      "每个客户端都绕开后端服务，直接对所有数据库实例发起查询",
+      "不管更新源是谁，客户端都必须每一次连接同一台固定不变的 server",
       "更新发布到 topic，endpoint servers 订阅 topic 并把消息转发给本机连接的客户端",
-      "客户端必须连接固定 server",
-      "每个客户端直接查询所有数据库",
-      "所有消息都必须经过同一个 API handler 同步返回"
+      "所有消息都必须先经过同一个 API handler 同步处理完才能返回"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "Pub/Sub 把主要状态放在 pub/sub 层，endpoint server 更轻量，客户端可连任意 endpoint。",
     "why_en": "Pub/sub sends updates to topics, and endpoint servers subscribe and forward them to connected clients.",
@@ -992,7 +2024,33 @@
       "endpoint-server",
       "definition"
     ],
-    "diagram": "flowchart LR\n    P[\"Publisher\"] --> T[\"Topic\"]\n    T --> S1[\"Endpoint A\"]\n    T --> S2[\"Endpoint B\"]\n    S1 --> C1[\"Clients\"]\n    S2 --> C2[\"Clients\"]"
+    "diagram": "flowchart LR\n    P[\"Publisher\"] --> T[\"Topic\"]\n    T --> S1[\"Endpoint A\"]\n    T --> S2[\"Endpoint B\"]\n    S1 --> C1[\"Clients\"]\n    S2 --> C2[\"Clients\"]",
+    "options_en": [
+      "Every client bypasses the backend service and queries all database instances directly.",
+      "Regardless of the update source, clients must always connect to the exact same fixed server every time.",
+      "Updates publish to a topic, and endpoint servers subscribe and forward them to their own connected clients.",
+      "Every message must first pass fully through the same API handler synchronously before it can return."
+    ],
+    "codeSample": "SUBSCRIBE user:42\nPUBLISH user:42 {\"type\":\"message\",\"text\":\"hi\"}\n# endpoint server 为每个已连接用户订阅一个 topic\n# 更新源只管 PUBLISH，不需要知道用户连接在哪台 server",
+    "lang": "redis",
+    "termDefinitions": [
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      },
+      {
+        "term": "topic",
+        "meaning": "pub/sub 里消息分类的频道，订阅者按 topic 接收消息。",
+        "meaningEn": "A topic is a named channel in pub/sub that subscribers listen to for messages."
+      },
+      {
+        "term": "endpoint server",
+        "meaning": "只负责持有客户端连接、订阅 topic 并转发消息的轻量服务器。",
+        "meaningEn": "An endpoint server is a lightweight server that just holds client connections, subscribes to topics, and forwards messages."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-040",
@@ -1019,7 +2077,8 @@
       "pubsub",
       "flow",
       "endpoint-server"
-    ]
+    ],
+    "tradeoff": "端点服务器可互换、随便连 vs consistent hashing 的稳定归属"
   },
   {
     "id": "sd-patterns-realtime-updates-041",
@@ -1030,13 +2089,13 @@
     "scenario": "聊天系统只需要把小消息转发给在线用户，endpoint server 本身没有重状态，负载希望用 least connections 简单均衡。",
     "q": "server-side propagation 更适合什么？",
     "options": [
-      "Pub/Sub",
-      "每个用户 consistent hashing 到固定 server",
-      "WebRTC mesh 所有人互连",
-      "只靠 SQL polling"
+      "只靠 SQL polling 查有没有新消息",
+      "对每个用户做 consistent hashing 固定到一台 server",
+      "用 WebRTC mesh 让所有人两两互连",
+      "Pub/Sub 转发小消息"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "小消息转发不需要重 owner state。Pub/Sub 简化连接层，让 endpoint servers 轻量可替换。",
     "why_en": "Pub/sub fits lightweight message forwarding where endpoint servers do not hold heavy per-user state.",
@@ -1045,6 +2104,38 @@
       "pubsub",
       "chat",
       "fit"
+    ],
+    "options_en": [
+      "Rely only on SQL polling for new messages.",
+      "Pin every user to one fixed server with consistent hashing.",
+      "Use a WebRTC mesh so everyone connects directly to everyone.",
+      "Pub/sub forwards lightweight messages."
+    ],
+    "tradeoff": "endpoint server 轻量可互换 vs owner server 稳定但要迁移编排",
+    "optionMeanings": [
+      "polling 对聊天这种高频双向场景延迟太高。",
+      "固定归属适合重状态连接，这里消息轻量用不上。",
+      "mesh 连接数按人数平方增长，聊天室人多就爆炸。",
+      "topic 只管转发，谁在线、连到哪台机器完全不关心。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      },
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
     ]
   },
   {
@@ -1071,6 +2162,27 @@
       "pubsub",
       "tradeoffs",
       "scaling"
+    ],
+    "options_en": [
+      "Endpoint servers are easy to load-balance with a least-connections strategy.",
+      "It efficiently broadcasts updates to a large number of subscribers.",
+      "The pub/sub service can become a bottleneck or single point of failure, needing a cluster or sharding.",
+      "It adds absolutely no latency or dependency at all."
+    ],
+    "tradeoff": "endpoint 层易扩展 vs pub/sub 服务本身的单点/瓶颈风险",
+    "optionMeanings": [
+      "消息量是唯一变量时，least-connections 很容易均衡负载。",
+      "一次发布能高效广播给大量订阅者。",
+      "pub/sub service 可能成瓶颈或单点，需要集群/分片。",
+      "反例：多一层间接必然带来一点延迟和依赖，不可能为零。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      }
     ]
   },
   {
@@ -1079,22 +2191,37 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "pubsub-latency",
-    "q": "文章对 Pub/Sub 额外延迟的量级描述更接近哪项？",
+    "q": "这个额外延迟量级更支持哪条判断？",
     "options": [
-      "<10ms 级别，通常很小",
-      "10 分钟",
-      "1 小时",
-      "完全不可用"
+      "Pub/Sub 引入的延迟通常在个位数到十几毫秒，量级远小于用户能感知的门槛",
+      "Pub/Sub 会让延迟增加几分钟，几乎不能用于实时场景",
+      "Pub/Sub 延迟接近 1 小时，只适合离线批处理",
+      "Pub/Sub 服务必然让系统完全不可用"
     ],
     "answer": [
       0
     ],
-    "why": "Pub/Sub 增加一层间接，但在常见设计里延迟影响通常很小；真正要关注的是规模、可用性和 topic 分片。",
-    "why_en": "The extra latency from pub/sub is often small, on the order of under ten milliseconds.",
+    "why": "Pub/Sub 只是多一跳转发，量级通常在 10ms 以内；真正要担心的是它的可用性和分片扩展，而不是这点延迟。",
+    "why_en": "Pub/sub adds only a small extra hop, typically under ten milliseconds, so the real concerns are its availability and sharding, not this added latency.",
     "tags": [
       "pubsub",
       "latency",
       "numbers"
+    ],
+    "scenario": "端到端消息要经过 Pub/Sub 这一层间接转发；团队担心这层 indirection 会不会让实时性变差。",
+    "options_en": [
+      "Pub/sub latency is usually single digits to low tens of milliseconds, far below what users can perceive.",
+      "Pub/sub adds minutes of delay, making it nearly unusable for realtime.",
+      "Pub/sub latency is close to an hour, fit only for offline batch.",
+      "A pub/sub service inevitably makes the system completely unavailable."
+    ],
+    "termDefinitions": [
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      }
     ]
   },
   {
@@ -1106,13 +2233,13 @@
     "scenario": "endpoint server 主要资源是打开的连接数，每条连接工作量类似。",
     "q": "负载均衡策略用什么最直观？",
     "options": [
-      "least connections",
-      "按 URL path 随机切",
-      "所有连接固定到第一台",
-      "按 HTML 文件大小"
+      "按请求的 URL path 做随机切分，和连接数无关",
+      "least connections（挑连接数最少的 server）",
+      "把所有长连接固定发给最开始那一台 server 处理",
+      "按 HTML 静态文件的大小来分配后续流量"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "连接数本身就是资源消耗的主指标。least-connections 能避免某台 server 因历史长连接过多而成为热点。",
     "why_en": "Least-connections load balancing fits endpoint servers whose main resource is open connection count.",
@@ -1121,6 +2248,19 @@
       "load-balancing",
       "least-connections",
       "fit"
+    ],
+    "options_en": [
+      "Randomly split traffic by the request's URL path, unrelated to connection count.",
+      "Least connections — route to whichever server currently holds the fewest connections.",
+      "Pin all long-lived connections to whichever server handled the very first request.",
+      "Allocate subsequent traffic based on the size of an HTML static file."
+    ],
+    "tradeoff": "按真实资源消耗均衡 vs 与连接数无关的路由规则",
+    "optionMeanings": [
+      "URL path 和连接负载没有必然关系。",
+      "连接数就是资源消耗的主指标，直接按它均衡最直观。",
+      "固定一台会让它成为热点，完全没有均衡。",
+      "文件大小和长连接的资源消耗无关。"
     ]
   },
   {
@@ -1131,13 +2271,13 @@
     "sub": "connection-failure",
     "q": "实时系统中 zombie connection 指什么？",
     "options": [
+      "CDN 边缘节点上的缓存内容已经过期",
+      "数据库表里出现了同一条数据的重复行",
       "一端以为连接还活着，但另一端已经断开或清理",
-      "数据库里重复行",
-      "CDN 缓存过期",
-      "一个用户有多个设备"
+      "同一个用户同时用多台设备登录"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "移动网络、WiFi 切换和服务器重启都可能让连接状态不一致。Heartbeat/ping-pong 用来快速发现死连接。",
     "why_en": "A zombie connection is one side believing a connection is alive after the other side has lost or cleaned it up.",
@@ -1145,6 +2285,26 @@
       "connection-failure",
       "heartbeat",
       "zombie"
+    ],
+    "options_en": [
+      "Cached content expiring at a CDN edge node.",
+      "Duplicate rows appearing in a database table.",
+      "One side believes the connection is still alive while the other side has already dropped or cleaned it up.",
+      "One user being logged in from multiple devices."
+    ],
+    "optionMeanings": [
+      "这是缓存失效问题，和连接状态无关。",
+      "这是数据一致性问题，和连接状态无关。",
+      "一端以为连接还活着，另一端其实已清理，这就是 zombie。",
+      "这是多设备场景，本身不是连接故障。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存到靠近用户的边缘节点的网络。",
+        "meaningEn": "A CDN is a network of edge servers that caches content close to users."
+      }
     ]
   },
   {
@@ -1172,7 +2332,31 @@
       "heartbeat",
       "sequence"
     ],
-    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: heartbeat\n    S-->>C: ack\n    Note over C,S: 网络断开\n    C->>S: reconnect + last_seq\n    S-->>C: replay missed"
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: heartbeat\n    S-->>C: ack\n    Note over C,S: 网络断开\n    C->>S: reconnect + last_seq\n    S-->>C: replay missed",
+    "options_en": [
+      "Heartbeats detect that a connection has died.",
+      "The client reconnects with backoff to avoid a reconnect storm.",
+      "A sequence number or last event ID lets the server know what to replay.",
+      "Drop messages during a disconnect and never record them."
+    ],
+    "optionMeanings": [
+      "heartbeat 定期探测，快速发现连接已经死掉。",
+      "client reconnect with backoff 避免风暴式重连打垮服务器。",
+      "sequence number/last event ID 让服务器知道该补发哪一段。",
+      "反例：直接丢弃且不记录，重连后用户就永久漏消息。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "sequence number",
+        "meaning": "给消息编号，客户端和服务器都能用它对齐看到哪了。",
+        "meaningEn": "A sequence number labels each message so client and server can agree on how far the client has read."
+      },
+      {
+        "term": "last event ID / Last-Event-ID",
+        "meaning": "SSE 事件自带的编号；重连时浏览器自动带上它，服务器据此补发漏掉的事件。",
+        "meaningEn": "Last-Event-ID is the SSE event identifier the browser resends on reconnect so the server can replay missed events."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-047",
@@ -1183,13 +2367,13 @@
     "scenario": "WebSocket 断开 20 秒后重连，客户端需要收到断线期间的消息。",
     "q": "服务端应如何支持？",
     "options": [
-      "维护 per-user message queue 或 Redis Streams，并用 sequence number 补发 last_seen 之后的消息",
-      "告诉用户消息全部丢了",
-      "只依赖 TCP 自动保存所有断线消息",
-      "让客户端猜测消息内容"
+      "让客户端在成功重连之后自己凭空猜测断线期间究竟收到过什么样的消息",
+      "直接放弃处理，明确告诉用户断线期间产生的所有消息都已经永久丢失了",
+      "只依赖 TCP 协议本身在传输层自动帮你保存断线期间产生的全部消息内容",
+      "维护 per-user 消息队列或 Redis Streams，按 sequence number 补发错过的消息"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "WebSocket 本身不替你保存断线消息。需要可查询的消息日志和 last_seen cursor。",
     "why_en": "WebSocket reconnection needs a durable message log or queue plus a last-seen cursor to replay missed messages.",
@@ -1198,6 +2382,39 @@
       "missed-messages",
       "redis-streams",
       "fit"
+    ],
+    "options_en": [
+      "Let the client, after successfully reconnecting, guess out of thin air what messages it might have missed.",
+      "Simply give up and tell the user that every message sent during the disconnect is permanently lost.",
+      "Rely solely on the TCP transport layer to automatically save every message sent during a disconnect.",
+      "Maintain a per-user message queue or Redis Streams and replay missed messages by sequence number."
+    ],
+    "tradeoff": "多维护一份可查询的消息日志 vs 断线期间完全无补发能力",
+    "optionMeanings": [
+      "猜测内容既不可靠，也不是工程方案。",
+      "放弃补发会让用户体验很差，且并非唯一选项。",
+      "TCP 只管这条连接内的字节顺序，不会替你持久化消息。",
+      "per-user 消息日志 + sequence number 是补发的标准做法。"
+    ],
+    "codeSample": "XADD user:42:events * type message text \"hi\"\nXREAD COUNT 50 STREAMS user:42:events 1699999999-0\n# XADD 把事件追加进该用户的 stream\n# 重连时带上 last_seen id，XREAD 从那之后读取补发",
+    "lang": "redis",
+    "termDefinitions": [
+      {
+        "term": "Redis Streams",
+        "meaning": "Redis 里的一种追加日志结构，支持按位置读取和补发消息。",
+        "meaningEn": "Redis Streams is an append-only log data structure in Redis that supports reading from a given position for replay."
+      },
+      {
+        "term": "sequence number",
+        "meaning": "给消息编号，客户端和服务器都能用它对齐看到哪了。",
+        "meaningEn": "A sequence number labels each message so client and server can agree on how far the client has read."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、保证有序可靠传输的传输层协议。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered, reliable delivery."
+      }
     ]
   },
   {
@@ -1209,9 +2426,9 @@
     "q": "实时系统里的 celebrity problem 是什么？",
     "options": [
       "一个高关注用户的更新需要同时推给数百万客户端，naive fanout 可能压垮系统",
-      "用户名字太长",
-      "WebSocket 无法传文本",
-      "所有用户都离线"
+      "用户在设置页面填写的显示名字超过了后端字段长度限制",
+      "WebSocket 协议在设计上本身就无法传输任何文本类型的消息",
+      "系统里恰好所有用户账号在这一时刻都处于离线状态"
     ],
     "answer": [
       0
@@ -1222,6 +2439,30 @@
       "celebrity-problem",
       "fanout",
       "scale"
+    ],
+    "options_en": [
+      "One highly followed user's update must reach millions of clients at once, and naive fanout can crash the system.",
+      "The display name a user entered on the settings page exceeds the backend's field length limit.",
+      "The WebSocket protocol, by design, is fundamentally unable to transmit any text-type message.",
+      "Every single user account in the system happens to be offline at this exact moment."
+    ],
+    "optionMeanings": [
+      "百万级 fanout 是 celebrity problem 的核心：naive 推送会打垮系统。",
+      "这是字段校验问题，和 fanout 规模无关。",
+      "WebSocket 能传文本，这个说法本身就错了。",
+      "离线状态不是 fanout 压力的成因。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "fanout",
+        "meaning": "一条更新要分发给大量接收者，接收者数量越大分发压力越大。",
+        "meaningEn": "Fanout is delivering one update to a large number of recipients; more recipients means more delivery pressure."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
     ]
   },
   {
@@ -1249,7 +2490,19 @@
       "fanout",
       "hierarchical"
     ],
-    "diagram": "flowchart TB\n    A[\"热点更新\"] --> B[\"聚合/限流\"]\n    B --> C[\"区域 fanout\"]\n    C --> D[\"Endpoint servers\"]\n    D --> E[\"大量客户端\"]"
+    "diagram": "flowchart TB\n    A[\"热点更新\"] --> B[\"聚合/限流\"]\n    B --> C[\"区域 fanout\"]\n    C --> D[\"Endpoint servers\"]\n    D --> E[\"大量客户端\"]",
+    "options_en": [
+      "Cache the update once and distribute it through regional or hierarchical layers of local connections.",
+      "Batch and broadcast hierarchically so no single component takes the full hit.",
+      "Allow slight delay or sampling where strict realtime is not critical.",
+      "Synchronously write to every user connection one by one with no throttling."
+    ],
+    "optionMeanings": [
+      "缓存更新一次，按区域/层级分发给本地连接，减少重复计算。",
+      "批量聚合 + 分层广播，避免单组件被瞬间打满。",
+      "非关键实时性允许延迟或抽样，用宽松度换稳定性。",
+      "反例：同步逐个写入且不限流，正是会被打垮的做法。"
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-050",
@@ -1259,13 +2512,13 @@
     "sub": "ordering",
     "q": "分布式实时更新为什么会遇到 message ordering 问题？",
     "options": [
+      "JSON 这种数据交换格式在设计上完全无法表达任何顺序字段",
       "不同 server/partition/network path 处理消息，发送顺序和到达顺序可能不一致",
-      "JSON 无法表示顺序",
-      "客户端永远只能收一条消息",
-      "load balancer 会自动排序所有消息"
+      "客户端在系统运行的任意时刻永远只能收到一条服务器消息",
+      "load balancer 会在转发过程中自动帮所有消息重新排好顺序"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "多个 server 并行处理时，消息可能乱序。关键流需要明确排序域和顺序来源。",
     "why_en": "Distributed realtime systems can reorder messages when different servers or paths process them concurrently.",
@@ -1274,7 +2527,32 @@
       "distributed-systems",
       "messages"
     ],
-    "diagram": "flowchart LR\n    A[\"msg 1\"] --> S1[\"Server A\"] --> C[\"Client\"]\n    B[\"msg 2\"] --> S2[\"Server B\"] --> C\n    S2 -.可能先到.-> C\n    O[\"single sequencer\"] -->|统一编号| C"
+    "diagram": "flowchart LR\n    A[\"msg 1\"] --> S1[\"Server A\"] --> C[\"Client\"]\n    B[\"msg 2\"] --> S2[\"Server B\"] --> C\n    S2 -.可能先到.-> C\n    O[\"single sequencer\"] -->|统一编号| C",
+    "options_en": [
+      "JSON, as a data interchange format, is by design fundamentally unable to represent any ordering field.",
+      "Different servers, partitions, or network paths process messages, so send order and arrival order can differ.",
+      "A client, at any moment while the system is running, can only ever receive one server message.",
+      "The load balancer automatically re-sorts every message into the correct order while forwarding it."
+    ],
+    "optionMeanings": [
+      "JSON 本身能表达顺序字段，这不是根因。",
+      "不同 server/路径并行处理，天然可能打乱到达顺序。",
+      "客户端能收多条消息，这个前提不对。",
+      "LB 不做消息排序，这是应用层要解决的问题。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "JSON",
+        "fullName": "JavaScript Object Notation",
+        "meaning": "一种轻量级的结构化数据格式。",
+        "meaningEn": "JSON is a lightweight structured data format."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      }
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-051",
@@ -1285,13 +2563,13 @@
     "scenario": "在线拍卖中，同一个 item 的出价顺序必须明确，总顺序比水平扩展更重要。",
     "q": "更务实的排序策略是什么？",
     "options": [
-      "把同一 item 的消息 funnel 到单个 server/partition，由它打 timestamp/sequence",
-      "让所有 server 随机排序",
-      "完全依赖客户端时间",
-      "不记录出价顺序"
+      "完全依赖每个客户端设备本地时钟给自己的出价打时间戳",
+      "让每一台 server 各自独立、随机决定收到消息的处理先后顺序",
+      "把同一 item 的消息 funnel 到单个 server/partition 打顺序号",
+      "干脆不记录任何一次出价之间的先后顺序关系"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "产品类面试里，单 host/partition 负责同一实体通常比 vector clocks 更简单可靠。它用可控扩展换明确顺序。",
     "why_en": "For product systems, funneling one entity's messages through one server or partition gives a simple total order.",
@@ -1300,6 +2578,19 @@
       "ordering",
       "auction",
       "fit"
+    ],
+    "options_en": [
+      "Rely entirely on each client device's local clock to timestamp its own bids.",
+      "Let every server independently and randomly decide the processing order of messages it receives.",
+      "Funnel one item's messages through a single server or partition that stamps a sequence number.",
+      "Simply don't record the ordering relationship between any bids at all."
+    ],
+    "tradeoff": "牺牲一点水平扩展换来简单的总顺序 vs 全局分布式排序的实现复杂度",
+    "optionMeanings": [
+      "客户端时钟不可信，会导致乱序甚至作弊。",
+      "随机顺序无法保证同一 item 出价的先后关系。",
+      "单 server/partition 天然给出一个总顺序，简单可靠。",
+      "拍卖场景明确需要顺序，不记录直接违反需求。"
     ]
   },
   {
@@ -1310,13 +2601,13 @@
     "sub": "vector-clocks",
     "q": "什么时候才更可能讨论 vector clocks / logical timestamps？",
     "options": [
-      "深层分布式基础设施或多源并发更新，需要表达消息因果关系",
-      "普通在线拍卖题的首选方案",
-      "只需要每 5 秒刷新 dashboard",
-      "单机队列处理"
+      "消息只经过单机队列顺序处理的场景",
+      "是普通在线拍卖这类产品设计题的默认首选方案",
+      "只是每 5 秒刷新一次 dashboard 数字的场景",
+      "深层分布式基础设施或多源并发更新，需要表达消息因果关系"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "大多数产品设计题优先用单 partition 建立顺序。Vector clocks 更适合深 infra 和冲突解析。",
     "why_en": "Vector clocks are more common in deep infrastructure problems than in ordinary product realtime designs.",
@@ -1324,7 +2615,28 @@
       "vector-clocks",
       "ordering",
       "contrast"
-    ]
+    ],
+    "options_en": [
+      "Messages processed sequentially through a single-machine queue.",
+      "The default first choice for an ordinary online-auction product design question.",
+      "A dashboard that just refreshes a number every five seconds.",
+      "Deep distributed infrastructure or multi-source concurrent updates that need to express causal relationships between messages."
+    ],
+    "tradeoff": "表达因果关系的通用性 vs 单 partition 方案的简单性",
+    "optionMeanings": [
+      "单机队列本身处理顺序天然有保证，无需额外机制。",
+      "产品设计题里默认优先用单一节点建立顺序，这个说法反了。",
+      "低频刷新场景完全用不上任何排序机制。",
+      "多源并发写入、需要表达先后因果时才用得上这类机制。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "vector clock",
+        "meaning": "每台节点维护一个计数器向量，用来判断分布式事件之间的因果先后。",
+        "meaningEn": "A vector clock is a per-node counter vector used to determine the causal order between distributed events."
+      }
+    ],
+    "scenario": "面试官追问：在线拍卖这类产品设计题里，什么情况下才真的需要引入更复杂的分布式排序机制。"
   },
   {
     "id": "sd-patterns-realtime-updates-053",
@@ -1335,10 +2647,10 @@
     "scenario": "设计 WhatsApp 类聊天，需要消息即时送达、typing、presence，并处理断线补发。",
     "q": "合理主线是什么？",
     "options": [
-      "WebSocket 做双向连接，Pub/Sub 路由到 endpoint servers，消息日志支持 reconnect replay",
-      "只用每日邮件摘要",
-      "WebRTC 每个用户和所有联系人建 P2P",
-      "只存本地内存不持久化"
+      "WebSocket 双向连接 + Pub/Sub 路由 + 消息日志支持 reconnect replay",
+      "把所有消息汇总起来做成一份每日邮件摘要发给用户查看",
+      "让每一个用户都和自己所有联系人分别建立独立的 WebRTC P2P 连接",
+      "消息只临时存放在服务器本地内存里，完全不做任何持久化处理"
     ],
     "answer": [
       0
@@ -1350,6 +2662,38 @@
       "chat",
       "websocket",
       "pubsub"
+    ],
+    "options_en": [
+      "Bidirectional WebSocket connections, pub/sub routing, and a message log for reconnect replay.",
+      "Roll all messages up into a daily email digest sent to the user.",
+      "Have every user open a separate, independent WebRTC peer-to-peer connection to each of their contacts.",
+      "Keep messages only temporarily in local server memory with absolutely no persistence."
+    ],
+    "tradeoff": "双向低延迟+可靠补发 vs 引入 Pub/Sub 和消息日志的架构复杂度",
+    "optionMeanings": [
+      "WebSocket + Pub/Sub + 消息日志是聊天场景的标准组合拳。",
+      "邮件摘要延迟以天计，不满足即时聊天需求。",
+      "联系人数一多，P2P 连接数就会爆炸式增长。",
+      "不持久化意味着重启或断线就彻底丢消息。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "支持浏览器间直接点对点音视频/数据通信的协议族。",
+        "meaningEn": "WebRTC is a protocol suite that lets browsers exchange audio, video, or data directly, peer to peer."
+      }
     ]
   },
   {
@@ -1361,13 +2705,13 @@
     "scenario": "Google Docs 类协作编辑要传播字符级变更、光标和选择状态，并处理冲突。",
     "q": "实时更新之外还必须讨论什么？",
     "options": [
+      "只靠 CDN 缓存文档内容就能解决并发编辑冲突",
       "CRDT 或 Operational Transform 等冲突解决机制",
-      "只用 CDN",
-      "把所有变更当成图片上传",
-      "完全忽略顺序"
+      "把每一次字符级变更都当成一张图片上传",
+      "完全忽略并发编辑的先后顺序，谁的改动都直接覆盖"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "实时连接只解决“怎么送达”。协作编辑还要解决并发编辑冲突和文档一致性。",
     "why_en": "Collaborative editing needs realtime delivery plus conflict resolution such as CRDTs or operational transforms.",
@@ -1376,6 +2720,39 @@
       "collaborative-editing",
       "crdt",
       "operational-transform"
+    ],
+    "options_en": [
+      "Just rely on a CDN to cache the document content.",
+      "Conflict-resolution mechanisms such as CRDTs or Operational Transform.",
+      "Treat every character-level change as an image upload.",
+      "Completely ignore the order of concurrent edits."
+    ],
+    "tradeoff": "实时传输解决送达 vs CRDT/OT 解决并发冲突，两者缺一不可",
+    "optionMeanings": [
+      "CDN 缓存静态内容，不解决并发写冲突。",
+      "CRDT/OT 专门处理并发编辑的冲突合并，传输本身不够。",
+      "图片没有可合并的结构化操作，无法表达字符级编辑。",
+      "忽略顺序会导致后一次编辑覆盖前一次，内容丢失。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "CRDT",
+        "fullName": "Conflict-free Replicated Data Type",
+        "meaning": "一种设计成可以在多个副本上并发修改、最终自动合并不冲突的数据结构。",
+        "meaningEn": "A CRDT, Conflict-free Replicated Data Type, is a data structure designed so concurrent edits on different replicas merge automatically without conflict."
+      },
+      {
+        "term": "Operational Transform",
+        "fullName": "Operational Transformation",
+        "meaning": "通过变换并发操作的方式，让它们能按顺序应用而不冲突。",
+        "meaningEn": "Operational Transformation, or OT, transforms concurrent operations so they can be applied in sequence without conflicting."
+      },
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存到靠近用户的边缘节点的网络。",
+        "meaningEn": "A CDN is a network of edge servers that caches content close to users."
+      }
     ]
   },
   {
@@ -1387,13 +2764,13 @@
     "scenario": "FB Live comments 中，评论量巨大，所有观众都要感到“实时”，但不一定每个人都看到每条评论。",
     "q": "设计上应重点考虑什么？",
     "options": [
+      "把所有观众的连接都塞进单台 WebSocket server",
+      "每条评论都同步、逐个直接推给每一位观众",
       "批处理、分层聚合和采样/过滤，避免极端 fanout 压垮系统",
-      "每条评论同步推给每个观众",
-      "只用单台 WebSocket server",
-      "禁止评论"
+      "直接关闭评论功能来规避压力"
     ],
     "answer": [
-      0
+      2
     ],
     "why": "直播评论是高 fanout 高写入场景。体验上需要实时感，不一定要求每个客户端收到完整全量流。",
     "why_en": "Live comments need batching and hierarchical fanout to preserve a realtime feel without delivering every event to every viewer.",
@@ -1402,6 +2779,31 @@
       "live-comments",
       "fanout",
       "fit"
+    ],
+    "options_en": [
+      "Put every viewer's connection on one single WebSocket server.",
+      "Synchronously push every single comment to every single viewer.",
+      "Batching, hierarchical aggregation, and sampling or filtering to avoid extreme fanout overwhelming the system.",
+      "Just disable comments entirely."
+    ],
+    "tradeoff": "牺牲“每人看到每条”的完整性 vs 保住系统在极端 fanout 下不被打垮",
+    "optionMeanings": [
+      "单台 server 撑不住百万级并发连接。",
+      "同步逐条推送在百万观众规模下会直接打垮系统。",
+      "批处理+分层+采样是应对极端 fanout 的标准组合。",
+      "关闭功能不是设计问题的答案，只是回避问题。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "fanout",
+        "meaning": "一条更新要分发给大量接收者，接收者数量越大分发压力越大。",
+        "meaningEn": "Fanout is delivering one update to a large number of recipients; more recipients means more delivery pressure."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      }
     ]
   },
   {
@@ -1458,7 +2860,19 @@
           "冲突解决"
         ]
       ]
-    }
+    },
+    "options_en": [
+      "WhatsApp-style chat.",
+      "Uber driver location updates.",
+      "Robinhood live prices and orders.",
+      "Google Docs collaborative editing."
+    ],
+    "optionMeanings": [
+      "消息必须瞬间到达所有参与者，是经典实时场景。",
+      "司机位置需要持续、高频地更新给相关方。",
+      "价格/订单变化要求极低延迟推送给交易者。",
+      "字符级变更要在参与者之间毫秒级同步。"
+    ]
   },
   {
     "id": "sd-patterns-realtime-updates-057",
@@ -1468,13 +2882,13 @@
     "sub": "overengineering",
     "q": "为什么不要一看到“更新”就直接上 WebSocket？",
     "options": [
-      "WebSocket 带来状态连接、重连、LB 和部署复杂度；如果 polling/SSE 足够，应从简单开始",
-      "WebSocket 不能双向通信",
-      "WebSocket 永远比 polling 简单",
-      "WebSocket 不支持浏览器"
+      "目前主流的浏览器版本都还完全不支持 WebSocket 这个协议",
+      "WebSocket 实际上完全做不到任何形式的双向通信，只能单向推送",
+      "WebSocket 无论在什么场景下实现起来都必然比 polling 更加简单",
+      "WebSocket 带来状态连接、重连、LB 和部署复杂度；如果 polling/SSE 足够，应从简单开始"
     ],
     "answer": [
-      0
+      3
     ],
     "why": "成熟设计会先判断实时性和双向性需求。很多状态更新每几秒刷新即可，不值得引入持久连接复杂度。",
     "why_en": "Do not jump to WebSockets unless the latency and bidirectional requirements justify stateful connection complexity.",
@@ -1482,6 +2896,36 @@
       "overengineering",
       "websocket",
       "tradeoffs"
+    ],
+    "options_en": [
+      "Mainstream browser versions today still completely fail to support the WebSocket protocol.",
+      "WebSocket is actually completely incapable of any form of bidirectional communication, only one-way push.",
+      "WebSocket, no matter the scenario, is always necessarily simpler to implement than polling.",
+      "WebSocket brings stateful connections, reconnection, load-balancing, and deployment complexity, so start simple if polling or SSE is enough."
+    ],
+    "optionMeanings": [
+      "反例：主流浏览器早已广泛支持 WebSocket。",
+      "反例：WebSocket 恰恰是双向的，这个判断反了。",
+      "反例：WebSocket 的连接管理明显比 polling 复杂。",
+      "WebSocket 的代价是状态连接和运维复杂度，能简单就别先上它。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      },
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      }
     ]
   },
   {
@@ -1509,6 +2953,18 @@
       "reconnection",
       "fanout",
       "ordering"
+    ],
+    "options_en": [
+      "Reconnection and replaying missed messages.",
+      "Massive fanout from one hot user or event.",
+      "Message ordering across distributed servers.",
+      "Only discussing button colors."
+    ],
+    "optionMeanings": [
+      "断线重连和漏消息补发，检验对连接可靠性的理解。",
+      "单点巨大 fanout，检验对规模化推送的理解。",
+      "分布式消息排序，检验对一致性/顺序的理解。",
+      "反例：按钮颜色是 UI 细节，不是实时系统的深挖点。"
     ]
   },
   {
@@ -1536,7 +2992,8 @@
       "interview-answer",
       "decision-chain",
       "realtime"
-    ]
+    ],
+    "tradeoff": "先定需求再选协议 vs 一上来就跳到具体技术方案"
   },
   {
     "id": "sd-patterns-realtime-updates-060",
@@ -1552,6 +3009,30 @@
       "summary",
       "cloze",
       "two-hops"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "基于 HTTP 的单向流：服务器持续推送事件，客户端只接收。",
+        "meaningEn": "SSE, Server-Sent Events, is an HTTP-based one-way stream where the server keeps pushing events to the client."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "在一条 TCP 连接上支持客户端和服务器双向收发消息的协议。",
+        "meaningEn": "WebSocket is a protocol that lets client and server exchange messages both ways over one persistent connection."
+      },
+      {
+        "term": "pub/sub",
+        "fullName": "Publish/Subscribe",
+        "meaning": "发布者把消息发到 topic，订阅该 topic 的所有客户端都会收到。",
+        "meaningEn": "Pub/sub, short for publish/subscribe, lets a publisher send to a topic that every subscriber of that topic receives."
+      },
+      {
+        "term": "consistent hashing",
+        "meaning": "一种把 key 分配给 server 的算法，扩缩容时只需迁移少量 key。",
+        "meaningEn": "Consistent hashing is an algorithm for assigning keys to servers that only moves a small fraction of keys when the server set changes."
+      }
     ]
   }
 ]
