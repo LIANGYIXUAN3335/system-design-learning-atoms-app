@@ -146,6 +146,8 @@ export interface SessionScreenProps {
   initialQueue: string[];
   /** requeue-sweep universe for mode-filtered sessions; null/undefined = the whole deck */
   requeueScope?: Set<string> | null;
+  /** Cards already graded today; excluded from same-day requeue sweeps. */
+  reviewedToday?: Set<string>;
   onExit: () => void;
   onDone: (stats: SessionStats) => void;
 }
@@ -156,6 +158,7 @@ export function SessionScreen({
   store,
   initialQueue,
   requeueScope,
+  reviewedToday,
   onExit,
   onDone,
 }: SessionScreenProps) {
@@ -170,6 +173,7 @@ export function SessionScreen({
   const [queue, setQueue] = useState<string[]>(initialQueue);
   const [pos, setPos] = useState(0);
   const statsRef = useRef<SessionStats>({ answered: 0, correct: 0 });
+  const reviewedTodayRef = useRef<Set<string>>(new Set(reviewedToday ?? []));
   const scrollRef = useRef<ScrollView>(null);
   const revealY = useRef(0);
 
@@ -316,12 +320,13 @@ export function SessionScreen({
       answered: statsRef.current.answered + 1,
       correct: statsRef.current.correct + (eph.wasCorrect === true ? 1 : 0),
     };
+    reviewedTodayRef.current.add(card.id);
 
     // Requeue sweep: cards that became due (the just-lapsed card, learning
     // steps maturing) go to the END of the queue — bounded to sweepScope so a
     // mode-filtered session never pulls in cards the user excluded.
-    const remaining = new Set(queue.slice(pos + 1));
-    const additions = dueAdditions(store.srs, sweepScope, remaining, new Date());
+    const unavailableToday = new Set([...queue, ...reviewedTodayRef.current]);
+    const additions = dueAdditions(store.srs, sweepScope, unavailableToday, new Date());
     const nextQueue = additions.length ? [...queue, ...additions] : queue;
 
     if (pos + 1 >= nextQueue.length) {
@@ -344,7 +349,9 @@ export function SessionScreen({
     setEph((e) => ({ ...e, flags }));
   };
 
-  const remaining = queue.length - pos;
+  const total = queue.length;
+  const currentIndex = Math.min(pos + 1, Math.max(1, total));
+  const remaining = total - pos;
   const { answered } = statsRef.current;
   const isChoice = card.format === 'mcq' || card.format === 'multi' || card.format === 'code';
   const correctDisplay = new Set<number>(
@@ -387,12 +394,24 @@ export function SessionScreen({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.header}>
-        <Pressable onPress={onExit} hitSlop={10}>
-          <Text style={{ color: colors.muted, fontSize: 15 }}>‹ 退出</Text>
+        <Pressable
+          onPress={onExit}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.homeBtn,
+            { borderColor: pressed ? colors.accent : colors.line },
+          ]}
+        >
+          <Text style={{ color: colors.ink, fontSize: 14, fontWeight: '600' }}>主页</Text>
         </Pressable>
-        <Text style={{ color: colors.muted, fontSize: 13 }}>
-          斩杀 {answered} · 剩余 {remaining}
-        </Text>
+        <View style={styles.progressLabel}>
+          <Text style={{ color: colors.ink, fontSize: 14, fontWeight: '600' }}>
+            第 {currentIndex} / {total} 张
+          </Text>
+          <Text style={{ color: colors.muted, fontSize: 12 }}>
+            已答 {answered} · 剩余 {remaining}
+          </Text>
+        </View>
       </View>
       <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
         <ProgressBar ratio={answered / Math.max(1, answered + remaining)} />
@@ -548,6 +567,15 @@ const styles = StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 10,
   },
+  homeBtn: {
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minWidth: 58,
+    alignItems: 'center',
+  },
+  progressLabel: { alignItems: 'flex-end', gap: 2 },
   card: { borderWidth: 1, borderRadius: 16, padding: 20 },
   questionPane: { flex: 1, minWidth: 0 },
   sidePanel: { borderWidth: 1, borderRadius: 16, overflow: 'hidden' },

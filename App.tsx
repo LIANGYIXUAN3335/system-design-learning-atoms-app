@@ -68,6 +68,7 @@ export default function App() {
   const [sessionDeck, setSessionDeck] = useState<Card[]>([]);
   /** for 'review'/'new' sessions: the id set the requeue sweep may draw from (null = whole deck) */
   const [sessionScope, setSessionScope] = useState<Set<string> | null>(null);
+  const [sessionReviewedToday, setSessionReviewedToday] = useState<Set<string>>(new Set());
   const [sessionKey, setSessionKey] = useState(0);
   const [lastStats, setLastStats] = useState<SessionStats>({ answered: 0, correct: 0 });
 
@@ -76,6 +77,7 @@ export default function App() {
   const storeRef = useRef<SessionStore | null>(null);
   const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
   const tracksRef = useRef<Track[]>([]);
+  const todayDoneIdsRef = useRef<Set<string>>(new Set());
 
   const pickerTracks = useCallback((): Track[] => [ALL_TRACK, ...tracksRef.current], []);
 
@@ -105,6 +107,9 @@ export default function App() {
     const deck = filterByCategory(trackDeck, validCategory);
     const deckIds = new Set(deck.map((c) => c.id));
     const trackDeckIds = new Set(trackDeck.map((c) => c.id));
+    const doneSetAll = await distinctCardsOnDay(db, localDateStr(now));
+    todayDoneIdsRef.current = doneSetAll;
+    const reviewedTodayInDeck = new Set([...doneSetAll].filter((id) => deckIds.has(id)));
 
     let mastered = 0;
     let trackMastered = 0;
@@ -120,13 +125,14 @@ export default function App() {
     // to the "全部" view where the planner paces the whole track.
     const focusedModule = validCategory !== ALL_CATEGORY;
     const effectiveNewPerDay = focusedModule ? deck.length : plan.newPerDay;
-    const queue = buildQueue(deck, store.srs, now, { newPerDay: effectiveNewPerDay });
+    const queue = buildQueue(deck, store.srs, now, {
+      newPerDay: effectiveNewPerDay,
+      reviewedToday: reviewedTodayInDeck,
+    });
     const dueCount = queue.filter((id) => store.srs.has(id)).length;
     const newCount = queue.length - dueCount;
 
-    const doneSetAll = await distinctCardsOnDay(db, localDateStr(now));
-    let doneInDeck = 0;
-    for (const id of doneSetAll) if (deckIds.has(id)) doneInDeck++;
+    const doneInDeck = reviewedTodayInDeck.size;
     const quotaLeft = Math.max(0, effectiveNewPerDay - introducedTodayCount(store.srs, now, deckIds));
     const goal = dailyGoal(doneInDeck, dueCount, Math.min(quotaLeft, newCount));
 
@@ -135,6 +141,7 @@ export default function App() {
     let otherTracksDue = 0;
     for (const [id, e] of store.srs.entries()) {
       if (deckIds.has(id)) continue;
+      if (doneSetAll.has(id)) continue;
       if (isDueNow(e.fsrs, now)) otherTracksDue++;
     }
 
@@ -145,7 +152,7 @@ export default function App() {
       todayDone: goal.done,
       todayTarget: goal.target,
       streak,
-      laterToday: laterTodayCount(deck, store.srs, now),
+      laterToday: laterTodayCount(deck, store.srs, now, undefined, reviewedTodayInDeck),
       otherTracksDue,
       feedbackCount: buildFeedbackExport(cardsRef.current, store.fb).length,
       masteredCount: mastered,
@@ -228,8 +235,13 @@ export default function App() {
     const store = storeRef.current;
     const stats = todayStats;
     if (!store || !stats) return;
+    const now = new Date();
     const deck = activeDeck();
-    let q = buildQueue(deck, store.srs, new Date(), { newPerDay: stats.newPerDay });
+    const reviewedToday = todayDoneIdsRef.current;
+    let q = buildQueue(deck, store.srs, now, {
+      newPerDay: stats.newPerDay,
+      reviewedToday,
+    });
     if (mode === 'review') q = q.filter((id) => store.srs.has(id));
     if (mode === 'new') q = q.filter((id) => !store.srs.has(id));
     // dues keep oldest-first order; only the new-card tail is shuffled per session
@@ -237,6 +249,7 @@ export default function App() {
     if (!q.length) return;
     setSessionDeck(deck);
     setSessionQueue(q);
+    setSessionReviewedToday(new Set(reviewedToday));
     // mode-filtered sessions bound the mid-session requeue sweep to their own cards
     setSessionScope(mode === 'all' ? null : new Set(q));
     setSessionKey((k) => k + 1);
@@ -362,6 +375,7 @@ export default function App() {
           store={storeRef.current}
           initialQueue={sessionQueue}
           requeueScope={sessionScope}
+          reviewedToday={sessionReviewedToday}
           onExit={() => {
             void refresh();
             setScreen('today');
