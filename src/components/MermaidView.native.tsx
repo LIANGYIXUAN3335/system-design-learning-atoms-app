@@ -27,7 +27,12 @@ async function copyAssetTo(moduleRef: number, target: string): Promise<void> {
 
 function inlineMermaid(shellHtml: string, mermaidJs: string) {
   const escapedJs = mermaidJs.replace(/<\/script/gi, '<\\/script');
-  const html = shellHtml.replace('<script src="./mermaid.js"></script>', `<script>${escapedJs}</script>`);
+  // Use a REPLACER FUNCTION, not a string. A string replacement treats `$&`, `$\``,
+  // `$'`, `$$` as special patterns; the 3.4MB minified lib contains ~39 of them, and
+  // an expanded `$&` splices an unescaped </script> into the script, closing it early
+  // and dumping the rest of the library into the page as visible text. A function
+  // replacer inserts the string verbatim, so no `$`-sequence is ever interpreted.
+  const html = shellHtml.replace('<script src="./mermaid.js"></script>', () => `<script>${escapedJs}</script>`);
   if (html === shellHtml) throw new Error('diagram shell is missing mermaid script tag');
   return html;
 }
