@@ -74,6 +74,13 @@ const TERMS: TermDef[] = [
     meaningEn: 'A persistent bidirectional connection for realtime messages between client and server.',
   },
   {
+    label: 'Webhook',
+    aliases: ['Webhook', 'webhook', 'webhooks', 'Webhooks', 'web hook', 'Web hook'],
+    englishName: 'HTTP callback',
+    meaning: '别人系统发生事件后，主动用 HTTP 调你的接口。常用于支付成功、构建完成、告警通知。',
+    meaningEn: 'An HTTP callback where another system calls your endpoint after an event happens.',
+  },
+  {
     label: 'SSE',
     aliases: ['SSE', 'Server-Sent Events'],
     englishName: 'Server-Sent Events',
