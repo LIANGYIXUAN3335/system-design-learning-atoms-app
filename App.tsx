@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, SafeAreaView, Share, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, SafeAreaView, Share, StatusBar as RNStatusBar, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import bundledCardsJson from './src/content/deck.bundle.json';
 import seedTracksJson from './src/content/tracks.json';
@@ -294,7 +294,16 @@ export default function App() {
   }, [tracks]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+    <SafeAreaView
+      style={{
+        flex: 1,
+        backgroundColor: colors.bg,
+        // RN's built-in SafeAreaView only insets on iOS; on Android (esp. with a
+        // camera cutout + edge-to-edge) the status-bar height must be added so top
+        // headers/buttons don't sit under the status bar / camera and become untappable.
+        paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight ?? 0 : 0,
+      }}
+    >
       <StatusBar style="auto" />
       {screen === 'loading' ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
