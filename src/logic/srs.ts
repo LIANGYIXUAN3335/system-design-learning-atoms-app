@@ -31,12 +31,16 @@ export function emptyCard(now: Date): FsrsCard {
   return createEmptyCard(now);
 }
 
-export function applyReview(card: FsrsCard, now: Date, grade: Grade): FsrsCard {
+export function applyReview(card: FsrsCard, now: Date, grade: Grade, floorDays = 1): FsrsCard {
   const next = scheduler.next(card, now, grade).card;
-  // Product rule from M3 §3.1: once the learner grades a card today, it leaves
-  // today's review debt even if FSRS would schedule a short relearning step.
-  if (localDateStr(next.due) <= localDateStr(now)) {
-    return { ...next, due: addLocalDays(now, 1) };
+  // Product rule (M3 §3.1 + §3.2): a graded card never returns before its
+  // correctness-gated floor — at minimum tomorrow (clears today's review debt
+  // even when FSRS wants a short relearning step), and longer for a
+  // correct-but-shaky card so reviews don't churn daily and crowd out breadth.
+  // If FSRS already scheduled further out, keep FSRS's date.
+  const earliest = addLocalDays(now, Math.max(1, Math.round(floorDays)));
+  if (next.due.getTime() < earliest.getTime()) {
+    return { ...next, due: earliest };
   }
   return next;
 }
