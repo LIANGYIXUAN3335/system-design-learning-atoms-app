@@ -1,7 +1,7 @@
 import { State, type FsrsCard } from './srs';
 import { localDateStr } from './dates';
 import { shuffleWithMap } from './shuffle';
-import { LEARN_AHEAD_MIN, NEW_PER_DAY } from '../config';
+import { LEARN_AHEAD_MIN, MASTERED_STABILITY_DAYS, NEW_PER_DAY } from '../config';
 import type { Card } from '../types';
 
 export interface SrsEntry {
@@ -97,6 +97,34 @@ export function buildQueue(
     .map((c) => c.id);
 
   return [...due, ...fresh];
+}
+
+/** Weak-set membership for the final-stretch sweep (M3 §3.2 Phase 3): a seen card
+ *  that isn't mastered yet (Review state with stability ≥ threshold). Cards the
+ *  learner keeps marking 模糊 stay low-stability, so they surface here. */
+export function isWeak(e: SrsEntry, masteredStabilityDays: number = MASTERED_STABILITY_DAYS): boolean {
+  return !(e.fsrs.state === State.Review && e.fsrs.stability >= masteredStabilityDays);
+}
+
+/**
+ * Final-stretch queue (M3 §3.2 Phase 3): in the last days before the interview we
+ * stop new cards and drill the weak set — every seen-but-not-mastered card,
+ * weakest first (lowest stability, then most lapses), regardless of due date — so
+ * the final pass shores up gaps instead of adding breadth. `limit` caps the sweep.
+ */
+export function buildWeakSweepQueue(
+  cards: Card[],
+  srs: Map<string, SrsEntry>,
+  opts: { limit?: number; reviewedToday?: Set<string>; masteredStabilityDays?: number } = {},
+): string[] {
+  const reviewedToday = opts.reviewedToday ?? new Set<string>();
+  const masteredDays = opts.masteredStabilityDays ?? MASTERED_STABILITY_DAYS;
+  const ids = new Set(cards.map((c) => c.id));
+  const weak = [...srs.entries()]
+    .filter(([id, e]) => ids.has(id) && !reviewedToday.has(id) && isWeak(e, masteredDays))
+    .sort((a, b) => a[1].fsrs.stability - b[1].fsrs.stability || b[1].fsrs.lapses - a[1].fsrs.lapses)
+    .map(([id]) => id);
+  return opts.limit != null ? weak.slice(0, opts.limit) : weak;
 }
 
 /**

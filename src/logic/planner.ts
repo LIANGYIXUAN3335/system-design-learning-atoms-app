@@ -1,4 +1,4 @@
-import { NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY } from '../config';
+import { FINAL_STRETCH_DAYS, NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY } from '../config';
 import { daysBetweenLocal } from './dates';
 
 /**
@@ -60,4 +60,23 @@ export function planNewPerDay(input: PlannerInput): PlannerResult {
       : null;
 
   return { newPerDay, daysLeft: diff, raw, warning };
+}
+
+/**
+ * Deadline-scaled floor, in days, for a "correct + 模糊" card (M3 §3.2 Phase 2).
+ * Scales with pressure (newPerDay ≈ cards-left ÷ days-left): many cards / few days
+ * → longer floor so reviews don't crowd out breadth; few cards / more days →
+ * shorter floor so shaky cards get reinforced sooner. Clamped to 2–14 days; at the
+ * recommended pace (and when no interview date is set) it lands on 4 — the value
+ * Phase 1 shipped as the fixed default.
+ */
+export function deadlineFloorDays(newPerDay: number): number {
+  const scaled = Math.round((4 * newPerDay) / RECOMMENDED_NEW_PER_DAY);
+  return Math.min(14, Math.max(2, scaled));
+}
+
+/** Final stretch = the last few days before the interview (M3 §3.2 Phase 3);
+ *  day 0 / past is the planner's review-only case, handled separately. */
+export function isFinalStretch(daysLeft: number | null): boolean {
+  return daysLeft !== null && daysLeft > 0 && daysLeft <= FINAL_STRETCH_DAYS;
 }

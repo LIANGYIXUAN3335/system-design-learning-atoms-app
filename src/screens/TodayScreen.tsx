@@ -24,6 +24,10 @@ export interface TodayStats {
   newPerDay: number;
   rawNewPerDay: number | null;
   daysLeft: number | null;
+  /** M3 §3.2: deadline-scaled floor (days) for a correct-but-fuzzy card */
+  correctFuzzyFloor: number;
+  /** M3 §3.2 Phase 3: within the final-stretch window → weak-set drilling */
+  finalStretch: boolean;
   plannerWarning: string | null;
   /** a specific module is selected: finite set, no daily quota — finish it */
   focusedModule: boolean;

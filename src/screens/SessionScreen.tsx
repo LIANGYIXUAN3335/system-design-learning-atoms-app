@@ -148,6 +148,8 @@ export interface SessionScreenProps {
   requeueScope?: Set<string> | null;
   /** Cards already graded today; excluded from same-day requeue sweeps. */
   reviewedToday?: Set<string>;
+  /** M3 §3.2: deadline-scaled minimum interval for a correct-but-fuzzy card */
+  correctFuzzyFloor: number;
   onExit: () => void;
   onDone: (stats: SessionStats) => void;
 }
@@ -159,6 +161,7 @@ export function SessionScreen({
   initialQueue,
   requeueScope,
   reviewedToday,
+  correctFuzzyFloor,
   onExit,
   onDone,
 }: SessionScreenProps) {
@@ -299,7 +302,7 @@ export function SessionScreen({
     const rating = toFsrsRating(g, eph.wasCorrect, eph.usedIdk);
     // M3 §3.2: correctness-gated floor — a correct-but-shaky card must not return
     // tomorrow. (Phase 2 will pass a deadline-scaled floor derived from the plan.)
-    const floorDays = minIntervalDays(g, eph.wasCorrect, eph.usedIdk);
+    const floorDays = minIntervalDays(g, eph.wasCorrect, eph.usedIdk, correctFuzzyFloor);
     const existing = store.srs.get(card.id);
     const prev = existing?.fsrs ?? emptyCard(now);
     const entry: SrsEntry = {
