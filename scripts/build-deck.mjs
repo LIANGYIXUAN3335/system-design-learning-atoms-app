@@ -32,12 +32,14 @@ const DIR_TRACK_TAG = {
   'ai-coding': 'track:ai-coding',
   'llm-sd': 'track:llm-sd',
   'low-level-design': 'track:low-level-design',
+  'interview-drill': 'track:interview-drill',
 };
 const DIR_TRACK_ID = {
   'system-design': 'classic-sd',
   'ai-coding': 'ai-coding',
   'llm-sd': 'llm-sd',
   'low-level-design': 'low-level-design',
+  'interview-drill': 'interview-drill',
 };
 
 const CATEGORY_PREFIXES = [
@@ -49,6 +51,38 @@ const CATEGORY_PREFIXES = [
   'overview_',
   'fundamentals_',
 ];
+
+const SCALABILITY_NUMBER_TAGS = new Set([
+  'backpressure',
+  'burst',
+  'bursty-traffic',
+  'capacity',
+  'numbers',
+  'partitioning',
+  'partitions',
+  'qps',
+  'read-scaling',
+  'scale',
+  'scaling',
+  'sharding',
+  'throughput',
+  'tps',
+  'write-scaling',
+]);
+const SCALABILITY_NUMBER_SUBSTRINGS = [
+  'capacity',
+  'partition',
+  'qps',
+  'scale',
+  'scaling',
+  'shard',
+  'throughput',
+  'tps',
+];
+const SCALABILITY_NUMBER_CHEATSHEET =
+  '数字小抄：先用平均 QPS/TPS × 峰值系数（常用 2-5x）估峰值；Redis 简单 GET/SET 约 100k+ ops/s/实例；单主 SQL 写事务常按 1k-10k+ TPS/主库估；Kafka 单 partition 常按 5k-10k msg/s 起算，靠 partitions/brokers 横向扩；API worker 吞吐取决于是否打 DB/外部 API；队列只能削峰和排队，不能提高下游真实处理能力。';
+const SCALABILITY_NUMBER_CHEATSHEET_EN =
+  'Capacity cheat sheet: estimate peak as average QPS/TPS times a peak factor, often 2-5x. A Redis instance can handle roughly 100k+ simple GET/SET ops/s; a single SQL primary is often reasoned about as 1k-10k+ write TPS; one Kafka partition is often estimated around 5k-10k msg/s, scaling with partitions and brokers. API worker throughput depends on DB or external calls. Queues smooth bursts but do not increase downstream capacity.';
 
 const ACRONYM_WORDS = new Map([
   ['ai', 'AI'],
@@ -96,6 +130,26 @@ function categoryFromFile(file) {
     .join(' ');
 }
 
+function hasScalabilitySignal(card) {
+  if (card.track !== SEED_TRACK_ID) return false;
+  const tags = (card.tags ?? []).map((tag) => String(tag).toLowerCase());
+  if (tags.some((tag) => SCALABILITY_NUMBER_TAGS.has(tag))) return true;
+  const sub = String(card.sub ?? '').toLowerCase();
+  return SCALABILITY_NUMBER_SUBSTRINGS.some((needle) => sub.includes(needle));
+}
+
+function appendScalabilityNumberCheatsheet(card) {
+  if (!hasScalabilitySignal(card)) return card;
+  const next = { ...card };
+  if (typeof next.why === 'string' && !next.why.includes('数字小抄：')) {
+    next.why = `${next.why}\n\n${SCALABILITY_NUMBER_CHEATSHEET}`;
+  }
+  if (typeof next.why_en === 'string' && !next.why_en.includes('Capacity cheat sheet:')) {
+    next.why_en = `${next.why_en}\n\n${SCALABILITY_NUMBER_CHEATSHEET_EN}`;
+  }
+  return next;
+}
+
 const merged = [];
 const ids = new Set();
 let dupes = 0;
@@ -108,7 +162,7 @@ function add(cards, label, meta = {}) {
     if (meta.track) next.track = meta.track;
     if (meta.category) next.category = meta.category;
     if (meta.trackTag) next.tags = [...new Set([...(next.tags ?? []), meta.trackTag])];
-    merged.push(next);
+    merged.push(appendScalabilityNumberCheatsheet(next));
   }
 }
 
