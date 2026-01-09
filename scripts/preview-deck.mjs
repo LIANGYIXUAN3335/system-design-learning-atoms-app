@@ -20,7 +20,7 @@ const inFile = process.argv[2]
   : path.join(root, 'src/content/deck.bundle.json');
 const outFile = process.argv[3]
   ? path.resolve(process.cwd(), process.argv[3])
-  : path.resolve(root, '../content/deck-preview.html');
+  : path.join(root, 'reports/deck-preview.html');
 
 const raw = JSON.parse(fs.readFileSync(inFile, 'utf8'));
 const cards = Array.isArray(raw) ? raw : raw.cards || [];

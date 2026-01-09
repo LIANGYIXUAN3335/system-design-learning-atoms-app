@@ -6,7 +6,7 @@ import { localDateStr } from './dates';
  * Streak: forgiving on purpose (spec §11.5) — a day counts if ≥1 review
  * happened. Whether a past day's queue was "cleared" is not reconstructible
  * from the log (queue composition was never snapshotted), so ≥1-review is
- * both the derivable and the demotivation-safe reading (atoms-m2a-review.md §2.1).
+ * both the derivable and the demotivation-safe reading (docs/history/m2a-review.md §2.1).
  * Anchor: if today has no reviews yet, the walk starts at yesterday, so a
  * morning glance doesn't show 0 before you've studied.
  */
@@ -31,7 +31,7 @@ export interface DailyGoal {
 /**
  * Daily goal ring. The spec's literal `due + newPerDay` shrinks as you study;
  * this equivalent keeps the denominator stable and hits 100% exactly when
- * the day's queue is cleared (atoms-m2a-review.md §2.2). Re-lapsed cards
+ * the day's queue is cleared (docs/history/m2a-review.md §2.2). Re-lapsed cards
  * count once because `done` is a distinct-card count.
  */
 export function dailyGoal(distinctAnsweredToday: number, dueNowCount: number, newQuotaLeft: number): DailyGoal {

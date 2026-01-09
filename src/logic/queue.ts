@@ -31,7 +31,7 @@ function newCardSortKey(cardId: string, day: string): number {
 }
 
 /**
- * Due semantics (atoms-m1-review.md §3.3 / §6):
+ * Due semantics (docs/history/m1-review.md §3.3 / §6):
  *  - Review-state cards are day-granular: due if their due DATE is today or earlier.
  *  - Learning/Relearning cards are minute-granular: due if within the learn-ahead window.
  *  - New-state rows don't occur (a row is only written after the first review).
@@ -50,7 +50,7 @@ export function isDueNow(c: FsrsCard, now: Date, learnAheadMin: number = LEARN_A
 
 /**
  * Cards first answered today. When `withinIds` is given, only those cards
- * count — the M2a planner paces each track independently (atoms-m2a-review.md §2.4).
+ * count — the M2a planner paces each track independently (docs/history/m2a-review.md §2.4).
  */
 export function introducedTodayCount(
   srs: Map<string, SrsEntry>,

@@ -19,7 +19,7 @@ const seedFile = path.join(contentDir, 'cards.json');
 const outFile = path.join(contentDir, 'deck.bundle.json');
 
 /**
- * M2a (atoms-m2a-review.md §2.8): tracks consume `track:*` tags. They are
+ * M2a (docs/history/m2a-review.md §2.8): tracks consume `track:*` tags. They are
  * injected here — one visible map from content source to track — so the
  * source JSONs stay exactly as generated. Cards may also carry their own
  * explicit `track:*` tags; the union is deduplicated.
