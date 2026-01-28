@@ -32,7 +32,7 @@ import {
 import { localDateStr } from '../src/logic/dates';
 import { buildFeedbackExport } from '../src/logic/feedback';
 import { ALL_TRACK, cardMatchesTrack, filterDeck, trackIdFromName } from '../src/logic/tracks';
-import { ALL_CATEGORY, buildCategoryStats, filterByCategory } from '../src/logic/categories';
+import { ALL_CATEGORY, buildCategoryStats, categoryStatus, filterByCategory } from '../src/logic/categories';
 import { deadlineFloorDays, isFinalStretch, planNewPerDay } from '../src/logic/planner';
 import { computeStreak, dailyGoal } from '../src/logic/streak';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
@@ -170,6 +170,18 @@ console.log('architecture visuals');
   const visual = buildArchitectureVisual(cacheCard);
   t('cache card gets auto architecture diagram', !!visual?.diagram.includes('Cache / Redis'));
   t('cache card gets cache-aside pseudocode', !!visual?.codeSample?.includes('cache.get'));
+
+  const redisPubSubCard = {
+    ...cacheCard,
+    id: 'arch-redis-pubsub-001',
+    sub: 'pubsub',
+    scenario: 'Chat servers use Redis Pub/Sub to fan out messages to subscribed servers.',
+    q: '为什么 Redis Pub/Sub 适合在线消息转发？',
+    why: 'Redis 维护频道到订阅连接的映射，并沿现有连接推送消息。',
+    why_en: 'Redis maintains channel-to-subscriber connection state and pushes over existing connections.',
+  } as Card;
+  const redisPubSubVisual = buildArchitectureVisual(redisPubSubCard);
+  t('Redis Pub/Sub does not get cache-aside pseudocode', !redisPubSubVisual?.codeSample?.includes('cache.get'));
 
   const queueCard = {
     ...cacheCard,
@@ -389,6 +401,23 @@ console.log('tracks');
   const categories = buildCategoryStats(classicDeck, new Map());
   t('classic track has category groups', categories.length > 40 && categories.every((c) => c.total > 0));
   t('category filter scopes deck', filterByCategory(classicDeck, categories[0].id).length === categories[0].total);
+  // M3: per-topic coverage status (seen = answered ≥1×, distinct from mastered)
+  t('empty srs → all topics not-started', categories.every((c) => c.seen === 0 && categoryStatus(c) === 'not-started'));
+  t('categoryStatus: none seen', categoryStatus({ seen: 0, total: 5 }) === 'not-started');
+  t('categoryStatus: partway', categoryStatus({ seen: 2, total: 5 }) === 'in-progress');
+  t('categoryStatus: all seen → covered', categoryStatus({ seen: 5, total: 5 }) === 'covered');
+  {
+    const catNow = new Date('2026-07-01T09:00:00');
+    const pickName = categories[0].name;
+    const pickIds = classicDeck.filter((c) => (c.category ?? 'Uncategorized') === pickName).map((c) => c.id);
+    const seenSrs = new Map<string, SrsEntry>(
+      pickIds.map((id) => [id, { fsrs: emptyCard(catNow), firstSeen: localDateStr(catNow) }]),
+    );
+    const withSeen = buildCategoryStats(classicDeck, seenSrs);
+    const pick = withSeen.find((c) => c.name === pickName)!;
+    t('seen counts cards with an SRS row', pick.seen === pick.total && categoryStatus(pick) === 'covered');
+    t('covered topic sinks to the end', categoryStatus(withSeen[withSeen.length - 1]) === 'covered');
+  }
   t('all category keeps deck', filterByCategory(classicDeck, ALL_CATEGORY).length === classicDeck.length);
 }
 
