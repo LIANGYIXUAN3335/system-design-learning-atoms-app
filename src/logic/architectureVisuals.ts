@@ -78,7 +78,7 @@ const COMPONENTS: ComponentDef[] = [
   {
     id: 'cache',
     label: 'Cache / Redis',
-    aliases: ['cache', 'redis', 'memcached', 'ttl', 'cache-aside'],
+    aliases: ['cache', 'redis cache', 'redis as cache', 'memcached', 'cache-aside'],
     role: '缓存热点读、会话或派生结果，用内存和 TTL 换低延迟；代价是失效和一致性。',
     roleEn: 'Caches hot reads, sessions, or derived results with TTLs; the tradeoff is invalidation and consistency.',
     layer: 'data',
@@ -207,6 +207,25 @@ const DATA_FLOW_RE =
 function flowIsTheSubject(card: Card): boolean {
   const structuralText = [card.scenario, card.q].filter(Boolean).join('\n');
   return DATA_FLOW_RE.test(structuralText);
+}
+
+function bodyText(card: Card) {
+  return [card.scenario, card.scenario_en, card.q, card.q_en, card.text, card.why, card.why_en, ...(card.steps ?? [])]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+}
+
+function cacheCodeFits(card: Card) {
+  return /(cache[- ]?aside|read[- ]?through|write[- ]?through|write[- ]?behind|cache miss|cache hit|缓存命中|缓存未命中|回源|失效|invalidation|热点读|read-heavy|in front of .*postgres|挡在.*db|ttl)/i.test(
+    bodyText(card),
+  );
+}
+
+function workerCodeFits(card: Card) {
+  return /(queue|job queue|worker|consumer|sqs|rabbitmq|kafka|event stream|transcod|异步.{0,8}(任务|处理|消费)|队列|消费者|削峰|重试|幂等|后台任务)/i.test(
+    bodyText(card),
+  );
 }
 
 function hasAlias(text: string, alias: string) {
@@ -341,7 +360,7 @@ function buildBullets(components: ComponentDef[]) {
   return bullets.slice(0, 4);
 }
 
-function codeFor(components: ComponentDef[]): Pick<ArchitectureVisual, 'codeLabel' | 'codeSample'> {
+function codeFor(card: Card, components: ComponentDef[]): Pick<ArchitectureVisual, 'codeLabel' | 'codeSample'> {
   const has = (id: string) => components.some((component) => component.id === id);
 
   if (has('rate_limiter')) {
@@ -359,7 +378,7 @@ function codeFor(components: ComponentDef[]): Pick<ArchitectureVisual, 'codeLabe
     };
   }
 
-  if (has('cache')) {
+  if (has('cache') && cacheCodeFits(card)) {
     return {
       codeLabel: '模式伪代码 · cache-aside',
       codeSample: `read(key):
@@ -376,7 +395,7 @@ write(key, value):
     };
   }
 
-  if (has('queue') || has('kafka') || has('worker')) {
+  if ((has('queue') || has('kafka') || has('worker')) && workerCodeFits(card)) {
     return {
       codeLabel: '模式伪代码 · idempotent worker',
       codeSample: `handle(event):
@@ -444,7 +463,7 @@ export function buildArchitectureVisual(card: Card): ArchitectureVisual | null {
 
   const named = components.filter((component) => component.id !== 'service');
   const subject = named.length ? named.slice(0, 3).map((component) => component.label).join(' + ') : 'system components';
-  const code = codeFor(components);
+  const code = codeFor(card, components);
 
   return {
     title: `自动架构草图：${subject}`,

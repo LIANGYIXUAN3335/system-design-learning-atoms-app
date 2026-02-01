@@ -1,5 +1,5 @@
 ---
-version: 2026-07-08.1
+version: 2026-07-08.2
 ---
 
 # Card quality rubric（逐字段质量标准 · 重写/生成的唯一裁判）
@@ -49,23 +49,26 @@ version: 2026-07-08.1
 
 - **S1** 每个错误选项 = 一个工程师真会犯的误解，或一个"换个前提就赢"的真实方案（NBME：plausible, homogeneous）。
 - **S2** 同类同颗粒度：全是存储方案，或全是策略，不混"技术方案+废话"。
-- **S3** 长度均衡：正确项 < 干扰项均值×1.9 `[answer_cue.longest_option]`。
+- **S3** 长度/信息量均衡：正确项**不应是最长或最详细**那个（实测全 deck 85% 的卡正确项恰是最长 → 长度泄题，随机应 ≈1/n）。干扰项与正确项**长度、具体度相当**，并**跨卡轮换谁最长**；判据从"<1.9×"升级为"**正确项不得是严格最长且明显长于第二长**" `[answer_cue.longest_option]`（纯 1.9× 会漏"只长一点却总排第一"）。deck 级"正确项最长率"应 ≈1/n，用 `node scripts/audit-length-bias.mjs` 监控。
 - **S4** **双语**：`options_en` 与 `options` 逐项对齐 `[missing.options_en]`，英文为自然口语句（面试可直接说出口）。
 - **S5** 选项必须对 general systems reader 有意义：每个选项要说清它采取的机制或架构动作，而不是只给本题内部简称。读者即使没见过具体系统，也能判断"这个方案会把状态放在哪里 / 何时同步 / 由谁保证一致性 / 失败时怎么恢复"。
+- **S6 正确性（P0 · judge）**：keyed 正确答案必须**事实正确**，且每个干扰项**确实是错的**（不是"也对但没那么好"）。这是**最高优先级** judge 项（judge-only，机器查不了）——教错答案是本产品最致命的失败；判不准 → 挂 `needsHuman`，不得放行。
 - **F1** "以上都对/都不对"、跨领域乱入、明显荒谬项。
 - **F2** 正确答案换个说法混进干扰项（LLM 生成典型病，人查/judge 查）。
 - **F3** 选项是问题内部黑话或产品动作名，缺少机制含义：如只写 "last-disconnect"、"hold flow"、"replay path"，但不说明它在系统里是断线状态记录、短时库存锁、还是历史事件补放。
 
 ### 1.3 选项解析（`optionMeanings` / `optionDirectness` / `optionScenarioImpacts`）
 
-- **S0 覆盖门**：`mcq` / `multi` / `code` 卡必须有完整 option-level 解释：优先六个 rich 字段（中英三字段逐项对齐且非空），或至少 legacy `optionExplanations` + `optionExplanations_en` 完整存在 `[choice.missing_option_notes]`。唯一例外是 S4 的裸数字估算题。
-- **S1** 每字段每项 **1 句 ≤70 字** `[too_long.option_note]`；三段形状 = ①它是什么（含术语才写）②它在什么场景更合适 ③放到本场景意味着什么。`optionDirectness` 是历史字段名，新内容把它当作**适用边界/when this option fits**，不要写成"够不够直接"。
+- **S0 覆盖门**：`mcq` / `multi` / `code` 卡每个选项都要有解释，**首选一句连贯完整的 `optionExplanations` + `optionExplanations_en`**——把「它是什么 / 何时它更合适 / 本题为何不选」**织进一句自然的话，不拆成带标签的三段**。旧的三段 rich 字段（`optionMeanings` / `optionDirectness` / `optionScenarioImpacts`）视为 legacy，**不再是首选**（渲染仍兼容）。裸数字估算题（S4）例外。`[choice.missing_option_notes]`
+- **S1 一句连贯 ≤~90 字** `[too_long.option_note]`：每个选项**一句自然的完整解释**，覆盖「是什么 / 何时它反而赢 / 本题为何不选」，但**不加「是什么/适用/本题」标签、不拆成三段**——读起来像一句人话，不像填表。写不出可信内容就极简或留空（空胜于废话）。
 - **S2** **一卡一讲**：一个概念在 A 解释过，B/C/D 引用而不重讲 `[redundant.cross_option_repeat]`。
 - **S3** 不复读 `why` `[redundant.why_repeated_in_options]`；不含模板腔 `[template_filler]`（"不符合最佳实践"类零信息句 = error）。
 - **S3a** 禁止机械套"最直接 / 直接命中题目的关键约束 / 不够直接"。`optionDirectness` 应写**这个方案在哪些约束下会赢**（如"读多写少且可容忍短暂旧数据时，读副本更合适"、"翻旧评论时，`before/cursor` 比 `since` 更合适"）。如果写不出可信适用场景，留空胜于硬凑。
 - **S4** **裸数字估算题不写选项解析**：当多数选项只是 `~10ms` / `~100k QPS` 这类裸量级时，数字就是数字，设计含义只写在 `why` `[number.over_explained]`。但如果 `number` 卡问的是数字的来源、取舍、适用场景或排除理由，仍按 S0 补 option-level 解释。
 - **S5 清单/分层卡（multi、安全分层、加固手段、优化手段）每项一句"它挡住什么风险 / 把压力从哪里减掉"**——不是名词翻译。范例（容器加固）："read-only filesystem：防止用户代码改依赖、留持久文件"；（写入优化）"batch processing：多条写合成一次事务，减少 commit/WAL flush 次数，但有缓冲丢失风险"。判据：删掉该句后学习者只剩一个名词 = failure。
-- **F1** 三段全填但读完无增量（宁可留空——空胜于废话）。
+- **S6 正向框架（主）**：每个选项解析以「**什么约束下选它最合适**」为主框架；若该选项从不合适，直接点名它对应**哪个误解**。不写「B 不如 A」式贬低——教决策边界，不教贬低。
+- **S7 按题型匹配深度**：解析深度配题型。**「识别正确原因 / 揪误解」型**（选项是对 vs 错、不是并列真实方案）→ `why` 讲清真因 + 每错项**一句纠正**即可，别逐项长篇、别把同一个点复读四遍；**真·fit/contrast**（选项是并列真实方案、各有适用场景）→ 才值得每项一句更完整的连贯解释。别给简单题套重解析。
+- **F1** 明明一句能说清却硬凑成长解析、或读完无增量（宁可极简/留空——空胜于废话）。
 
 ### 1.4 `why` + `tradeoff`（核心解释）
 
@@ -106,6 +109,7 @@ version: 2026-07-08.1
 - **S5 同 deck 一致性**：同一组候选方案（同一批数据库/协议）在一个 deck 内的对比表应同构——相同的行集合与维度列，避免两张卡各说各话。
 - **F1** 把选项解析的句子搬进单元格（表格是短语密度结构，塞长句两头不讨好）。
 - **F2** 为凑表而造表：≤1 个真实维度差异的对比不需要表格，一句 `tradeoff` 就够。
+- **S6 三种表原型（按内容选型）**：①**决策矩阵**（方案 × 区分维度，默认）②**量级对比**（数字 benchmark：延迟/QPS/成本/容量…）③**适用场景**（方案 → 何时选它 / 哪个维度强哪个弱）。三者都保持中立（不标 ✓ 最佳）。
 
 ### 1.8 `codeSample`（真实代码 — 机制类卡片的"实现参考"）
 
@@ -114,8 +118,11 @@ version: 2026-07-08.1
 - **S1 何时必须有**：卡片的判断落在一个**具体机制的用法/格式**上时——认证方式（JWT 的 `header.payload.signature` 三段、API key 的 `Authorization: Bearer/X-API-Key` 请求头）、Redis 命令、建表语句、查询 DSL、HTTP 报文。概念层对比（"一致性 vs 可用性"）不需要。
 - **S2 形状**：≤10 行、**真实可跑或真实线上格式**（HI 十二律 12：代码只放真实命令，不放伪代码腔）；带 2-3 行注释点出关键参数为什么这么写（`EX 86400` = 24h 过期）。
 - **S3** 与 `table` 配合：对比类卡（JWT vs API key）表格给全景，codeSample 给**正确答案那个方案**的真实样子——不用把每个候选都写一遍代码。
+- **S4 相关性门**：`codeSample` 必须匹配本卡正在考的**机制**，不能只因关键词相似套模板。Redis 是平台/数据结构集合，不等于 cache-aside；只有题干/场景/正确答案明确在讲 cache hit/miss、TTL、invalidation、read-through/write-through/write-behind、热点读缓存时，才允许放 cache-aside 代码。Redis Pub/Sub 要放 `SUBSCRIBE/PUBLISH` 或连接时序；Redis Streams 要放 `XREADGROUP/XACK/XCLAIM`；Redis lock 要放 `SET NX EX` + token/释放检查；Redis Cluster 要放 slot/MOVED/SSUBSCRIBE 相关命令。
+- **S5 范围扩展**：`codeSample` 不限真实命令——也可是**配置片段**（yaml/conf），或**当逻辑本身是考点、且无真实片段可表达时的最小示意伪代码**（如对比 ABCD 的控制流/判断顺序）。触发：**答案取决于确切语法 / 配置项 / 步骤顺序**时配；纯概念对比不配。注意与 F1 的区别：允许的是**有信息量的示意逻辑**，禁止的是 `doAuth(); // 认证` 这类空架子充数。
 - **F1** 伪代码化的空架子（`doAuth(); // 认证`）——不如不写。
 - **F2** 超过 10 行的完整教程式代码——这是卡片不是文档。
+- **F3** 跨题样例：卡片问 Pub/Sub、lock、replication、slot、Bloom/JSON/Time Series，却出现 `cache.get -> database.read -> cache.set` 这种 cache-aside 模板 `[code_sample.cross_topic]`。
 
 ### 1.9 Live-drill confusion triggers（实刷暴露出的强制补强项）
 
@@ -128,6 +135,7 @@ version: 2026-07-08.1
 - **C5 锁/租约/跨系统正确性触发器**：题目出现 Redis lock、lease、过期锁、fencing token、CAS、条件写、幂等时，必须画出"拿锁 -> TTL 过期/进程暂停 -> 另一个持有者写 -> 旧持有者醒来"的状态链，并点名真正拒绝旧写的是下游 DB/存储的 token/version/state 条件，不是 Redis 锁本身。
 - **C6 抽象数据库术语触发器**：题目出现 optimizer、query planner、columnar OLAP、MPP、WAL、KMS、TLS、at-rest encryption、CRDT/OT 这类抽象词时，必须回答三件事：它在哪一层、输入/输出长什么样、为什么本题需要它。`termDefinitions` 只给一句词典式解释不够；`why` 或 option notes 要给一个具名例子。
 - **C7 "正确但没解释为什么不用另一把刀"触发器**：当用户的直觉是"杀鸡焉用牛刀"或"这个方案也能做啊"时，卡片必须有 `whenOtherWins` 或表格行说明 rejected option 何时反超。范例：Time Series DB 适合按时间窗口的 metric；ClickHouse/BigQuery 适合复杂多维报表和大范围列扫描。
+- **C8 相似卡/向量检索相关性门**：允许用相似卡找例子，但必须通过"同机制 + 同约束 + 同答案方向"三重检查。只共享 `Redis`、`cache`、`database`、`scalability` 这类宽词，不足以复用 codeSample、表格或 option notes。若相似卡答案是 cache-aside，而当前卡答案是 Pub/Sub、Streams、lock、replication、Cluster slot、Bloom/JSON/Time Series，就只能借术语定义，不能借代码或模式结论。
 
 ## 2. 失败模式速查（F → 检测 → 修）
 
@@ -140,7 +148,7 @@ version: 2026-07-08.1
 | 模板废话 | `[template_filler]`（error） | 删句；写不出具体内容就留空 |
 | `optionDirectness` 口癖 | judge | 去掉"最直接/直接命中/不够直接"，改写为这个方案更合适的约束：规模/一致性/成本/时机/资源 |
 | 复读 why / 跨选项重复 | `[redundant.*]` | 每句必须新增信息；概念一卡一讲 |
-| 长度泄漏答案 | `[answer_cue.longest_option]` | 均衡选项长度 |
+| 长度泄漏答案（正确项总是最长） | `[answer_cue.longest_option]` | 均衡长度+具体度，别让正确项稳居最长；跨卡轮换谁最长 |
 | 取舍缺失 | `[tradeoff.not_explicit]` | 补 `tradeoff` 或 why 里写代价 |
 | 选项无英文 | `[missing.options_en]` | 补 `options_en` |
 | 题干/场景无英文小字 | `[missing.q_en]` / `[missing.scenario_en]` | 补自然英文 `q_en` / `scenario_en` |
@@ -153,6 +161,7 @@ version: 2026-07-08.1
 | 不像面试口语 | `[template_filler]` + judge（1.4-S7） | 拆短句；改成"我会先…因为…但代价是…" |
 | 清单题名词罗列 | judge（1.3-S5） | 每项一句"挡什么风险/减哪里压力" |
 | 命令/多步序列没真实例子 | `[missing.command_example]` + judge（1.9-C1） | 补 `codeSample` 或时序图：命令、状态变化、崩溃点、残留状态 |
+| 代码样例跨题误配 | `[code_sample.cross_topic]` + judge（1.8-S4 / 1.9-C8） | 删除模板代码，或换成本卡机制的真实命令/时序；Redis 不默认等于 cache-aside |
 | 扩展成本没说明按谁算 | `[missing.scaling_unit_model]` + judge（1.9-C2） | 补单位模型：按 node/channel/user/device/slot/shard 哪个算，哪个只是二级成本 |
 | 原生 vs 自制只给形容词 | `[missing.lifecycle_visual]` + judge（1.9-C3） | 补 table/diagram：谁维护状态、谁清理、谁发现故障、代价 |
 | 版本事实没边界 | `[missing.version_boundary]` + judge（1.9-C4） | 补 current vs legacy / product boundary；必要时查官方文档 |
@@ -181,7 +190,7 @@ npm run build:deck && npm run verify     # schema + 逻辑 + Mermaid
 | `redundant.why_repeated_in_options` | warn | 选项解析与 `why` 有 ≥14 字逐字重合 | 解析必须新增信息，不复读 why |
 | `redundant.cross_option_repeat` | warn | 两个选项的解析共享 ≥16 字重合段 | 概念一卡一讲，其余选项引用 |
 | `template_filler` | **error** | 零信息模板句或 AI 文档腔（"代表一种可以拿来比较的判断路径"、"选择它会把排查带向…"等） | 改成面试口语短句；写具体误解/后果，或留空 |
-| `answer_cue.longest_option` | warn | 正确项 >1.9× 干扰项均长（NBME 长度均衡） | 均衡选项长度 |
+| `answer_cue.longest_option` | warn | 正确项 >1.9× 干扰项均长，**或**是严格最长且比第二长多 >6 字（NBME 长度均衡；纯 1.9× 会漏"只长一点却总第一"，deck 分布见 `audit-length-bias.mjs`） | 均衡长度+具体度，别让正确项最长 |
 | `tradeoff.not_explicit` | warn | fit/contrast 卡无 `tradeoff` 字段且 why 无双边取舍语 | 补 "X vs Y" 或 why 里写代价 |
 | `contrast.missing_comparison_table` | warn | contrast 卡对比 ≥2 具名技术但无 `table` | 补横向对比表（§1.7） |
 | `table.non_discriminative` | warn | 表格某列所有行同值 | 换成能区分方案的维度 |
@@ -195,10 +204,11 @@ npm run build:deck && npm run verify     # schema + 逻辑 + Mermaid
 | `missing_context` | warn | 题干用指代词（这一层/文章）且无 scenario | 把系统与约束写进 scenario |
 | `trivia_or_bad_number_question` | warn | 选项多为数字的裸数字题 / number 卡无场景 | 数字作前提考设计含义（Gate 0 G3） |
 | `bad_distractors` (`choice.generic_explanation`) | warn | 多个选项解释是"不符合要求"式套话 | 写出每个选项代表的误解 |
-| `choice.missing_option_notes` | warn | 非裸数字估算选择题没有完整 option-level 解释 | 补 rich 三字段中英版本；若已有高质量 legacy 解释，可先补 `optionExplanations_en` |
-| `choice.legacy_only` | warn | 只有 `optionExplanations` 无三字段 | 重要卡迁移到三字段形式 |
+| `choice.missing_option_notes` | warn | 非裸数字估算选择题没有 option-level 解释 | 每选项补**一句连贯 `optionExplanations` + `_en`**（首选，§1.3-S0） |
+| `choice.legacy_only` | ~~warn~~ **已停用** | —— 一句连贯的 `optionExplanations` 现在是**首选**形式（§1.3-S0），不再催迁三段式 | —— |
 | `jargon_not_explained` (`terms.undefined`) | warn | 题干/选项术语密集但无本地解释 | 补 termDefinitions 或场景内释义 |
 | `missing.command_example` | warn | 题干/解释出现具体命令或 API 机制，但没有 `codeSample` 或时序图 | 补真实命令/请求/SQL，或画出多步状态变化 |
+| `code_sample.cross_topic` | **error** | `codeSample` 明显属于另一个模式（如 cache-aside 模板出现在非缓存 Redis 机制卡） | 按 §1.8-S4 重写为本卡机制代码；若没有具体命令，就删掉 codeSample |
 | `missing.scaling_unit_model` | warn | 文本出现"按节点/按频道/per node/per channel/连接数/slot/shard"等扩展单位，但没有表格/图或公式化说明 | 补单位模型：主计量单位、非主计量单位、二级成本 |
 | `missing.lifecycle_visual` | warn | 文本比较原生/自制、registry、谁维护状态，但没有 table/diagram | 补生命周期表或数据流图 |
 | `missing.version_boundary` | warn | 文本涉及 Redis 7/8、Redis Stack、老版本/新版本、模块/内置等版本边界，但没有对比表或 `whenOtherWins` | 补 current vs legacy / product boundary |

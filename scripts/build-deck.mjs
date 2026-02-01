@@ -52,37 +52,77 @@ const CATEGORY_PREFIXES = [
   'fundamentals_',
 ];
 
-const SCALABILITY_NUMBER_TAGS = new Set([
-  'backpressure',
-  'burst',
-  'bursty-traffic',
-  'capacity',
-  'numbers',
-  'partitioning',
-  'partitions',
-  'qps',
-  'read-scaling',
-  'scale',
-  'scaling',
-  'sharding',
-  'throughput',
-  'tps',
-  'write-scaling',
-]);
-const SCALABILITY_NUMBER_SUBSTRINGS = [
-  'capacity',
-  'partition',
-  'qps',
-  'scale',
-  'scaling',
-  'shard',
-  'throughput',
-  'tps',
+const NUMBER_ANCHORS = {
+  sql: {
+    system: 'Postgres/MySQL',
+    unit: 'primary / replica / shard',
+    estimate: '读 10k-50k TPS；写 10k-20k TPS',
+    risk: '单主写瓶颈、索引/事务变重',
+  },
+  redis: {
+    system: 'Redis',
+    unit: 'instance / shard',
+    estimate: '100k-200k+ simple ops/s',
+    risk: '大 value、Lua、ZSET、网络带宽',
+  },
+  kafka: {
+    system: 'Kafka',
+    unit: 'partition / broker',
+    estimate: 'broker 0.3M-1M msg/s；partition 10k-50k msg/s',
+    risk: 'hot partition、batch 太小',
+  },
+  dynamodb: {
+    system: 'DynamoDB',
+    unit: 'physical partition',
+    estimate: '3k RCU / 1k WCU 每物理分区',
+    risk: 'AWS 管扩展，但 hot key 仍会限流',
+  },
+  cassandra: {
+    system: 'Cassandra',
+    unit: 'node / token range',
+    estimate: '10k-50k ops/s per node 粗估',
+    risk: 'wide partition、tombstone、repair/compaction',
+  },
+  mongodb: {
+    system: 'MongoDB',
+    unit: 'shard key / shard',
+    estimate: '10k-50k ops/s per shard 粗估',
+    risk: 'shard key 选错导致 scatter query',
+  },
+  elastic: {
+    system: 'Elasticsearch/OpenSearch',
+    unit: 'primary shard / replica / node',
+    estimate: '先按 10-50GB/shard，不背单 shard QPS',
+    risk: 'oversharding、复杂查询 fan-out',
+  },
+  cockroachdb: {
+    system: 'CockroachDB',
+    unit: 'range / replica / node',
+    estimate: 'range max 512MiB；默认 3 replicas',
+    risk: 'Raft quorum、hot range、事务冲突',
+  },
+  clickhouse: {
+    system: 'ClickHouse',
+    unit: 'shard / replica / part',
+    estimate: '批量写 >=1k rows；理想 10k-100k rows',
+    risk: 'too many parts、merge backlog、分区键过细',
+  },
+};
+
+const NUMBER_ANCHOR_MATCHERS = [
+  ['sql', /\b(Postgres|PostgreSQL|MySQL|RDBMS|Aurora|RDS)\b|关系型数据库|关系数据库|单主 SQL|SQL 主库/i],
+  ['redis', /\bRedis\b/i],
+  ['kafka', /\bKafka\b/i],
+  ['dynamodb', /\bDynamoDB\b/i],
+  ['cassandra', /\bCassandra\b/i],
+  ['mongodb', /\bMongoDB\b/i],
+  ['elastic', /\b(Elasticsearch|OpenSearch)\b/i],
+  ['cockroachdb', /\bCockroachDB\b/i],
+  ['clickhouse', /\bClickHouse\b/i],
 ];
-const SCALABILITY_NUMBER_CHEATSHEET =
-  '数字小抄：先用平均 QPS/TPS × 峰值系数（常用 2-5x）估峰值；Redis 简单 GET/SET 约 100k+ ops/s/实例；单主 SQL 写事务常按 1k-10k+ TPS/主库估；Kafka 单 partition 常按 5k-10k msg/s 起算，靠 partitions/brokers 横向扩；API worker 吞吐取决于是否打 DB/外部 API；队列只能削峰和排队，不能提高下游真实处理能力。';
-const SCALABILITY_NUMBER_CHEATSHEET_EN =
-  'Capacity cheat sheet: estimate peak as average QPS/TPS times a peak factor, often 2-5x. A Redis instance can handle roughly 100k+ simple GET/SET ops/s; a single SQL primary is often reasoned about as 1k-10k+ write TPS; one Kafka partition is often estimated around 5k-10k msg/s, scaling with partitions and brokers. API worker throughput depends on DB or external calls. Queues smooth bursts but do not increase downstream capacity.';
+
+const SCALABILITY_SIGNAL =
+  /scal|scale|scaling|扩展|扩容|吞吐|QPS|TPS|ops\/s|msg\/s|capacity|容量|分片|shard|partition|hot partition|hot key|热分区|热 key|热点|瓶颈|bottleneck|fan-?out|write-heavy|read-heavy|高写|高读|写入放大|读放大|高并发|throughput|broker|replica|副本|primary|主库|节点|node|单机|单实例|物理分区|宽分区|wide partition|tombstone|compaction|oversharding|scatter|scatter-gather|峰值|负载|load|OLAP|MPP|analytics|分析|列式|数仓|rollup|materialized view|物化视图|batch|批量|MergeTree|part|parts|range|Raft|quorum/i;
 
 const ACRONYM_WORDS = new Map([
   ['ai', 'AI'],
@@ -135,24 +175,40 @@ function categoryFromFile(file) {
     .join(' ');
 }
 
-function hasScalabilitySignal(card) {
-  if (card.track !== SEED_TRACK_ID) return false;
-  const tags = (card.tags ?? []).map((tag) => String(tag).toLowerCase());
-  if (tags.some((tag) => SCALABILITY_NUMBER_TAGS.has(tag))) return true;
-  const sub = String(card.sub ?? '').toLowerCase();
-  return SCALABILITY_NUMBER_SUBSTRINGS.some((needle) => sub.includes(needle));
+function searchableCardText(card) {
+  return [
+    card.id,
+    card.sub,
+    card.scenario,
+    card.q,
+    Array.isArray(card.options) ? card.options.join(' ') : '',
+    card.text,
+    Array.isArray(card.steps) ? card.steps.join(' ') : '',
+    card.why,
+    card.whenOtherWins,
+    Array.isArray(card.tags) ? card.tags.join(' ') : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-function appendScalabilityNumberCheatsheet(card) {
-  if (!hasScalabilitySignal(card)) return card;
-  const next = { ...card };
-  if (typeof next.why === 'string' && !next.why.includes('数字小抄：')) {
-    next.why = `${next.why}\n\n${SCALABILITY_NUMBER_CHEATSHEET}`;
-  }
-  if (typeof next.why_en === 'string' && !next.why_en.includes('Capacity cheat sheet:')) {
-    next.why_en = `${next.why_en}\n\n${SCALABILITY_NUMBER_CHEATSHEET_EN}`;
-  }
-  return next;
+function matchingNumberAnchors(card) {
+  if (card.track !== SEED_TRACK_ID) return [];
+  const text = searchableCardText(card);
+  if (!SCALABILITY_SIGNAL.test(text)) return [];
+
+  const keys = NUMBER_ANCHOR_MATCHERS.filter(([, matcher]) => matcher.test(text)).map(([key]) => key);
+  return [...new Set(keys)].map((key) => NUMBER_ANCHORS[key]);
+}
+
+function attachNumberAnchors(card) {
+  const anchors = matchingNumberAnchors(card);
+  if (!anchors.length) return card;
+
+  const existing = Array.isArray(card.numberAnchors) ? card.numberAnchors : [];
+  const bySystem = new Map(existing.map((anchor) => [anchor.system, anchor]));
+  for (const anchor of anchors) bySystem.set(anchor.system, anchor);
+  return { ...card, numberAnchors: [...bySystem.values()] };
 }
 
 const merged = [];
@@ -167,7 +223,7 @@ function add(cards, label, meta = {}) {
     if (meta.track) next.track = meta.track;
     if (meta.category) next.category = meta.category;
     if (meta.trackTag) next.tags = [...new Set([...(next.tags ?? []), meta.trackTag])];
-    merged.push(appendScalabilityNumberCheatsheet(next));
+    merged.push(attachNumberAnchors(next));
   }
 }
 

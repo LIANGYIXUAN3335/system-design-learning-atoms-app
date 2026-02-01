@@ -55,6 +55,8 @@ export interface Card {
   tradeoff?: string;
   /** card-local terms that must be explained even if the global glossary misses them */
   termDefinitions?: CardTermDefinition[];
+  /** compact capacity/scalability anchors injected for database and infra cards */
+  numberAnchors?: CardNumberAnchor[];
   codeSample?: string;
   lang?: string;
   /** build-time metadata for navigation; source JSONs do not need to carry it */
@@ -89,6 +91,13 @@ export interface CardTermDefinition {
   fullName?: string;
   meaning: string;
   meaningEn?: string;
+}
+
+export interface CardNumberAnchor {
+  system: string;
+  unit: string;
+  estimate: string;
+  risk: string;
 }
 
 /** A track = a saved tag filter (union semantics), spec §4. */

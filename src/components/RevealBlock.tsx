@@ -9,6 +9,7 @@ import { AutoArchitectureVisual } from './AutoArchitectureVisual';
 import { CodeBlock } from './ui';
 import { FeedbackBlock } from './FeedbackBlock';
 import { MermaidView } from './MermaidView';
+import { NumberAnchors } from './NumberAnchors';
 import { TableView } from './TableView';
 import { TermGlossary } from './TermGlossary';
 
@@ -55,6 +56,8 @@ export function RevealBlock(props: RevealBlockProps) {
       <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>{card.why}</Text>
 
       <AnswerDetailPad details={props.optionDetails ?? []} />
+
+      <NumberAnchors anchors={card.numberAnchors} />
 
       {card.diagram ? <MermaidView spec={card.diagram} /> : null}
 
