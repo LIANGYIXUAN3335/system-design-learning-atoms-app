@@ -180,7 +180,9 @@
       "It's not just disk bloat — repeated labels and index upkeep also slow writes down, so blaming only space misses the write-side cost.",
       "Right — label strings repeat on every row, and index upkeep grows right along with write volume, so both writes and storage take the hit.",
       "Shrinking the numeric type saves a few bytes at best — it doesn't touch the real bottlenecks of repeated labels and index upkeep."
-    ]
+    ],
+    "scenario": "10 万台服务器每 10 秒各上报 5 个指标（约 5 万点/秒），先用一张 Postgres 行式表顶着。",
+    "scenario_en": "You start with a single Postgres row table for 100k servers reporting 5 metrics every 10 seconds, about 50k points per second."
   },
   {
     "id": "sd-deep-dives-time-series-databases-004",
@@ -275,7 +277,9 @@
       "InfluxDB is purpose-built for time series with an LSM-style engine underneath — a textbook TSDB.",
       "Prometheus pulls and stores time-series metrics and pairs with alerting — also a TSDB.",
       "TimescaleDB extends Postgres for time-series workloads, so it counts as a TSDB too."
-    ]
+    ],
+    "scenario": "要为 5 万点/秒的监控指标选一个专用存储，先把候选组件里不是时序存储的筛掉。",
+    "scenario_en": "You're picking a purpose-built store for a 50k points/second metrics stream and first need to weed out the candidates that aren't time-series stores."
   },
   {
     "id": "sd-deep-dives-time-series-databases-005",
@@ -286,10 +290,10 @@
     "q": "Append-only（只追加写）存储的核心思想是什么？",
     "q_en": "What is the core idea of append-only storage?",
     "options": [
-      "每次写入都先扫描全表",
-      "新数据总是追加到文件末尾，避免原地随机更新",
-      "只允许删除，不允许写入",
-      "每个指标都单独创建数据库"
+      "每次写入都先全表扫描，定位后再原地修改",
+      "新数据只追加到文件末尾，不做原地更新",
+      "只允许删除旧数据，不允许新增写入",
+      "每个指标名单独建一个数据库实例"
     ],
     "answer": [
       1
@@ -302,10 +306,10 @@
     ],
     "diagram": "flowchart LR\n  A[\"Metric point\"] --> B[\"Memory buffer\"]\n  B --> C[\"Append segment\"]\n  C --> D[\"Compact later\"]",
     "options_en": [
-      "Every write first scans the entire table.",
-      "New data is always appended to the end of a file, avoiding in-place random updates.",
-      "Only deletes are allowed, no writes.",
-      "Each metric gets its own separate database."
+      "Every write scans the whole table first, finds the row, and updates it in place.",
+      "New data is only appended to the end of the file, never updated in place.",
+      "You can only delete old data; new writes are rejected.",
+      "Each metric name gets its own separate database instance."
     ],
     "termDefinitions": [
       {
@@ -325,7 +329,9 @@
       "Right — every new point lands at the tail of the file instead of overwriting old data in place.",
       "Delete-only cannot absorb a continuous stream of incoming points — append-only exists precisely to keep writes safe and ongoing.",
       "Spinning up a separate database per metric is an operational nightmare — append-only describes how one engine writes internally, not a sharding scheme."
-    ]
+    ],
+    "scenario": "指标以 5 万点/秒持续写入、几乎不改旧点，磁盘写入模式成了瓶颈。",
+    "scenario_en": "Metrics stream in at 50k points per second and old points are almost never updated, so the disk write pattern is the bottleneck."
   },
   {
     "id": "sd-deep-dives-time-series-databases-006",
@@ -381,7 +387,9 @@
       "Right — it drops the locate/read/modify/rewrite dance and just tacks new data onto the end, converting scattered writes into one sequential stream.",
       "Sequential writes save disk seeks; they do not mean queries can skip indexing — locating a series still needs a tag index or similar.",
       "Sequential append helps disk-based engines too — both spinning disks and SSDs benefit from it, it is not exclusive to in-memory databases."
-    ]
+    ],
+    "scenario": "写入端是持续追加的指标流、几乎没有对旧点的更新，且要在机械盘上撑住吞吐。",
+    "scenario_en": "The write side is a continuous append-only metrics stream with almost no updates to old points, and it has to hold up on spinning disks."
   },
   {
     "id": "sd-deep-dives-time-series-databases-007",
@@ -394,10 +402,10 @@
     "q": "机械硬盘上，随机 I/O 相比顺序 I/O 的数量级差异大致是什么？",
     "q_en": "On spinning disks, roughly how different are random I/O and sequential I/O?",
     "options": [
-      "随机 I/O 永远比顺序 I/O 快 100 倍",
-      "SSD 无论随机还是顺序都完全一样，二者无差别",
-      "机械硬盘随机操作通常只有百级 ops/s，顺序写吞吐可以高出一到两个数量级",
-      "磁盘 I/O 模式与数据库写入设计无关"
+      "随机 I/O 永远比顺序 I/O 快 100 倍，写路径不用特意设计",
+      "SSD 上随机和顺序完全一样，机械盘也没有差别",
+      "随机约百级 ops/s，顺序写能高出一到两个数量级",
+      "磁盘 I/O 模式和数据库写入路径的设计无关"
     ],
     "answer": [
       2
@@ -410,10 +418,10 @@
       "io"
     ],
     "options_en": [
-      "Random I/O is always 100 times faster than sequential I/O.",
-      "SSDs perform identically whether access is random or sequential.",
-      "Spinning disks typically manage only hundreds of random ops per second, while sequential writes can be one to two orders of magnitude higher.",
-      "Disk I/O pattern has nothing to do with database write design."
+      "Random I/O is always 100x faster than sequential, so the write path needs no special design.",
+      "On SSDs random and sequential are identical, and spinning disks are no different either.",
+      "Random ops sit around a few hundred per second; sequential writes run one to two orders of magnitude higher.",
+      "Disk I/O patterns have nothing to do with how a database designs its write path."
     ],
     "termDefinitions": [
       {
@@ -503,10 +511,10 @@
     "q": "LSM（Log-Structured Merge Tree）的 memtable 为什么通常保持有序？",
     "q_en": "Why is the memtable in an LSM tree usually kept sorted?",
     "options": [
-      "为了让所有写入都必须等待磁盘完成排序后才算成功",
-      "为了强制所有查询必须全表扫描，不能走索引",
-      "为了把每个 key 随机分散写到不同文件，避免热点",
-      "为了刷盘后直接生成有序 SSTable，方便二分查找、范围扫描和后续合并"
+      "为了让每次写入都等磁盘完成排序之后才算成功返回",
+      "为了强制查询走全表扫描，不允许再使用任何索引",
+      "为了把相邻 key 随机打散到不同文件，避免写热点",
+      "为了刷盘时直接产出有序 SSTable，方便范围扫描与合并"
     ],
     "answer": [
       3
@@ -519,10 +527,10 @@
       "memtable"
     ],
     "options_en": [
-      "So that every write must wait for the disk to finish sorting before it's considered successful.",
-      "So that every query is forced to do a full scan instead of using an index.",
-      "So that each key is randomly scattered across different files to avoid hotspots.",
-      "So that flushing produces an already-sorted SSTable, enabling binary search, range scans, and later merge-based compaction."
+      "So that every write only succeeds after the disk has finished sorting it.",
+      "So that queries are forced into full scans and can no longer use any index.",
+      "So that adjacent keys get scattered randomly across files to avoid write hotspots.",
+      "So the flush produces a sorted SSTable directly, which makes range scans and merges easy."
     ],
     "termDefinitions": [
       {
@@ -549,7 +557,9 @@
       "A sorted structure exists to enable efficient lookups like binary search — it does not force full scans or disable indexing.",
       "Sorted means ordered by key, not scattered; scattering writes would actually break locality for range queries.",
       "Right — because it's already ordered, flushing it to disk produces a file you can binary-search and merge without extra sorting work."
-    ]
+    ],
+    "scenario": "LSM 引擎每隔几分钟把 memtable 刷成一个 SSTable，而查询几乎都是按 series 的时间范围扫描。",
+    "scenario_en": "The LSM engine flushes its memtable into an SSTable every few minutes, and queries are almost always range scans over one series."
   },
   {
     "id": "sd-deep-dives-time-series-databases-010",
@@ -606,7 +616,9 @@
       "Right — reads sometimes cost more and compaction rewrites data multiple times, but in exchange writes run far faster than in-place updates allow.",
       "LSM engines typically use compression to cut space usage — this option has the causality backwards.",
       "Background compaction is itself LSM's core overhead — claiming there's none ignores its biggest cost."
-    ]
+    ],
+    "scenario": "监控写入 5 万点/秒，读取多是最近一小时的范围查询，团队在评估要不要上 LSM 引擎。",
+    "scenario_en": "Monitoring takes 50k writes per second and most reads are last-hour range queries, and the team is weighing an LSM engine."
   },
   {
     "id": "sd-deep-dives-time-series-databases-011",
@@ -643,10 +655,10 @@
     "q": "varint（variable-length encoding，变长整数编码）在 TSDB 压缩中解决什么问题？",
     "q_en": "What problem does varint, or variable-length encoding, solve in TSDB compression?",
     "options": [
-      "让所有字符串自动转换成图片格式存储",
-      "强制每条记录都补齐到固定 1MB 大小",
-      "让数值小的整数只占 1-2 字节，而不是固定 4/8 字节",
-      "让浮点数从此无法用任何方式存储"
+      "把所有字符串自动转换成图片格式之后再落盘保存",
+      "强制每条记录都补齐到固定 1MB 的大小再写入",
+      "让小整数只占 1-2 字节，而不是固定 4/8 字节",
+      "让浮点数从此无法用任何方式落盘保存"
     ],
     "answer": [
       2
@@ -659,10 +671,10 @@
       "varint"
     ],
     "options_en": [
-      "It automatically converts all strings into image format for storage.",
-      "It forces every record to pad out to a fixed 1MB size.",
-      "It lets small integers take only 1-2 bytes instead of a fixed 4 or 8 bytes.",
-      "It makes floating-point numbers impossible to store at all."
+      "It converts every string into an image format before writing it to disk.",
+      "It pads every record out to a fixed 1MB size before the write.",
+      "It lets small integers take 1-2 bytes instead of a fixed 4 or 8.",
+      "It makes floating-point values impossible to persist at all."
     ],
     "codeSample": "varint(1)        = 0x01            (1 byte)\nvarint(300)      = 0xAC 0x02       (2 bytes)\nvarint(1000000)  = 0xC0 0x84 0x3D  (3 bytes)\n# 值越小，占用字节越少；delta 编码后大多是小数值",
     "lang": "text",
@@ -685,7 +697,9 @@
       "Varint does the opposite — it's variable-length, using fewer bytes for small values, not padding everything to a fixed size.",
       "Right — small integers take just 1-2 bytes instead of a fixed 4 or 8, which amplifies what delta encoding already saves.",
       "Varint only handles integers — floats have their own compression path (like XOR), so the two do not conflict."
-    ]
+    ],
+    "scenario": "delta 编码后的指标差值多是个位数小整数，而 43 亿点/天的存储费是主要账单。",
+    "scenario_en": "After delta encoding, most metric deltas are single-digit integers, and storage for 4.3 billion points a day is the main bill."
   },
   {
     "id": "sd-deep-dives-time-series-databases-013",
@@ -737,7 +751,9 @@
       "Right — with a fixed sampling interval, second-order deltas collapse to mostly zero, and zeros compress extremely well.",
       "It still keeps the real sample times — it just takes a second difference of them, it does not discard the original timestamps.",
       "The comparison is numeric — converting to strings first is not needed and would only slow the encoding down."
-    ]
+    ],
+    "scenario": "每台机器固定每 10 秒采样一次，压缩前 timestamp 列就占掉很大一块空间。",
+    "scenario_en": "Every host samples on a fixed 10-second interval, and before compression the timestamp column alone eats a big chunk of space."
   },
   {
     "id": "sd-deep-dives-time-series-databases-014",
@@ -748,10 +764,10 @@
     "q": "TSDB 对浮点值常用 XOR 压缩的直觉是什么？",
     "q_en": "What is the intuition behind XOR compression for floating-point values in a TSDB?",
     "options": [
-      "浮点数在时间序列里完全无法做任何压缩处理",
-      "XOR 运算会把所有数值变成同一个常数输出",
-      "XOR 压缩只对文本字符串生效，对浮点数无效",
-      "相邻浮点值接近时，XOR 后多数 bit 是 0，只需存差异部分"
+      "浮点数在时间序列里完全无法做任何形式的压缩处理",
+      "XOR 运算会把所有输入数值都折算成同一个常数输出",
+      "XOR 压缩只对文本字符串生效，对浮点数完全无效",
+      "相邻值接近时 XOR 后多数 bit 为 0，只存差异位"
     ],
     "answer": [
       3
@@ -764,10 +780,10 @@
       "compression"
     ],
     "options_en": [
-      "Floating-point values in time series can't be compressed at all.",
-      "XOR turns all values into the same constant output.",
-      "XOR compression only works on text strings, not floats.",
-      "When adjacent float values are close, XORing them leaves mostly zero bits, so only the differing part needs to be stored."
+      "Floating-point values in time series simply cannot be compressed in any way.",
+      "XOR collapses every input value into one and the same constant output.",
+      "XOR compression only works on text strings and does nothing for floats.",
+      "When neighboring values are close, most bits of their XOR are zero, so you store only the differing bits."
     ],
     "codeSample": "Value 1: 0 10000010 01101000101000111101011\nValue 2: 0 10000010 01101000110000100000000\nXOR:     0 00000000 00000000011000011101011\n#          ^^^^^^^^^^ 前导零很多，只存有效位",
     "lang": "text",
@@ -789,7 +805,9 @@
       "XOR output depends on how the two inputs differ — different values give different results, not a single constant.",
       "XOR compression works on bit patterns, and a float's binary representation qualifies just as well — it is not text-only.",
       "Right — when adjacent values are close, XORing them leaves mostly leading zeros, so only the differing bits need storing."
-    ]
+    ],
+    "scenario": "CPU 使用率相邻采样值往往只差零点几，但 43 亿点/天按 float64 原样存太贵。",
+    "scenario_en": "Consecutive CPU-usage samples differ by only a fraction, yet storing 4.3 billion points a day as raw float64 is too expensive."
   },
   {
     "id": "sd-deep-dives-time-series-databases-015",
@@ -802,8 +820,8 @@
     "q": "为什么一条普通指标点的原始信息很小，但行式存储仍可能很浪费？",
     "q_en": "Why can a normal metric point be tiny in raw form but still waste space in row storage?",
     "options": [
-      "因为每条指标都会被数据库自动复制成完整的一段视频文件保存",
-      "因为原始数值本身只有十几字节，但每行还反复存 host、metric_name 等标签字符串",
+      "因为每条指标都会被数据库自动复制成一段完整的视频文件长期保存",
+      "因为数值只有十几字节，每行却反复存 host、metric_name",
       "因为 timestamp 这个字段本身在磁盘上要占用大约 10MB 空间",
       "因为浮点数类型在关系数据库里天生完全无法进行任何压缩"
     ],
@@ -817,10 +835,10 @@
       "storage"
     ],
     "options_en": [
-      "Because every point gets automatically duplicated into a full video file by the database.",
-      "Because the raw value itself is only a dozen or so bytes, but every row still repeats label strings like host and metric_name.",
-      "Because the timestamp field alone takes about 10MB of disk space.",
-      "Because floating-point types in relational databases inherently cannot be compressed at all."
+      "Because the database quietly copies every metric point into a full video file and keeps it around.",
+      "Because the value itself is only a dozen-odd bytes, while every row repeats host and metric_name.",
+      "Because the timestamp field alone takes roughly 10MB of disk space.",
+      "Because float columns in a relational database inherently cannot be compressed at all."
     ],
     "optionExplanations": [
       "数据库不会把指标点变成视频文件，这个选项纯属荒谬干扰项。",
@@ -844,10 +862,10 @@
     "q": "Time-based partitioning 在 TSDB 中的含义是什么？",
     "q_en": "What does time-based partitioning mean in a TSDB?",
     "options": [
-      "按用户名哈希把数据随机拆分成数量不受控的表",
-      "把所有历史数据永远放进一个不可删除的大文件",
-      "按时间窗口把数据切成不同 partition/chunk，比如按天或按周划分",
-      "只根据 metric 的数值大小做分区，不看时间"
+      "按用户名哈希把数据随机拆成数量完全不受控的表",
+      "把所有历史数据永远放进一个不可删除的大文件里",
+      "按时间窗口切成不同 partition，比如按天或按周",
+      "只按 metric 数值大小分区，完全不看时间字段"
     ],
     "answer": [
       2
@@ -860,10 +878,10 @@
     ],
     "diagram": "flowchart TD\n  A[\"Time range\"] --> B[\"Day partition\"]\n  A --> C[\"Week partition\"]\n  B --> D[\"Drop old partition\"]",
     "options_en": [
-      "Randomly hash-splitting data by username into an unbounded number of tables.",
-      "Keeping all historical data forever in one file that can never be deleted.",
-      "Splitting data into partitions or chunks by time window, such as daily or weekly.",
-      "Partitioning only by the metric's numeric value, ignoring time."
+      "Hash on username to split data into an uncontrolled number of tables.",
+      "Keep all history forever inside one giant file that can never be deleted.",
+      "Slice data into partitions by time window, for example per day or per week.",
+      "Partition purely by the magnitude of the metric value, ignoring time."
     ],
     "termDefinitions": [
       {
@@ -883,7 +901,9 @@
       "Dumping everything into one undeletable file is exactly what time partitioning avoids — partitions let you drop whole old chunks later.",
       "Right — the data is chopped into time windows, say by day or by week, and everything else gets easier to reason about.",
       "If partitioning only looked at the metric value, same-time data could scatter everywhere, and time-range queries would lose their ability to prune."
-    ]
+    ],
+    "scenario": "监控数据只保留 30 天，查询几乎都带时间范围，引擎要决定按什么维度切分数据。",
+    "scenario_en": "Metrics are kept for only 30 days and nearly every query carries a time range, so the engine must decide what dimension to split data on."
   },
   {
     "id": "sd-deep-dives-time-series-databases-017",
@@ -934,7 +954,9 @@
       "Right — new writes naturally land in the current time window, giving writes strong locality.",
       "Right — dropping an entire old partition is far cheaper than deleting rows one by one from a giant table.",
       "Right — queries can skip partitions entirely outside the requested time range instead of scanning them."
-    ]
+    ],
+    "scenario": "指标保留 30 天、查询多为最近一小时，团队已按天分区，现在盘点实际拿到哪些收益。",
+    "scenario_en": "With 30-day retention and mostly last-hour queries, the team already partitions by day and wants to know what that actually buys."
   },
   {
     "id": "sd-deep-dives-time-series-databases-018",
@@ -983,7 +1005,9 @@
       "Executing retention still needs metadata lookups to find which partition to drop — it is not metadata-free.",
       "A TSDB does delete data — just at the granularity of a whole partition file instead of row by row.",
       "Right — old data lives in its own time partition, so once its window is up, retention just drops that file without scanning anything."
-    ]
+    ],
+    "scenario": "43 亿点/天的表要每天清掉 30 天前的数据，同时不能拖慢在线写入。",
+    "scenario_en": "A table taking 4.3 billion points a day must drop everything older than 30 days each night without slowing live writes."
   },
   {
     "id": "sd-deep-dives-time-series-databases-019",
@@ -1104,7 +1128,9 @@
       "It saves memory precisely by tolerating a little error — false positives are allowed, only false negatives are ruled out.",
       "Right — it may over-claim \"maybe present,\" but it will never wrongly say \"absent\" when the key is actually there; that asymmetry is the whole point.",
       "A Bloom filter answers membership (is it there or not), not exact counting — this option confuses it with a different structure."
-    ]
+    ],
+    "scenario": "查一个 series 要探测几十个 SSTable，用 Bloom filter 跳文件前得先确认它会不会漏结果。",
+    "scenario_en": "Looking up one series means probing dozens of SSTables, so before skipping files with a Bloom filter you must know whether it can lose results."
   },
   {
     "id": "sd-deep-dives-time-series-databases-021",
@@ -1117,10 +1143,10 @@
     "q": "一个调优良好的 Bloom filter，典型的内存开销和误报率大致是什么量级？",
     "q_en": "What order of memory cost and false positive rate is typical for a well-tuned Bloom filter?",
     "options": [
-      "必须每个 key 占用 10KB 才能正常工作",
-      "约 10 bits/key 就能做到约 1% 的 false positive 率",
-      "false positive 率永远是 100%，形同虚设",
-      "只能用于少于 10 个 key 的小文件"
+      "必须给每个 key 分配 10KB 内存，否则无法正常工作",
+      "约 10 bits/key 就能做到约 1% 的误报率",
+      "误报率永远是 100%，等于完全没有过滤效果",
+      "只能用在少于 10 个 key 的极小文件上"
     ],
     "answer": [
       1
@@ -1133,10 +1159,10 @@
       "numbers"
     ],
     "options_en": [
-      "It must use 10KB per key to work at all.",
-      "About 10 bits per key can achieve roughly a 1 percent false positive rate.",
-      "The false positive rate is always 100 percent, making it useless.",
-      "It only works for small files with fewer than 10 keys."
+      "It needs about 10KB of memory per key or it will not work at all.",
+      "Around 10 bits per key already gives roughly a 1% false-positive rate.",
+      "The false-positive rate is always 100%, so it filters nothing.",
+      "It only works on tiny files holding fewer than 10 keys."
     ],
     "termDefinitions": [
       {
@@ -1235,7 +1261,9 @@
       "A rollup keeps the time dimension — it just merges fine-grained points into coarser buckets, timestamps are not removed.",
       "Right — coarsening older data means historical queries have far fewer points to scan.",
       "Nothing to do with password encryption — a rollup is a pre-aggregation technique for metric data."
-    ]
+    ],
+    "scenario": "1 年的 10 秒级指标要支撑“过去 90 天趋势”看板，全量扫描已经把查询拖垮。",
+    "scenario_en": "A year of 10-second metrics has to serve a 90-day trend dashboard, and scanning the raw points already blows the query budget."
   },
   {
     "id": "sd-deep-dives-time-series-databases-023",
@@ -1286,7 +1314,9 @@
       "min captures the lowest value in that bucket, so you can spot dips without scanning every raw point.",
       "max captures the peak value in that bucket, useful for spotting brief spikes.",
       "sum and count together let you reconstruct the average, and they back most dashboard aggregation queries."
-    ]
+    ],
+    "scenario": "把 10 秒原始点按 5 分钟桶预聚合，同时要保证看板的均值、峰值和趋势还能算出来。",
+    "scenario_en": "You pre-aggregate 10-second raw points into 5-minute buckets while still needing averages, peaks, and trends on the dashboard."
   },
   {
     "id": "sd-deep-dives-time-series-databases-024",
@@ -1299,9 +1329,9 @@
     "q": "相比直接扫描原始 10 秒采样点，用 5 分钟 rollup 回答“过去一天趋势”的查询，设计上带来了什么？",
     "q_en": "Compared with scanning raw 10-second samples, what does a 5-minute rollup change for a past-day trend query?",
     "options": [
-      "扫描的数据点数量完全不变，只是换了一种展示方式",
-      "查询需要扫描的数据点数量级下降，历史大范围查询明显更快，但会牺牲一部分时间精度",
-      "rollup 会让查询变慢，因为要先做聚合计算",
+      "扫描的数据点数量完全不变，只是换了一种展示方式而已",
+      "扫描点数下降两个数量级，代价是牺牲时间精度",
+      "rollup 会让查询变慢，因为每次都得重新做一遍聚合计算",
       "rollup 只影响存储成本，不影响查询要扫描多少数据"
     ],
     "answer": [
@@ -1315,10 +1345,10 @@
       "rollups"
     ],
     "options_en": [
-      "The number of points scanned stays exactly the same; only the display changes.",
-      "The number of points to scan drops by orders of magnitude, making large historical queries much faster at the cost of some time resolution.",
-      "Rollups make queries slower because they require upfront aggregation.",
-      "Rollups only affect storage cost, not how much data a query scans."
+      "The number of points scanned is unchanged; only the presentation differs.",
+      "Points scanned drop by two orders of magnitude, at the cost of time resolution.",
+      "Rollups make queries slower because the aggregation has to be recomputed each time.",
+      "Rollups only affect storage cost, not how much data a query has to scan."
     ],
     "optionExplanations": [
       "点数其实变了——一天 8640 个原始点压成 288 个 5 分钟桶，不是单纯换个展示方式。",
@@ -1344,10 +1374,10 @@
     "q": "更成熟的回应是什么？",
     "q_en": "What is a more mature response?",
     "options": [
-      "直接照单全收，保存全部原始点一整年，不讨论任何成本",
-      "直接把最近 24 小时的数据也删掉以省空间",
-      "建议近期保留细粒度，老数据降采样成分钟级 rollup，并向面试官确认是否可接受",
-      "把所有历史数据都压缩成只剩最后一个点"
+      "直接照单全收，保存一整年的全部原始点，完全不讨论成本",
+      "直接把最近 24 小时的数据也删掉，用来省下存储空间",
+      "近期留细粒度、老数据降采样，并和面试官确认可接受",
+      "把所有历史数据都压缩成每个 series 只剩最后一个点"
     ],
     "answer": [
       2
@@ -1362,10 +1392,10 @@
     ],
     "tradeoff": "精度换成本的降采样提案 vs 原样保留全部原始点",
     "options_en": [
-      "Just accept it as-is and store every raw point for a full year without discussing cost.",
-      "Delete even the most recent 24 hours of data to save space.",
-      "Propose keeping fine resolution for recent data and rolling older data up to minute-level buckets, then confirm with the interviewer whether that's acceptable.",
-      "Compress all historical data down to just the last point."
+      "Just accept it as stated and keep a full year of raw points without discussing cost.",
+      "Delete even the last 24 hours of data to save on storage.",
+      "Keep recent data fine-grained, downsample older data, and check with the interviewer that this is acceptable.",
+      "Compress all history down to a single last point per series."
     ],
     "termDefinitions": [
       {
@@ -1396,10 +1426,10 @@
     "q": "Block-level metadata 在 TSDB 查询中有什么用？",
     "q_en": "What is block-level metadata used for in TSDB queries?",
     "options": [
-      "强制数据库把每个 block 都完整读一遍，不允许跳过",
-      "把所有 metric name 随机替换成一串数字",
-      "只在处理用户登录鉴权请求时才会被用到",
-      "记录每个 block 的 min/max，用来跳过不可能匹配的 block"
+      "强制数据库把每个 block 都完整读一遍，任何情况下都不允许跳过",
+      "把所有 metric name 随机替换成一串无意义的数字",
+      "只在处理用户登录鉴权请求时才会被查询路径用到",
+      "记录每个 block 的 min/max，据此跳过不匹配的 block"
     ],
     "answer": [
       3
@@ -1411,10 +1441,10 @@
       "block-metadata"
     ],
     "options_en": [
-      "Force the database to fully read every block, never allowing a skip.",
-      "Randomly replace every metric name with a number.",
-      "It is only used when handling user login authentication.",
-      "Record each block's min and max so queries can skip blocks that cannot match."
+      "It forces the database to read every block in full and never allows skipping.",
+      "It replaces every metric name with a random meaningless number.",
+      "It is only consulted when handling user login and authentication requests.",
+      "It records each block's min/max so the engine can skip blocks that cannot match."
     ],
     "codeSample": "block_0.min_ts=1700000000  block_0.max_ts=1700003600\nblock_0.min_val=0.0        block_0.max_val=4.8\n# 查询 value > 10 时，跳过 max_val=4.8 的 block_0，无需读盘",
     "lang": "text",
@@ -1436,7 +1466,9 @@
       "Renaming metrics has nothing to do with block pruning — block metadata stores value ranges, not name substitutions.",
       "This is a general read-path optimization that benefits any value-filtered query — it has nothing to do with login authentication.",
       "Right — each block's min and max get recorded, so a query whose range doesn't overlap can skip it without reading disk."
-    ]
+    ],
+    "scenario": "一个 SSTable 里有几百个 block，而查询只要最近一小时，希望尽量少读盘。",
+    "scenario_en": "One SSTable holds hundreds of blocks but the query only wants the last hour, so you want to touch as little disk as possible."
   },
   {
     "id": "sd-deep-dives-time-series-databases-027",
@@ -1570,7 +1602,9 @@
       "Right — tags carry the indexed dimensions you filter on, like host or region, while fields hold the raw numbers and typically skip indexing.",
       "They're indexed differently — treating them as interchangeable means the filtering you expect from an index just won't happen.",
       "Fields can hold any measured value, not just timestamps — timestamps have their own dedicated field."
-    ]
+    ],
+    "scenario": "指标要按 host/region 过滤，同时还得存一个高基数的 request_id，建模决定索引大小。",
+    "scenario_en": "Metrics must be filterable by host and region while also carrying a high-cardinality request_id, and the modeling choice drives index size."
   },
   {
     "id": "sd-deep-dives-time-series-databases-029",
@@ -1581,10 +1615,10 @@
     "q": "TSDB 里一个 series 通常由什么唯一确定？",
     "q_en": "What usually uniquely identifies a series in a TSDB?",
     "options": [
-      "客户端发起请求时 IP 地址的最后一段数字",
-      "数据库进程本次启动的系统时间戳",
-      "measurement 加上一组具体 tag 值的唯一组合",
-      "series 里数值最大的那一个点"
+      "发起本次写入请求的客户端 IP 地址的最后一段数字",
+      "数据库进程本次启动时记录的系统时间戳",
+      "measurement 加上一组 tag 值的唯一组合",
+      "这条曲线里数值最大的那一个采样点"
     ],
     "answer": [
       2
@@ -1596,10 +1630,10 @@
       "series"
     ],
     "options_en": [
-      "The last segment of the client's IP address at request time.",
-      "The system timestamp of when the database process last started.",
-      "The unique combination of a measurement plus a specific set of tag values.",
-      "Whichever point in the series happens to have the largest value."
+      "The last octet of the IP address of the client that sent this write.",
+      "The system timestamp recorded when the database process last started.",
+      "A measurement plus one unique combination of tag values.",
+      "The single sample with the largest value on that curve."
     ],
     "termDefinitions": [
       {
@@ -1619,7 +1653,9 @@
       "Process start time is a runtime detail, not a data-modeling concept — it has nothing to do with series identity.",
       "Right — pin down the measurement and one specific set of tag values, and that pair is what defines a series.",
       "The largest-value point is just one data point in the series — it can't stand in for the series' identity."
-    ]
+    ],
+    "scenario": "监控里 cpu_usage 带 host、region、env 三个标签，要判断这算多少条独立时间线。",
+    "scenario_en": "In monitoring, cpu_usage carries host, region, and env tags, and you need to know how many independent timelines that makes."
   },
   {
     "id": "sd-deep-dives-time-series-databases-030",
@@ -1718,7 +1754,9 @@
       "Right — it's a lookup table from each series key straight to where its block sits in the file, so a query doesn't have to scan from the top.",
       "HTTP request headers are a networking concern — unrelated to the series lookup index stored at the end of a data file.",
       "GPU training logs belong to a machine-learning pipeline — they have nothing to do with a TSDB internal file index."
-    ]
+    ],
+    "scenario": "查询只关心一个 host 的 cpu_usage，但单个数据文件有几百 MB，不能整文件顺序扫。",
+    "scenario_en": "A query only wants cpu_usage for one host, but a single data file is hundreds of megabytes, so scanning it end to end is off the table."
   },
   {
     "id": "sd-deep-dives-time-series-databases-032",
@@ -1819,7 +1857,9 @@
       "Right — both map a filterable value to the set of objects containing it; it is the same underlying idea.",
       "Both support intersection — looking up each condition's matching set and intersecting them is exactly how compound filters work.",
       "Both are server-side indexing structures living inside the database or search engine — not a browser-only technique."
-    ]
+    ],
+    "scenario": "查询要按 region=us-west 且 env=prod 找出相关 series，不想扫遍全部数据块。",
+    "scenario_en": "A query has to find the series matching region=us-west and env=prod without scanning every data block."
   },
   {
     "id": "sd-deep-dives-time-series-databases-034",
@@ -1870,7 +1910,9 @@
       "Deleting a tag's index means that condition can no longer be filtered on — the opposite of what a two-condition query needs.",
       "Ignoring both tag conditions means skipping the query's actual filter logic entirely — the result would be way off.",
       "Right — look up the matching series set for each tag separately, then intersect them to get series satisfying both."
-    ]
+    ],
+    "scenario": "看板查询带 region='us-west' AND env='prod' 两个标签条件，而 series 总数上百万。",
+    "scenario_en": "A dashboard query filters on region='us-west' AND env='prod' while the store holds millions of series."
   },
   {
     "id": "sd-deep-dives-time-series-databases-035",
@@ -1920,7 +1962,9 @@
       "Filtering by tag still works fine — series-oriented storage exists precisely to make post-filter reads more efficient.",
       "Right — points from the same series sit closer together physically, so a query touches fewer scattered locations and compresses better too.",
       "A series keeps receiving many points over time (say, one every 10 seconds) — it is not capped at a single record."
-    ]
+    ],
+    "scenario": "看板要查一台 host 最近一小时的 cpu_usage，而行式表里这些点散落在整张表各处。",
+    "scenario_en": "The dashboard wants one host's cpu_usage for the last hour, but in a row table those points are scattered all over the table."
   },
   {
     "id": "sd-deep-dives-time-series-databases-036",
@@ -1931,10 +1975,10 @@
     "q": "TSDB 查询 mean(value) GROUP BY time(5m) 时，为什么通常不需要先把所有点加载到内存？",
     "q_en": "Why does a TSDB query like mean(value) GROUP BY time(5m) usually not need to load all points into memory first?",
     "options": [
-      "平均值不需要任何输入数据",
-      "聚合可以边读取边累积 sum/count/min/max",
-      "磁盘会自动返回最终答案",
-      "tag index 会直接存所有聚合结果"
+      "平均值不需要任何输入数据就能算出",
+      "边读边累积 sum/count 等中间状态",
+      "磁盘会自动返回聚合后的最终答案",
+      "tag index 里直接存好了所有聚合结果"
     ],
     "answer": [
       1
@@ -1946,10 +1990,10 @@
       "aggregation"
     ],
     "options_en": [
-      "The average requires no input data at all.",
-      "Aggregation can accumulate sum, count, min, and max while streaming through the data.",
-      "The disk automatically returns the final answer.",
-      "The tag index directly stores every aggregation result."
+      "An average can be produced without reading any input data.",
+      "The aggregate accumulates sum/count state as it streams through the points.",
+      "The disk itself returns the finished aggregate.",
+      "The tag index already stores every precomputed aggregate."
     ],
     "codeSample": "SELECT mean(value) FROM cpu_usage\nWHERE host = 'server-1' AND time > now() - 1h\nGROUP BY time(5m)\n# 引擎边读边维护每个 5m 桶的 sum/count，不必先加载全部点",
     "lang": "sql",
@@ -1971,7 +2015,9 @@
       "Right — sum, count, and similar running state get updated as data streams by, no need to load every point into memory first.",
       "Disk is just storage — it does not compute aggregates on its own; the query engine has to do that work.",
       "A tag index only locates matching series — it does not cache aggregation results, that happens during query execution."
-    ]
+    ],
+    "scenario": "查询 30 天的 mean(value) GROUP BY time(5m)，涉及上亿个点，而查询节点只有几 GB 内存。",
+    "scenario_en": "The query is a 30-day mean(value) GROUP BY time(5m) over hundreds of millions of points, on a query node with only a few gigabytes of RAM."
   },
   {
     "id": "sd-deep-dives-time-series-databases-037",
@@ -2013,7 +2059,9 @@
       "Random partitioning and full scans are exactly the inefficiency TSDBs try to avoid — not a source of locality.",
       "Both reads and writes matter to the design — reducing it to read-only or write-only misses how they work together.",
       "Right — one keeps a query inside the relevant time window, the other keeps same-tag data physically near each other, and together they cut disk access."
-    ]
+    ],
+    "scenario": "监控查询几乎都是“某几台 host 最近一小时”，要解释 TSDB 为什么只需读很少的盘。",
+    "scenario_en": "Almost every monitoring query is 'these few hosts, last hour', and you need to explain why a TSDB touches so little disk."
   },
   {
     "id": "sd-deep-dives-time-series-databases-038",
@@ -2024,10 +2072,10 @@
     "q": "TSDB 中 cardinality 指的是什么？",
     "q_en": "What does cardinality mean in a TSDB?",
     "options": [
-      "磁盘上文件的权限数量",
-      "每秒 CPU 指令数",
-      "唯一 tag 组合，也就是 series 的数量",
-      "SQL join 的列数"
+      "磁盘上某个数据文件被授予的访问权限位的数量",
+      "CPU 每秒能执行的机器指令条数",
+      "唯一 tag 组合数，也就是 series 数",
+      "SQL join 时实际用到的列的数量"
     ],
     "answer": [
       2
@@ -2039,10 +2087,10 @@
       "cardinality"
     ],
     "options_en": [
-      "The number of file permission bits on disk.",
-      "The number of CPU instructions executed per second.",
-      "The number of unique tag combinations, i.e., the number of series.",
-      "The number of columns in a SQL join."
+      "The number of access permission bits granted on a data file.",
+      "How many machine instructions the CPU executes per second.",
+      "The number of unique tag combinations, i.e. the number of series.",
+      "How many columns a SQL join actually touches."
     ],
     "termDefinitions": [
       {
@@ -2086,7 +2134,9 @@
       "CPU instructions per second is a hardware metric — it has nothing to do with how many unique series exist.",
       "Right — it is how many distinct tag combinations exist, which is the same as asking how many series the database is tracking.",
       "Join column count is a relational-query concept — a different thing from series count, which is TSDB-specific."
-    ]
+    ],
+    "scenario": "监控里有 10 万台 host、每台 20 个指标外加若干标签，团队担心内存元数据会撑爆。",
+    "scenario_en": "With 100k hosts, 20 metrics each, plus assorted tags, the team is worried the in-memory metadata will blow up."
   },
   {
     "id": "sd-deep-dives-time-series-databases-039",
@@ -2097,10 +2147,10 @@
     "q": "为什么 user_id、request_id 这类高基数值通常不应该作为 TSDB tag？",
     "q_en": "Why should high-cardinality values like user_id or request_id usually not be TSDB tags?",
     "options": [
-      "它们在写入时完全没办法被序列化成字节",
-      "它们会造出海量唯一 series，压垮内存索引并拖慢查询",
+      "它们在写入时完全没有办法被序列化成字节流",
+      "它们会造出海量唯一 series，压垮内存索引",
       "它们的取值格式一定不允许是字符串类型",
-      "它们会导致所有数据的时间戳顺序颠倒"
+      "它们会导致所有数据的时间戳顺序整体颠倒"
     ],
     "answer": [
       1
@@ -2113,10 +2163,10 @@
       "tags"
     ],
     "options_en": [
-      "They simply cannot be serialized into bytes when written.",
-      "They create massive numbers of unique series, overwhelming the in-memory index and slowing queries.",
-      "Their values are never allowed to be strings.",
-      "They cause every timestamp to be reversed in order."
+      "They cannot be serialized into bytes at write time at all.",
+      "They spawn a huge number of unique series and crush the in-memory index.",
+      "Their value format is never allowed to be a string.",
+      "They flip the timestamp ordering of all the data."
     ],
     "termDefinitions": [
       {
@@ -2136,7 +2186,9 @@
       "Right — since they are near-unique, each value spins up a brand-new series, and the tag index memory footprint balloons fast.",
       "Tag values are commonly strings already (host, region) — the high-cardinality problem has nothing to do with data type.",
       "Tag values and timestamp ordering are independent axes — a high-cardinality tag does not reverse time order."
-    ]
+    ],
+    "scenario": "有人想把 user_id、request_id 也加进 tag，而集群的 tag index 已经吃掉十几 GB 内存。",
+    "scenario_en": "Someone wants to add user_id and request_id as tags, but the cluster's tag index already eats more than ten gigabytes of RAM."
   },
   {
     "id": "sd-deep-dives-time-series-databases-040",
@@ -2255,9 +2307,9 @@
     "q": "对目标 workload 而言，TSDB 相比通用数据库的性能收益大致是什么量级？",
     "q_en": "For the target workload, what order of performance gain can a TSDB have over a general-purpose database?",
     "options": [
-      "永远只快 1%，几乎感觉不到差别",
-      "永远慢 100x，专用系统反而更差",
-      "通常能比通用数据库快一到两个数量级，比如 10-100x",
+      "永远只快 1%，几乎感觉不到任何差别",
+      "永远慢 100x，专用系统反而比通用库更差",
+      "通常快一到两个数量级，即 10-100x",
       "只影响 UI 展示，不影响存储或查询本身"
     ],
     "answer": [
@@ -2271,10 +2323,10 @@
       "performance"
     ],
     "options_en": [
-      "It's always only 1 percent faster, barely noticeable.",
-      "It's always 100x slower; the specialized system is actually worse.",
-      "It typically delivers one to two orders of magnitude better performance, roughly 10 to 100x.",
-      "It only affects the UI display, not storage or query itself."
+      "It's always just 1% faster, a difference nobody notices.",
+      "It's always 100x slower, so the purpose-built system is actually worse.",
+      "Typically one to two orders of magnitude faster, roughly 10-100x.",
+      "It only changes the UI presentation, not storage or query itself."
     ],
     "optionExplanations": [
       "1% 太保守了——写入、压缩、索引这些优化叠加起来，实际收益通常是数量级级别的。",
@@ -2300,10 +2352,10 @@
     "q": "是否应该因为数据带时间就默认上 TSDB？",
     "q_en": "Should you default to a TSDB just because the data has time?",
     "options": [
-      "应该，只要数据字段里出现时间就必须优先考虑 TSDB",
+      "应该，只要数据字段里出现时间就必须优先考虑上 TSDB",
       "应该，因为 TSDB 能自动帮你处理所有排序和聚合逻辑",
-      "不应该，因为 TSDB 这类系统从设计上就无法存储任何数字类型",
-      "不应该；Top-K 要跨大量 series 做排序聚合，TSDB 不一定好用"
+      "不应该，因为 TSDB 从设计上就无法存储任何数字类型",
+      "不应该；Top-K 要跨海量 series 排序，TSDB 不擅长"
     ],
     "answer": [
       3
@@ -2318,10 +2370,10 @@
     ],
     "tradeoff": "TSDB 的时间+低基数标签过滤 vs Top-K 需要的跨海量 series 全局排序",
     "options_en": [
-      "Yes, whenever a field contains time you must prioritize a TSDB.",
-      "Yes, because a TSDB automatically handles all sorting and aggregation logic for you.",
-      "No, because TSDBs are fundamentally unable to store any numeric type.",
-      "No; Top-K needs sorting and aggregation across huge numbers of series, which a TSDB is not necessarily good at."
+      "Yes — the moment a field carries a timestamp, a TSDB should be the first choice.",
+      "Yes, because a TSDB handles all sorting and aggregation logic for you automatically.",
+      "No, because a TSDB is designed in a way that cannot store numeric types at all.",
+      "No — Top-K means sorting across a huge number of series, which isn't what a TSDB is good at."
     ],
     "termDefinitions": [
       {
@@ -2385,9 +2437,9 @@
     "q_en": "Why does a TSDB fit better than a normal row table?",
     "options": [
       "因为它天生就提供比关系数据库更强的外键约束能力",
-      "因为它针对追加写、时间分区、压缩和 rollup 做了专门优化",
-      "因为它的所有数据都只保存在内存里，完全不需要磁盘",
-      "因为它能自动理解业务含义，不需要工程师建模"
+      "因为它为追加写、时间分区、压缩和 rollup 做了优化",
+      "因为它的数据全部只保存在内存里，完全不需要磁盘",
+      "因为它能自动理解业务含义，不需要工程师做任何建模"
     ],
     "answer": [
       1
@@ -2402,10 +2454,10 @@
     ],
     "tradeoff": "追加写+时间分区+压缩的读写优化 vs 通用数据库的事务/关系能力",
     "options_en": [
-      "Because it inherently offers stronger foreign-key constraints than a relational database.",
-      "Because it is purpose-built for append writes, time partitioning, compression, and rollups.",
-      "Because all its data lives only in memory and needs no disk at all.",
-      "Because it automatically understands business meaning without any modeling by engineers."
+      "Because it natively offers stronger foreign-key constraints than a relational database.",
+      "Because it is optimized for append writes, time partitioning, compression, and rollups.",
+      "Because it keeps all data in memory and needs no disk at all.",
+      "Because it understands the business meaning on its own, so no modeling is needed."
     ],
     "termDefinitions": [
       {
@@ -2493,7 +2545,9 @@
       "The in-memory buffer holds recently written points that haven't flushed yet — nothing to do with avatar images.",
       "Right — the newest points may still sit in the in-memory buffer unflushed, while older data is already on disk, so a query merges both.",
       "Checking both memory and disk is about getting complete data — it has nothing to do with disabling time filtering."
-    ]
+    ],
+    "scenario": "看板查最近 5 分钟的指标，而引擎每 15 分钟才把内存 buffer 刷成磁盘文件。",
+    "scenario_en": "The dashboard queries the last 5 minutes, but the engine only flushes its in-memory buffer to disk every 15 minutes."
   },
   {
     "id": "sd-deep-dives-time-series-databases-046",
@@ -2536,7 +2590,9 @@
       "Shuffling data would only slow queries down — the exact opposite of what \"writes assist reads\" describes.",
       "A TSDB keeps the full history of points for trend queries — it does not discard everything but the latest value.",
       "Right — writes get laid out and compressed with series and time in mind, so a later read only has to touch a handful of nearby blocks."
-    ]
+    ],
+    "scenario": "写入要吃住 5 万点/秒，同时看板的时间范围查询必须在百毫秒内返回。",
+    "scenario_en": "The write path must absorb 50k points per second while dashboard range queries still return within a few hundred milliseconds."
   },
   {
     "id": "sd-deep-dives-time-series-databases-047",
@@ -2609,7 +2665,9 @@
       "Two-phase commit solves cross-node transaction atomicity for strongly consistent use cases like bank transfers — not core to how a TSDB appends writes.",
       "The LSM tree turns random writes into sequential ones and tidies things up via background compaction — the core of high-throughput TSDB writes.",
       "Delta and XOR compression exploit how close adjacent values usually are — the key reason metric storage shrinks so much."
-    ]
+    ],
+    "scenario": "为一个 5 万点/秒写入、保留 30 天的监控平台，盘点它靠哪些机制拿到性能。",
+    "scenario_en": "For a monitoring platform taking 50k points per second with 30-day retention, you list the mechanisms it relies on for performance."
   },
   {
     "id": "sd-deep-dives-time-series-databases-048",
@@ -2670,7 +2728,9 @@
       "user_id is almost always unique per record — turning it into a tag spawns a flood of series and actually hurts the read path instead of helping.",
       "Block metadata records each block's min and max, letting a query skip blocks whose range can't possibly match.",
       "A tag index maps tag values to their matching series set, avoiding a scan through every series one by one."
-    ]
+    ],
+    "scenario": "看板查询延迟不达标，要在读路径上找出哪些机制真正减少了磁盘读取。",
+    "scenario_en": "Dashboard query latency is missing its budget, so you look at the read path for the mechanisms that actually cut disk reads."
   },
   {
     "id": "sd-deep-dives-time-series-databases-049",
@@ -2757,6 +2817,8 @@
       "Adjacent values and timestamps within a series tend to barely change, which is exactly what lets delta and XOR compression work.",
       "Monitoring metrics rarely need strong cross-table transactions — this assumption does not hold, and TSDBs are not optimized for it.",
       "Queries are usually narrowed down by a few tags with few possible values, plus a time window — exactly what tag indexes and partition pruning are built to exploit."
-    ]
+    ],
+    "scenario": "评估这套监控 workload 能不能吃到 TSDB 的红利，先看数据本身有哪些可利用特征。",
+    "scenario_en": "Before betting on a TSDB for this monitoring workload, you check which properties of the data it can actually exploit."
   }
 ]
