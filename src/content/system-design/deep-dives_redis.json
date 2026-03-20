@@ -5966,5 +5966,225 @@
         "meaningEn": "ZooKeeper is an external coordination service for custom leader election, configuration, and leases, but Redis Cluster failover does not depend on it."
       }
     ]
+  },
+  {
+    "id": "sd-deep-dives-redis-081",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "infrastructure-config",
+    "scenario": "整个数据集能舒服地装进一个节点的内存，写吞吐也远低于单节点上限，但这是线上核心缓存，节点一挂就不能整段不可用。Redis 有三种部署形态：单节点、主+副本(HA)、Cluster 分片。",
+    "scenario_en": "The whole dataset fits comfortably in one node's RAM and write throughput is well under a single node's ceiling, but this is a core production cache that cannot go fully dark if the node dies. Redis ships three topologies: single node, primary+replica (HA), and a sharded Cluster.",
+    "q": "该选哪种部署形态？",
+    "q_en": "Which topology should you deploy?",
+    "options": [
+      "单节点：一个进程扛全部读写，最简单",
+      "主 + 副本(HA)：数据仍在一个节点，副本用于自动故障转移",
+      "Cluster：把 key 按哈希槽分散到多个 master 上",
+      "主 + 多个只读副本：让副本分摊写入压力"
+    ],
+    "options_en": [
+      "Single node: one process serves all reads and writes, simplest",
+      "Primary + replica (HA): data still lives on one node, the replica is there for automatic failover",
+      "Cluster: spread keys across many masters by hash slot",
+      "Primary + several read replicas so the replicas absorb write load"
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错:单节点最省，但节点挂了就整段不可用、还丢内存里的数据；本题不能容忍宕机。",
+      "对:数据装得下一个节点、不需要分片，但要高可用——副本在主挂时被提升接管。",
+      "错:分片是为「装不下一个节点」或「写吞吐超单节点上限」准备的；这里两者都不缺。",
+      "错:常见误解——副本只分摊读，写永远落在拥有该槽的那个 master，加副本不加写容量。"
+    ],
+    "optionExplanations_en": [
+      "Wrong: single node is cheapest but a crash means full downtime and losing in-memory data; here downtime is unacceptable.",
+      "Right: data fits one node and needs no sharding, but you need HA—the replica is promoted when the primary dies.",
+      "Wrong: sharding is for when data won't fit one node or write throughput exceeds a single node's ceiling; neither applies here.",
+      "Wrong: a common myth—replicas only scale reads; every write still lands on the one primary owning the slot, so replicas add no write capacity."
+    ],
+    "why": "决定答案的约束是「数据装得下一个节点、写吞吐够用，但不能宕机」→ 选 HA 主从：拿到自动故障转移，又不背 Cluster 分片的复杂度。代价:复制是异步的，failover 时最后几笔已确认写可能凭空消失。",
+    "why_en": "The deciding constraint is 'fits one node, write throughput is fine, but no downtime allowed' -> pick HA primary-replica: you get automatic failover without Cluster's sharding complexity; the cost is async replication, so a failover can silently drop the last few acknowledged writes.",
+    "tradeoff": "HA 主从(单节点数据+自动故障转移) vs Cluster(分片,working set/写吞吐超一个节点才需要)",
+    "whenOtherWins": "当 working set 装不下一个节点的 RAM，或写吞吐超过单节点上限(约 10 万写/秒)时，才升级到 Cluster 分片；若只是可重建的缓存、能容忍短暂宕机，单节点最省。",
+    "table": {
+      "headers": [
+        "配置",
+        "解决什么",
+        "是否分片",
+        "自动故障转移"
+      ],
+      "rows": [
+        [
+          "单节点",
+          "最简单",
+          "否",
+          "无"
+        ],
+        [
+          "HA 主从",
+          "高可用",
+          "否",
+          "有(提升副本)"
+        ],
+        [
+          "Cluster",
+          "超一节点容量",
+          "是(哈希槽)",
+          "有(master 投票)"
+        ]
+      ]
+    },
+    "tags": [
+      "redis",
+      "infrastructure",
+      "topology",
+      "high-availability",
+      "fit"
+    ],
+    "termDefinitions": [
+      {
+        "term": "HA",
+        "fullName": "High Availability",
+        "meaning": "高可用(HA):部署主节点加副本，主挂时副本被自动提升接管，避免单点整段不可用。",
+        "meaningEn": "High Availability (HA): run a primary plus a replica so that if the primary dies the replica is automatically promoted, avoiding a single-point outage."
+      },
+      {
+        "term": "failover",
+        "meaning": "故障转移:主节点被判定挂掉后，把它的副本提升为新主并把流量切过去的过程。",
+        "meaningEn": "Failover is the process of promoting a replica to become the new primary and redirecting traffic after the old primary is declared dead."
+      },
+      {
+        "term": "hash slot",
+        "meaning": "Redis Cluster 把每个 key 映射到 16384 个哈希槽之一，每个槽归某个 master，这就是分片。",
+        "meaningEn": "Redis Cluster maps every key to one of 16,384 hash slots, each owned by a master; this is how it shards."
+      },
+      {
+        "term": "working set",
+        "meaning": "工作集:实际活跃、需要常驻内存的数据量；它装不下一个节点的 RAM 时才需要分片。",
+        "meaningEn": "The working set is the actively used data that must stay resident in RAM; you shard once it no longer fits one node."
+      },
+      {
+        "term": "read replica",
+        "meaning": "只读副本:异步复制主节点数据的节点，用来分摊读流量，但不能分摊写(写仍走主)。",
+        "meaningEn": "A read replica asynchronously copies the primary's data to absorb read traffic, but it cannot absorb writes, which still go to the primary."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-redis-082",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "lock-consensus",
+    "scenario": "要保证整个集群同一时刻只有一个节点在跑某个动作——比如只有一个 leader 执行定时批处理，或对一个没有版本列可做条件写的外部系统做互斥操作。Redis TTL 锁会因异步复制 failover 或客户端 GC 暂停，把同一把锁同时发给两个节点，一旦发生就破坏正确性。这里没有一张可以做条件写的业务数据行。",
+    "scenario_en": "You must guarantee that at any instant only one node in the cluster runs an action-say only one leader executes a scheduled batch job, or you take a mutually-exclusive action against an external system with no version column to conditionally write against. A Redis TTL lock can hand the same lock to two nodes at once (async-replication failover, or a client GC pause), and if that happens correctness is broken. There is no single business data row to conditionally write against here.",
+    "q": "锁失效会破坏正确性、且没有单一数据行可做条件写时，用什么？",
+    "q_en": "When a lock failure would break correctness and there's no single data row to conditionally write, what do you use?",
+    "options": [
+      "换用 ZooKeeper/etcd 这类共识系统做强一致的锁/选主",
+      "把 TTL 调长再叠加 Redlock，认为占住多数节点就够强",
+      "只在业务库上 UPDATE ... WHERE version=X 做条件写就行",
+      "多加只读副本，靠副本读到最新锁状态来避免脑裂"
+    ],
+    "options_en": [
+      "Switch to a consensus system like ZooKeeper/etcd for a strongly-consistent lock / leader election",
+      "Lengthen the TTL and stack Redlock, trusting that holding a majority of nodes is strong enough",
+      "Just do UPDATE ... WHERE version=X conditional writes on the business database",
+      "Add read replicas and rely on replicas reading the latest lock state to avoid split-brain"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对:没有单一数据行可 CAS 时，正确性要靠 ZooKeeper/etcd 提供的强一致锁与内建 fencing。",
+      "错:Redlock 有争议——客户端一旦暂停超过锁期，醒来仍会写，Kleppmann 已指出它不保正确性。",
+      "错:条件写能取代锁的前提是「被保护的就是某个库里的一行」；这里恰恰没有这样的行。",
+      "错:副本是异步复制、且只分摊读；靠它读锁状态既滞后又不参与选主，防不了脑裂。"
+    ],
+    "optionExplanations_en": [
+      "Right: with no single row to CAS, correctness must come from the strongly-consistent lock and built-in fencing that ZooKeeper/etcd provide.",
+      "Wrong: Redlock is controversial-a client paused past the lock's expiry still writes on wake, and Kleppmann showed it doesn't guarantee correctness.",
+      "Wrong: a conditional write can replace a lock only when the protected thing is a single row in a store; here there is exactly no such row.",
+      "Wrong: replicas replicate asynchronously and only scale reads; reading lock state off them is stale and they don't vote in election, so split-brain persists."
+    ],
+    "why": "Redis 锁会过期、不保互斥；当需要真正的分布式互斥或选主、下游又没有一行可条件写时，改用共识系统提供的强一致锁。代价:多养一套集群，比一次 DB 条件写更贵更慢。",
+    "why_en": "The axis is efficiency tool vs correctness guarantee: a Redis lock expires and doesn't guarantee mutual exclusion. When the protected thing is true distributed mutual exclusion / leader election with no single row to conditionally write, use the strongly-consistent lock in ZooKeeper/etcd; the cost is operating an extra consensus cluster, higher latency and complexity than one DB conditional write.",
+    "tradeoff": "DB 条件写(被保护的是单一数据行·最省) vs 共识系统 ZooKeeper/etcd(需强一致互斥/选主·运维贵)",
+    "whenOtherWins": "如果被保护的就是某个库里的一行或一个聚合(钱、库存、唯一订单)，直接 UPDATE ... WHERE version=X 的条件写往往就整个取代了分布式锁，不必上 ZooKeeper。",
+    "table": {
+      "headers": [
+        "方案",
+        "正确性保证",
+        "何时选",
+        "成本"
+      ],
+      "rows": [
+        [
+          "Redis TTL 锁",
+          "无(会过期)",
+          "只需减少并发",
+          "最低"
+        ],
+        [
+          "DB 条件写",
+          "强(单行 CAS)",
+          "有单一数据行",
+          "低"
+        ],
+        [
+          "ZooKeeper/etcd",
+          "强(共识+fencing)",
+          "跨节点互斥/选主",
+          "高(多套集群)"
+        ]
+      ]
+    },
+    "tags": [
+      "redis",
+      "distributed-lock",
+      "consensus",
+      "correctness",
+      "fit"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZooKeeper",
+        "meaning": "外部协调服务，提供强一致的分布式锁、选主和配置，靠内部共识协议保证只有一个持有者。",
+        "meaningEn": "ZooKeeper is an external coordination service providing strongly-consistent distributed locks, leader election, and config, backed by an internal consensus protocol so only one holder wins."
+      },
+      {
+        "term": "etcd",
+        "meaning": "基于 Raft 共识的强一致键值存储，常用于分布式锁、选主和配置(Kubernetes 就用它)。",
+        "meaningEn": "etcd is a strongly-consistent key-value store built on the Raft consensus protocol, commonly used for distributed locks, leader election, and config (Kubernetes uses it)."
+      },
+      {
+        "term": "CAS",
+        "fullName": "Compare-And-Swap",
+        "meaning": "比较并交换(CAS):只有当前值等于期望值时才写入，条件写 UPDATE ... WHERE version=X 就是这个思路。",
+        "meaningEn": "Compare-And-Swap (CAS) writes only if the current value matches an expected value; a conditional UPDATE ... WHERE version=X is exactly this idea."
+      },
+      {
+        "term": "Redlock",
+        "meaning": "Redis 官方的多节点分布式锁算法，在多数独立节点上抢锁；有争议，不防客户端暂停后的迟到写。",
+        "meaningEn": "Redlock is Redis's multi-node distributed-lock algorithm that acquires the lock on a majority of independent nodes; it's controversial and doesn't stop a late write after a client pause."
+      },
+      {
+        "term": "fencing token",
+        "meaning": "每次授锁附带一个递增编号，存储层拒绝带旧编号的写，从而挡住过期锁持有者的迟到写。",
+        "meaningEn": "A fencing token is an increasing number attached to each lock grant; the storage layer rejects writes stamped with an old number, blocking a stale lock holder's late write."
+      },
+      {
+        "term": "leader election",
+        "meaning": "选主:在一组节点里选出唯一一个 leader 执行某动作的过程；共识系统能保证同一时刻只有一个。",
+        "meaningEn": "Leader election is choosing exactly one node from a group to perform an action; a consensus system guarantees only one leader at a time."
+      },
+      {
+        "term": "split-brain",
+        "meaning": "脑裂:网络或故障导致两个节点都自认为是唯一持有者/主，同时写而破坏正确性。",
+        "meaningEn": "Split-brain is when a network partition or failure leaves two nodes each believing it is the sole holder/primary, both writing and breaking correctness."
+      }
+    ]
   }
 ]

@@ -4781,5 +4781,229 @@
       "Elasticsearch is a heavyweight tool purpose-built for full-text search — reaching for it on an ordinary equality/range query is overkill.",
       "Right — default to B-tree when unsure; swap to a geospatial index for proximity queries and an inverted index for full-text search."
     ]
+  },
+  {
+    "id": "sd-core-concepts-db-indexing-070",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "dynamodb-sort-key",
+    "scenario": "DynamoDB 聊天表按 user_id 分区，最常见的查询是「查某个用户在某时间段内的消息」，需要按时间区间取。",
+    "scenario_en": "A DynamoDB chat table is partitioned by user_id, and the hottest query is 'a given user's messages in a time window', needing a time range.",
+    "q": "怎么建模才能让「单用户 + 时间区间」这类查询走连续扫描？",
+    "q_en": "How do you model the table so a single-user time-range query becomes a contiguous scan?",
+    "options": [
+      "把 timestamp 设为该表的 sort key，让分区内 item 有序",
+      "另建一个只以 timestamp 为键的 GSI，靠它做时间区间扫描",
+      "依赖底层 B 树索引，直接对 timestamp 列做范围扫描",
+      "用 Scan 把整个分区读出来，再用 FilterExpression 过滤掉区间外的项"
+    ],
+    "options_en": [
+      "Make timestamp the table's sort key so items within the partition are stored in order.",
+      "Build a separate GSI keyed only on timestamp and use it for the time-range scan.",
+      "Rely on the underlying B-tree index to range-scan the timestamp column directly.",
+      "Use Scan to read the whole partition, then FilterExpression to drop items outside the window."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同分区内 item 按 sort key 有序存放，所以「固定 partition key + sort key 区间」是一次连续读，代价接近顺序扫描。代价：这份有序只在单个 partition key 内成立。",
+    "why_en": "DynamoDB keeps items within a partition ordered by sort key, so a fixed partition key plus a sort-key range is one contiguous read, close to a sequential scan in cost. The catch: that ordering only holds inside a single partition key.",
+    "whenOtherWins": "当查询不带 user_id、要跨所有用户按时间全局排序或取区间时，分区内 sort key 帮不上，得建一个以 time 为分区/排序键的 GSI。",
+    "tradeoff": "分区内 sort-key 区间（单分区有序、最省）vs GSI（跨分区但另建结构）vs Scan（全读再过滤）",
+    "tags": [
+      "dynamodb",
+      "lsm",
+      "sort-key",
+      "range-query"
+    ],
+    "termDefinitions": [
+      {
+        "term": "sort key（排序键）",
+        "meaning": "DynamoDB 复合主键的第二部分；同一 partition key 下的 item 按 sort key 有序存放，因此支持分区内区间查询。",
+        "meaningEn": "The sort key is the second part of a DynamoDB composite primary key; items under one partition key are stored in sort-key order, enabling in-partition range queries."
+      },
+      {
+        "term": "partition key（分区键）",
+        "meaning": "复合主键的第一部分，决定 item 落在哪个物理分区；有序区间查询只在同一个 partition key 内成立。",
+        "meaningEn": "The partition key is the first part of the primary key and decides which physical partition an item lands in; ordered range queries only hold within one partition key."
+      },
+      {
+        "term": "GSI",
+        "fullName": "Global Secondary Index（全局二级索引）",
+        "meaning": "DynamoDB 用另一套键（可跨分区）重新组织数据的附加索引，供主键之外的查询模式使用。",
+        "meaningEn": "A GSI is an extra DynamoDB index that reorganizes data under a different key, possibly across partitions, for query patterns beyond the primary key."
+      },
+      {
+        "term": "LSM",
+        "fullName": "Log-Structured Merge tree",
+        "meaning": "追加写、后台合并的存储结构；DynamoDB 被普遍认为用 LSM 式底座而非 B 树，因此没有用户可范围扫描的 B 树索引。",
+        "meaningEn": "An LSM tree is an append-and-merge storage structure; DynamoDB is widely understood to use an LSM-style engine rather than B-trees, so there is no user-facing B-tree to range-scan."
+      },
+      {
+        "term": "Scan / FilterExpression",
+        "meaning": "Scan 读遍整张表或整个分区，FilterExpression 只在读完之后丢弃不匹配项——不减少读取量。",
+        "meaningEn": "Scan reads the whole table or partition, and FilterExpression only discards non-matching items after reading — it does not reduce how much is read."
+      }
+    ],
+    "optionExplanations": [
+      "对，这正是把 timestamp 放进 sort key 的目的：同一 user_id 下的时间区间落成一段相邻磁盘读，而非逐条随机点查。",
+      "以 timestamp 为键的 GSI 是把数据跨分区重排，适合「跨用户按时间查」，但对「单用户区间」是绕远路。",
+      "DynamoDB 被普遍认为用 LSM 式底座、不是 B 树，没有可供用户对 timestamp 做范围扫描的 B 树索引。",
+      "Scan 会把整个分区都读出来再过滤，读取量不随区间收窄——正是 sort key 有序想避免的浪费。"
+    ],
+    "optionExplanations_en": [
+      "Right — items sit in sort-key order within the partition, so a fixed user_id plus a timestamp range is one contiguous read.",
+      "A GSI keyed on timestamp reorders data across partitions, good for 'time across all users' but a detour for a single user's range.",
+      "DynamoDB is understood to use an LSM-style engine, not B-trees, so there's no user B-tree to range-scan on timestamp.",
+      "Scan reads the entire partition then filters, so the read volume doesn't shrink with the window — the waste sort-key ordering avoids."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-db-indexing-071",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "quadtree",
+    "scenario": "用四叉树（把二维空间递归四等分的树）做「找我附近 1 公里的餐厅」，你已经下钻到自己所在的叶象限。",
+    "scenario_en": "Using a quadtree (a tree that recursively quarters 2D space) for 'restaurants within 1 km of me', you've drilled down to your own leaf quadrant.",
+    "q": "为什么只返回这个叶象限里的点会漏掉最近的餐厅？",
+    "q_en": "Why does returning only the points inside this leaf quadrant miss the nearest restaurant?",
+    "options": [
+      "最近的点可能就贴在象限边界另一侧的相邻象限里",
+      "本象限里的点没有按到我的距离排好序，结果顺序是乱的",
+      "四叉树不平衡，我所在的这个叶象限有可能恰好是空的",
+      "象限用 geohash 字符串编号，前缀比较有时会把邻居判成远点"
+    ],
+    "options_en": [
+      "The nearest point may sit just across the boundary in an adjacent quadrant.",
+      "Points in this quadrant aren't sorted by distance to me, so the order is scrambled.",
+      "A quadtree is unbalanced, so my leaf quadrant might happen to be empty.",
+      "Quadrants are labeled by geohash strings, and prefix comparison sometimes misjudges neighbors as far."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "下钻只覆盖了一块方格，真正的最近邻可能落在紧贴边界的相邻象限。所以邻近查询要走完整链：定位目标象限 → 检查同层相邻象限 → 按搜索半径上钻覆盖更大范围或下钻更精细。代价：一次邻近查询要触碰多个象限节点，不是单点查找。",
+    "why_en": "Drilling down only covers one cell, but the true nearest neighbor can fall in an adjacent quadrant hugging the boundary. So a proximity search runs the full loop: find the target quadrant, check same-level neighbors, then move up or down levels by the search radius. The cost: one query touches several quadrant nodes, not a single lookup.",
+    "tags": [
+      "quadtree",
+      "spatial-index",
+      "proximity-search"
+    ],
+    "termDefinitions": [
+      {
+        "term": "四叉树 / quadtree",
+        "meaning": "把二维空间递归四等分成象限的树；点太密就继续四分，稀疏区保留大格。",
+        "meaningEn": "A quadtree is a tree that recursively splits 2D space into four quadrants; dense areas keep subdividing while sparse areas keep large cells."
+      },
+      {
+        "term": "象限 / quadrant",
+        "meaning": "四叉树一次四等分得到的一块方格区域，对应树里的一个节点。",
+        "meaningEn": "A quadrant is one of the four cells produced by a quadtree split, corresponding to one node in the tree."
+      },
+      {
+        "term": "邻近查询 / proximity search",
+        "meaning": "找「距某点半径内的所有对象」的查询；在四叉树里需要跨相邻象限、按半径调层。",
+        "meaningEn": "A proximity search finds all objects within a radius of a point; in a quadtree it must cross neighboring quadrants and adjust levels by radius."
+      },
+      {
+        "term": "geohash",
+        "meaning": "把二维坐标编码成保留邻近性的字符串（另一种空间索引路线），靠前缀匹配做邻近查询——不是四叉树的机制。",
+        "meaningEn": "Geohash encodes 2D coordinates into a proximity-preserving string (a different spatial-index path) and uses prefix matching, not the quadtree's mechanism."
+      }
+    ],
+    "optionExplanations": [
+      "对，边界是人为切的，最近邻可能就在隔壁象限，所以必须再查同层相邻象限并按半径调层。",
+      "排序不是问题——问题是完整性：漏了相邻象限里更近的点，排不排序都补不回来。",
+      "四叉树按点密度自适应细分，空象限不是漏点的原因；漏点来自没查边界外的邻居。",
+      "把坐标编成前缀字符串是 geohash 的做法；四叉树直接切分空间、用树导航，不靠前缀比较。"
+    ],
+    "optionExplanations_en": [
+      "Right — the boundary is arbitrary, the nearest neighbor may be next door, so you must also check same-level neighbors and adjust levels by radius.",
+      "Ordering isn't the issue — completeness is: a closer point in an adjacent quadrant is missed whether or not you sort.",
+      "A quadtree subdivides adaptively by point density; an empty quadrant isn't why points are missed — skipping boundary neighbors is.",
+      "Encoding coordinates into prefix strings is geohash's approach; a quadtree partitions space directly and navigates the tree, not by prefixes."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-db-indexing-072",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "index-diagnosis",
+    "scenario": "线上一个查询突然变慢，表上已经有几个索引，团队不确定到底该给哪列再加索引。",
+    "scenario_en": "A production query suddenly got slow; the table already has a few indexes, and the team isn't sure which column to index next.",
+    "q": "定位「该加什么索引」的第一步应该是什么？",
+    "q_en": "What should the first step be to figure out which index to add?",
+    "options": [
+      "跑 EXPLAIN 看查询计划，确认它卡在哪个谓词、有没有 seq scan",
+      "给 WHERE 子句里出现的每一列都单独建一个索引，用数量硬覆盖所有过滤组合",
+      "按表的行数决定：行多就加索引，行少就先不加",
+      "直接把表迁到写入更快的 LSM 引擎上"
+    ],
+    "options_en": [
+      "Run EXPLAIN to read the query plan and see which predicate it stalls on and whether it's doing a seq scan.",
+      "Add an index to every column that appears in the WHERE clause to cover all possibilities.",
+      "Decide by row count: index if the table is big, skip it if the table is small.",
+      "Migrate the table onto an LSM engine that writes faster."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "索引不是免费的——每建一个都加写放大和存储，盲目加还可能既不命中慢查询又拖慢写入。先用 EXPLAIN/查询计划加数据库指标找到真正的瓶颈谓词，再针对性建索引。代价：多一步诊断，换来不建无效索引。",
+    "why_en": "Indexes aren't free — each one adds write amplification and storage, and blind ones may miss the slow query while slowing writes. First use EXPLAIN plus database metrics to find the real bottleneck predicate, then index for it. The cost: one extra diagnosis step, in exchange for not building dead indexes.",
+    "whenOtherWins": "当查询模式一开始就明确（例如登录永远按 email 精确匹配），建表时直接把索引建好即可，不必先跑 EXPLAIN 诊断。",
+    "tradeoff": "先诊断后建索引（多一步、只加有用的）vs 盲目全列建索引（省诊断、堆写入成本）",
+    "tags": [
+      "query-plan",
+      "explain",
+      "index-optimization"
+    ],
+    "termDefinitions": [
+      {
+        "term": "EXPLAIN",
+        "meaning": "数据库命令，打印某条查询的执行计划——它打算用哪些索引、要不要全表扫描、各步预估代价。",
+        "meaningEn": "EXPLAIN is a database command that prints a query's execution plan — which indexes it will use, whether it will scan the whole table, and the estimated cost of each step."
+      },
+      {
+        "term": "查询计划 / query plan",
+        "meaning": "数据库为一条查询选定的执行方案（用哪个索引、按什么顺序连接、扫描方式），是判断瓶颈的入口。",
+        "meaningEn": "A query plan is the execution strategy the database picks for a query — which index, join order, and scan method — and is the entry point for spotting bottlenecks."
+      },
+      {
+        "term": "seq scan（顺序扫描）",
+        "meaning": "Sequential scan，数据库逐行读遍整张表；查询计划里出现它往往意味着某个谓词缺可用索引。",
+        "meaningEn": "A seq (sequential) scan reads every row of the table in order; seeing it in a plan often means a predicate lacks a usable index."
+      },
+      {
+        "term": "谓词 / predicate",
+        "meaning": "查询里的过滤条件（如 WHERE user_id=123）；诊断的目标是找出哪个谓词没走索引。",
+        "meaningEn": "A predicate is a filter condition in a query (like WHERE user_id=123); diagnosis aims to find which predicate isn't using an index."
+      },
+      {
+        "term": "写放大 / write amplification",
+        "meaning": "一次逻辑写入被放大成多次物理写：每多一个索引，插入/更新就要多改一份结构。",
+        "meaningEn": "Write amplification is one logical write turning into several physical writes: each extra index means an insert or update must modify one more structure."
+      },
+      {
+        "term": "LSM",
+        "fullName": "Log-Structured Merge tree",
+        "meaning": "面向高写入的追加写存储结构；换引擎解决的是写吞吐，不是「哪列该建索引」的读诊断问题。",
+        "meaningEn": "An LSM tree is an append-oriented storage structure for high write throughput; switching engines addresses write throughput, not the read-side question of which column to index."
+      }
+    ],
+    "optionExplanations": [
+      "对，先看查询计划才知道慢在哪个谓词、是不是在做 seq scan，再据此选列建索引最省。",
+      "给每列都建索引会堆高写放大和存储，还可能建了一堆没命中慢查询的死索引。",
+      "行数只是粗略信号——真正决定要不要索引的是访问模式，光看大小会误判。",
+      "换 LSM 引擎解决的是写吞吐，和「哪个读谓词缺索引」是两根轴，跑偏了。"
+    ],
+    "optionExplanations_en": [
+      "Right — read the plan first to see which predicate is slow and whether it's a seq scan, then index that column.",
+      "Indexing every column piles on write amplification and storage, and may create dead indexes that never hit the slow query.",
+      "Row count is only a rough signal — access pattern decides whether an index helps; size alone misleads.",
+      "Switching to LSM addresses write throughput, a different axis from which read predicate lacks an index."
+    ]
   }
 ]
