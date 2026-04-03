@@ -5188,5 +5188,706 @@
       "Health checks are how a load balancer drops bad backends; unrelated to connection reuse.",
       "DNS rotation decides which server you hit, not whether each connection repeats a handshake."
     ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-083",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "tcp-teardown",
+    "scenario": "长连接代理关闭连接时,客户端已发完数据,但服务器那侧还要再发一阵才收尾,不能一次挥手就同时切断两个方向。",
+    "scenario_en": "A long-lived proxy is closing a connection: the client is done sending, but the server side still has more to send, so one exchange can't shut both directions at once.",
+    "q": "TCP 断开为什么要四次挥手而不是两次?",
+    "q_en": "Why does TCP close with four steps instead of two?",
+    "options": [
+      "连接两个方向各自独立关闭:一方 FIN 只关自己发送方向,对方可以还没发完数据",
+      "四次挥手是历史遗留的协议冗余,现代主流实现基本都跳过后面两步",
+      "多出的这两步是协议特意留给中间防火墙设备记录连接日志用的",
+      "四次挥手比三次握手多出的这两步,是特意设计来让两端重新协商并交换加密密钥用的"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "TCP 是双向连接:客户端 FIN 只表示「我这边发完了」,服务器可能还有数据在发,所以先 ACK 再自己发 FIN;客户端收到后再 ACK,两个方向各自独立关闭。这比三次握手多一步。",
+    "why_en": "A TCP connection is bidirectional: the client's FIN only says its own send side is done, so the server ACKs first and sends its own FIN once it's finished — each direction closes independently, one more step than the opening handshake.",
+    "tags": [
+      "tcp",
+      "teardown",
+      "four-way-handshake"
+    ],
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: FIN\n    S-->>C: ACK\n    S->>C: FIN\n    C-->>S: ACK\n    Note over C,S: 两个方向各自关闭",
+    "options_en": [
+      "Each direction closes independently: one side's FIN only shuts its own send direction, while the other may still have data left to send.",
+      "The four-step close is legacy protocol redundancy that most modern implementations skip the last two steps of.",
+      "The extra two steps exist specifically to give intermediate firewalls time to log the connection.",
+      "The extra two steps beyond the three-way handshake exist to let the two ends renegotiate and exchange encryption keys."
+    ],
+    "termDefinitions": [
+      {
+        "term": "FIN",
+        "fullName": "Finish",
+        "meaning": "TCP 控制标志位,表示发送方这一侧数据已经发完,要求关闭这个方向。",
+        "meaningEn": "FIN is a TCP control flag signaling that the sender is done sending and wants to close that direction."
+      },
+      {
+        "term": "ACK",
+        "fullName": "Acknowledge",
+        "meaning": "TCP 控制标志位,确认收到了对方的报文(这里指确认收到 FIN)。",
+        "meaningEn": "ACK is a TCP control flag confirming receipt of the other side's segment, here acknowledging a FIN."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接、可靠有序的传输层协议,双向维护状态直到显式关闭。",
+        "meaningEn": "TCP is a connection-oriented transport protocol that keeps bidirectional state until explicitly closed."
+      }
+    ],
+    "optionExplanations": [
+      "客户端 FIN 只关自己发送方向,服务器确认后仍可以继续发数据,发完才轮到它发 FIN 关自己那个方向。",
+      "四次挥手不是冗余,少了任何一步都会让某一方向的关闭状态不明确,现代实现照样走完四步。",
+      "防火墙日志跟挥手步数无关,它旁路监听连接,不需要协议专门为它留步骤。",
+      "TCP 挥手是控制连接生命周期的信号,不涉及密钥交换,加密握手是 TLS 的事。"
+    ],
+    "optionExplanations_en": [
+      "The client's FIN only closes its own send side; the server can keep sending after ACKing, then sends its own FIN once done.",
+      "The four steps aren't redundant — skipping one leaves a direction's close state ambiguous; real implementations still run all four.",
+      "Firewall logging is unrelated to handshake step count — it observes the connection, not a protocol-reserved step.",
+      "TCP's close signals manage connection lifecycle, not key exchange — that's TLS's job, not TCP teardown's."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-084",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "dhcp",
+    "scenario": "一批后端实例每次重启后 IP 都变了,服务注册表里如果记的是旧 IP,请求会打空。",
+    "scenario_en": "A batch of backend instances gets a different IP every time it restarts; requests miss if the service registry still holds the old address.",
+    "q": "节点 IP 由 DHCP 在开机时动态分配,这对服务发现意味着什么?",
+    "q_en": "Node IPs come from DHCP dynamically at boot — what does that mean for service discovery?",
+    "options": [
+      "不能硬编码实例 IP,得靠注册中心/健康检查动态同步最新地址",
+      "用了 DHCP,IP 地址就终身固定,硬编码完全没问题",
+      "DHCP 只影响客户端设备,服务器一律用静态 IP,不受影响",
+      "DHCP 会自动帮你把新 IP 同步进服务注册表,不用额外机制"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "DHCP 在实例启动时动态分配 IP,重启、扩缩容都可能换地址。硬编码或很少刷新的服务器列表一旦遇上换 IP 就会打到失效地址,这正是要靠注册中心/健康检查动态维护列表的原因。",
+    "why_en": "DHCP hands out IPs dynamically at boot, so restarts and scaling events can change an instance's address; a hardcoded or rarely-refreshed server list goes stale the moment that happens — hence the need for dynamic service discovery.",
+    "tags": [
+      "dhcp",
+      "ip",
+      "service-discovery"
+    ],
+    "options_en": [
+      "You can't hardcode instance IPs; a registry or health checks must keep the address list current.",
+      "Once DHCP assigns an IP it never changes again, so hardcoding it is perfectly safe.",
+      "DHCP only affects client devices; servers always use a static IP and are unaffected.",
+      "DHCP automatically pushes the new IP into your service registry with no extra mechanism needed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "DHCP",
+        "fullName": "Dynamic Host Configuration Protocol",
+        "meaning": "在设备开机时动态分配 IP 地址的协议,地址可能在下次重启时改变。",
+        "meaningEn": "DHCP is the protocol that dynamically assigns an IP address at boot; the address can change on the next restart."
+      }
+    ],
+    "optionExplanations": [
+      "换 IP 是 DHCP 动态分配的常态,注册中心/健康检查负责把最新地址同步给需要路由的一方。",
+      "DHCP 恰恰是「动态」分配,重启、迁移、扩缩容都可能拿到新地址,不是终身固定。",
+      "服务器同样常用 DHCP 分配的地址(尤其云上自动扩缩容的实例),不是只有客户端设备受影响。",
+      "DHCP 只负责分配 IP 本身,不负责把变化通知给服务注册表,这需要单独的服务发现机制。"
+    ],
+    "optionExplanations_en": [
+      "Changing addresses is normal under DHCP; a registry or health checks are what propagate the current address to routers.",
+      "DHCP is dynamic by definition — restarts, migrations, and scaling can all yield a new address, not a permanent one.",
+      "Servers, especially auto-scaled cloud instances, commonly get DHCP-assigned addresses too, not just client devices.",
+      "DHCP only hands out the address itself; syncing that change into a registry needs a separate discovery mechanism."
+    ],
+    "diagram": "flowchart LR\n    A[\"实例开机\"] --> B[\"DHCP 分配 IP\"]\n    B --> C[\"注册中心记录地址\"]\n    C --> D[\"实例重启/扩缩容\"]\n    D --> E[\"DHCP 分配新 IP\"]\n    E --> F[\"注册中心/健康检查更新\"]\n    F -.硬编码就漏掉这一步.-> G[\"旧地址仍在列表里\"]"
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-085",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "health-check-choice",
+    "scenario": "后端进程有时端口还开着、TCP 能连上,但应用逻辑已经死锁,只会回 500。负载均衡器要能识别这种「假活」。",
+    "scenario_en": "A backend process sometimes still accepts TCP connections while its application logic is deadlocked and only returns 500 — the load balancer needs to catch this fake-alive state.",
+    "q": "该用 TCP 健康检查还是 L7 健康检查?",
+    "q_en": "TCP health check or L7 health check here?",
+    "options": [
+      "TCP 健康检查:只确认端口能建连、三次握手能走完,便宜但测不出应用逻辑是否真的卡死",
+      "L7 健康检查:真发 HTTP 请求看状态码,能测出应用层假活,代价是多一次往返",
+      "两种检查探测的东西完全一样,挑哪个都不影响结果",
+      "干脆不配健康检查,故障早晚会被客户端请求超时自然暴露出来"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "端口开着但应用死锁只回 500 时,TCP 三次握手照样成功,TCP 检查测不出问题;L7 检查真发 HTTP 请求看返回码,才能抓到这种假活状态,代价是每次探测多一次应用层处理。",
+    "why_en": "A deadlocked app that still returns 500 still completes a TCP handshake fine, so a TCP check misses it; an L7 check actually sends an HTTP request and inspects the status code, catching that fake-alive state at the cost of an extra application-layer round trip.",
+    "whenOtherWins": "后端逻辑简单、连接失败与应用故障几乎总是同时发生时(如纯 TCP 代理),TCP 健康检查更便宜也够用。",
+    "tradeoff": "L7 更能测出应用层假活但更贵 vs TCP 更省但测不出应用层假死",
+    "tags": [
+      "health-checks",
+      "tcp",
+      "l7"
+    ],
+    "options_en": [
+      "TCP health check: only confirms the port accepts connections and the three-way handshake completes, cheap but blind to whether the app logic is actually hung.",
+      "L7 health check: sends a real HTTP request and reads the status code, catching an app-level fake-alive state at the cost of an extra hop.",
+      "Both checks probe exactly the same thing, so picking either one changes nothing about the outcome.",
+      "Skip health checks entirely — a crashed backend will eventually surface through client request timeouts anyway."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接的传输层协议,TCP 健康检查只测试三次握手能否成功。",
+        "meaningEn": "TCP is a connection-oriented transport protocol; a TCP health check only tests whether the handshake succeeds."
+      },
+      {
+        "term": "L7",
+        "fullName": "Layer 7 / Application Layer",
+        "meaning": "应用层,L7 健康检查在这一层发真实 HTTP 请求并检查响应内容。",
+        "meaningEn": "L7 is the application layer; an L7 health check sends a real HTTP request there and inspects the response."
+      },
+      {
+        "term": "health check",
+        "meaning": "负载均衡器定期探测后端是否存活/正常响应,失败就摘掉流量。",
+        "meaningEn": "A health check is the load balancer periodically probing whether a backend is alive and responding correctly."
+      }
+    ],
+    "optionExplanations": [
+      "TCP 握手成功不代表应用逻辑正常,死锁进程照样能完成三次握手,这种检查漏掉了假活状态。",
+      "真发 HTTP 请求看状态码才能识别「端口开着但应用挂了」,这正是本题场景要防住的问题。",
+      "两者测的深度完全不同:一个只看连接层,一个看应用层返回内容,效果并不等价。",
+      "等客户端超时发现故障意味着已经有真实用户请求打到坏实例上了,健康检查的价值就是提前拦下这些流量。"
+    ],
+    "optionExplanations_en": [
+      "A successful handshake says nothing about application logic — a deadlocked process still completes it, so this check misses the fake-alive state.",
+      "Sending a real HTTP request and reading the status code is what catches a port-alive-app-dead instance, exactly this scenario's risk.",
+      "The two checks probe different depths — one only sees the connection layer, the other sees the actual response — not equivalent.",
+      "Waiting for client timeouts means real user requests already hit the bad instance; health checks exist to intercept that traffic first."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-086",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "lb-algorithms",
+    "scenario": "购物车状态缓存在实例内存里,没有共享会话存储;同一用户的后续请求必须始终落在同一台服务器,否则购物车「丢了」。",
+    "scenario_en": "Cart state lives only in one instance's in-memory cache with no shared session store; a user's later requests must always land on the same server or the cart 'disappears'.",
+    "q": "负载均衡算法该选?",
+    "q_en": "Which load-balancing algorithm fits here?",
+    "options": [
+      "Least Connections:按当前活跃连接数分发,连接最少的服务器优先接",
+      "Round Robin:按固定顺序轮流把请求分给每台服务器",
+      "IP Hash:按客户端 IP 算哈希决定服务器,同一来源稳定落在同一台",
+      "Random:完全随机地把请求分发给某一台服务器"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "购物车只存在某台实例内存里,请求必须稳定落到那台实例。IP Hash 按客户端 IP 计算哈希路由,给了这种「会话粘性」需要的稳定性;其余三种算法都只管均衡分发,不保证同一用户总落在同一台。",
+    "why_en": "The cart only exists in one instance's memory, so requests must consistently land there. IP hash routes by hashing the client IP for that stickiness, while the other algorithms only balance distribution without any such guarantee.",
+    "whenOtherWins": "如果会话状态存在外部共享存储(如 Redis)而不是实例内存,就不需要粘性,换回 Round Robin/Least Connections 更简单均衡。",
+    "tradeoff": "IP Hash 保证会话粘性 vs 其他算法分布更均衡但不粘",
+    "tags": [
+      "lb-algorithms",
+      "ip-hash",
+      "session-persistence"
+    ],
+    "options_en": [
+      "Least connections: distributes by current active connection count, the least-busy server gets the next request.",
+      "Round robin: cycles through every server in a fixed, repeating order.",
+      "IP hash: hashes the client IP to pick a server, so the same source lands on the same backend.",
+      "Random: distributes each request to a completely random server."
+    ],
+    "termDefinitions": [
+      {
+        "term": "IP Hash",
+        "meaning": "按客户端 IP 计算哈希决定路由到哪台服务器的负载均衡算法,可用于会话保持。",
+        "meaningEn": "IP hash is a load-balancing algorithm that hashes the client IP to pick a server, useful for session persistence."
+      },
+      {
+        "term": "Least Connections",
+        "meaning": "把新请求发给当前活跃连接数最少的服务器的负载均衡算法。",
+        "meaningEn": "Least connections sends each new request to whichever server currently has the fewest active connections."
+      }
+    ],
+    "optionExplanations": [
+      "按连接数均衡跟「同一用户落在同一台」是两回事,连接数最少的那台不一定是存着这个用户购物车的那台。",
+      "轮询只管顺序分发请求次数,完全不看请求来自谁,做不到会话粘性。",
+      "按客户端 IP 哈希后路由,同一来源的请求算出的哈希值相同,天然稳定落在同一台实例上。",
+      "随机分发跟轮询一样不看请求来源,下一次请求大概率落到别的实例,购物车状态对不上。"
+    ],
+    "optionExplanations_en": [
+      "Balancing by connection count is unrelated to landing the same user on the same server — the least-busy one may not hold their cart.",
+      "Round robin only cycles by request order and ignores where a request came from, so it can't provide stickiness.",
+      "Hashing the client IP gives the same source the same hash value, so it naturally lands on the same instance every time.",
+      "Random distribution ignores origin just like round robin, so the next request likely lands elsewhere and the cart mismatches."
+    ],
+    "table": {
+      "headers": [
+        "算法",
+        "按什么路由",
+        "会话粘性"
+      ],
+      "rows": [
+        [
+          "Round Robin",
+          "请求顺序",
+          "无"
+        ],
+        [
+          "Random",
+          "随机",
+          "无"
+        ],
+        [
+          "Least Connections",
+          "当前连接数",
+          "无"
+        ],
+        [
+          "IP Hash",
+          "客户端 IP 哈希",
+          "有"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-087",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "tcp-flow-congestion",
+    "scenario": "一条 TCP 连接里,接收端处理慢、缓冲区快满了;另一条连接里,中间路由器已经开始丢包拥堵。这是两种不同的信号。",
+    "scenario_en": "On one TCP connection the receiver is slow and its buffer is nearly full; on another, an intermediate router is already dropping packets under congestion — two different signals.",
+    "q": "TCP 分别用什么机制应对这两种情况?",
+    "q_en": "What TCP mechanism handles each of these two situations?",
+    "options": [
+      "流量控制应对接收方缓冲区快满;拥塞控制应对网络拥堵,两者独立调节发送速率",
+      "都是拥塞控制的职责,流量控制只是它的别名",
+      "只有拥塞控制存在,TCP 不管接收方处理能力",
+      "流量控制和拥塞控制都是由应用层代码手动实现的,TCP 协议本身完全不管"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "流量控制盯着接收方的缓冲区,防止发送方把接收方冲垮;拥塞控制盯着网络路径,发现丢包或延迟就放慢发送速率给网络喘气。两者信号来源不同、调节目标也不同,常被工程师混为一谈。",
+    "why_en": "Flow control watches the receiver's buffer so the sender doesn't overrun it; congestion control watches the network path and slows down on loss or delay. They react to different signals even though both throttle the sender.",
+    "tags": [
+      "tcp",
+      "flow-control",
+      "congestion-control"
+    ],
+    "options_en": [
+      "Flow control handles a full receiver buffer; congestion control handles network congestion — two independent throttles.",
+      "Both are congestion control's job; flow control is just another name for it.",
+      "Only congestion control exists; TCP doesn't account for receiver processing capacity at all.",
+      "Both flow control and congestion control are hand-implemented in application code; TCP itself does neither."
+    ],
+    "termDefinitions": [
+      {
+        "term": "流量控制",
+        "fullName": "flow control",
+        "meaning": "TCP 防止发送方把接收方缓冲区冲垮的机制,盯着接收端处理能力。",
+        "meaningEn": "Flow control is the TCP mechanism that stops the sender from overrunning the receiver's buffer, tracking the receiver's capacity."
+      },
+      {
+        "term": "拥塞控制",
+        "fullName": "congestion control",
+        "meaning": "TCP 根据网络丢包/延迟动态调整发送速率的机制,盯着网络路径本身。",
+        "meaningEn": "Congestion control is the TCP mechanism that adjusts send rate based on network loss or delay, tracking the path itself."
+      }
+    ],
+    "optionExplanations": [
+      "接收方快撑不住是流量控制管的事,网络本身拥堵是拥塞控制管的事,是两套独立机制,不是同一件事的两个名字。",
+      "两者信号来源完全不同:一个看接收方缓冲区剩余空间,一个看网络路径的丢包/延迟,不能互相替代。",
+      "TCP 明确把「接收方处理能力」和「网络拥堵」拆成流控和拥塞控制两套机制,不是只有一套。",
+      "流量控制和拥塞控制都内建在 TCP 协议实现里(操作系统内核层面),不需要应用层代码自己实现。"
+    ],
+    "optionExplanations_en": [
+      "A slow receiver is flow control's job, network congestion is congestion control's job — two distinct mechanisms, not one thing under two names.",
+      "The two watch entirely different signals: one tracks receiver buffer space, the other tracks path loss and delay — not interchangeable.",
+      "TCP explicitly splits 'receiver capacity' from 'network congestion' into flow control and congestion control, not a single mechanism.",
+      "Both flow control and congestion control are built into the TCP implementation (OS kernel level), not something application code hand-rolls."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-088",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "webrtc-udp",
+    "scenario": "一对一视频通话中,某个视频帧因网络抖动丢了,等它重传到达时,该播放的已经是下一帧了。",
+    "scenario_en": "In a one-to-one video call, a frame is lost to jitter, and by the time a retransmit would arrive the next frame should already be playing.",
+    "q": "WebRTC 音视频流为什么选 UDP 而不是像 HTTP 那样用 TCP?",
+    "q_en": "Why does WebRTC send audio and video over UDP instead of TCP like HTTP does?",
+    "options": [
+      "实时音视频要的是新鲜度不是完整性:丢帧直接跳过好过等重传,TCP 的可靠重传反而会让画面卡在等一个丢包上",
+      "UDP 头部只有 8 字节,比 TCP 的 20-60 字节更省流量,省下的带宽才是它被选中的真正原因",
+      "音视频数据必须无损到达,TCP 更适合,只是浏览器实现选错了协议",
+      "WebRTC 的媒体数据其实都经中心服务器转发,不涉及不可靠传输的取舍"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "UDP 不保证送达和顺序,换来的是低延迟——这正是实时音视频要的:一帧迟到的画面不如直接丢弃、播放最新的。TCP 的可靠重传和保序会让整条流卡在等一个丢包上,对实时性是灾难。",
+    "why_en": "UDP drops delivery and ordering guarantees in exchange for low latency, which is exactly what real-time media needs — a late frame is worse than a dropped one. TCP's retransmission and ordering would stall the whole stream waiting on one lost packet.",
+    "tradeoff": "UDP 低延迟但可能丢帧 vs TCP 完整但可能卡顿等重传",
+    "tags": [
+      "webrtc",
+      "udp",
+      "real-time"
+    ],
+    "options_en": [
+      "Real-time media needs freshness, not completeness: skipping a dropped frame beats waiting for a retransmit, which would stall playback.",
+      "UDP's header is only 8 bytes versus TCP's 20-60, saving bandwidth — that saved bandwidth is the real reason it was picked.",
+      "Media must arrive lossless, so TCP would actually fit better; the browser implementation just picked the wrong protocol.",
+      "WebRTC media is actually relayed entirely through a central server, so the unreliable-transport tradeoff doesn't apply."
+    ],
+    "termDefinitions": [
+      {
+        "term": "UDP",
+        "fullName": "User Datagram Protocol",
+        "meaning": "无连接、尽力而为的传输层协议,不保证送达或顺序,换取更低延迟。",
+        "meaningEn": "UDP is a connectionless, best-effort transport protocol that skips delivery and ordering guarantees for lower latency."
+      },
+      {
+        "term": "WebRTC",
+        "fullName": "Web Real-Time Communication",
+        "meaning": "让浏览器之间直接进行点对点音视频/数据传输的协议族,媒体走 UDP。",
+        "meaningEn": "WebRTC is a protocol suite for direct peer-to-peer audio, video, or data between browsers, with media carried over UDP."
+      }
+    ],
+    "optionExplanations": [
+      "丢帧直接跳过、播放最新画面,比等 TCP 重传旧帧更符合实时体验,这是选 UDP 的核心原因。",
+      "头部省流量是真的,但只是个小副作用,不是 WebRTC 选 UDP 的原因——真正原因是避免重传拖慢实时性。",
+      "把方向说反了:正是因为不想为了「无损」牺牲实时性,才选了容忍丢包的 UDP,不是协议选错了。",
+      "WebRTC 的媒体流恰恰是点对点直连、不经中心服务器转发,这也是为什么丢包问题必须靠 UDP 的取舍正面处理。"
+    ],
+    "optionExplanations_en": [
+      "Skipping a dropped frame and playing the latest one beats waiting on a TCP retransmit — that's the real reason for choosing UDP.",
+      "The header savings are real but a minor side effect, not the reason WebRTC picked UDP — the real reason is avoiding retransmit-induced delay.",
+      "This reverses the logic: UDP was chosen precisely to avoid sacrificing real-time responsiveness for losslessness, not a mistaken pick.",
+      "WebRTC media is exactly peer-to-peer, not relayed through a central server, which is why the packet-loss tradeoff has to be handled head-on with UDP."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-089",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "client-lb-sync",
+    "scenario": "客户端负载均衡下新加了 3 台实例,你发现有些客户端要过十几秒才开始往新实例发请求,不是立刻生效。",
+    "scenario_en": "Under client-side load balancing, three new instances were added, but some clients only start sending to them after a delay of several seconds.",
+    "q": "为什么新实例没有立刻收到流量?",
+    "q_en": "Why don't the new instances receive traffic right away?",
+    "options": [
+      "客户端要等下一次轮询周期,或等注册中心推送到位,列表才会更新",
+      "因为新实例本身还在预热,跟客户端负载均衡的更新机制无关",
+      "因为新实例的健康检查还没通过,跟客户端负载均衡的更新机制无关",
+      "客户端负载均衡不存在这种延迟,新实例加入是瞬时同步的"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "客户端要么定期轮询注册中心、要么等注册中心推送变更,两种方式都有延迟。这也是为什么客户端负载均衡在实例上线时不是瞬时生效——新服务器要等列表刷新那一刻才开始收到流量。",
+    "why_en": "The client either polls the registry on an interval or waits for a push, and either way the update isn't instantaneous — new servers only start getting traffic once the list actually refreshes.",
+    "tags": [
+      "client-lb",
+      "service-registry",
+      "rollout"
+    ],
+    "options_en": [
+      "The client waits for the next poll cycle, or for the registry to push the change, before its list updates.",
+      "The new instances are still warming up, unrelated to the client-side load-balancing update mechanism.",
+      "The new instances haven't passed health checks yet, unrelated to the client-side load-balancing update mechanism.",
+      "Client-side load balancing has no such delay; new instances sync instantly."
+    ],
+    "termDefinitions": [
+      {
+        "term": "service registry",
+        "meaning": "记录当前有哪些可用服务器实例及其地址的目录服务,客户端从这里刷新列表。",
+        "meaningEn": "A service registry is the directory service tracking available server instances, which clients refresh their list from."
+      }
+    ],
+    "optionExplanations": [
+      "客户端负载均衡靠定期轮询或被动推送来同步服务器列表,这个刷新周期正是「延迟收到流量」的直接原因。",
+      "预热是另一个真实问题,但本题问的是「为什么没立刻收到流量」,根源在列表还没刷新,不在预热。",
+      "健康检查确实存在,但本题场景里问题出在客户端列表本身还没更新,不是健康检查没通过。",
+      "客户端负载均衡恰恰存在这种同步延迟,不管靠轮询还是推送,都不是瞬时的。"
+    ],
+    "optionExplanations_en": [
+      "Client-side load balancing syncs its server list via periodic polling or pushed updates, and that refresh cycle is the direct cause of the delay.",
+      "Warm-up is a separate real issue, but the question asks why traffic doesn't arrive at all yet — the cause is the stale list, not warm-up.",
+      "Health checks are real, but here the client's own list simply hasn't refreshed yet — it isn't a failed health check.",
+      "Client-side load balancing does have this sync delay, whether by polling or pushing — it's never instantaneous."
+    ],
+    "diagram": "flowchart LR\n    A[\"新实例上线\"] --> B[\"注册中心记录\"]\n    B --> C{\"客户端怎么知道?\"}\n    C -->|轮询周期到| D[\"客户端拉取新列表\"]\n    C -->|注册中心推送| D\n    D --> E[\"新实例开始收到流量\"]"
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-090",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "http-status-4xx",
+    "scenario": "用户已登录、token 有效,但访问的是别人的私有相册,接口该返回 401 还是 403?",
+    "scenario_en": "A user is logged in with a valid token but requests someone else's private album — should the API return 401 or 403?",
+    "q": "401 和 403 的语义区别是什么?",
+    "q_en": "What's the semantic difference between 401 and 403?",
+    "options": [
+      "401 是没认证/认证失败;403 是认证通过但没权限,已登录访问他人内容该回 403",
+      "401 和 403 语义上完全相同,两个状态码可以在任何地方随意互换使用",
+      "401 对应的是服务器自身处理请求时发生了错误,403 对应的是客户端本地网络连接出了问题",
+      "401 表示资源已经被永久删除,403 表示资源目前临时不可用"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "401 Unauthorized 是「你还没证明自己是谁」;403 Forbidden 是「你已经证明了,但这件事就是不让你做」。已登录用户访问他人私有相册是认证成功、只是没权限,该回 403;回 401 会误导客户端去重新登录。",
+    "why_en": "401 Unauthorized means the server doesn't know who you are yet; 403 Forbidden means it knows and still says no. A logged-in user hitting someone else's private album is authenticated but unauthorized, so the right response is 403, not 401.",
+    "tags": [
+      "http-status",
+      "401",
+      "403"
+    ],
+    "options_en": [
+      "401 is unauthenticated; 403 is authenticated but unauthorized — a logged-in user viewing someone else's content should get 403.",
+      "401 and 403 mean exactly the same thing, so the two status codes can be swapped freely.",
+      "401 corresponds to an error the server hit while processing the request, 403 corresponds to a local client-side network connectivity problem.",
+      "401 means the resource has been permanently deleted, 403 means the resource is currently temporarily unavailable."
+    ],
+    "termDefinitions": [
+      {
+        "term": "401",
+        "meaning": "Unauthorized:请求缺少有效身份凭证,服务器还不知道你是谁。",
+        "meaningEn": "401 Unauthorized means the request lacks valid credentials — the server doesn't know who you are yet."
+      },
+      {
+        "term": "403",
+        "meaning": "Forbidden:身份已确认,但没有权限执行这个操作。",
+        "meaningEn": "403 Forbidden means identity is confirmed, but you lack permission for this action."
+      }
+    ],
+    "optionExplanations": [
+      "401 卡在「你是谁都不知道」,403 卡在「知道你是谁但不让你做」,已登录访问他人内容属于后者。",
+      "两者语义完全不同,混用会误导客户端做出错误反应(比如让已登录用户去重新登录)。",
+      "两者都是客户端错误(4xx),跟服务器自身出错或网络问题无关,那是 5xx 和连接层的事。",
+      "资源被删除对应的是 404,资源临时不可用通常对应 503,跟 401/403 的认证-授权语义无关。"
+    ],
+    "optionExplanations_en": [
+      "401 is stuck at 'who are you', 403 is stuck at 'we know who you are but say no' — a logged-in user hitting another's content is the latter.",
+      "The two mean different things, and conflating them misleads the client into the wrong response, like re-prompting login when already logged in.",
+      "Both are client errors (4xx), unrelated to the server's own failures or network issues, which fall under 5xx or the connection layer.",
+      "A deleted resource maps to 404, and temporary unavailability usually maps to 503 — neither matches 401/403's authn-vs-authz meaning."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-091",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "http-status-5xx",
+    "scenario": "服务前面有一层反向代理,凌晨报警显示大量 5xx,你要先判断是自己的应用代码挂了还是上游依赖出了问题。",
+    "scenario_en": "A reverse proxy sits in front of your service, and an alert shows a spike of 5xx errors — you need to know whether your own code failed or an upstream dependency did.",
+    "q": "收到 500 还是 502,分别该往哪查?",
+    "q_en": "Where do you look first for a 500 versus a 502?",
+    "options": [
+      "500:这台服务器自己处理请求时出错;502:网关收到的是上游返回的无效响应,该查上游依赖",
+      "500 和 502 其实是同一件事,只是不同框架各自的命名习惯不同",
+      "500 是底层网络传输层出现的错误,和应用代码完全无关;502 才是应用代码自己抛出的异常",
+      "502 只会出现在客户端断网时,和服务器状态无关"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "500 Server Error 是这台服务器自己在处理请求时出错;502 Bad Gateway 是网关本身没出错,但它问的上游服务器返回了个无效响应。同样是 5xx,排查方向完全不同:500 看自己的日志,502 先看上游依赖。",
+    "why_en": "A 500 means this server errored while handling the request; a 502 means the gateway itself is fine but the upstream it called returned an invalid response. Both are 5xx, but 500 sends you to your own logs while 502 sends you to the upstream dependency.",
+    "tags": [
+      "http-status",
+      "500",
+      "502",
+      "debugging"
+    ],
+    "options_en": [
+      "500: this server errored handling the request; 502: the gateway got an invalid response from upstream — check the upstream dependency.",
+      "500 and 502 actually mean the same thing, just different naming conventions across frameworks.",
+      "500 is an error at the underlying network transport layer, unrelated to application code; 502 is the one application code itself throws.",
+      "502 only happens when the client loses network connectivity, unrelated to server state."
+    ],
+    "termDefinitions": [
+      {
+        "term": "500",
+        "meaning": "Server Error:服务器自己在处理请求时遇到了错误。",
+        "meaningEn": "500 Server Error means the server itself hit an error while handling the request."
+      },
+      {
+        "term": "502",
+        "meaning": "Bad Gateway:网关/代理本身没问题,但它请求的上游服务器返回了无效响应。",
+        "meaningEn": "502 Bad Gateway means the gateway itself is fine, but the upstream server it queried returned an invalid response."
+      }
+    ],
+    "optionExplanations": [
+      "500 指向自己这台机器的处理逻辑,502 指向网关问上游要数据时上游给的响应不对,两条排查路径完全不同。",
+      "两个状态码的责任方不同(自己 vs 上游),不是命名习惯差异,排查时不能当成一回事。",
+      "把责任方说反了:500 恰恰是应用代码/服务器自身出错,502 才是网关拿到了上游的无效响应。",
+      "502 描述的是网关和上游服务器之间的响应问题,跟客户端本地是否断网没有关系。"
+    ],
+    "optionExplanations_en": [
+      "500 points at this machine's own processing logic; 502 points at an invalid response the gateway got back from upstream — different debugging paths.",
+      "The two codes name different responsible parties (self vs. upstream), not a naming-convention quirk — they shouldn't be treated as one thing.",
+      "This reverses responsibility: 500 is exactly the app/server's own error, while 502 is the gateway receiving a bad upstream response.",
+      "502 describes a problem between the gateway and upstream server, unrelated to whether the client itself lost network connectivity."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-092",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "rest-nesting",
+    "scenario": "一个 user 拥有多篇 posts,你要在 REST API 里表达这种一对多的从属关系。",
+    "scenario_en": "A user owns many posts, and you need to express that one-to-many ownership relationship in a REST API.",
+    "q": "REST 该怎么表达「一个 user 有多篇 posts」这种从属关系?",
+    "q_en": "How should REST express the 'a user has many posts' ownership relationship?",
+    "options": [
+      "嵌套路径:GET /users/{id}/posts,路径本身表达从属关系",
+      "单独开一个 POST /getUserPosts 端点,把 userId 放进请求体",
+      "把 posts 整个内嵌进 user 资源的每次响应里,不单独暴露",
+      "用一个不带路径参数的全局 /posts 端点,靠客户端自己过滤"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "REST 用嵌套路径表达从属关系:GET /users/{id}/posts,路径本身就是文档。把操作塞进端点名字(如 getUserPosts)是 RPC 风格,不是资源建模。",
+    "why_en": "REST expresses ownership through nested paths — GET /users/{id}/posts reads as this user's posts from the URL alone. Stuffing the action into an endpoint name like getUserPosts is RPC style, not resource modeling.",
+    "tags": [
+      "rest",
+      "resource-modeling",
+      "nesting"
+    ],
+    "options_en": [
+      "A nested path: GET /users/{id}/posts, where the path itself expresses the ownership relationship.",
+      "A dedicated POST /getUserPosts endpoint, with userId placed in the request body.",
+      "Embed posts entirely inside every user resource response, without exposing them separately.",
+      "A global /posts endpoint with no path parameter at all, leaving filtering to the client."
+    ],
+    "termDefinitions": [
+      {
+        "term": "REST",
+        "fullName": "Representational State Transfer",
+        "meaning": "把系统建模成「资源」、用标准 HTTP 方法和路径操作它们的 API 风格。",
+        "meaningEn": "REST is an API style that models a system as resources manipulated with standard HTTP verbs and path conventions."
+      }
+    ],
+    "optionExplanations": [
+      "嵌套路径把从属关系直接编码进 URL,客户端不用查文档就知道这是「这个用户的 posts」。",
+      "getUserPosts 是把动作塞进接口名字的 RPC 写法,资源和操作没有分离,不是资源建模。",
+      "把 posts 强行塞进 user 响应里,想单独只要 posts 列表时反而绕不开完整的 user 对象。",
+      "不带路径参数就丢了「属于哪个 user」这层语义,只能把全量 posts 拉回来自己在客户端筛。"
+    ],
+    "optionExplanations_en": [
+      "A nested path encodes the ownership relationship directly in the URL — no docs needed to know it's this user's posts.",
+      "getUserPosts stuffs the action into the endpoint name, RPC-style, without separating resource from operation.",
+      "Forcing posts inside every user response makes it impossible to fetch just the post list without the full user object.",
+      "A path-less endpoint drops the 'belongs to which user' semantics, forcing the client to pull everything and filter locally."
+    ],
+    "table": {
+      "headers": [
+        "写法",
+        "从属关系是否可见",
+        "能否单独取列表"
+      ],
+      "rows": [
+        [
+          "GET /users/{id}/posts",
+          "路径直接可见",
+          "可以"
+        ],
+        [
+          "POST /getUserPosts",
+          "藏在请求体里",
+          "可以但非资源语义"
+        ],
+        [
+          "内嵌进 user 响应",
+          "隐含在结构里",
+          "不行,绑定 user"
+        ],
+        [
+          "全局 /posts 无参数",
+          "不可见",
+          "只能拉全量自筛"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-093",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "http-status-3xx",
+    "scenario": "你把一个旧接口路径永久迁移到了新路径,同时另一个接口只是短暂维护、临时跳转到备用地址。",
+    "scenario_en": "You've permanently migrated an old endpoint path to a new one, while a different endpoint is only briefly redirecting to a backup during maintenance.",
+    "q": "301 和 302 该分别用在什么场景?",
+    "q_en": "When should you use 301 versus 302?",
+    "options": [
+      "301 用于永久迁移,客户端/缓存应记住新地址;302 用于临时跳转,下次还应请求原地址",
+      "301 和 302 说的其实是同一种永久迁移状态,数字不同只是历史命名习惯没有实际区别",
+      "301 用于服务器临时维护期间的跳转,302 用于标记资源已经被永久删除",
+      "两者都只影响浏览器地址栏显示,不影响客户端后续该往哪发请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "301 告诉客户端和缓存「这个地址永久搬走了,以后直接用新地址」;302 告诉它「这次临时去那边,下次还是先请求原地址」。永久迁移的接口用 301,短暂维护跳转用 302,避免旧地址被永久遗忘。",
+    "why_en": "A 301 tells clients and caches the address moved for good, so update your records; a 302 says this redirect is temporary, keep hitting the original URL next time. Use 301 for a permanent path migration and 302 for a temporary maintenance redirect.",
+    "tags": [
+      "http-status",
+      "301",
+      "302",
+      "redirects"
+    ],
+    "options_en": [
+      "301 for a permanent move that clients/caches should remember; 302 for a temporary redirect where the original URL should still be used next time.",
+      "301 and 302 actually both describe the same permanent-move state; the different numbers are just a naming-convention leftover with no real distinction.",
+      "301 is for a temporary redirect during server maintenance, 302 is for marking a resource as permanently deleted.",
+      "Both only affect what the browser address bar shows, not which URL the client should request afterward."
+    ],
+    "termDefinitions": [
+      {
+        "term": "301",
+        "meaning": "Moved Permanently:资源永久搬到了新地址,客户端和缓存应更新记录。",
+        "meaningEn": "301 Moved Permanently means the resource moved for good; clients and caches should update their records."
+      },
+      {
+        "term": "302",
+        "meaning": "Found:资源临时跳转到别处,下次仍应请求原地址。",
+        "meaningEn": "302 Found means a temporary redirect; the original URL should still be requested next time."
+      }
+    ],
+    "optionExplanations": [
+      "301 让客户端和搜索引擎更新书签/索引指向新地址,302 保留原地址下次继续被请求,分别对应永久迁移和临时跳转。",
+      "两者语义相反:一个说「以后都用新地址」,一个说「这次临时去那边」,数字差异正对应这层区别。",
+      "把场景说反了:永久删除对应的是 410/404 一类,301/302 描述的是「地址搬没搬家」,不是维护或删除状态。",
+      "状态码会实际改变客户端(包括程序化客户端、爬虫、缓存)后续请求的目标地址,不只是浏览器地址栏的显示。"
+    ],
+    "optionExplanations_en": [
+      "301 makes clients and search engines update bookmarks and indexes to the new address, 302 keeps the original address requested next time — permanent vs temporary.",
+      "The two mean opposite things: one says 'always use the new address from now on', the other says 'just this once' — the numbers track that distinction.",
+      "This flips the scenarios: permanent deletion maps to 410/404-style codes; 301/302 describe whether the address itself moved, not maintenance or deletion.",
+      "Status codes actually change where clients — including programmatic ones, crawlers, and caches — send future requests, not just what a browser's address bar shows."
+    ]
   }
 ]
