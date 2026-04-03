@@ -33,6 +33,7 @@ const DIR_TRACK_TAG = {
   'llm-sd': 'track:llm-sd',
   'low-level-design': 'track:low-level-design',
   'interview-drill': 'track:interview-drill',
+  'interview-review': 'track:interview-review',
 };
 const DIR_TRACK_ID = {
   'system-design': 'classic-sd',
@@ -40,6 +41,7 @@ const DIR_TRACK_ID = {
   'llm-sd': 'llm-sd',
   'low-level-design': 'low-level-design',
   'interview-drill': 'interview-drill',
+  'interview-review': 'interview-review',
 };
 
 const CATEGORY_PREFIXES = [
@@ -159,7 +161,26 @@ function stripOrderingPrefix(stem) {
   return stem.replace(/^\d{2,4}[-_\s]+/, '');
 }
 
-function categoryFromFile(file) {
+/**
+ * Explicit category names, keyed by `<topic>/<file>`. Auto-titling a filename
+ * gives English labels ("Bq Stories"), which reads wrong inside a Chinese-facing
+ * track. The 面试复盘 track names its categories after the failure mode being
+ * drilled, ordered roughly by how early it bites in an interview.
+ */
+const CATEGORY_OVERRIDES = {
+  'interview-review/openers-and-narrative.json': '开场与叙事',
+  'interview-review/questions-and-reading-the-room.json': '反问与读空气',
+  'interview-review/red-flags-and-delivery.json': '红旗与表达习惯',
+  'interview-review/bq-stories.json': 'BQ 故事库',
+  'interview-review/structure-first.json': '先骨架后细节',
+  'interview-review/system-design-drills.json': '系统设计复盘',
+  'interview-review/coding-reflexes.json': '编码反射',
+  'interview-review/knowledge-gaps.json': '知识短板',
+};
+
+function categoryFromFile(file, topic) {
+  const override = CATEGORY_OVERRIDES[`${topic}/${file}`];
+  if (override) return override;
   let stem = file.replace(/\.json$/, '');
   for (const prefix of CATEGORY_PREFIXES) {
     if (stem.startsWith(prefix)) {
@@ -251,7 +272,7 @@ for (const topic of topics) {
     add(cards, `${topic}/${f}`, {
       trackTag: DIR_TRACK_TAG[topic],
       track: DIR_TRACK_ID[topic],
-      category: categoryFromFile(f),
+      category: categoryFromFile(f, topic),
     });
     n += cards.length;
   }
