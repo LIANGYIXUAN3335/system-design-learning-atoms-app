@@ -1,3 +1,7 @@
+---
+version: 2026-07-08.2
+---
+
 # Card quality rubric（逐字段质量标准 · 重写/生成的唯一裁判）
 
 > 📍 **体系导航**：判据总库（唯一权威）。改标准只改这里，再同步各手册转述。全部文档地图：`docs/INDEX.md`。机检规则参考：本文附录 A。
@@ -20,7 +24,7 @@
 
 ## 1. 逐字段 metrics
 
-每个字段独立打分。**S = success 判据，F = failure 判据**，`[机检]` 标注 audit 规则名，其余由 LLM judge 抽查。它这个 agentic flow 的话，它是用什么来写的呀？ 
+每个字段独立打分。**S = success 判据，F = failure 判据**，`[机检]` 标注 audit 规则名，其余由 LLM judge 抽查。
 
 ### 1.1 `scenario`（场景）+ `q`（题干）
 

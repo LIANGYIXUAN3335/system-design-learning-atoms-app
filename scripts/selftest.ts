@@ -388,10 +388,10 @@ console.log('tracks');
   t('ALL_TRACK matches everything', filterDeck([a, b, c, d], ALL_TRACK).length === 4);
   t('filterDeck unions correctly', filterDeck([a, b, c], llmTrack).map((x) => x.id).join(',') === 'c');
   t(
-    'seed tracks: 8, ids stable',
-    seedTracks.length === 8 &&
+    'seed tracks: 9, ids stable',
+    seedTracks.length === 9 &&
       seedTracks.map((x) => x.id).join(',') ===
-        'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill,interview-review,interview-english,cli',
+        'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill,interview-review,interview-english,cli,pmle',
   );
   t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
