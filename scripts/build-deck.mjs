@@ -35,6 +35,7 @@ const DIR_TRACK_TAG = {
   'interview-drill': 'track:interview-drill',
   'interview-review': 'track:interview-review',
   'interview-english': 'track:interview-english',
+  'cli': 'track:cli',
 };
 const DIR_TRACK_ID = {
   'system-design': 'classic-sd',
@@ -44,6 +45,7 @@ const DIR_TRACK_ID = {
   'interview-drill': 'interview-drill',
   'interview-review': 'interview-review',
   'interview-english': 'interview-english',
+  'cli': 'cli',
 };
 
 const CATEGORY_PREFIXES = [
