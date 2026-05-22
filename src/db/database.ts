@@ -250,6 +250,44 @@ export async function seedTracksOnce(db: Db, seeds: Track[]): Promise<void> {
       "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '3') ON CONFLICT(key) DO UPDATE SET value = '3'",
     );
   }
+
+  // v4: built-in tracks added after v3 — cli (2026-07-31; its migration was
+  // forgotten at the time, so existing installs never saw it) and pmle (2026-08-03).
+  if (currentVersion < 4) {
+    for (const id of ['cli', 'pmle']) {
+      const t = seeds.find((s) => s.id === id);
+      if (!t) continue;
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        t.id,
+        t.name,
+        JSON.stringify(t.include),
+        JSON.stringify(t.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '4') ON CONFLICT(key) DO UPDATE SET value = '4'",
+    );
+  }
+
+  // v5: user decision 2026-08-04 — fold 面试临场 into 面试复盘 as one learner-facing
+  // track; the track:interview-drill tag lives on inside interview-review's include.
+  // UPDATE (not upsert) keeps a user's deletion of interview-review sticky.
+  if (currentVersion < 5) {
+    const review = seeds.find((s) => s.id === 'interview-review');
+    if (review) {
+      await db.runAsync(
+        'UPDATE tracks SET include = ? WHERE id = ?',
+        JSON.stringify(review.include),
+        review.id,
+      );
+    }
+    await db.runAsync("DELETE FROM tracks WHERE id = 'interview-drill'");
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '5') ON CONFLICT(key) DO UPDATE SET value = '5'",
+    );
+  }
 }
 
 export async function loadTracks(db: Db): Promise<Track[]> {

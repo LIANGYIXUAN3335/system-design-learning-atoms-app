@@ -174,6 +174,10 @@ function stripOrderingPrefix(stem) {
  * drilled, ordered roughly by how early it bites in an interview.
  */
 const CATEGORY_OVERRIDES = {
+  'llm-sd/agentic-frameworks_langchain-stack.json': 'Agentic Building Effective Agents',
+  'llm-sd/agentic-durability_temporal.json': 'Agentic Building Effective Agents',
+  'llm-sd/agentic-streaming_resumable.json': 'Agentic Building Effective Agents',
+  'llm-sd/agentic-rag_retrieval-completeness.json': 'Agentic Building Effective Agents',
   'interview-review/openers-and-narrative.json': '开场与叙事',
   'interview-review/questions-and-reading-the-room.json': '反问与读空气',
   'interview-review/red-flags-and-delivery.json': '红旗与表达习惯',
