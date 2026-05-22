@@ -188,6 +188,24 @@ const CATEGORY_OVERRIDES = {
   'interview-review/knowledge-gaps.json': '知识短板',
 };
 
+// These are one study module even though their source files belong to two
+// tracks. The card-level override keeps the source files intact while making
+// the interview workflow discoverable from the AI coding track.
+const CORE_AGENT_CATEGORY = 'Agent 核心 · Loop / When / Patterns / vs Call';
+const CARD_OVERRIDES = {
+  'ag-002': { category: CORE_AGENT_CATEGORY },
+  'ag-003': { category: CORE_AGENT_CATEGORY },
+  'ag-004': { category: CORE_AGENT_CATEGORY },
+  'llm-recap-ford-2026-07-31-004': {
+    category: CORE_AGENT_CATEGORY,
+    trackTags: ['track:ai-coding'],
+  },
+  'llm-recap-ford-2026-07-31-005': {
+    category: CORE_AGENT_CATEGORY,
+    trackTags: ['track:ai-coding'],
+  },
+};
+
 function categoryFromFile(file, topic) {
   const override = CATEGORY_OVERRIDES[`${topic}/${file}`];
   if (override) return override;
@@ -254,6 +272,11 @@ function add(cards, label, meta = {}) {
     if (meta.track) next.track = meta.track;
     if (meta.category) next.category = meta.category;
     if (meta.trackTag) next.tags = [...new Set([...(next.tags ?? []), meta.trackTag])];
+    const cardOverride = CARD_OVERRIDES[next.id];
+    if (cardOverride?.category) next.category = cardOverride.category;
+    if (cardOverride?.trackTags) {
+      next.tags = [...new Set([...(next.tags ?? []), ...cardOverride.trackTags])];
+    }
     merged.push(attachNumberAnchors(next));
   }
 }

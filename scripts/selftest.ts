@@ -366,6 +366,23 @@ console.log('bundle');
   );
   t('bundle: ag cards present', bundle.some((c) => c.id.startsWith('ag-')));
   t('bundle: cr cards present', bundle.some((c) => c.id.startsWith('cr-')));
+  const coreAgentIds = new Set([
+    'ag-002',
+    'ag-003',
+    'ag-004',
+    'llm-recap-ford-2026-07-31-004',
+    'llm-recap-ford-2026-07-31-005',
+  ]);
+  const coreAgentCards = bundle.filter((c) => coreAgentIds.has(c.id));
+  t(
+    'bundle: core agent cards share one AI-coding module',
+    coreAgentCards.length === coreAgentIds.size &&
+      coreAgentCards.every(
+        (c) =>
+          c.category === 'Agent 核心 · Loop / When / Patterns / vs Call' &&
+          c.tags?.includes('track:ai-coding'),
+      ),
+  );
 }
 
 // ---- M2a: tracks ---------------------------------------------------------
