@@ -33,11 +33,42 @@ import { localDateStr } from '../src/logic/dates';
 import { buildFeedbackExport } from '../src/logic/feedback';
 import { ALL_TRACK, cardMatchesTrack, filterDeck, trackIdFromName } from '../src/logic/tracks';
 import { ALL_CATEGORY, buildCategoryStats, categoryStatus, filterByCategory } from '../src/logic/categories';
+import {
+  filterSystemDesignRoadmapStage,
+  legacyTrackToRoadmapStage,
+  SYSTEM_DESIGN_ROADMAP,
+} from '../src/logic/systemDesignRoadmap';
+import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from '../src/logic/settings';
 import { deadlineFloorDays, isFinalStretch, planNewPerDay } from '../src/logic/planner';
 import { computeStreak, dailyGoal } from '../src/logic/streak';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
 import { buildArchitectureVisual } from '../src/logic/architectureVisuals';
 import { NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY, RHYTHMS } from '../src/config';
+import reciteBundleJson from '../src/content/recite.bundle.json';
+import reciteThreadsJson from '../src/content/recite.threads.json';
+import { buildThreads, threadOfItem, threadSiblings } from '../src/recite/threads';
+import type { ReciteItem, ReciteThread } from '../src/recite/types';
+import {
+  EMPTY_FILTER,
+  buildSections,
+  countRows,
+  countSections,
+  dots,
+  dupeIds,
+  filterGroups,
+  filterSections,
+  fmtClock,
+  groupByCompany,
+  hasScriptVersions,
+  isFillerQuestion,
+  matchesFilter,
+  queueChipLabel,
+  resolveVersion,
+  rowTags,
+  splitCanon,
+  toRow,
+  versionOptions,
+} from '../src/recite/library';
 
 const cards = cardsJson as unknown as Card[];
 const bundle = bundleJson as unknown as Card[];
@@ -404,28 +435,64 @@ console.log('tracks');
   t('low-level track matches lld cards', cardMatchesTrack(d, lldTrack) && !cardMatchesTrack(a, lldTrack));
   t('ALL_TRACK matches everything', filterDeck([a, b, c, d], ALL_TRACK).length === 4);
   t('filterDeck unions correctly', filterDeck([a, b, c], llmTrack).map((x) => x.id).join(',') === 'c');
+  const seedById = (id: string) => seedTracks.find((track) => track.id === id)!;
   t(
-    'seed tracks: 8, ids stable',
-    seedTracks.length === 8 &&
-      seedTracks.map((x) => x.id).join(',') ===
-        'ai-coding,classic-sd,llm-sd,low-level-design,interview-review,coding-fundamentals,pmle,power-scheming',
+    'classic system design remains one top-level track',
+    seedTracks.length === 8 && Boolean(seedById('classic-sd')) && !seedTracks.some((track) => track.id.startsWith('sd-path-')),
   );
-  t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
-  t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
-  t('bundle covers llm-sd seed track', filterDeck(bundle, seedTracks[2]).length >= 300);
-  t('bundle covers low-level-design seed track', filterDeck(bundle, seedTracks[3]).length >= 700);
-  t('bundle covers interview-review seed track', filterDeck(bundle, seedTracks[4]).length >= 250);
+  t('bundle covers ai-coding seed track', filterDeck(bundle, seedById('ai-coding')).length >= 11);
+  t('bundle covers classic-sd seed track', filterDeck(bundle, seedById('classic-sd')).length >= 600);
+  t('bundle covers llm-sd seed track', filterDeck(bundle, seedById('llm-sd')).length >= 300);
+  t('bundle covers low-level-design seed track', filterDeck(bundle, seedById('low-level-design')).length >= 700);
+  t('bundle covers interview-review seed track', filterDeck(bundle, seedById('interview-review')).length >= 250);
   // 编码基本功 = cli + 4 lbld-* content dirs (merged 2026-08-21)
-  t('bundle covers coding-fundamentals seed track', filterDeck(bundle, seedTracks[5]).length >= 260);
+  t('bundle covers coding-fundamentals seed track', filterDeck(bundle, seedById('coding-fundamentals')).length >= 260);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
-  const classicDeck = filterDeck(bundle, seedTracks[1]);
+  const classicDeck = filterDeck(bundle, seedById('classic-sd'));
+  const expectedRoadmapSizes: Record<string, number> = {
+    'sd-00-framework': 45,
+    'sd-01-patterns': 60,
+    'sd-02-components': 70,
+    'sd-03-cases': 93,
+    'sd-04-upgrades': 60,
+    'sd-10-foundations': 713,
+    'sd-11-patterns-full': 338,
+    'sd-12-data-storage': 1488,
+    'sd-13-platform-network': 576,
+    'sd-14-product-systems': 1218,
+    'sd-15-reference': 979,
+    'sd-99-gap-fill': 1811,
+  };
+  for (const [id, expected] of Object.entries(expectedRoadmapSizes)) {
+    t(`${id} is an in-track classic-system-design stage`, filterSystemDesignRoadmapStage(classicDeck, id).length === expected);
+  }
+  const guidedClassicIds = new Set(
+    SYSTEM_DESIGN_ROADMAP.flatMap((stage) => filterSystemDesignRoadmapStage(classicDeck, stage.id).map((card) => card.id)),
+  );
+  t('in-track system-design roadmap covers every classic-deck card', guidedClassicIds.size === classicDeck.length);
+  t(
+    'roadmap tags never leak outside classic system design',
+    bundle
+      .filter((card) => !card.tags?.includes('track:classic-sd'))
+      .every((card) => !card.tags?.some((tag) => tag.startsWith('curriculum:sd-'))),
+  );
+  t(
+    'legacy route selection maps into the classic-SD roadmap',
+    legacyTrackToRoadmapStage('sd-path-12-data-storage') === 'sd-12-data-storage' &&
+      legacyTrackToRoadmapStage('classic-sd') === null,
+  );
+  const persistedRoadmap = settingsToKv({ ...DEFAULT_SETTINGS, activeRoadmapStage: 'sd-14-product-systems' });
+  t(
+    'roadmap stage persists in settings',
+    settingsFromKv(persistedRoadmap).activeRoadmapStage === 'sd-14-product-systems',
+  );
   const categories = buildCategoryStats(classicDeck, new Map());
   t('classic track has category groups', categories.length > 40 && categories.every((c) => c.total > 0));
   t('category filter scopes deck', filterByCategory(classicDeck, categories[0].id).length === categories[0].total);
   // 面试复盘 track: the original 8 named categories (one per failure mode, build-deck
   // CATEGORY_OVERRIDES) must survive. Since the 2026-08-04 merge the track also unions
   // interview-drill decks, so extra per-interview categories on top are expected.
-  const reviewCats = new Set(filterDeck(bundle, seedTracks[4]).map((c) => c.category));
+  const reviewCats = new Set(filterDeck(bundle, seedById('interview-review')).map((c) => c.category));
   t(
     'interview-review track keeps its 8 named categories',
     reviewCats.size >= 8 &&
@@ -538,6 +605,386 @@ console.log('rhythm');
   );
   setRequestRetention(0.9);
   t('retention restored to default', getRequestRetention() === 0.9);
+}
+
+// ---- M4: 念稿库（bundle 契约 + 库的纯逻辑）---------------------------------
+console.log('recite');
+{
+  const items = reciteBundleJson as unknown as ReciteItem[];
+  t('bundle 非空', items.length > 0);
+  t('id 唯一', new Set(items.map((i) => i.id)).size === items.length);
+  t(
+    '每条都有 §3.1 的必填字段',
+    items.every(
+      (i) =>
+        typeof i.id === 'string' &&
+        typeof i.co === 'string' &&
+        typeof i.target_sec === 'number' &&
+        Array.isArray(i.points) &&
+        Array.isArray(i.scored_idx) &&
+        Array.isArray(i.canon_spans) &&
+        Array.isArray(i.dialog_followups),
+    ),
+  );
+  t('scored_idx ≤ 4（Cowan ~4 的工作记忆约束）', items.every((i) => i.scored_idx.length <= 4));
+  t(
+    'scored_idx / extra_idx 都指得到 points',
+    items.every((i) => [...i.scored_idx, ...i.extra_idx].every((k) => i.points[k] != null)),
+  );
+  t('script 是 string 或 null，不是空串', items.every((i) => i.script === null || i.script.length > 0));
+  t('有 dialog 的条目都带 turns', items.every((i) => !i.dialog || i.dialog.turns.length > 0));
+
+  // 库的单位是 thread。threads.json 现在还是空的，所以这里拿到的是「一条一段」的派生结果。
+  const rawThreads = reciteThreadsJson as unknown as ReciteThread[];
+  const threads = buildThreads(items, rawThreads);
+  const rows = threads.map(toRow);
+  t('每条都落进恰好一条 thread', (() => {
+    const seen = new Map<string, number>();
+    for (const th of threads) for (const i of th.items) seen.set(i.id, (seen.get(i.id) ?? 0) + 1);
+    return seen.size === items.length && [...seen.values()].every((n) => n === 1);
+  })());
+  t('没分组时一条一段', rawThreads.length > 0 || threads.length === items.length);
+  t('thread 顺序跟着主问题在 bundle 里的位置', (() => {
+    const pos = new Map(items.map((i, k) => [i.id, k]));
+    return threads.every((th, k) => k === 0 || (pos.get(threads[k - 1].main.item.id) ?? 0) <= (pos.get(th.main.item.id) ?? 0));
+  })());
+  const groups = groupByCompany(rows);
+  t('分组不丢链', countRows(groups) === threads.length);
+  t(
+    '公司按条数降序、同数按名字',
+    groups.every((g, k) => k === 0 || groups[k - 1].n > g.n || (groups[k - 1].n === g.n && groups[k - 1].name < g.name)),
+  );
+  t(
+    '场次按名字排序',
+    groups.every((g) => g.sessions.every((s, k) => k === 0 || g.sessions[k - 1].name.localeCompare(s.name) <= 0)),
+  );
+
+  const first = groups[0];
+  t('公司过滤只留那一家', filterGroups(groups, { ...EMPTY_FILTER, company: first.name }).length === 1);
+  t(
+    '只看有原声',
+    filterGroups(groups, { ...EMPTY_FILTER, origOnly: true }).every((g) =>
+      g.sessions.every((s) => s.rows.every((r) => r.thread.hasOrig)),
+    ),
+  );
+  const sample = rows[0];
+  t(
+    '搜 item id 一定命中自己',
+    matchesFilter(sample, { ...EMPTY_FILTER, query: sample.thread.main.item.id.toUpperCase() }),
+  );
+  t('搜不存在的词命中 0 条', countRows(filterGroups(groups, { ...EMPTY_FILTER, query: 'zzz-不存在-zzz' })) === 0);
+
+  // 撞车 = 同一个 link_group 下 >1 条；单独一条不算。
+  const dupes = dupeIds(items);
+  const byGroup = new Map<string, number>();
+  for (const i of items) if (i.link_group) byGroup.set(i.link_group, (byGroup.get(i.link_group) ?? 0) + 1);
+  t(
+    '撞车集合 = link_group 计数 >1 的那些',
+    items.every((i) => dupes.has(i.id) === Boolean(i.link_group && (byGroup.get(i.link_group) ?? 0) > 1)),
+  );
+
+  // canon 高亮：切片拼回去必须一字不差，跨度必须被标成 canon。
+  const withCanon = items.find((i) => i.script && i.canon_spans.length);
+  if (withCanon?.script) {
+    const segs = splitCanon(withCanon.script, withCanon.canon_spans);
+    t('canon 切片拼回原文', segs.map((s) => s.text).join('') === withCanon.script);
+    t('canon 跨度被标出来', segs.some((s) => s.canon));
+  }
+  t('没有 canon 时整段是一片', splitCanon('abc', []).length === 1);
+  t('找不到的跨度被忽略', splitCanon('abc', ['zzz']).every((s) => !s.canon));
+
+  t('点阵 5 满 / 0 空', dots(5) === '●●●●●' && dots(0) === '○○○○○' && dots(3.4) === '●●●○○');
+  t('时钟 mm:ss', fmtClock(0) === '0:00' && fmtClock(65) === '1:05' && fmtClock(-3) === '0:00');
+
+  // 行标签：云上 needs_rewrite 也要挂「稿要改」，而且不能和 bundle 的 rough 叠成两个。
+  {
+    const clean = rows.find((r) => r.thread.items.every((i) => i.quality !== 'rough' && !i.deferred))!;
+    const base = { queueIds: new Set<string>(), dupes: new Set<string>(), nTakes: 0, lastTotal: null };
+    const off = rowTags(clean, base).filter((x) => x.text === '稿要改');
+    const on = rowTags(clean, { ...base, needsRewrite: true }).filter((x) => x.text === '稿要改');
+    t('needs_rewrite 才挂稿要改', off.length === 0 && on.length === 1);
+    const rough = rows.find((r) => r.thread.items.some((i) => i.quality === 'rough' || i.deferred));
+    if (rough) {
+      const both = rowTags(rough, { ...base, needsRewrite: true }).filter((x) => x.text === '稿要改');
+      t('rough + needs_rewrite 不叠成两个标签', both.length === 1);
+    }
+    const withTakes = rowTags(clean, { ...base, nTakes: 3, lastTotal: 4.25 });
+    t('录过 n 次带上次分数', withTakes.some((x) => x.text === '录过 3 次 · 上次 4.3'));
+  }
+
+  // ── 三段顺序（2026-09-03 她定的）：有原声 → BQ playbook → 其他 ──────────────
+  {
+    const secs = buildSections(rows);
+    t('三段，顺序固定', secs.map((x) => x.id).join(',') === 'orig,playbook,other');
+    t('三段不丢链', countSections(secs) === threads.length);
+    const ids = new Set<string>();
+    for (const sec of secs) {
+      for (const co of sec.companies) for (const ses of co.sessions) for (const r of ses.rows) ids.add(r.thread.thread.thread_id);
+    }
+    t('每条链只落一段', ids.size === threads.length);
+
+    const orig = secs[0];
+    // 收全段的 item id：有原声的条目可能是链上的追问，不一定是主问题。
+    const inOrig = new Set<string>();
+    for (const co of orig.companies)
+      for (const ses of co.sessions)
+        for (const r of ses.rows) for (const i of r.thread.items) inOrig.add(i.id);
+    t('有原声的一条不落', items.every((i) => !i.has_orig || inOrig.has(i.id)));
+    // 同一场里只要有一条有原声，整场都在第一段 —— 不能把一场题拆到两个区。
+    const origSessions = new Set(
+      items.filter((i) => i.has_orig).map((i) => `${i.co || '其他'}//${i.interview || '（未分场）'}`),
+    );
+    t(
+      '整场跟着走',
+      items.every(
+        (i) => !origSessions.has(`${i.co || '其他'}//${i.interview || '（未分场）'}`) || inOrig.has(i.id),
+      ),
+    );
+    t('第一段公司按条数降序', orig.companies.every((c, k) => k === 0 || orig.companies[k - 1].n >= c.n));
+
+    const pb = secs[1];
+    const inPb: string[] = [];
+    for (const co of pb.companies) for (const ses of co.sessions) for (const r of ses.rows) inPb.push(r.thread.main.item.id);
+    t('playbook 段只有 playbook', inPb.every((id) => items.find((i) => i.id === id)?.source === 'playbook'));
+    t('playbook 按公司平铺', pb.companies.every((c) => c.flat === true && c.sessions.length === 1));
+    t(
+      'playbook 公司按名字排',
+      pb.companies.every((c, k) => k === 0 || pb.companies[k - 1].name.localeCompare(c.name) <= 0),
+    );
+    t('其他段默认折叠', secs[2].defaultCollapsed && !secs[0].defaultCollapsed && !secs[1].defaultCollapsed);
+
+    // 过滤跨三段生效，命中数是加总。
+    const f = { ...EMPTY_FILTER, origOnly: true };
+    const filtered = filterSections(secs, f);
+    t('只看有原声后只剩第一段', filtered.every((x) => x.id === 'orig'));
+    t('命中数 = 有原声的链数', countSections(filtered) === threads.filter((th) => th.hasOrig).length);
+  }
+
+  // playbook 不再默认挂「稿要改」（2026-09-03 起 bundle 里是 ok/false）。
+  {
+    const base = { queueIds: new Set<string>(), dupes: new Set<string>(), nTakes: 0, lastTotal: null };
+    const pbRows = rows.filter((r) => r.thread.main.item.source === 'playbook');
+    t(
+      'playbook 默认不挂稿要改',
+      pbRows.length > 0 && pbRows.every((r) => !rowTags(r, base).some((x) => x.text === '稿要改')),
+    );
+  }
+
+  // ── 英文题面是废话时把中文提到第一行 ──────────────────────────────────────
+  {
+    t('Okay. 算废话', isFillerQuestion('Okay.') && isFillerQuestion('Okay, sounds good.'));
+    t('少于四个词算废话', isFillerQuestion('Tell me more'));
+    t('正常题面不算', !isFillerQuestion('Tell me about a time you disagreed with your manager.'));
+    t('空题面算废话', isFillerQuestion('   '));
+    const asRow = (q: string, zh: string) =>
+      toRow(buildThreads([{ ...items[0], question: q, question_zh: zh }], [])[0]);
+    const r = asRow('Okay.', '第一题：滑动窗口');
+    t('废话题面用中文当标题', r.title === '第一题：滑动窗口' && r.subtitle === 'Okay.');
+    t('废话题面英文中文都还能搜到', r.search.includes('okay.') && r.search.includes('滑动窗口'));
+    const normal = asRow('Walk me through the sliding window solution.', '中文');
+    t('正常题面不动', normal.title === 'Walk me through the sliding window solution.' && normal.subtitle === '中文');
+  }
+
+  // ── 稿子版本：短版 / 长版 / 原稿 ─────────────────────────────────────────
+  {
+    const plain = { ...items[0], script: 'BASE', script_zh_gloss: 'G', target_sec: 60,
+      script_long: null, gloss_long: '', target_sec_long: null,
+      script_short: null, gloss_short: '', target_sec_short: null };
+    t('没有长短版就不给开关', !hasScriptVersions(plain) && versionOptions(plain).length === 0);
+    const r0 = resolveVersion(plain, 'long');
+    t('没版本时一律落回原稿', r0.version === 'base' && r0.script === 'BASE' && r0.targetSec === 60);
+
+    const both = { ...plain, script_long: 'LONG', gloss_long: 'GL', target_sec_long: 240,
+      script_short: 'SHORT', gloss_short: 'GS', target_sec_short: 90 };
+    t('长短齐全 = 两段开关', versionOptions(both).map((v) => v.id).join(',') === 'short,long');
+    const rs = resolveVersion(both, 'short');
+    t('短版取 short 三件套', rs.script === 'SHORT' && rs.gloss === 'GS' && rs.targetSec === 90);
+    const rl = resolveVersion(both, 'long');
+    t('长版取 long 三件套', rl.script === 'LONG' && rl.gloss === 'GL' && rl.targetSec === 240);
+
+    // 真 bundle：28 条 playbook 带长短版，两版必须成对出现。
+    const withLong = items.filter((i) => i.script_long);
+    t('bundle 里长短版成对', withLong.length > 0 && withLong.every((i) => Boolean(i.script_short)));
+    t('带版本的只有 playbook', withLong.every((i) => i.source === 'playbook'));
+    t(
+      '六个版本字段都在',
+      items.every(
+        (i) =>
+          'script_long' in i && 'gloss_long' in i && 'target_sec_long' in i &&
+          'script_short' in i && 'gloss_short' in i && 'target_sec_short' in i,
+      ),
+    );
+    t('长版目标秒数比短版大', withLong.every((i) => (i.target_sec_long ?? 0) > (i.target_sec_short ?? 0)));
+    t(
+      '真条目给两段开关',
+      withLong.every((i) => versionOptions(i).map((v) => v.id).join(',') === 'short,long'),
+    );
+    t('没版本的条目一段都不给', items.filter((i) => !i.script_long && !i.script_short)
+      .every((i) => versionOptions(i).length === 0));
+
+    const longOnly = { ...plain, script_long: 'LONG', gloss_long: '', target_sec_long: 240 };
+    t('没有 short 时多一段原稿', versionOptions(longOnly).map((v) => v.id).join(',') === 'short,long,base');
+    const rso = resolveVersion(longOnly, 'short');
+    t('short 缺失就回落到基稿和基秒数', rso.script === 'BASE' && rso.gloss === 'G' && rso.targetSec === 60);
+    t('gloss_long 为空回落到基 gloss', resolveVersion(longOnly, 'long').gloss === 'G');
+    t('base 段就是基稿', resolveVersion(longOnly, 'base').script === 'BASE');
+    t('选了不存在的版本回落到第一段', resolveVersion(both, 'base').version === 'short');
+  }
+
+  // ── 真 threads.json 的不变量 ──────────────────────────────────────────────
+  {
+    t('分组表非空', rawThreads.length > 0);
+    t('thread_id 唯一', new Set(rawThreads.map((x) => x.thread_id)).size === rawThreads.length);
+    t('每条链恰好一个主问题', rawThreads.every((x) => x.segments.filter((g) => g.role === 'main').length === 1));
+    t('主问题排在第一段', rawThreads.every((x) => x.segments[0]?.role === 'main'));
+    t('第一段不许 merge_into_prev', rawThreads.every((x) => !x.segments[0]?.merge_into_prev));
+    t('每条链都写了「他为什么一直追问」', rawThreads.every((x) => (x.chain_note_zh || '').trim().length > 0));
+    const byId = new Map(items.map((i) => [i.id, i]));
+    t('分组表引用的条目都在 bundle 里', rawThreads.every((x) => x.segments.every((g) => byId.has(g.item_id))));
+    t(
+      '同一条链只来自同一场',
+      rawThreads.every((x) => x.segments.every((g) => (byId.get(g.item_id)?.interview || '') === x.interview)),
+    );
+    const used = rawThreads.flatMap((x) => x.segments.map((g) => g.item_id));
+    t('一个条目不会同时属于两条链', new Set(used).size === used.length);
+    // 她点名的那一场：分组必须正好是这四组。
+    const amazonReal = threads
+      .filter((th) => th.interview === 'amazon interview' && th.grouped)
+      .map((th) => th.items.map((i) => i.id.slice('iv:amazon-interview:'.length)));
+    t(
+      '真数据里 Amazon 那场 = [a01][a02..a05][a06,a07,a09,a10,a11,a12][a13,a15]',
+      JSON.stringify(amazonReal) ===
+        JSON.stringify([['a01'], ['a02', 'a03', 'a04', 'a05'], ['a06', 'a07', 'a09', 'a10', 'a11', 'a12'], ['a13', 'a15']]),
+    );
+    t(
+      'bundle 的 thread_id 戳和分组表对得上',
+      rawThreads.every((x) => x.segments.every((g) => byId.get(g.item_id)?.thread_id === x.thread_id)),
+    );
+  }
+
+  // ── 对话流：真实面试的题整页就是原始对话（2026-09-03 她的要求）──────────────
+  {
+    const dm = threads.filter((th) => th.dialogMode);
+    const notDm = threads.filter((th) => !th.dialogMode);
+    t(
+      'dialogMode 只认 interview / reference',
+      dm.every((th) => th.main.item.source === 'interview' || th.main.item.source === 'reference') &&
+        notDm.every((th) => th.main.item.source === 'playbook' || th.main.item.source === 'opener'),
+    );
+    t('分组过的链都是对话流', threads.filter((th) => th.grouped).every((th) => th.dialogMode));
+    t('playbook 不进对话流', threads.filter((th) => th.main.item.source === 'playbook').every((th) => !th.dialogMode));
+    // 整页就是逐句原文，所以每一段都必须真的有 turns，否则页面是空的。
+    t(
+      '对话流每一段都有逐句原文',
+      dm.every((th) => th.items.every((i) => (i.dialog?.turns.length ?? 0) > 0)),
+    );
+    t(
+      '每一句都有说话人和时间戳',
+      dm.every((th) =>
+        th.items.every((i) =>
+          (i.dialog?.turns ?? []).every((x) => (x.sp === 'me' || x.sp === 'iv') && typeof x.s === 'number'),
+        ),
+      ),
+    );
+    // 「无念稿」对真实面试的题不再是缺陷标签。
+    const base = { queueIds: new Set<string>(), dupes: new Set<string>(), nTakes: 0, lastTotal: null };
+    t(
+      '对话流不挂「无念稿」',
+      rows
+        .filter((r) => r.thread.dialogMode)
+        .every((r) => !rowTags(r, base).some((x) => x.text.startsWith('无念稿'))),
+    );
+    const noScriptPlaybook = rows.find((r) => !r.thread.dialogMode && !r.hasScript);
+    if (noScriptPlaybook) {
+      t(
+        '非对话流没稿时仍然挂「无念稿」',
+        rowTags(noScriptPlaybook, base).some((x) => x.text.startsWith('无念稿')),
+      );
+    }
+  }
+
+  // ── 题 + 追问链：合成一组当单元测试（不依赖真数据长什么样）────────────────
+  {
+    const P = 'iv:amazon-interview:';
+    const groups = [
+      ['a01'],
+      ['a02', 'a03', 'a04', 'a05'],
+      ['a06', 'a07', 'a09', 'a10', 'a11', 'a12'],
+      ['a13', 'a15'],
+    ];
+    const sample: ReciteThread[] = groups.map((g, k) => ({
+      thread_id: `th:amazon-interview:${String(k + 1).padStart(2, '0')}`,
+      interview: 'amazon interview',
+      kind: k === 0 ? 'self-intro' : k === 3 ? 'coding' : 'bq',
+      title: `Q${k + 1}`,
+      title_zh: `第 ${k + 1} 问`,
+      segments: g.map((sfx, j) => ({
+        item_id: P + sfx,
+        role: j === 0 ? ('main' as const) : ('followup' as const),
+        label: j === 0 ? '主问题' : `追问 ${j}`,
+        // 最后一组的追问故意标成「很短」，验证并段
+        ...(k === 3 && j > 0 ? { merge_into_prev: true } : {}),
+      })),
+      chain_note_zh: '他一直在问，因为产品是什么没讲清楚。',
+    }));
+    const grouped = buildThreads(items, sample);
+    const amazon = grouped.filter((th) => th.interview === 'amazon interview');
+    t('Amazon 那场分成 4 条链', amazon.length === 4);
+    t(
+      'Amazon 分组 = [a01][a02..a05][a06,a07,a09,a10,a11,a12][a13,a15]',
+      JSON.stringify(amazon.map((th) => th.items.map((i) => i.id.slice(P.length)))) ===
+        JSON.stringify(groups),
+    );
+    t('主问题就是每组第一条', amazon.every((th, k) => th.main.item.id === P + groups[k][0]));
+    t(
+      '追问数 = 段数 - 1',
+      amazon.every((th, k) => th.followupCount === groups[k].length - 1),
+    );
+    t(
+      '目标秒数是全链之和',
+      amazon.every((th) => th.targetSec === th.items.reduce((n, i) => n + i.target_sec, 0)),
+    );
+    t('分组过的 thread 标了 grouped', amazon.every((th) => th.grouped));
+    t('merge_into_prev 只影响第一段之后的段', amazon[3].segments.map((x) => x.merged).join(',') === 'false,true');
+
+    // 所有 interview 条目仍然恰好落一次
+    const seen = new Map<string, number>();
+    for (const th of grouped) for (const i of th.items) seen.set(i.id, (seen.get(i.id) ?? 0) + 1);
+    t('分组之后一条不丢、不重', seen.size === items.length && [...seen.values()].every((n) => n === 1));
+    t('没被收走的仍然一条一段', grouped.filter((th) => !th.grouped).every((th) => th.items.length === 1));
+
+    // 搜索命中任意一段；item → thread 能映射回来（今日推荐胶囊要用）
+    const chain = amazon[2];
+    const followup = chain.items[3];
+    t(
+      '搜追问的题面也能命中整条链',
+      matchesFilter(toRow(chain), { ...EMPTY_FILTER, query: (followup.question || '').slice(0, 20).toLowerCase() }),
+    );
+    t('item → thread 映射回得去', threadOfItem(grouped, followup.id)?.thread.thread_id === chain.thread.thread_id);
+    t('同场次邻居按主问题 id 排', threadSiblings(grouped, amazon[0]).length === 4);
+    t('行标签里的追问数走链', toRow(chain).followupCount === 5);
+    // 'Q3' 只有一个词 → 走废话题面规则，落到中文标题上；这正是期望行为。
+    t('链标题优先用分组表给的（短英文标题让位给中文）', toRow(chain).title === '第 3 问');
+    const longTitled = buildThreads(items, [
+      { ...sample[2], title: 'Tell me about a time you had to learn a new domain fast.', title_zh: '中文标题' },
+    ]).find((th) => th.grouped)!;
+    t(
+      '正常长度的链标题直接用',
+      toRow(longTitled).title === 'Tell me about a time you had to learn a new domain fast.' &&
+        toRow(longTitled).subtitle === '中文标题',
+    );
+  }
+
+  // 今日推荐胶囊：截断了必须补省略号，不然读起来像句子写坏了。
+  {
+    const long = items.find((i) => (i.question_zh || i.question || i.id).length > 26);
+    if (long) {
+      const label = queueChipLabel(long);
+      t('长标题截断补省略号', label.length === 27 && label.endsWith('…'));
+    }
+    const short = items.find((i) => (i.question_zh || i.question || i.id).length <= 26);
+    if (short) t('短标题不动', !queueChipLabel(short).endsWith('…'));
+  }
 }
 
 if (failures) {

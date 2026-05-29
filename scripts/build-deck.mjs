@@ -247,6 +247,97 @@ const CARD_OVERRIDES = {
   },
 };
 
+/**
+ * A deliberately small first pass through classic system design. These tags
+ * create an ordered route in the app without changing the source decks or
+ * asking the learner to survive the whole 6k-card catalog at once.
+ *
+ * Each slice takes the opening cards from a coherent source deck. Those cards
+ * establish the reusable idea first; the rest of the source stays available in
+ * the broad "经典系统设计" track for a later, targeted deep dive.
+ */
+const SD_CURRICULUM_SLICES = {
+  'system-design/in-a-hurry_how-to-prepare.json': [['curriculum:sd-00-framework', 10]],
+  'system-design/in-a-hurry_delivery.json': [['curriculum:sd-00-framework', 15]],
+  'system-design/in-a-hurry_core-concepts.json': [['curriculum:sd-00-framework', 10]],
+  'system-design/core-concepts_numbers-to-know.json': [['curriculum:sd-00-framework', 10]],
+
+  'system-design/patterns_long-running-tasks.json': [['curriculum:sd-01-patterns', 12]],
+  'system-design/patterns_scaling-reads.json': [['curriculum:sd-01-patterns', 12]],
+  'system-design/patterns_scaling-writes.json': [['curriculum:sd-01-patterns', 12]],
+  'system-design/patterns_realtime-updates.json': [['curriculum:sd-01-patterns', 12]],
+  'system-design/patterns_dealing-with-contention.json': [['curriculum:sd-01-patterns', 12]],
+
+  'system-design/core-concepts_caching.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_api-design.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_data-modeling.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_sharding.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_consistent-hashing.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_db-indexing.json': [['curriculum:sd-02-components', 10]],
+  'system-design/core-concepts_networking-essentials.json': [['curriculum:sd-02-components', 10]],
+
+  'system-design/problem-breakdowns_distributed-rate-limiter.json': [['curriculum:sd-03-cases', 15]],
+  'system-design/problem-breakdowns_bitly.json': [['curriculum:sd-03-cases', 15]],
+  'system-design/problem-breakdowns_bulk-email-move.json': [['curriculum:sd-03-cases', 18]],
+  'system-design/problem-breakdowns_google-docs.json': [['curriculum:sd-03-cases', 15]],
+  'system-design/problem-breakdowns_ticketmaster.json': [['curriculum:sd-03-cases', 15]],
+  'system-design/problem-breakdowns_chatgpt.json': [['curriculum:sd-03-cases', 15]],
+
+  'system-design/coach-chat-realtime.json': [['curriculum:sd-04-upgrades', 10]],
+  'system-design/coach-contention-booking.json': [['curriculum:sd-04-upgrades', 10]],
+  'system-design/coach-storage-fundamentals.json': [['curriculum:sd-04-upgrades', 10]],
+  'system-design/coach-api-design.json': [['curriculum:sd-04-upgrades', 10]],
+  'system-design/coach-social-feed.json': [['curriculum:sd-04-upgrades', 10]],
+  'system-design/coach-collab-judge.json': [['curriculum:sd-04-upgrades', 10]],
+};
+
+/**
+ * The long-form continuation routes are built from existing topical tags, but
+ * receive private `curriculum:*` tags only on classic-system-design cards.
+ * That prevents a generic tag such as `api` or `caching` from pulling PMLE or
+ * LLM cards into this learner-facing system-design map.
+ */
+const SD_DEEP_DIVE_TAGS = {
+  'curriculum:sd-10-foundations': [
+    'interview-method', 'requirements', 'capacity', 'estimation', 'numbers',
+    'delivery', 'scope', 'nfr', 'high-level-design', 'architecture',
+  ],
+  'curriculum:sd-11-patterns-full': [
+    'scaling-reads', 'scaling-writes', 'long-running-tasks', 'realtime-updates',
+    'contention', 'multi-step-processes', 'large-blobs', 'queue', 'messaging',
+    'fanout', 'batching', 'idempotency',
+  ],
+  'curriculum:sd-12-data-storage': [
+    'caching', 'distributed-cache', 'data-modeling', 'data-model', 'databases',
+    'database', 'sharding', 'partitioning', 'consistent-hashing', 'replication',
+    'consistency', 'transactions', 'indexing', 'postgres', 'dynamodb', 'cassandra',
+    'redis', 'elasticsearch',
+  ],
+  'curriculum:sd-13-platform-network': [
+    'api-design', 'api', 'api-gateway', 'networking', 'dns', 'cdn',
+    'load-balancing', 'websocket', 'sse', 'security', 'auth', 'pagination',
+  ],
+  'curriculum:sd-14-product-systems': [
+    'problem-breakdowns', 'youtube', 'instagram', 'whatsapp', 'ticketmaster',
+    'chatgpt', 'google-docs', 'bitly', 'rate-limiter', 'dropbox', 'tinder',
+    'yelp', 'crawler', 'google-news', 'feed', 'auction', 'payment-system',
+    'uber', 'top-k',
+  ],
+  'curriculum:sd-15-reference': ['ddia', 'educative'],
+};
+
+function curriculumTagsFor(topic, file, index, tags = []) {
+  const firstPass = (SD_CURRICULUM_SLICES[`${topic}/${file}`] ?? [])
+    .filter(([, limit]) => index < limit)
+    .map(([tag]) => tag);
+  if (topic !== 'system-design') return firstPass;
+
+  const deepDive = Object.entries(SD_DEEP_DIVE_TAGS)
+    .filter(([, routeTags]) => routeTags.some((tag) => tags.includes(tag)))
+    .map(([routeTag]) => routeTag);
+  return [...new Set([...firstPass, ...deepDive])];
+}
+
 function categoryFromFile(file, topic) {
   const override = CATEGORY_OVERRIDES[`${topic}/${file}`];
   if (override) return override;
@@ -313,17 +404,27 @@ const ids = new Set();
 let dupes = 0;
 
 function add(cards, label, meta = {}) {
-  for (const c of cards) {
+  for (const [index, c] of cards.entries()) {
     if (ids.has(c.id)) { dupes++; console.error(`  ! duplicate id ${c.id} (from ${label}) skipped`); continue; }
     ids.add(c.id);
     const next = { ...c };
     if (meta.track) next.track = meta.track;
     if (meta.category) next.category = meta.category;
-    if (meta.trackTag) next.tags = [...new Set([...(next.tags ?? []), meta.trackTag])];
+    const injectedTags = [
+      ...(meta.trackTag ? [meta.trackTag] : []),
+      ...(meta.curriculumTags?.(index, next) ?? []),
+    ];
+    if (injectedTags.length) next.tags = [...new Set([...(next.tags ?? []), ...injectedTags])];
     const cardOverride = CARD_OVERRIDES[next.id];
     if (cardOverride?.category) next.category = cardOverride.category;
     if (cardOverride?.trackTags) {
       next.tags = [...new Set([...(next.tags ?? []), ...cardOverride.trackTags])];
+    }
+    // The roadmap lives inside the single classic-system-design track. Any
+    // classic card outside the named stages belongs to the final gap-fill stop
+    // instead of disappearing from the route altogether.
+    if (next.track === SEED_TRACK_ID && !(next.tags ?? []).some((tag) => tag.startsWith('curriculum:'))) {
+      next.tags = [...new Set([...(next.tags ?? []), 'curriculum:sd-99-gap-fill'])];
     }
     merged.push(attachNumberAnchors(next));
   }
@@ -345,6 +446,11 @@ const topics = fs.readdirSync(contentDir, { withFileTypes: true })
   .sort();
 const perTopic = {};
 for (const topic of topics) {
+  if (!(topic in DIR_TRACK_ID)) {
+    // recite-* dirs hold data for the recite subsystem, not card decks
+    console.error(`  ~ skip ${topic}/: not a mapped card track`);
+    continue;
+  }
   const dir = path.join(contentDir, topic);
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
   let n = 0;
@@ -354,6 +460,7 @@ for (const topic of topics) {
       trackTag: DIR_TRACK_TAG[topic],
       track: DIR_TRACK_ID[topic],
       category: categoryFromFile(f, topic),
+      curriculumTags: (index, card) => curriculumTagsFor(topic, f, index, card.tags ?? []),
     });
     n += cards.length;
   }
