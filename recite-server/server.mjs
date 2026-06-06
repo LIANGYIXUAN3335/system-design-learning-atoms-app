@@ -468,6 +468,16 @@ export async function makeServer(env = process.env) {
           // DEVIATION: jobscan 写 recite_items.scope；bundle 是只读内容，所以标记落在
           // state.scope_override 上（M4 §3.2 里已经留了这个字段）。
           await store.setState(id, { scope_override: 'thin' });
+        } else if (act === 'practice') {
+          // 三遍练习追踪：body = {step: shadow|blind|timed, on: true|false}。
+          // on=false 允许手滑取消。时间戳由服务端打（离线补传的勾会晚一点，可接受）。
+          const step = String(body.step || '');
+          if (!R.PRACTICE_STEPS.includes(step)) {
+            return json(res, 400, { error: 'unknown practice step' });
+          }
+          await store.setState(id, {
+            [`practice_${step}_at`]: body.on === false ? null : R.now_iso(),
+          });
         } else if (act === 'box') {
           await store.setState(id, {
             box: Math.max(1, Math.min(5, parseInt(body.box || 1, 10) || 1)),

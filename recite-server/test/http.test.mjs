@@ -51,9 +51,9 @@ test('冒烟：overview → 上传 → 回听 → 评分 → mark', async (t) =>
     headers: { authorization: 'Bearer wrong' },
   })).status, 401);
 
-  // ── overview：336 条状态 + ≤6 条队列 ────────────────────────
+  // ── overview：全 bundle 条状态 + ≤6 条队列 ────────────────────────
   const ov = await (await app.get('/recite/overview')).json();
-  assert.equal(Object.keys(ov.state).length, 336);
+  assert.equal(Object.keys(ov.state).length, BUNDLE.length);
   assert.ok(ov.queue_ids.length > 0 && ov.queue_ids.length <= 6);
   assert.equal(ov.calibrating, true);
   assert.deepEqual(ov.n_takes, {});
@@ -164,6 +164,22 @@ test('冒烟：overview → 上传 → 回听 → 评分 → mark', async (t) =>
   assert.equal((await (await app.get(`/recite/items/${ITEM.id}`)).json()).state.box, 5, '箱位夹在 1–5');
   assert.equal((await (await mark({ action: 'archive' })).json()).ok, true);
   assert.equal((await mark({ action: 'nope' })).status, 400);
+
+  // ── practice：三遍练习勾选框（跟读/闭眼/掐表）─────────────────
+  assert.equal((await (await mark({ action: 'practice', step: 'shadow' })).json()).ok, true);
+  assert.equal((await (await mark({ action: 'practice', step: 'timed' })).json()).ok, true);
+  assert.equal((await mark({ action: 'practice', step: 'nope' })).status, 400);
+  let st = (await (await app.get(`/recite/items/${ITEM.id}`)).json()).state;
+  assert.ok(st.practice_shadow_at, '勾了要有时间戳');
+  assert.equal(st.practice_blind_at, null, '没勾的保持 null');
+  assert.ok(st.practice_timed_at);
+  // 手滑取消：on=false 清回 null
+  assert.equal((await (await mark({ action: 'practice', step: 'timed', on: false })).json()).ok, true);
+  st = (await (await app.get(`/recite/items/${ITEM.id}`)).json()).state;
+  assert.equal(st.practice_timed_at, null);
+  // overview 的 state 合并也带这些字段（库页统计靠它）
+  const ovp = await (await app.get('/recite/overview')).json();
+  assert.ok(ovp.state[ITEM.id].practice_shadow_at);
 
   const exp = await (await app.get(`/recite/items/${ITEM.id}/exposure`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stage: 9 }),

@@ -421,7 +421,12 @@ export const DEFAULT_STATE = {
   best_total: null, last_total: null, last_fix: '', last_at: null,
   needs_rewrite: 0, snooze_until: null, archived: 0,
   exposed: 0, exposure_stage: 0, exposure_at: null, scope_override: null,
+  // 三遍练习法追踪（2026-09-22）：跟读/闭眼/掐表 各存打勾时刻，null=没勾。
+  practice_shadow_at: null, practice_blind_at: null, practice_timed_at: null,
 };
+
+/** mark practice 认的三步。顺序即练习顺序：看中文念英文 → 闭眼复述 → 盖住中文掐表。 */
+export const PRACTICE_STEPS = ['shadow', 'blind', 'timed'];
 
 export function default_state(item_id, day = today()) {
   return { ...DEFAULT_STATE, item_id, due_on: day };

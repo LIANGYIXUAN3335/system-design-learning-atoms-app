@@ -52,14 +52,25 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
+/** 带 HTTP 状态码的错误：离线队列要靠它区分「服务器明确拒绝（4xx，别再重试）」和「网络不通」。 */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function handle<T>(res: Response, what: string): Promise<T> {
   if (res.status === 401 || res.status === 403) {
+    // 口令问题走普通 Error：清了口令重输后同一请求就能成，不算「明确拒绝」
     clearToken();
     throw new Error(`${what}：口令不对（${res.status}）—— 刷新页面后重新输入口令`);
   }
   if (!res.ok) {
     const detail = await readError(res);
-    throw new Error(`${what}：服务返回 ${res.status}${detail ? ` —— ${detail}` : ''}`);
+    throw new ApiError(`${what}：服务返回 ${res.status}${detail ? ` —— ${detail}` : ''}`, res.status);
   }
   const text = await res.text();
   try {
@@ -117,7 +128,7 @@ export function getItem(id: string): Promise<ReciteItemStatus> {
 export function mark(
   id: string,
   action: ReciteMarkAction,
-  extra?: { box?: number; days?: number },
+  extra?: { box?: number; days?: number; step?: string; on?: boolean },
 ): Promise<{ ok: boolean }> {
   return postJson<{ ok: boolean }>(`${itemPath(id)}/mark`, { action, ...(extra ?? {}) }, '标记这一条');
 }

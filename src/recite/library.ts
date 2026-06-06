@@ -1,5 +1,27 @@
 import type { ResolvedThread } from './threads';
-import type { ReciteItem, ReciteState, ScriptVersion } from './types';
+import type { PracticeStep, ReciteItem, ReciteState, ScriptVersion } from './types';
+
+// ── 三遍练习法（2026-09-22）────────────────────────────────────────────────
+// 三个勾选框不是数次数，是三种练法各一遍；纯逻辑放这层，网络和离线队列在 practice.ts。
+
+export const PRACTICE_STEPS: Array<{ key: PracticeStep; label: string; hint: string }> = [
+  { key: 'shadow', label: '跟读', hint: '看中文念英文' },
+  { key: 'blind', label: '闭眼', hint: '不看稿复述一遍' },
+  { key: 'timed', label: '掐表', hint: '盖住中文掐时间说完' },
+];
+
+/** 某一步的打勾时刻（null=没勾）。字段平铺是为了 Firestore merge 简单。 */
+export function practiceAt(st: ReciteState | undefined, step: PracticeStep): string | null {
+  if (!st) return null;
+  if (step === 'shadow') return st.practice_shadow_at ?? null;
+  if (step === 'blind') return st.practice_blind_at ?? null;
+  return st.practice_timed_at ?? null;
+}
+
+/** 这一条勾满了几步（0–3）。 */
+export function practiceDoneCount(st: ReciteState | undefined): number {
+  return PRACTICE_STEPS.filter((s) => practiceAt(st, s.key) != null).length;
+}
 
 /**
  * 总库的纯逻辑：分组、搜索/过滤、行标签、撞车检测、页脚计数。
@@ -283,6 +305,9 @@ export interface RowTagContext {
   lastTotal: number | null;
   /** 云上 state.needs_rewrite（链上任一段被标过） */
   needsRewrite?: boolean;
+  /** 链上三遍全勾的段数 / 总段数（三遍练习法） */
+  practiceDone?: number;
+  practiceTotal?: number;
 }
 
 /** recite.html 行内那一排标签，顺序原样；口径从「一个条目」改成「一条链」。 */
@@ -310,6 +335,14 @@ export function rowTags(row: LibraryRow, ctx: RowTagContext): RowTag[] {
     const last = ctx.lastTotal != null ? ` · 上次 ${ctx.lastTotal.toFixed(1)}` : '';
     tags.push({ text: `录过 ${ctx.nTakes} 次${last}`, tone: 'plain' });
   }
+  // 三遍练习法进度：一段勾满三步才算一段；全链勾满变绿。没动过的不挂标签，别刷屏。
+  if (ctx.practiceDone) {
+    const total = ctx.practiceTotal ?? items.length;
+    tags.push({
+      text: `三遍 ${ctx.practiceDone}/${total}`,
+      tone: ctx.practiceDone >= total ? 'good' : 'note',
+    });
+  }
   return tags;
 }
 
@@ -318,22 +351,30 @@ export function aggregateRowState(
   row: LibraryRow,
   state: Record<string, ReciteState>,
   nTakesById: Record<string, number>,
-): { nTakes: number; lastTotal: number | null; needsRewrite: boolean } {
+): {
+  nTakes: number;
+  lastTotal: number | null;
+  needsRewrite: boolean;
+  practiceDone: number;
+  practiceTotal: number;
+} {
   let nTakes = 0;
   let needsRewrite = false;
   let lastTotal: number | null = null;
   let lastAt = '';
+  let practiceDone = 0;
   for (const item of row.thread.items) {
     const st = state[item.id] ?? {};
     nTakes += nTakesById[item.id] ?? st.n_takes ?? 0;
     if (st.needs_rewrite) needsRewrite = true;
+    if (practiceDoneCount(st) >= PRACTICE_STEPS.length) practiceDone++;
     // 「上次多少分」取时间最近的那一段，不是链上第一段。
     if (st.last_total != null && (st.last_at ?? '') >= lastAt) {
       lastAt = st.last_at ?? '';
       lastTotal = st.last_total;
     }
   }
-  return { nTakes, lastTotal, needsRewrite };
+  return { nTakes, lastTotal, needsRewrite, practiceDone, practiceTotal: row.thread.items.length };
 }
 
 export interface LibraryCounts {
@@ -346,6 +387,9 @@ export interface LibraryCounts {
   archived: number;
   noscript: number;
   thin: number;
+  /** 三遍全勾的段数 / 可练段数（没归档的） */
+  practiced: number;
+  practiceDen: number;
 }
 
 export function libraryCounts(
@@ -357,6 +401,8 @@ export function libraryCounts(
   let rough = 0;
   let noscript = 0;
   let thin = 0;
+  let practiced = 0;
+  let practiceDen = 0;
   const companies = new Set<string>();
   for (const it of items) {
     companies.add(it.co || '其他');
@@ -364,6 +410,11 @@ export function libraryCounts(
     if (it.quality === 'rough' || it.deferred) rough++;
     if (!(it.script || '').trim()) noscript++;
     if (it.scope === 'thin') thin++;
+    // 三遍统计的分母 = 没归档的段；overview 没到时 state 是 {}，读数退回 0/全部。
+    if (!state[it.id]?.archived) {
+      practiceDen++;
+      if (practiceDoneCount(state[it.id]) >= PRACTICE_STEPS.length) practiced++;
+    }
   }
   const archived = Object.values(state).filter((s) => s?.archived).length;
   return {
@@ -375,6 +426,8 @@ export function libraryCounts(
     archived,
     noscript,
     thin,
+    practiced,
+    practiceDen,
   };
 }
 

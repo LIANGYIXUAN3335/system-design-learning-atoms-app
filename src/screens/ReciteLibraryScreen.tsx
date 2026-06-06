@@ -405,7 +405,8 @@ export function ReciteLibraryScreen({ items, threads, onOpen, onBack }: ReciteLi
       >
         <Text style={{ fontSize: 13, color: colors.muted, marginTop: 10 }}>
           全库 {counts.threads} 条题 · {counts.companies} 家公司 · 🎧 原声 {counts.orig} 段 · 你说了{' '}
-          {overview?.hist?.spoken_min ?? 0} 分钟（近 40 次）
+          {overview?.hist?.spoken_min ?? 0} 分钟（近 40 次） · ✅ 三遍全勾 {counts.practiced}/
+          {counts.practiceDen} 段
         </Text>
 
         {serverNote ? (

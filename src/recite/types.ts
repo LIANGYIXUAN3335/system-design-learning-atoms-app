@@ -162,6 +162,10 @@ export interface ReciteState {
   exposure_at?: string | null;
   scope_override?: string | null;
   updated_at?: string | null;
+  /** 三遍练习法（2026-09-22）：跟读/闭眼/掐表 各存打勾时刻，null=没勾 */
+  practice_shadow_at?: string | null;
+  practice_blind_at?: string | null;
+  practice_timed_at?: string | null;
 }
 
 export interface ReciteHistBucket {
@@ -303,4 +307,8 @@ export type ReciteMarkAction =
   | 'unarchive'
   | 'scope_thin'
   | 'box'
-  | 'snooze';
+  | 'snooze'
+  | 'practice';
+
+/** 三遍练习法的三步，顺序即练习顺序：看中文念英文 → 闭眼复述 → 盖住中文掐表。 */
+export type PracticeStep = 'shadow' | 'blind' | 'timed';

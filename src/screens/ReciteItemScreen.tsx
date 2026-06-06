@@ -26,6 +26,8 @@ import {
 import {
   dots,
   fmtClock,
+  PRACTICE_STEPS,
+  practiceAt,
   segmentSecLabel,
   hasScriptVersions,
   resolveVersion,
@@ -33,15 +35,18 @@ import {
   versionOptions,
 } from '../recite/library';
 import { threadById, threadSiblings, type ResolvedSegment, type ResolvedThread } from '../recite/threads';
-import { markOverviewStale } from '../recite/libraryCache';
+import { libraryCache, markOverviewStale } from '../recite/libraryCache';
+import { flushPracticeQueue, hasQueuedPractice, peekQueuedPractice, sendPracticeMark } from '../recite/practice';
 import { scriptVersionPref, setScriptVersionPref } from '../recite/prefs';
 import { useRecorder } from '../recite/useRecorder';
 import type {
   ActiveVariant,
+  PracticeStep,
   ReciteItem,
   ReciteItemStatus,
   ReciteMode,
   ReciteScoreResult,
+  ReciteState,
   ReciteTakeSummary,
   ScriptVersion,
 } from '../recite/types';
@@ -244,6 +249,54 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
   const [statusPhase, setStatusPhase] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [statusNote, setStatusNote] = useState<string | null>(null);
   const [masked, setMasked] = useState(false);
+
+  // ── 三遍练习法（跟读/闭眼/掐表）──────────────────────────────────────────
+  // 初值来自总库 overview 缓存（她的动线永远是库→练，缓存是热的）；点了先本地
+  // 乐观置位，再走 practice.ts 的「先进队、随即冲队」通道。
+  const [practiceLocal, setPracticeLocal] = useState<
+    Record<string, Partial<Record<PracticeStep, string | null>>>
+  >({});
+  const [practicePending, setPracticePending] = useState(false);
+  useEffect(() => {
+    // 挂载时：先用队列里还没送达的勾播种本地显示（它们比服务器/库缓存的值新——
+    // 不播种的话，断网点的勾这会儿会显示成没勾），再补传；真补上了把库缓存标脏，
+    // 否则回库后行标签还是旧读数。
+    const pending = peekQueuedPractice();
+    if (pending.length) {
+      setPracticeLocal((m) => {
+        const next = { ...m };
+        for (const p of pending) {
+          next[p.id] = { ...next[p.id], [p.step]: p.on ? new Date().toISOString() : null };
+        }
+        return next;
+      });
+    }
+    void flushPracticeQueue().then((sent) => {
+      if (sent > 0) markOverviewStale();
+      setPracticePending(hasQueuedPractice());
+    });
+  }, []);
+  const practiceVal = useCallback(
+    (id: string, step: PracticeStep): string | null => {
+      const loc = practiceLocal[id];
+      if (loc && step in loc) return loc[step] ?? null;
+      const st = libraryCache().overview?.state?.[id] as ReciteState | undefined;
+      return practiceAt(st, step);
+    },
+    [practiceLocal],
+  );
+  const togglePractice = useCallback(
+    (id: string, step: PracticeStep) => {
+      const on = practiceVal(id, step) == null;
+      setPracticeLocal((m) => ({
+        ...m,
+        [id]: { ...m[id], [step]: on ? new Date().toISOString() : null },
+      }));
+      markOverviewStale();
+      void sendPracticeMark(id, step, on).then((sent) => setPracticePending(!sent));
+    },
+    [practiceVal],
+  );
   // 稿子版本是跨条目的偏好（她说先把短版练熟），所以初值从 prefs 来，不随换条目重置。
   const [version, setVersion] = useState<ScriptVersion>(scriptVersionPref);
   const [mineUrl, setMineUrl] = useState<string | null>(null);
@@ -1202,6 +1255,33 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
     );
   };
 
+  /** 三遍练习法勾选框：每段一排 ☐跟读 ☐闭眼 ☐掐表。勾了立即存云端（失败进本地队列自动补传）。 */
+  const practiceRow = (it: ReciteItem) => (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 8, flexWrap: 'wrap' }}>
+      <Small>三遍</Small>
+      {PRACTICE_STEPS.map((s) => {
+        const on = practiceVal(it.id, s.key) != null;
+        return (
+          <Pressable
+            key={s.key}
+            onPress={() => togglePractice(it.id, s.key)}
+            hitSlop={8}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: on }}
+            accessibilityLabel={`${s.label}（${s.hint}）`}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          >
+            <Text style={{ fontSize: 16, color: on ? colors.accent : colors.muted }}>
+              {on ? '☑' : '☐'}
+            </Text>
+            <Text style={{ fontSize: 12.5, color: on ? colors.ink : colors.muted }}>{s.label}</Text>
+          </Pressable>
+        );
+      })}
+      {practicePending ? <Small>⏳ 有勾还没同步，联网后自动补传</Small> : null}
+    </View>
+  );
+
   const dialogSegmentBlock = ({ lead, merged }: SegGroup) => {
     const it = lead.item;
     const armed = it.id === item.id;
@@ -1263,6 +1343,8 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
                 </View>
               ) : null}
               {transcriptFor(part.item)}
+              {/* 并进来的短追问也是独立条目，三遍统计按条目算——每段都要有自己的勾 */}
+              {practiceRow(part.item)}
             </View>
           ))}
         </View>
@@ -1331,6 +1413,7 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
         ) : null}
 
         <View style={{ marginTop: 10 }}>{studyBlock(it)}</View>
+        {practiceRow(it)}
 
         {/* 很短的追问并在这一块里：问题 + ▶ + 我当时说的，不给自己的稿和录音面板 */}
         {merged.map((m) => (
@@ -1359,6 +1442,7 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
                 <Text style={{ fontSize: 13.5, color: colors.ink, lineHeight: 21 }}>{m.item.orig_text}</Text>
               </Collapse>
             ) : null}
+            {practiceRow(m.item)}
           </View>
         ))}
 
@@ -1526,6 +1610,7 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
             <View style={{ flex: 1.25, minWidth: 0 }}>
               {versionControl}
               {studyBlock(mainItem)}
+              {practiceRow(mainItem)}
               {dialogPanel(mainItem)}
             </View>
             {right}
@@ -1536,6 +1621,7 @@ export function ReciteItemScreen({ items, threads, threadId, onOpen, onBack }: R
             {versionControl}
             {recordArea}
             {studyBlock(mainItem)}
+            {practiceRow(mainItem)}
             {dialogPanel(mainItem)}
             {takesPanel}
           </View>

@@ -56,8 +56,10 @@ const baseJudge = (over = {}) => ({
 
 // ---------------------------------------------------------------- 移植保真
 
-test('scored_cues 复算能重现 bundle 里全部 336 条的 scored_idx / extra_idx', () => {
-  assert.equal(BUNDLE.length, 336);
+test('scored_cues 复算能重现 bundle 里全部条目的 scored_idx / extra_idx', () => {
+  // 条数下限而非精确数：bundle 会随批次增长（9/21 Arya 批 336→387），
+  // 这条测的是 scored_cues 移植保真，不是内容冻结。
+  assert.ok(BUNDLE.length >= 336);
   const mismatch = [];
   for (const it of BUNDLE) {
     const pts = it.points || [];
