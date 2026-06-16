@@ -119,6 +119,8 @@ export interface AppSettings {
   /** interview date YYYY-MM-DD; null = no deadline (planner falls back to default pace) */
   targetDate: string | null;
   activeTrackId: string;
+  /** selected stage inside the single classic-system-design track; 'all' = whole catalog */
+  activeRoadmapStage: string;
   /** category display name within the active track; "all" = whole track */
   activeCategory: string;
   rhythm: RhythmId;
@@ -127,6 +129,8 @@ export interface AppSettings {
   morningTime: string;
   /** "HH:MM" local — used by the intensive (早晚) rhythm */
   eveningTime: string;
+  /** 答对「叮」、做完一组的音效（设置页「音效」）；默认开 */
+  soundEnabled: boolean;
 }
 
 export type SelfGrade = 'forgot' | 'fuzzy' | 'got';

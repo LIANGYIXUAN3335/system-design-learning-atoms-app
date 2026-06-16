@@ -14,7 +14,10 @@ import { chainCorrect, choiceCorrect, minIntervalDays, toFeedbackGrade, toFsrsRa
 import { dueAdditions, type SrsEntry } from '../logic/queue';
 import { shuffleWithMap, type Shuffled } from '../logic/shuffle';
 import { applyReview, emptyCard } from '../logic/srs';
+import { becameRemembered, fastAnswerNote, readingTimerMs, type TypicalTimes } from '../logic/gameFeel';
+import { feelSmallWin } from '../feel';
 import { logReview, saveFeedback, saveSrs, type Db } from '../db/database';
+import { syncNow } from '../sync';
 import { useTheme } from '../theme';
 import type { Card, FeedbackRow, FlagKey, SelfGrade } from '../types';
 import { ChainView } from '../components/ChainView';
@@ -23,6 +26,7 @@ import { OptionList } from '../components/OptionList';
 import { RevealBlock, type Verdict } from '../components/RevealBlock';
 import type { AnswerOptionDetail } from '../components/AnswerDetailPad';
 import { ActButton, GhostButton, ProgressBar, ScenarioBox, TagRow } from '../components/ui';
+import { PlusOne, SoftTimerRing, useWinPulse, WinFlash } from '../components/GameFeel';
 
 const OPTION_LABELS = 'ABCDEFGH';
 
@@ -33,7 +37,10 @@ export interface SessionStore {
 
 export interface SessionStats {
   answered: number;
+  /** 答对：客观答对，或填空题自评「记得」（填空没有客观对错） */
   correct: number;
+  /** A3「这组 y 张从忘记变成记住了」——判定见 logic/gameFeel.ts becameRemembered() */
+  learned: number;
 }
 
 interface Ephemeral {
@@ -49,6 +56,8 @@ interface Ephemeral {
   chainPicked: number[];
   wasCorrect: boolean | null;
   usedIdk: boolean;
+  /** A1：出题 → 作答（翻面）的毫秒数；还没作答时为 null */
+  answerMs: number | null;
   flags: FlagKey[];
   term: string;
   note: string;
@@ -150,8 +159,24 @@ export interface SessionScreenProps {
   reviewedToday?: Set<string>;
   /** M3 §3.2: deadline-scaled minimum interval for a correct-but-fuzzy card */
   correctFuzzyFloor: number;
+  /** A1 软计时的基准：读题阶段按每个卡型历史中位数的三倍走。 */
+  typicalTimes: TypicalTimes;
+  /** A2 音效开关（设置页「音效」） */
+  soundEnabled: boolean;
   onExit: () => void;
   onDone: (stats: SessionStats) => void;
+}
+
+/** 读题阶段的秒表：每秒 +1，翻面就停。只在 UI 上走，不进任何记录。 */
+function useReadingSeconds(startTs: number, running: boolean): number {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    setSec(Math.max(0, Math.floor((Date.now() - startTs) / 1000)));
+    if (!running) return;
+    const id = setInterval(() => setSec(Math.max(0, Math.floor((Date.now() - startTs) / 1000))), 1000);
+    return () => clearInterval(id);
+  }, [startTs, running]);
+  return sec;
 }
 
 export function SessionScreen({
@@ -162,6 +187,8 @@ export function SessionScreen({
   requeueScope,
   reviewedToday,
   correctFuzzyFloor,
+  typicalTimes,
+  soundEnabled,
   onExit,
   onDone,
 }: SessionScreenProps) {
@@ -175,7 +202,8 @@ export function SessionScreen({
 
   const [queue, setQueue] = useState<string[]>(initialQueue);
   const [pos, setPos] = useState(0);
-  const statsRef = useRef<SessionStats>({ answered: 0, correct: 0 });
+  const statsRef = useRef<SessionStats>({ answered: 0, correct: 0, learned: 0 });
+  const winPulse = useWinPulse();
   const reviewedTodayRef = useRef<Set<string>>(new Set(reviewedToday ?? []));
   const scrollRef = useRef<ScrollView>(null);
   const revealY = useRef(0);
@@ -194,6 +222,7 @@ export function SessionScreen({
       chainPicked: [],
       wasCorrect: null,
       usedIdk: false,
+      answerMs: null,
       flags: prevFb ? [...prevFb.flags] : [],
       term: prevFb?.term ?? '',
       note: prevFb?.note ?? '',
@@ -210,7 +239,7 @@ export function SessionScreen({
   }, [card]);
   if (!card) return null;
 
-  const persistFeedback = (patch: Partial<FeedbackRow>) => {
+  const persistFeedback = (patch: Partial<FeedbackRow>): Promise<void> => {
     const row: FeedbackRow = {
       cardId: card.id,
       grade: store.fb.get(card.id)?.grade ?? null,
@@ -221,22 +250,31 @@ export function SessionScreen({
       ...patch,
     };
     store.fb.set(card.id, row);
-    saveFeedback(db, row).catch((e) => console.warn('saveFeedback failed', e));
+    return saveFeedback(db, row).catch((e) => console.warn('saveFeedback failed', e));
   };
 
   const scrollToReveal = () => {
     setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(0, revealY.current - 60), animated: true }), 80);
   };
 
+  /** A2 小档：只在「做成了」时调用。答错 / 不会 / 看答案永远不走这里（§2 硬规矩）。 */
+  const celebrateWin = () => {
+    winPulse.fire();
+    feelSmallWin(soundEnabled);
+  };
+
   const reveal = (verdict: Verdict, wasCorrect: boolean | null, usedIdk: boolean, pickedDisplay?: Set<number>) => {
+    const answerMs = Date.now() - eph.startTs;
     setEph((e) => ({
       ...e,
       phase: 'revealed',
       verdict,
       wasCorrect,
       usedIdk,
+      answerMs,
       pickedDisplay: pickedDisplay ?? e.pickedDisplay,
     }));
+    if (verdict === 'correct') celebrateWin();
     scrollToReveal();
   };
 
@@ -295,6 +333,7 @@ export function SessionScreen({
     reveal('shown', null, false);
   };
 
+  /** 读题环到点只翻答案，不写入评分；用户仍需自己选忘了/模糊/记得。 */
   // ---- grading ---------------------------------------------------------
 
   const grade = (g: SelfGrade) => {
@@ -309,9 +348,10 @@ export function SessionScreen({
       fsrs: applyReview(prev, now, rating, floorDays),
       firstSeen: existing?.firstSeen ?? localDateStr(now),
     };
+    const learnedNow = becameRemembered(prev.state, entry.fsrs.state, rating);
     store.srs.set(card.id, entry);
-    saveSrs(db, card.id, entry).catch((e) => console.warn('saveSrs failed', e));
-    logReview(db, {
+    const srsWrite = saveSrs(db, card.id, entry).catch((e) => console.warn('saveSrs failed', e));
+    const reviewWrite = logReview(db, {
       cardId: card.id,
       ts: now,
       day: localDateStr(now),
@@ -320,11 +360,18 @@ export function SessionScreen({
       usedIdk: eph.usedIdk,
       elapsedMs: Date.now() - eph.startTs,
     }).catch((e) => console.warn('logReview failed', e));
-    persistFeedback({ grade: toFeedbackGrade(g) });
+    const feedbackWrite = persistFeedback({ grade: toFeedbackGrade(g) });
+    // Keep the interaction instant locally, but upload only after all three
+    // SQLite writes have completed so the newest review cannot be missed.
+    void Promise.all([srsWrite, reviewWrite, feedbackWrite]).then(() => syncNow(db).catch(() => {}));
 
+    // 填空题没有客观对错，自评「记得」就算答对；它的小档庆祝也放在这里（选择 / 排序题在翻面时已经庆祝过）。
+    const clozeGot = eph.wasCorrect === null && !eph.usedIdk && g === 'got';
+    if (clozeGot) celebrateWin();
     statsRef.current = {
       answered: statsRef.current.answered + 1,
-      correct: statsRef.current.correct + (eph.wasCorrect === true ? 1 : 0),
+      correct: statsRef.current.correct + (eph.wasCorrect === true || clozeGot ? 1 : 0),
+      learned: statsRef.current.learned + (learnedNow ? 1 : 0),
     };
     reviewedTodayRef.current.add(card.id);
 
@@ -391,6 +438,14 @@ export function SessionScreen({
         })
       : [];
   const sideReveal = eph.phase === 'revealed' && width >= 920;
+  const typicalMs = typicalTimes[card.atomType]?.ms ?? 15_000;
+  const timerMs = readingTimerMs();
+  // 读题秒数：先倒数到 0，再「+N 秒」正计时继续走；颜色不变、不弹窗、不替她翻面。
+  const readingSec = useReadingSeconds(eph.startTs, eph.phase === 'question');
+  const remainingSec = Math.round(timerMs / 1000) - readingSec;
+  const timerLabel = remainingSec >= 0 ? `${remainingSec} 秒` : `+${-remainingSec} 秒`;
+  // A1：答对才看快慢，而且只报「快」——慢了什么都不说（§7 A3 精神）
+  const speedNote = eph.verdict === 'correct' ? fastAnswerNote(eph.answerMs, typicalMs) : null;
   const sidePanelWidth = Math.min(460, Math.max(360, width * 0.36));
   const sidePanelMaxHeight = Math.max(430, height - 136);
 
@@ -410,13 +465,26 @@ export function SessionScreen({
         >
           <Text style={{ color: colors.ink, fontSize: 14, fontWeight: '600' }}>主页</Text>
         </Pressable>
-        <View style={styles.progressLabel}>
-          <Text style={{ color: colors.ink, fontSize: 14, fontWeight: '600' }}>
-            第 {currentIndex} / {total} 张
-          </Text>
-          <Text style={{ color: colors.muted, fontSize: 12 }}>
-            已答 {answered} · 剩余 {remaining}
-          </Text>
+        <View style={styles.headerRight}>
+          {eph.phase === 'question' ? (
+            <View
+              accessibilityLabel={`读题计时，${Math.ceil(timerMs / 1000)} 秒；走完继续正计时，不翻面不计错`}
+              style={[styles.timerDock, { borderColor: colors.line, backgroundColor: colors.card }]}
+            >
+              <SoftTimerRing key={`${pos}-${card.id}`} durationMs={timerMs} />
+              <Text style={{ color: colors.muted, fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] }}>
+                {timerLabel}
+              </Text>
+            </View>
+          ) : null}
+          <View style={styles.progressLabel}>
+            <Text style={{ color: colors.ink, fontSize: 14, fontWeight: '600' }}>
+              第 {currentIndex} / {total} 张
+            </Text>
+            <Text style={{ color: colors.muted, fontSize: 12 }}>
+              已答 {answered} · 剩余 {remaining}
+            </Text>
+          </View>
         </View>
       </View>
       <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
@@ -437,7 +505,10 @@ export function SessionScreen({
               { backgroundColor: colors.card, borderColor: colors.line },
             ]}
           >
-            <TagRow card={card} />
+            <WinFlash pulse={winPulse.value} />
+            <View style={styles.tagRowWrap}>
+              <TagRow card={card} />
+            </View>
             {card.scenario ? <ScenarioBox text={card.scenario} textEn={card.scenario_en} /> : null}
             <View style={styles.questionBlock}>
               <Text style={[styles.q, { color: colors.ink }]}>{card.q}</Text>
@@ -508,6 +579,7 @@ export function SessionScreen({
                   term={eph.term}
                   note={eph.note}
                   optionDetails={optionDetails}
+                  speedNote={speedNote}
                   onToggleFlag={toggleFlag}
                   onTerm={(v) => setEph((e) => ({ ...e, term: v }))}
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
@@ -543,6 +615,7 @@ export function SessionScreen({
                   term={eph.term}
                   note={eph.note}
                   optionDetails={optionDetails}
+                  speedNote={speedNote}
                   onToggleFlag={toggleFlag}
                   onTerm={(v) => setEph((e) => ({ ...e, term: v }))}
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
@@ -556,6 +629,7 @@ export function SessionScreen({
           忘了 / 模糊 / 记得 → FSRS 排期
         </Text>
       </ScrollView>
+      <PlusOne pulse={winPulse.value} />
     </KeyboardAvoidingView>
   );
 }
@@ -581,8 +655,11 @@ const styles = StyleSheet.create({
     minWidth: 58,
     alignItems: 'center',
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   progressLabel: { alignItems: 'flex-end', gap: 2 },
+  timerDock: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 5 },
   card: { borderWidth: 1, borderRadius: 16, padding: 20 },
+  tagRowWrap: {},
   questionPane: { flex: 1, minWidth: 0 },
   sidePanel: { borderWidth: 1, borderRadius: 16, overflow: 'hidden' },
   sidePanelScroll: { flexGrow: 0 },

@@ -13,6 +13,12 @@ http.createServer((req, res) => {
   const safe = path.normalize(relative).replace(/^\.\.(\/|\\|$)/, '');
   let file = path.join(root, safe);
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(root, 'index.html');
-  res.writeHead(200, { 'content-type': contentTypes[path.extname(file)] || 'application/octet-stream' });
+  // The HTML chooses the hashed Expo bundle. Never serve an old HTML shell after a
+  // deploy, while allowing immutable assets to stay fast in browser/CDN caches.
+  const isHtmlShell = path.basename(file) === 'index.html';
+  res.writeHead(200, {
+    'content-type': contentTypes[path.extname(file)] || 'application/octet-stream',
+    'cache-control': isHtmlShell ? 'no-cache, max-age=0, must-revalidate' : 'public, max-age=31536000, immutable',
+  });
   fs.createReadStream(file).pipe(res);
 }).listen(port, () => console.log(`Atoms web listening on ${port}`));

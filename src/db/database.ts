@@ -78,6 +78,17 @@ async function migrate(db: Db): Promise<void> {
       PRAGMA user_version = 3;
     `);
   }
+  if (version < 4) {
+    // Sync metadata: SRS is last-write-wins per card; reviews are append-only.
+    await db.execAsync(`
+      ALTER TABLE srs ADD COLUMN updatedAt TEXT NOT NULL DEFAULT '';
+      UPDATE srs SET updatedAt = firstSeen WHERE updatedAt = '';
+      ALTER TABLE review_log ADD COLUMN eventId TEXT;
+      UPDATE review_log SET eventId = 'legacy-' || id WHERE eventId IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_review_log_event_id ON review_log(eventId);
+      PRAGMA user_version = 4;
+    `);
+  }
 }
 
 export async function loadSrs(db: Db): Promise<Map<string, SrsEntry>> {
@@ -91,17 +102,20 @@ export async function loadSrs(db: Db): Promise<Map<string, SrsEntry>> {
 
 export async function saveSrs(db: Db, cardId: string, entry: SrsEntry): Promise<void> {
   await db.runAsync(
-    `INSERT INTO srs (cardId, fsrs, due, state, firstSeen) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(cardId) DO UPDATE SET fsrs = excluded.fsrs, due = excluded.due, state = excluded.state`,
+     `INSERT INTO srs (cardId, fsrs, due, state, firstSeen, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(cardId) DO UPDATE SET fsrs = excluded.fsrs, due = excluded.due,
+       state = excluded.state, updatedAt = excluded.updatedAt`,
     cardId,
     serializeFsrs(entry.fsrs),
     entry.fsrs.due.toISOString(),
     entry.fsrs.state,
     entry.firstSeen,
+    new Date().toISOString(),
   );
 }
 
 export interface ReviewLogEntry {
+  eventId?: string;
   cardId: string;
   ts: Date;
   day: string;
@@ -113,7 +127,8 @@ export interface ReviewLogEntry {
 
 export async function logReview(db: Db, e: ReviewLogEntry): Promise<void> {
   await db.runAsync(
-    'INSERT INTO review_log (cardId, ts, day, rating, wasCorrect, usedIdk, elapsedMs) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT OR IGNORE INTO review_log (eventId, cardId, ts, day, rating, wasCorrect, usedIdk, elapsedMs) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    e.eventId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     e.cardId,
     e.ts.toISOString(),
     e.day,
@@ -122,6 +137,70 @@ export async function logReview(db: Db, e: ReviewLogEntry): Promise<void> {
     e.usedIdk ? 1 : 0,
     e.elapsedMs,
   );
+}
+
+export interface SyncSnapshot {
+  srs: Array<{ cardId: string; fsrs: string; due: string; state: number; firstSeen: string; updatedAt: string }>;
+  reviews: Array<ReviewLogEntry & { eventId: string }>;
+  feedback: FeedbackRow[];
+}
+
+/** Export only mutable learning state. Card content remains in the app bundle. */
+export async function exportSyncSnapshot(db: Db): Promise<SyncSnapshot> {
+  const srs = await db.getAllAsync<SyncSnapshot['srs'][number]>(
+    'SELECT cardId, fsrs, due, state, firstSeen, updatedAt FROM srs',
+  );
+  const reviewRows = await db.getAllAsync<{
+    eventId: string; cardId: string; ts: string; day: string; rating: number;
+    wasCorrect: number | null; usedIdk: number; elapsedMs: number;
+  }>('SELECT eventId, cardId, ts, day, rating, wasCorrect, usedIdk, elapsedMs FROM review_log');
+  const feedback = [...(await loadFeedback(db)).values()];
+  return {
+    srs,
+    reviews: reviewRows.map((r) => ({
+      eventId: r.eventId,
+      cardId: r.cardId,
+      ts: new Date(r.ts),
+      day: r.day,
+      rating: r.rating,
+      wasCorrect: r.wasCorrect == null ? null : r.wasCorrect === 1,
+      usedIdk: r.usedIdk === 1,
+      elapsedMs: r.elapsedMs,
+    })),
+    feedback,
+  };
+}
+
+/** Merge the server's canonical snapshot into local SQLite without deleting local data. */
+export async function mergeSyncSnapshot(db: Db, snapshot: SyncSnapshot): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    for (const row of snapshot.srs) {
+      await db.runAsync(
+        `INSERT INTO srs (cardId, fsrs, due, state, firstSeen, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(cardId) DO UPDATE SET fsrs = excluded.fsrs, due = excluded.due,
+           state = excluded.state, firstSeen = excluded.firstSeen, updatedAt = excluded.updatedAt
+         WHERE excluded.updatedAt >= srs.updatedAt`,
+        row.cardId, row.fsrs, row.due, row.state, row.firstSeen, row.updatedAt,
+      );
+    }
+    for (const e of snapshot.reviews) {
+      await db.runAsync(
+        `INSERT OR IGNORE INTO review_log (eventId, cardId, ts, day, rating, wasCorrect, usedIdk, elapsedMs)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        e.eventId, e.cardId, new Date(e.ts).toISOString(), e.day, e.rating,
+        e.wasCorrect == null ? null : e.wasCorrect ? 1 : 0, e.usedIdk ? 1 : 0, e.elapsedMs,
+      );
+    }
+    for (const row of snapshot.feedback) {
+      await db.runAsync(
+        `INSERT INTO feedback (cardId, grade, flags, term, note, updatedAt) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(cardId) DO UPDATE SET grade = excluded.grade, flags = excluded.flags,
+           term = excluded.term, note = excluded.note, updatedAt = excluded.updatedAt
+         WHERE excluded.updatedAt >= feedback.updatedAt`,
+        row.cardId, row.grade, JSON.stringify(row.flags), row.term, row.note, row.updatedAt,
+      );
+    }
+  });
 }
 
 export async function countReviewsOnDay(db: Db, day: string): Promise<number> {
@@ -139,6 +218,26 @@ export async function distinctCardsOnDay(db: Db, day: string): Promise<Set<strin
     day,
   );
   return new Set(rows.map((r) => r.cardId));
+}
+
+/** A1：所有有用时的作答记录（cardId + elapsedMs），启动时算一次各卡型中位数。 */
+export async function loadElapsedSamples(db: Db): Promise<Array<{ cardId: string; elapsedMs: number }>> {
+  return db.getAllAsync<{ cardId: string; elapsedMs: number }>(
+    'SELECT cardId, elapsedMs FROM review_log WHERE elapsedMs > 0',
+  );
+}
+
+/**
+ * B4 / A3：某一天做了几张（去重）、一共投入多少毫秒。
+ * 单张卡最多算 capMs（防止把手机放一边的时间算成「坚持」）。
+ */
+export async function dayActivity(db: Db, day: string, capMs: number): Promise<{ cards: number; ms: number }> {
+  const row = await db.getFirstAsync<{ cards: number; ms: number | null }>(
+    'SELECT COUNT(DISTINCT cardId) AS cards, SUM(MIN(elapsedMs, ?)) AS ms FROM review_log WHERE day = ?',
+    capMs,
+    day,
+  );
+  return { cards: row?.cards ?? 0, ms: row?.ms ?? 0 };
 }
 
 /** All local days with ≥1 review — the streak's raw material. */
@@ -360,6 +459,100 @@ export async function seedTracksOnce(db: Db, seeds: Track[]): Promise<void> {
     }
     await db.runAsync(
       "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '8') ON CONFLICT(key) DO UPDATE SET value = '8'",
+    );
+  }
+
+  // v9: ordered first-pass system-design route. These are deliberately small
+  // curated slices of the classic deck: framework → patterns → components →
+  // representative systems → senior follow-ups.
+  if (currentVersion < 9) {
+    for (const id of [
+      'sd-path-00-framework',
+      'sd-path-01-patterns',
+      'sd-path-02-components',
+      'sd-path-03-cases',
+      'sd-path-04-upgrades',
+    ]) {
+      const t = seeds.find((s) => s.id === id);
+      if (!t) continue;
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        t.id,
+        t.name,
+        JSON.stringify(t.include),
+        JSON.stringify(t.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '9') ON CONFLICT(key) DO UPDATE SET value = '9'",
+    );
+  }
+
+  // v10: the first-pass route is an on-ramp, not a false promise that 328
+  // cards cover the whole classic deck. Add the existing tag-based deep-dive
+  // tracks and the remaining-card gap-fill track for existing installations.
+  if (currentVersion < 10) {
+    for (const id of [
+      'sd-path-10-foundations',
+      'sd-path-11-patterns-full',
+      'sd-path-12-data-storage',
+      'sd-path-13-platform-network',
+      'sd-path-14-product-systems',
+      'sd-path-15-reference',
+      'sd-path-99-gap-fill',
+    ]) {
+      const t = seeds.find((s) => s.id === id);
+      if (!t) continue;
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        t.id,
+        t.name,
+        JSON.stringify(t.include),
+        JSON.stringify(t.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '10') ON CONFLICT(key) DO UPDATE SET value = '10'",
+    );
+  }
+
+  // v11: the system-design curriculum belongs inside the one existing
+  // "经典系统设计" track. Retire the temporary top-level route tracks without
+  // touching any FSRS rows, and preserve the learner's current place when one
+  // of those route tracks had been selected.
+  if (currentVersion < 11) {
+    const legacyToRoadmap: Record<string, string> = {
+      'sd-path-00-framework': 'sd-00-framework',
+      'sd-path-01-patterns': 'sd-01-patterns',
+      'sd-path-02-components': 'sd-02-components',
+      'sd-path-03-cases': 'sd-03-cases',
+      'sd-path-04-upgrades': 'sd-04-upgrades',
+      'sd-path-10-foundations': 'sd-10-foundations',
+      'sd-path-11-patterns-full': 'sd-11-patterns-full',
+      'sd-path-12-data-storage': 'sd-12-data-storage',
+      'sd-path-13-platform-network': 'sd-13-platform-network',
+      'sd-path-14-product-systems': 'sd-14-product-systems',
+      'sd-path-15-reference': 'sd-15-reference',
+      'sd-path-99-gap-fill': 'sd-99-gap-fill',
+    };
+    const active = await db.getFirstAsync<{ value: string }>(
+      "SELECT value FROM settings WHERE key = 'activeTrackId'",
+    );
+    const mappedStage = active?.value ? legacyToRoadmap[active.value] : undefined;
+    if (mappedStage) {
+      await db.runAsync("UPDATE settings SET value = 'classic-sd' WHERE key = 'activeTrackId'");
+      await db.runAsync(
+        "INSERT INTO settings (key, value) VALUES ('activeRoadmapStage', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        mappedStage,
+      );
+    }
+    await db.runAsync(
+      "DELETE FROM tracks WHERE id IN ('sd-path-00-framework', 'sd-path-01-patterns', 'sd-path-02-components', 'sd-path-03-cases', 'sd-path-04-upgrades', 'sd-path-10-foundations', 'sd-path-11-patterns-full', 'sd-path-12-data-storage', 'sd-path-13-platform-network', 'sd-path-14-product-systems', 'sd-path-15-reference', 'sd-path-99-gap-fill')",
+    );
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '11') ON CONFLICT(key) DO UPDATE SET value = '11'",
     );
   }
 }

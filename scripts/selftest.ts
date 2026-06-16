@@ -41,6 +41,21 @@ import {
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from '../src/logic/settings';
 import { deadlineFloorDays, isFinalStretch, planNewPerDay } from '../src/logic/planner';
 import { computeStreak, dailyGoal } from '../src/logic/streak';
+import {
+  becameRemembered,
+  dueByTomorrowCount,
+  estimateMinutes,
+  fastAnswerNote,
+  isStreakMilestone,
+  median,
+  minutesFromMs,
+  PLAN_CHUNK,
+  planChunk,
+  readingTimerMs,
+  READING_TIMER_SEC,
+  TIMER_FALLBACK_SEC,
+  typicalTimesByType,
+} from '../src/logic/gameFeel';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
 import { buildArchitectureVisual } from '../src/logic/architectureVisuals';
 import { NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY, RHYTHMS } from '../src/config';
@@ -583,6 +598,93 @@ console.log('streak');
   const g = dailyGoal(7, 3, 5);
   t('goal = done + due + quota', g.done === 7 && g.target === 15);
   t('cleared day → done === target', dailyGoal(20, 0, 0).target === 20);
+}
+
+// ---- 游戏的劲儿（docs/DESIGN_game-feel_2026-10-11.md 第 1 批 + A1）------------
+console.log('game-feel');
+{
+  t('median odd', median([5, 1, 3]) === 3);
+  t('median even', median([4, 1, 3, 2]) === 2.5);
+  t('median empty → null', median([]) === null);
+
+  // A1：样本够（≥20）用她的中位数，不够兜底 15 秒；没有用时 / 不在牌组里的记录不算
+  const typeOf = (id: string) => (id.startsWith('f') ? 'fact' : id.startsWith('c') ? 'contrast' : undefined) as
+    | 'fact'
+    | 'contrast'
+    | undefined;
+  const samples = [
+    ...Array.from({ length: 21 }, (_, i) => ({ cardId: `f${i}`, elapsedMs: (i + 1) * 1000 })),
+    ...Array.from({ length: 19 }, (_, i) => ({ cardId: `c${i}`, elapsedMs: 4000 })),
+    { cardId: 'gone', elapsedMs: 999_000 },
+    { cardId: 'f-null', elapsedMs: null },
+  ];
+  const typical = typicalTimesByType(samples, typeOf);
+  t('A1: ≥20 samples → her median', typical.fact.fromHistory && typical.fact.ms === 11_000 && typical.fact.samples === 21);
+  t('A1: <20 samples → 15 s fallback', !typical.contrast.fromHistory && typical.contrast.ms === TIMER_FALLBACK_SEC * 1000);
+  t('A1: no samples → fallback', typical.number.ms === TIMER_FALLBACK_SEC * 1000 && typical.number.samples === 0);
+  t('A1: reading timer is a flat 60 s regardless of card type (2026-10-12)', READING_TIMER_SEC === 60 && readingTimerMs() === 60_000 && typical.fact.ms !== 60_000);
+  t('A1: faster than median → ⚡ note', fastAnswerNote(4_600, 11_000) === '⚡ 5 秒');
+  t('A1: slower than median → nothing (不渲染慢)', fastAnswerNote(12_000, 11_000) === null);
+  t('A1: no answer time → nothing', fastAnswerNote(null, 11_000) === null);
+
+  // A5：一组最多 PLAN_CHUNK 张；估时 = 每张按卡型中位数相加，向上取整
+  const long = Array.from({ length: 340 }, (_, i) => `x${i}`);
+  t('A5: 340 queued → plan shows only 60', planChunk(long).length === PLAN_CHUNK && planChunk(long)[0] === 'x0');
+  t('A5: short queue untouched', planChunk(['a', 'b']).length === 2);
+  const est = new Map<string, Card>([
+    ['f1', { id: 'f1', atomType: 'fact' } as Card],
+    ['f2', { id: 'f2', atomType: 'fact' } as Card],
+  ]);
+  t('A5: estimate minutes from typical times', estimateMinutes(['f1', 'f2', 'missing'], est, typical) === 1);
+  t('A5: empty plan → 0 minutes', estimateMinutes([], est, typical) === 0);
+
+  // A3「从忘记变成记住」：评分前不在 Review、评完进 Review、评分 ≥ Good
+  t('A3: Learning → Review + Good counts', becameRemembered(State.Learning, State.Review, Rating.Good));
+  t('A3: Relearning → Review + Good counts', becameRemembered(State.Relearning, State.Review, Rating.Good));
+  t('A3: Review → Review is not new learning', !becameRemembered(State.Review, State.Review, Rating.Good));
+  t('A3: Hard never counts', !becameRemembered(State.Relearning, State.Review, Rating.Hard));
+  t('A3: still Learning → no', !becameRemembered(State.New, State.Learning, Rating.Good));
+  {
+    // 用真的 FSRS 走一遍：新卡记得 → 进学习步；隔天再记得 → 进 Review，这一下算「记住了」
+    const d0 = new Date('2026-10-11T10:00:00');
+    const c0 = emptyCard(d0);
+    const c1 = applyReview(c0, d0, Rating.Good);
+    const c2 = applyReview(c1, c1.due, Rating.Good);
+    t(
+      'A3: real FSRS path New→…→Review is caught exactly once',
+      [becameRemembered(c0.state, c1.state, Rating.Good), becameRemembered(c1.state, c2.state, Rating.Good)].filter(Boolean)
+        .length === 1 && c2.state === State.Review,
+    );
+  }
+
+  // A3「明天预计到期」：到明天结束前到期的复习卡（含今天还欠着的），不在范围里的不算
+  {
+    const now = new Date('2026-10-11T10:00:00');
+    const at = (iso: string): SrsEntry => ({
+      fsrs: { ...emptyCard(now), state: State.Review, due: new Date(iso) },
+      firstSeen: '2026-10-01',
+    });
+    const srs = new Map<string, SrsEntry>([
+      ['overdue', at('2026-10-09T08:00:00')],
+      ['tomorrow-night', at('2026-10-12T23:30:00')],
+      ['day-after', at('2026-10-13T08:00:00')],
+      ['other-track', at('2026-10-12T08:00:00')],
+    ]);
+    t(
+      'A3: due-by-tomorrow counts overdue + tomorrow, scoped',
+      dueByTomorrowCount(new Set(['overdue', 'tomorrow-night', 'day-after']), srs, now) === 2,
+    );
+  }
+
+  t('minutes: any work → at least 1', minutesFromMs(20_000) === 1);
+  t('minutes: nothing → 0', minutesFromMs(0) === 0);
+  t('minutes: rounds', minutesFromMs(14.6 * 60_000) === 15);
+  t('streak milestones 7/30/100 only', isStreakMilestone(7) && isStreakMilestone(30) && isStreakMilestone(100) && !isStreakMilestone(8));
+
+  // 音效开关：默认开，老安装没有这个 key 也是开，存 '0' 才是关
+  t('sound default on', DEFAULT_SETTINGS.soundEnabled === true);
+  t('sound: missing key → on', settingsFromKv(new Map()).soundEnabled === true);
+  t('sound: off roundtrips', settingsFromKv(settingsToKv({ ...DEFAULT_SETTINGS, soundEnabled: false })).soundEnabled === false);
 }
 
 // ---- M2a: rhythm → FSRS retention -----------------------------------------

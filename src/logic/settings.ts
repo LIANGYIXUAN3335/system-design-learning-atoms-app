@@ -1,14 +1,20 @@
 import { DEFAULT_EVENING, DEFAULT_MORNING } from '../config';
 import type { AppSettings, RhythmId } from '../types';
+import {
+  DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE,
+  isSystemDesignRoadmapStageId,
+} from './systemDesignRoadmap';
 
 export const DEFAULT_SETTINGS: AppSettings = {
   targetDate: null,
   activeTrackId: 'all',
+  activeRoadmapStage: DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE,
   activeCategory: 'all',
   rhythm: 'normal',
   remindersEnabled: false,
   morningTime: DEFAULT_MORNING,
   eveningTime: DEFAULT_EVENING,
+  soundEnabled: true,
 };
 
 const RHYTHM_IDS: RhythmId[] = ['intensive', 'normal', 'relaxed'];
@@ -33,6 +39,8 @@ export function settingsFromKv(kv: Map<string, string>): AppSettings {
   if (target && isValidDateStr(target)) s.targetDate = target;
   const track = kv.get('activeTrackId');
   if (track) s.activeTrackId = track;
+  const roadmapStage = kv.get('activeRoadmapStage');
+  if (roadmapStage && isSystemDesignRoadmapStageId(roadmapStage)) s.activeRoadmapStage = roadmapStage;
   const category = kv.get('activeCategory');
   if (category) s.activeCategory = category;
   const rhythm = kv.get('rhythm') as RhythmId | undefined;
@@ -42,6 +50,8 @@ export function settingsFromKv(kv: Map<string, string>): AppSettings {
   if (morning && isValidTimeStr(morning)) s.morningTime = morning;
   const evening = kv.get('eveningTime');
   if (evening && isValidTimeStr(evening)) s.eveningTime = evening;
+  // 默认开：只有明确存过 '0' 才算关（老安装没有这个 key，也是开）
+  s.soundEnabled = kv.get('soundEnabled') !== '0';
   return s;
 }
 
@@ -49,10 +59,12 @@ export function settingsToKv(s: AppSettings): Map<string, string> {
   return new Map<string, string>([
     ['targetDate', s.targetDate ?? ''],
     ['activeTrackId', s.activeTrackId],
+    ['activeRoadmapStage', s.activeRoadmapStage],
     ['activeCategory', s.activeCategory],
     ['rhythm', s.rhythm],
     ['remindersEnabled', s.remindersEnabled ? '1' : '0'],
     ['morningTime', s.morningTime],
     ['eveningTime', s.eveningTime],
+    ['soundEnabled', s.soundEnabled ? '1' : '0'],
   ]);
 }

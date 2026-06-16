@@ -34,6 +34,8 @@ export interface RevealBlockProps {
   onGrade: (g: SelfGrade) => void;
   optionDetails?: AnswerOptionDetail[];
   panel?: boolean;
+  /** A1：答对且比她平时快时的一行「⚡ 5 秒」；慢了 / 答错时为空，什么都不显示 */
+  speedNote?: string | null;
 }
 
 function speakEnglish(text: string) {
@@ -52,6 +54,9 @@ export function RevealBlock(props: RevealBlockProps) {
     <View style={[styles.wrap, { borderTopColor: colors.line }, props.panel ? styles.panelWrap : null]}>
       <Text style={{ fontSize: 15, fontWeight: '700', color: verdictColor, marginBottom: 9 }}>
         {VERDICT_TEXT[verdict]}
+        {verdict === 'correct' && props.speedNote ? (
+          <Text style={{ fontSize: 13, fontWeight: '600', color: colors.muted }}>{'   '}{props.speedNote}</Text>
+        ) : null}
       </Text>
       <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>{card.why}</Text>
 

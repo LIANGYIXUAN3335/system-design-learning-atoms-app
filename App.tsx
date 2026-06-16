@@ -3,9 +3,13 @@ import { ActivityIndicator, Alert, Platform, SafeAreaView, Share, StatusBar as R
 import { StatusBar } from 'expo-status-bar';
 import bundledCardsJson from './src/content/deck.bundle.json';
 import seedTracksJson from './src/content/tracks.json';
+import reciteBundleJson from './src/content/recite.bundle.json';
+import reciteThreadsJson from './src/content/recite.threads.json';
 import {
+  dayActivity,
   deleteTrack,
   distinctCardsOnDay,
+  loadElapsedSamples,
   loadFeedback,
   loadSettingsKv,
   loadSrs,
@@ -16,6 +20,7 @@ import {
   seedTracksOnce,
   studiedDays,
   type Db,
+  type SyncSnapshot,
 } from './src/db/database';
 import { MASTERED_STABILITY_DAYS, RHYTHMS } from './src/config';
 import { localDateStr } from './src/logic/dates';
@@ -26,20 +31,55 @@ import { deadlineFloorDays, isFinalStretch, planNewPerDay } from './src/logic/pl
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from './src/logic/settings';
 import { setRequestRetention, State } from './src/logic/srs';
 import { computeStreak, dailyGoal } from './src/logic/streak';
+import {
+  defaultTypicalTimes,
+  dueByTomorrowCount,
+  estimateMinutes,
+  MAX_COUNTED_MS_PER_CARD,
+  minutesFromMs,
+  planChunk,
+  typicalTimesByType,
+  type TypicalTimes,
+} from './src/logic/gameFeel';
+import { preloadSfx } from './src/feel';
 import { ALL_TRACK, cardMatchesTrack, filterDeck, findTrack } from './src/logic/tracks';
+import {
+  CLASSIC_SYSTEM_DESIGN_TRACK_ID,
+  filterSystemDesignRoadmapStage,
+  legacyTrackToRoadmapStage,
+  normalizeSystemDesignRoadmapStage,
+  SYSTEM_DESIGN_ROADMAP,
+} from './src/logic/systemDesignRoadmap';
 import { rescheduleReminders } from './src/notifications';
 import { useTheme } from './src/theme';
+import { syncConfigured, syncNow } from './src/sync';
 import type { AppSettings, Card, Track } from './src/types';
 import { DoneScreen } from './src/screens/DoneScreen';
 import { SessionScreen, type SessionStats, type SessionStore } from './src/screens/SessionScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { TodayScreen, type TodayStats } from './src/screens/TodayScreen';
+import { ReciteLibraryScreen } from './src/screens/ReciteLibraryScreen';
+import { ReciteItemScreen } from './src/screens/ReciteItemScreen';
+import { buildThreads } from './src/recite/threads';
+import type { ReciteItem, ReciteThread } from './src/recite/types';
 
 const bundledCards = bundledCardsJson as unknown as Card[];
 const seedTracks = seedTracksJson as unknown as Track[];
+// 念稿库和 12k 张卡一样打进 bundle：离线也能读题、看点评、看完整对话。
+// 只有录音 / 转写 / 判官那一段要联网（docs/M4-recite.md §1）。
+const reciteItems = reciteBundleJson as unknown as ReciteItem[];
+// 库和练习页的单位是 thread（主问题 + 追问链）。分组表还没填满时，没被收走的条目
+// 各自派生成一条单段 thread —— 336 条一条不丢（src/recite/threads.ts）。
+const reciteThreads = buildThreads(reciteItems, reciteThreadsJson as unknown as ReciteThread[]);
 
-type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings';
+type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item';
 type SessionMode = 'all' | 'review' | 'new';
+type SyncState = 'idle' | 'syncing' | 'success' | 'error';
+
+function syncSummary(snapshot: SyncSnapshot): string {
+  const reviewedCards = new Set(snapshot.reviews.map((review) => review.cardId)).size;
+  return `同步完成：${snapshot.srs.length} 张已排期，${reviewedCards} 张有作答记录，${snapshot.reviews.length} 次作答。`;
+}
 
 function downloadTextFile(filename: string, text: string): boolean {
   if (typeof document === 'undefined') return false;
@@ -70,7 +110,11 @@ export default function App() {
   const [sessionScope, setSessionScope] = useState<Set<string> | null>(null);
   const [sessionReviewedToday, setSessionReviewedToday] = useState<Set<string>>(new Set());
   const [sessionKey, setSessionKey] = useState(0);
-  const [lastStats, setLastStats] = useState<SessionStats>({ answered: 0, correct: 0 });
+  const [lastStats, setLastStats] = useState<SessionStats>({ answered: 0, correct: 0, learned: 0 });
+  const [syncState, setSyncState] = useState<SyncState>('idle');
+  const [syncMessage, setSyncMessage] = useState('');
+  /** 正在练的那一条链（thread_id）；'recite-item' 屏用它 */
+  const [reciteThreadId, setReciteThreadId] = useState<string | null>(null);
 
   const dbRef = useRef<Db | null>(null);
   const cardsRef = useRef<Card[]>([]);
@@ -78,19 +122,25 @@ export default function App() {
   const settingsRef = useRef<AppSettings>(DEFAULT_SETTINGS);
   const tracksRef = useRef<Track[]>([]);
   const todayDoneIdsRef = useRef<Set<string>>(new Set());
+  const cardsByIdRef = useRef<Map<string, Card>>(new Map());
+  /** A1：各卡型她自己的作答用时中位数，启动时从 review_log 算一次 */
+  const typicalRef = useRef<TypicalTimes>(defaultTypicalTimes());
 
   const pickerTracks = useCallback((): Track[] => [ALL_TRACK, ...tracksRef.current], []);
 
-  const activeDeck = useCallback((): Card[] => {
-    const track = findTrack(pickerTracks(), settingsRef.current.activeTrackId);
+  const activeTrackDeck = useCallback((): Card[] => {
+    const settings = settingsRef.current;
+    const track = findTrack(pickerTracks(), settings.activeTrackId);
     const trackDeck = filterDeck(cardsRef.current, track);
-    return filterByCategory(trackDeck, settingsRef.current.activeCategory);
+    return settings.activeTrackId === CLASSIC_SYSTEM_DESIGN_TRACK_ID
+      ? filterSystemDesignRoadmapStage(trackDeck, settings.activeRoadmapStage)
+      : trackDeck;
   }, [pickerTracks]);
 
-  const activeTrackDeck = useCallback((): Card[] => {
-    const track = findTrack(pickerTracks(), settingsRef.current.activeTrackId);
-    return filterDeck(cardsRef.current, track);
-  }, [pickerTracks]);
+  const activeDeck = useCallback(
+    (): Card[] => filterByCategory(activeTrackDeck(), settingsRef.current.activeCategory),
+    [activeTrackDeck],
+  );
 
   const refresh = useCallback(async () => {
     const db = dbRef.current;
@@ -142,12 +192,37 @@ export default function App() {
         });
     const dueCount = queue.filter((id) => store.srs.has(id)).length;
     const newCount = queue.length - dueCount;
+    // A5：首页只报「这一组」——队列再长也最多 PLAN_CHUNK 张，剩下的不提；没做完的明天照样到期，
+    // 按「最早到期先做」自然摊到之后几天（补课模式，FSRS 排期一点没动）。
+    const planIds = planChunk(queue);
+    const planMinutes = estimateMinutes(planIds, cardsByIdRef.current, typicalRef.current);
+    const activity = await dayActivity(db, localDateStr(now), MAX_COUNTED_MS_PER_CARD);
 
     const doneInDeck = reviewedTodayInDeck.size;
     const quotaLeft = Math.max(0, effectiveNewPerDay - introducedTodayCount(store.srs, now, deckIds));
     const goal = dailyGoal(doneInDeck, dueCount, Math.min(quotaLeft, newCount));
 
     const streak = computeStreak(await studiedDays(db), now);
+
+    const roadmapStages =
+      s.activeTrackId === CLASSIC_SYSTEM_DESIGN_TRACK_ID
+        ? SYSTEM_DESIGN_ROADMAP.map((stage) => {
+            const stageDeck = filterSystemDesignRoadmapStage(
+              filterDeck(cardsRef.current, findTrack(pickerTracks(), CLASSIC_SYSTEM_DESIGN_TRACK_ID)),
+              stage.id,
+            );
+            let seen = 0;
+            let stageMastered = 0;
+            for (const card of stageDeck) {
+              const entry = store.srs.get(card.id);
+              if (entry) seen++;
+              if (entry?.fsrs.state === State.Review && entry.fsrs.stability >= MASTERED_STABILITY_DAYS) {
+                stageMastered++;
+              }
+            }
+            return { ...stage, total: stageDeck.length, seen, mastered: stageMastered };
+          })
+        : [];
 
     let otherTracksDue = 0;
     for (const [id, e] of store.srs.entries()) {
@@ -162,6 +237,11 @@ export default function App() {
       newCount,
       todayDone: goal.done,
       todayTarget: goal.target,
+      planCount: planIds.length,
+      planMinutes,
+      todayCardsAll: doneSetAll.size,
+      todayMinutes: minutesFromMs(activity.ms),
+      dueTomorrow: dueByTomorrowCount(deckIds, store.srs, now),
       streak,
       laterToday: laterTodayCount(deck, store.srs, now, undefined, reviewedTodayInDeck),
       otherTracksDue,
@@ -179,6 +259,7 @@ export default function App() {
           ? '冲刺收尾：暂停新卡，集中刷未掌握的弱卡'
           : plan.warning,
       focusedModule,
+      roadmapStages,
       categories: [
         {
           id: ALL_CATEGORY,
@@ -196,11 +277,51 @@ export default function App() {
     }
   }, [activeTrackDeck]);
 
+  const runSync = useCallback(async () => {
+    const db = dbRef.current;
+    if (!db) return;
+    setSyncState('syncing');
+    setSyncMessage('正在合并本机和云端的刷题记录…');
+    try {
+      const snapshot = await syncNow(db);
+      if (!snapshot) {
+        setSyncState('error');
+        setSyncMessage(
+          syncConfigured()
+            ? '同步没有开始：请重新点一次按钮并输入同步口令。'
+            : '这个版本还没有配置同步服务。',
+        );
+        return;
+      }
+      const [srs, fb, samples] = await Promise.all([loadSrs(db), loadFeedback(db), loadElapsedSamples(db)]);
+      storeRef.current = { srs, fb };
+      typicalRef.current = typicalTimesByType(samples, (id) => cardsByIdRef.current.get(id)?.atomType);
+      await refresh();
+      setSyncState('success');
+      setSyncMessage(syncSummary(snapshot));
+    } catch (error) {
+      setSyncState('error');
+      setSyncMessage(`同步没有完成：${error instanceof Error ? error.message : '请检查网络后重试。'}`);
+    }
+  }, [refresh]);
+
   useEffect(() => {
     (async () => {
       try {
         const db = await openDb();
         await seedTracksOnce(db, seedTracks);
+        // Pull and merge before loading the queue, so a phone and laptop see the
+        // same FSRS state as soon as the app opens.
+        try {
+          const snapshot = await syncNow(db);
+          if (snapshot) {
+            setSyncState('success');
+            setSyncMessage(syncSummary(snapshot));
+          }
+        } catch (error) {
+          setSyncState('error');
+          setSyncMessage(`启动同步没有完成：${error instanceof Error ? error.message : '请稍后在设置页重试。'}`);
+        }
         const cards = bundledCards;
         const srs = await loadSrs(db);
         const fb = await loadFeedback(db);
@@ -210,8 +331,24 @@ export default function App() {
 
         dbRef.current = db;
         cardsRef.current = cards;
+        cardsByIdRef.current = new Map(cards.map((c) => [c.id, c]));
+        try {
+          const samples = await loadElapsedSamples(db);
+          typicalRef.current = typicalTimesByType(samples, (id) => cardsByIdRef.current.get(id)?.atomType);
+        } catch (e) {
+          console.warn('typical times failed, using 15s fallback', e);
+        }
+        preloadSfx();
         storeRef.current = { srs, fb };
         tracksRef.current = dbTracks;
+        // An interrupted old build can still carry the retired top-level route
+        // id. Preserve its place by moving it into the classic-SD roadmap.
+        const legacyRoadmapStage = legacyTrackToRoadmapStage(loadedSettings.activeTrackId);
+        if (legacyRoadmapStage) {
+          loadedSettings.activeTrackId = CLASSIC_SYSTEM_DESIGN_TRACK_ID;
+          loadedSettings.activeRoadmapStage = legacyRoadmapStage;
+        }
+        loadedSettings.activeRoadmapStage = normalizeSystemDesignRoadmapStage(loadedSettings.activeRoadmapStage);
         // deleted-track fallback (review §2 edge): unknown id → 全部
         if (!(loadedSettings.activeTrackId === 'all' || dbTracks.some((t) => t.id === loadedSettings.activeTrackId))) {
           loadedSettings.activeTrackId = 'all';
@@ -242,7 +379,24 @@ export default function App() {
   };
 
   const selectTrack = (id: string) => {
-    void persistSettings({ ...settingsRef.current, activeTrackId: id, activeCategory: ALL_CATEGORY });
+    void persistSettings({
+      ...settingsRef.current,
+      activeTrackId: id,
+      activeRoadmapStage:
+        id === CLASSIC_SYSTEM_DESIGN_TRACK_ID
+          ? normalizeSystemDesignRoadmapStage(settingsRef.current.activeRoadmapStage)
+          : settingsRef.current.activeRoadmapStage,
+      activeCategory: ALL_CATEGORY,
+    });
+  };
+
+  const selectRoadmapStage = (id: string) => {
+    void persistSettings({
+      ...settingsRef.current,
+      activeTrackId: CLASSIC_SYSTEM_DESIGN_TRACK_ID,
+      activeRoadmapStage: normalizeSystemDesignRoadmapStage(id),
+      activeCategory: ALL_CATEGORY,
+    });
   };
 
   const selectCategory = (id: string) => {
@@ -267,11 +421,15 @@ export default function App() {
     // dues keep oldest-first order; only the new-card tail is shuffled per session
     q = orderSessionQueue(q, store.srs);
     if (!q.length) return;
+    // A5：一组最多 PLAN_CHUNK 张（到期的照旧最早先做，新卡在后）
+    const chunk = planChunk(q);
+    const chunked = chunk.length < q.length;
     setSessionDeck(deck);
-    setSessionQueue(q);
+    setSessionQueue(chunk);
     setSessionReviewedToday(new Set(reviewedToday));
-    // mode-filtered sessions bound the mid-session requeue sweep to their own cards
-    setSessionScope(mode === 'all' ? null : new Set(q));
+    // mode-filtered sessions bound the mid-session requeue sweep to their own cards;
+    // a chunked group too — otherwise the sweep would pull the whole backlog straight back in
+    setSessionScope(mode === 'all' && !chunked ? null : new Set(chunk));
     setSessionKey((k) => k + 1);
     setScreen('session');
   };
@@ -346,8 +504,10 @@ export default function App() {
           stats={todayStats}
           tracks={pickerTracks()}
           activeTrackId={settings.activeTrackId}
+          activeRoadmapStage={settings.activeRoadmapStage}
           activeCategory={settings.activeCategory}
           onSelectTrack={selectTrack}
+          onSelectRoadmapStage={selectRoadmapStage}
           onSelectCategory={selectCategory}
           onStart={() => startSession('all')}
           onStartReviews={() => startSession('review')}
@@ -355,6 +515,29 @@ export default function App() {
           onExport={exportFeedback}
           onRefresh={() => void refresh()}
           onSettings={() => setScreen('settings')}
+          onRecite={() => setScreen('recite')}
+        />
+      ) : null}
+
+      {screen === 'recite' ? (
+        <ReciteLibraryScreen
+          items={reciteItems}
+          threads={reciteThreads}
+          onOpen={(id) => {
+            setReciteThreadId(id);
+            setScreen('recite-item');
+          }}
+          onBack={() => setScreen('today')}
+        />
+      ) : null}
+
+      {screen === 'recite-item' && reciteThreadId ? (
+        <ReciteItemScreen
+          items={reciteItems}
+          threads={reciteThreads}
+          threadId={reciteThreadId}
+          onOpen={(id) => setReciteThreadId(id)}
+          onBack={() => setScreen('recite')}
         />
       ) : null}
 
@@ -363,6 +546,7 @@ export default function App() {
           settings={settings}
           tracks={tracks}
           trackCounts={trackCounts}
+          typicalTimes={typicalRef.current}
           onSave={(s) => {
             void persistSettings(s).then(() => setScreen('today'));
           }}
@@ -389,6 +573,9 @@ export default function App() {
               })
               .catch(() => {});
           }}
+          onSyncNow={() => void runSync()}
+          syncState={syncState}
+          syncMessage={syncMessage}
           onBack={() => {
             void refresh();
             setScreen('today');
@@ -406,6 +593,8 @@ export default function App() {
           requeueScope={sessionScope}
           reviewedToday={sessionReviewedToday}
           correctFuzzyFloor={todayStats?.correctFuzzyFloor ?? 4}
+          typicalTimes={typicalRef.current}
+          soundEnabled={settings.soundEnabled}
           onExit={() => {
             void refresh();
             setScreen('today');
@@ -420,10 +609,10 @@ export default function App() {
       {screen === 'done' && todayStats ? (
         <DoneScreen
           stats={lastStats}
-          todayDone={todayStats.todayDone}
-          todayTarget={todayStats.todayTarget}
+          todayMinutes={todayStats.todayMinutes}
+          dueTomorrow={todayStats.dueTomorrow}
           streak={todayStats.streak}
-          laterToday={todayStats.laterToday}
+          soundEnabled={settings.soundEnabled}
           onBack={() => {
             void refresh();
             setScreen('today');

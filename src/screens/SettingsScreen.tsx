@@ -16,7 +16,8 @@ import { isValidDateStr, isValidTimeStr } from '../logic/settings';
 import { trackIdFromName } from '../logic/tracks';
 import { useTheme } from '../theme';
 import type { AppSettings, RhythmId, Track } from '../types';
-import { ActButton, GhostButton } from '../components/ui';
+import { ActButton, ATOM_TYPE_LABEL, GhostButton } from '../components/ui';
+import { ATOM_TYPES, TIMER_MIN_SAMPLES, type TypicalTimes } from '../logic/gameFeel';
 
 const PREP_DAY_MIN = 1;
 const PREP_DAY_MAX = 60;
@@ -49,6 +50,11 @@ export interface SettingsScreenProps {
   onAddTrack: (t: Track) => void;
   onDeleteTrack: (id: string) => void;
   onBack: () => void;
+  onSyncNow: () => void;
+  syncState: 'idle' | 'syncing' | 'success' | 'error';
+  syncMessage: string;
+  /** A1 计时环的基准秒数（启动时从 review_log 算的），这里只读展示 */
+  typicalTimes?: TypicalTimes;
 }
 
 export function SettingsScreen({
@@ -59,6 +65,10 @@ export function SettingsScreen({
   onAddTrack,
   onDeleteTrack,
   onBack,
+  onSyncNow,
+  syncState,
+  syncMessage,
+  typicalTimes,
 }: SettingsScreenProps) {
   const { colors } = useTheme();
   const [targetDate, setTargetDate] = useState(settings.targetDate ?? '');
@@ -70,6 +80,7 @@ export function SettingsScreen({
   const [remindersEnabled, setRemindersEnabled] = useState(settings.remindersEnabled);
   const [morningTime, setMorningTime] = useState(settings.morningTime);
   const [eveningTime, setEveningTime] = useState(settings.eveningTime);
+  const [soundEnabled, setSoundEnabled] = useState(settings.soundEnabled);
   const [newTrackName, setNewTrackName] = useState('');
   const [newTrackTags, setNewTrackTags] = useState('');
 
@@ -105,6 +116,7 @@ export function SettingsScreen({
       remindersEnabled,
       morningTime,
       eveningTime,
+      soundEnabled,
     });
   };
 
@@ -273,6 +285,64 @@ export function SettingsScreen({
           </View>
         ) : null}
 
+        {label('音效（答对「叮」一声，做完一组响一串；震动不受这个开关影响）')}
+        <Pressable
+          onPress={() => setSoundEnabled(!soundEnabled)}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: soundEnabled }}
+          style={[
+            styles.rhythmRow,
+            {
+              borderColor: soundEnabled ? colors.accent : colors.line,
+              backgroundColor: soundEnabled ? colors.accentSoft : colors.card,
+            },
+          ]}
+        >
+          <Text style={{ fontSize: 15, color: soundEnabled ? colors.accent : colors.ink }}>
+            {soundEnabled ? '🔊 音效已开启（点击关闭）' : '🔇 音效已关闭（点击开启）'}
+          </Text>
+        </Pressable>
+
+        {typicalTimes ? (
+          <>
+            {label(`读题计时环（你自己每种卡的用时中位数；读题时给 3 倍时间，某种卡做过不到 ${TIMER_MIN_SAMPLES} 张就先按 45 秒）`)}
+            <Text style={{ fontSize: 13, color: colors.ink, lineHeight: 20 }}>
+              {ATOM_TYPES.map((type) => {
+                const tt = typicalTimes[type];
+                const sec = Math.round(tt.ms / 1000);
+                return `${ATOM_TYPE_LABEL[type].split(' ')[0]} ${sec} 秒${tt.fromHistory ? '' : '（读题按 45 秒）'}`;
+              }).join(' · ')}
+            </Text>
+          </>
+        ) : null}
+
+        {label('跨设备同步')}
+        <Text style={{ fontSize: 13, color: colors.muted, lineHeight: 19, marginBottom: 8 }}>
+          用同步口令把本机与云端记录合并。同步不会覆盖较新的 FSRS 排期。
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          disabled={syncState === 'syncing'}
+          onPress={onSyncNow}
+          style={[
+            styles.syncButton,
+            {
+              borderColor: colors.accent,
+              backgroundColor: syncState === 'syncing' ? colors.accentSoft : colors.card,
+              opacity: syncState === 'syncing' ? 0.65 : 1,
+            },
+          ]}
+        >
+          <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '700' }}>
+            {syncState === 'syncing' ? '正在同步…' : '同步我的刷题记录'}
+          </Text>
+        </Pressable>
+        {syncMessage ? (
+          <Text style={{ fontSize: 13, color: syncState === 'error' ? colors.bad : colors.muted, lineHeight: 19, marginTop: 8 }}>
+            {syncMessage}
+          </Text>
+        ) : null}
+
         {label('学习路径（track = tag 过滤器，取并集；可随时新增）')}
         <View style={{ gap: 8 }}>
           {tracks.map((t) => (
@@ -323,6 +393,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   rhythmRow: { borderWidth: 1.5, borderRadius: 11, paddingVertical: 11, paddingHorizontal: 13 },
+  syncButton: { alignItems: 'center', borderWidth: 1.5, borderRadius: 9, paddingVertical: 11, paddingHorizontal: 13 },
   prepRow: {
     borderWidth: 1.5,
     borderRadius: 11,
