@@ -84,6 +84,8 @@ export interface TodayScreenProps {
   onSettings: () => void;
   /** 🎤 口语复盘 —— 不是卡池，是另一种练习，所以放标题行不放 track chip（M4 §4） */
   onRecite: () => void;
+  /** 🗺 领地图：按模块三色格子，攒下来的看得见 */
+  onTerritory: () => void;
 }
 
 export function TodayScreen({
@@ -102,6 +104,7 @@ export function TodayScreen({
   onRefresh,
   onSettings,
   onRecite,
+  onTerritory,
 }: TodayScreenProps) {
   const { colors } = useTheme();
   const isAboveRecommendation =
@@ -139,6 +142,15 @@ export function TodayScreen({
           >
             <Text style={{ fontSize: 18 }}>🎤</Text>
             <Text style={{ fontSize: 13, color: colors.muted }}>口语复盘</Text>
+          </Pressable>
+          <Pressable
+            onPress={onTerritory}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="领地图"
+            style={styles.gear}
+          >
+            <Text style={{ fontSize: 18 }}>🗺</Text>
           </Pressable>
           <Pressable onPress={onSettings} hitSlop={10} style={styles.gear}>
             <Text style={{ fontSize: 20 }}>⚙️</Text>

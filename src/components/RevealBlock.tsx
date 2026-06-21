@@ -31,6 +31,8 @@ export interface RevealBlockProps {
   onToggleFlag: (f: FlagKey) => void;
   onTerm: (v: string) => void;
   onNote: (v: string) => void;
+  feedbackSubmitted: boolean;
+  onSubmitFeedback: () => Promise<'cloud' | 'local'>;
   onGrade: (g: SelfGrade) => void;
   optionDetails?: AnswerOptionDetail[];
   panel?: boolean;
@@ -109,6 +111,9 @@ export function RevealBlock(props: RevealBlockProps) {
       <TermGlossary card={card} />
 
       <FeedbackBlock
+        cardId={card.id}
+        submitted={props.feedbackSubmitted}
+        onSubmit={props.onSubmitFeedback}
         flags={props.flags}
         term={props.term}
         note={props.note}

@@ -14,7 +14,7 @@ import { chainCorrect, choiceCorrect, minIntervalDays, toFeedbackGrade, toFsrsRa
 import { dueAdditions, type SrsEntry } from '../logic/queue';
 import { shuffleWithMap, type Shuffled } from '../logic/shuffle';
 import { applyReview, emptyCard } from '../logic/srs';
-import { becameRemembered, fastAnswerNote, readingTimerMs, type TypicalTimes } from '../logic/gameFeel';
+import { becameRemembered, fastAnswerNote, nextWinLevel, readingTimerMs, type TypicalTimes } from '../logic/gameFeel';
 import { feelSmallWin } from '../feel';
 import { logReview, saveFeedback, saveSrs, type Db } from '../db/database';
 import { syncNow } from '../sync';
@@ -61,6 +61,9 @@ interface Ephemeral {
   flags: FlagKey[];
   term: string;
   note: string;
+  /** 真正发出去的那句（persistFeedback 用它，不用草稿） */
+  noteSent: string;
+  fbSubmitted: boolean;
   startTs: number;
 }
 
@@ -203,6 +206,8 @@ export function SessionScreen({
   const [queue, setQueue] = useState<string[]>(initialQueue);
   const [pos, setPos] = useState(0);
   const statsRef = useRef<SessionStats>({ answered: 0, correct: 0, learned: 0 });
+  /** 组内连续答对的「叮」级数（0 = 刚归零） */
+  const winLevelRef = useRef(0);
   const winPulse = useWinPulse();
   const reviewedTodayRef = useRef<Set<string>>(new Set(reviewedToday ?? []));
   const scrollRef = useRef<ScrollView>(null);
@@ -226,6 +231,8 @@ export function SessionScreen({
       flags: prevFb ? [...prevFb.flags] : [],
       term: prevFb?.term ?? '',
       note: prevFb?.note ?? '',
+      noteSent: prevFb?.note ?? '',
+      fbSubmitted: false,
       startTs: Date.now(),
     };
   };
@@ -245,7 +252,7 @@ export function SessionScreen({
       grade: store.fb.get(card.id)?.grade ?? null,
       flags: eph.flags,
       term: eph.term,
-      note: eph.note,
+      note: eph.noteSent,
       updatedAt: new Date().toISOString(),
       ...patch,
     };
@@ -260,11 +267,14 @@ export function SessionScreen({
   /** A2 小档：只在「做成了」时调用。答错 / 不会 / 看答案永远不走这里（§2 硬规矩）。 */
   const celebrateWin = () => {
     winPulse.fire();
-    feelSmallWin(soundEnabled);
+    // 「叮」按组内连续答对升级：1→5 级封顶；答错 / 模糊 / 看答案在下面归 0
+    winLevelRef.current = nextWinLevel(winLevelRef.current, true);
+    feelSmallWin(soundEnabled, winLevelRef.current);
   };
 
   const reveal = (verdict: Verdict, wasCorrect: boolean | null, usedIdk: boolean, pickedDisplay?: Set<number>) => {
     const answerMs = Date.now() - eph.startTs;
+    if (verdict !== 'correct') winLevelRef.current = nextWinLevel(winLevelRef.current, false);
     setEph((e) => ({
       ...e,
       phase: 'revealed',
@@ -276,6 +286,19 @@ export function SessionScreen({
     }));
     if (verdict === 'correct') celebrateWin();
     scrollToReveal();
+  };
+
+  /** ✏️ 改这张卡 → 发给 Claude 改：存本机，再立刻上云（上云失败也不丢，下次同步带走）。 */
+  const submitFeedback = async (): Promise<'cloud' | 'local'> => {
+    const note = eph.note.trim();
+    setEph((e) => ({ ...e, noteSent: note, fbSubmitted: true }));
+    await persistFeedback({ note, flags: eph.flags, term: eph.term });
+    try {
+      const snap = await syncNow(db);
+      return snap ? 'cloud' : 'local';
+    } catch {
+      return 'local';
+    }
   };
 
   // ---- answer handlers -------------------------------------------------
@@ -368,6 +391,7 @@ export function SessionScreen({
     // 填空题没有客观对错，自评「记得」就算答对；它的小档庆祝也放在这里（选择 / 排序题在翻面时已经庆祝过）。
     const clozeGot = eph.wasCorrect === null && !eph.usedIdk && g === 'got';
     if (clozeGot) celebrateWin();
+    if (g !== 'got') winLevelRef.current = nextWinLevel(winLevelRef.current, false);
     statsRef.current = {
       answered: statsRef.current.answered + 1,
       correct: statsRef.current.correct + (eph.wasCorrect === true || clozeGot ? 1 : 0),
@@ -583,6 +607,8 @@ export function SessionScreen({
                   onToggleFlag={toggleFlag}
                   onTerm={(v) => setEph((e) => ({ ...e, term: v }))}
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
+                  feedbackSubmitted={eph.fbSubmitted}
+                  onSubmitFeedback={submitFeedback}
                   onGrade={grade}
                 />
               </View>
@@ -619,6 +645,8 @@ export function SessionScreen({
                   onToggleFlag={toggleFlag}
                   onTerm={(v) => setEph((e) => ({ ...e, term: v }))}
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
+                  feedbackSubmitted={eph.fbSubmitted}
+                  onSubmitFeedback={submitFeedback}
                   onGrade={grade}
                 />
               </ScrollView>

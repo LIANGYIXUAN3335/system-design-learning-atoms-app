@@ -143,3 +143,15 @@ export function fastAnswerNote(answerMs: number | null, baselineMs: number): str
   if (answerMs == null || !(answerMs > 0) || answerMs >= baselineMs) return null;
   return `⚡ ${Math.max(1, Math.round(answerMs / 1000))} 秒`;
 }
+
+/** 「叮」音阶一共几级（和 src/feel.ts 的音频文件数一致）。 */
+export const WIN_LEVELS = 5;
+
+/**
+ * 组内连续答对的级数：答对 +1（封顶 WIN_LEVELS），答错 / 模糊 / 看答案归 0。
+ * 下一次答对从 1 开始，所以「回第 1 级」= 归 0 再 +1。
+ */
+export function nextWinLevel(prev: number, won: boolean): number {
+  if (!won) return 0;
+  return Math.min(WIN_LEVELS, Math.max(0, Math.floor(prev)) + 1);
+}

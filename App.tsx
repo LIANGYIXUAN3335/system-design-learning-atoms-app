@@ -30,6 +30,8 @@ import { buildQueue, buildWeakSweepQueue, introducedTodayCount, isDueNow, laterT
 import { deadlineFloorDays, isFinalStretch, planNewPerDay } from './src/logic/planner';
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from './src/logic/settings';
 import { setRequestRetention, State } from './src/logic/srs';
+import { buildTerritory, type TerritoryCell } from './src/logic/territory';
+import { TerritoryScreen } from './src/screens/TerritoryScreen';
 import { computeStreak, dailyGoal } from './src/logic/streak';
 import {
   defaultTypicalTimes,
@@ -72,7 +74,7 @@ const reciteItems = reciteBundleJson as unknown as ReciteItem[];
 // 各自派生成一条单段 thread —— 336 条一条不丢（src/recite/threads.ts）。
 const reciteThreads = buildThreads(reciteItems, reciteThreadsJson as unknown as ReciteThread[]);
 
-type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item';
+type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item' | 'territory';
 type SessionMode = 'all' | 'review' | 'new';
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
@@ -403,24 +405,25 @@ export default function App() {
     void persistSettings({ ...settingsRef.current, activeCategory: id });
   };
 
-  const startSession = (mode: SessionMode = 'all') => {
+  /** deckOverride：🗺 领地图点一格 → 只刷这个模块（到期优先，新卡不受每日配额限制）。回 false = 没卡可做。 */
+  const startSession = (mode: SessionMode = 'all', deckOverride?: Card[]): boolean => {
     const store = storeRef.current;
     const stats = todayStats;
-    if (!store || !stats) return;
+    if (!store || !stats) return false;
     const now = new Date();
-    const deck = activeDeck();
+    const deck = deckOverride ?? activeDeck();
     const reviewedToday = todayDoneIdsRef.current;
-    let q = stats.finalStretch
+    let q = stats.finalStretch && !deckOverride
       ? buildWeakSweepQueue(deck, store.srs, { reviewedToday })
       : buildQueue(deck, store.srs, now, {
-          newPerDay: stats.newPerDay,
+          newPerDay: deckOverride ? Number.MAX_SAFE_INTEGER : stats.newPerDay,
           reviewedToday,
         });
     if (mode === 'review') q = q.filter((id) => store.srs.has(id));
     if (mode === 'new') q = q.filter((id) => !store.srs.has(id));
     // dues keep oldest-first order; only the new-card tail is shuffled per session
     q = orderSessionQueue(q, store.srs);
-    if (!q.length) return;
+    if (!q.length) return false;
     // A5：一组最多 PLAN_CHUNK 张（到期的照旧最早先做，新卡在后）
     const chunk = planChunk(q);
     const chunked = chunk.length < q.length;
@@ -429,9 +432,15 @@ export default function App() {
     setSessionReviewedToday(new Set(reviewedToday));
     // mode-filtered sessions bound the mid-session requeue sweep to their own cards;
     // a chunked group too — otherwise the sweep would pull the whole backlog straight back in
-    setSessionScope(mode === 'all' && !chunked ? null : new Set(chunk));
+    setSessionScope(mode === 'all' && !chunked && !deckOverride ? null : new Set(chunk));
     setSessionKey((k) => k + 1);
     setScreen('session');
+    return true;
+  };
+
+  const pickTerritoryCell = (cell: TerritoryCell): boolean => {
+    const ids = new Set(cell.cardIds);
+    return startSession('all', cardsRef.current.filter((c) => ids.has(c.id)));
   };
 
   const exportFeedback = async () => {
@@ -516,6 +525,15 @@ export default function App() {
           onRefresh={() => void refresh()}
           onSettings={() => setScreen('settings')}
           onRecite={() => setScreen('recite')}
+          onTerritory={() => setScreen('territory')}
+        />
+      ) : null}
+
+      {screen === 'territory' && storeRef.current ? (
+        <TerritoryScreen
+          rows={buildTerritory(cardsRef.current, tracksRef.current, storeRef.current.srs, MASTERED_STABILITY_DAYS)}
+          onPick={pickTerritoryCell}
+          onBack={() => setScreen('today')}
         />
       ) : null}
 

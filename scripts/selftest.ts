@@ -53,9 +53,12 @@ import {
   planChunk,
   readingTimerMs,
   READING_TIMER_SEC,
+  WIN_LEVELS,
+  nextWinLevel,
   TIMER_FALLBACK_SEC,
   typicalTimesByType,
 } from '../src/logic/gameFeel';
+import { buildTerritory, cellStatus, cellWidth, STABLE_SHARE } from '../src/logic/territory';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
 import { buildArchitectureVisual } from '../src/logic/architectureVisuals';
 import { NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY, RHYTHMS } from '../src/config';
@@ -623,6 +626,21 @@ console.log('game-feel');
   t('A1: <20 samples → 15 s fallback', !typical.contrast.fromHistory && typical.contrast.ms === TIMER_FALLBACK_SEC * 1000);
   t('A1: no samples → fallback', typical.number.ms === TIMER_FALLBACK_SEC * 1000 && typical.number.samples === 0);
   t('A1: reading timer is a flat 60 s regardless of card type (2026-10-12)', READING_TIMER_SEC === 60 && readingTimerMs() === 60_000 && typical.fact.ms !== 60_000);
+  {
+    const mk = (id: string, track: string, category: string): Card =>
+      ({ id, format: 'mcq', atomType: 'fact', topic: 't', sub: 's', q: id, options: ['a', 'b'], answer: [0], why: '', tags: [`track:${track}`], category } as unknown as Card);
+    const cards = [mk('a1', 'x', 'A'), mk('a2', 'x', 'A'), mk('b1', 'x', 'B'), mk('c1', 'y', 'C')];
+    const tracks = [{ id: 'x', name: 'X', include: ['track:x'] }, { id: 'y', name: 'Y', include: ['track:y'] }];
+    const stable = { fsrs: { state: State.Review, stability: 30 }, firstSeen: '2026-10-01' } as unknown as SrsEntry;
+    const young = { fsrs: { state: State.Learning, stability: 1 }, firstSeen: '2026-10-01' } as unknown as SrsEntry;
+    const rows = buildTerritory(cards, tracks, new Map([['a1', stable], ['a2', stable], ['b1', young]]), 7);
+    t('领地: 一轨一行、一模块一格', rows.length === 2 && rows[0].cells.length === 2 && rows[1].cells.length === 1);
+    t('领地: 三色判定', rows[0].cells[0].status === 'stable' && rows[0].cells[1].status === 'learning' && rows[1].cells[0].status === 'untouched');
+    t('领地: 稳定份额门槛', cellStatus(10, 8, 10) === 'stable' && cellStatus(10, 7, 10) === 'learning' && STABLE_SHARE === 0.8 && cellStatus(0, 0, 0) === 'untouched');
+    t('领地: 格宽有上下限', cellWidth(1) >= 72 && cellWidth(6000) <= 180 && cellWidth(100) > cellWidth(4));
+  }
+  t('叮: 连续答对 1→5 封顶', [1,2,3,4,5,6].reduce((lv) => nextWinLevel(lv, true), 0) === WIN_LEVELS && nextWinLevel(0, true) === 1);
+  t('叮: 答错 / 模糊归 0，下一次从 1 开始', nextWinLevel(4, false) === 0 && nextWinLevel(nextWinLevel(4, false), true) === 1);
   t('A1: faster than median → ⚡ note', fastAnswerNote(4_600, 11_000) === '⚡ 5 秒');
   t('A1: slower than median → nothing (不渲染慢)', fastAnswerNote(12_000, 11_000) === null);
   t('A1: no answer time → nothing', fastAnswerNote(null, 11_000) === null);

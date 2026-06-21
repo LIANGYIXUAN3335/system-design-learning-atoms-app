@@ -34,11 +34,17 @@ function vibrate(strength: 'light' | 'medium'): void {
   }
 }
 
-// 两个音都是用 Python 标准库合成的（见 docs/DESIGN_game-feel_2026-10-11.md「实现记录」）。
+// 音都是用 Python 标准库合成的：「叮」五级见 scripts/make-sfx.py；fanfare 见 docs/DESIGN_game-feel_2026-10-11.md「实现记录」。
+// 「叮」按组内连续答对的级数升高（G6→A6→B6→D7→E7，五声音阶）；答错 / 模糊 / 看答案回第 1 级。2026-10-13 她拍板。
 const SOURCES = {
-  ding: require('../assets/sfx/ding.wav'),
+  'ding-1': require('../assets/sfx/ding-1.wav'),
+  'ding-2': require('../assets/sfx/ding-2.wav'),
+  'ding-3': require('../assets/sfx/ding-3.wav'),
+  'ding-4': require('../assets/sfx/ding-4.wav'),
+  'ding-5': require('../assets/sfx/ding-5.wav'),
   fanfare: require('../assets/sfx/fanfare.wav'),
 } as const;
+export const WIN_LEVELS = 5;
 
 type SfxName = keyof typeof SOURCES;
 const players: Partial<Record<SfxName, AudioPlayer | null>> = {};
@@ -57,7 +63,7 @@ function player(name: SfxName): AudioPlayer | null {
 
 /** 启动时先把两个音加载好，第一次答对就不会慢半拍。 */
 export function preloadSfx(): void {
-  player('ding');
+  for (let i = 1; i <= WIN_LEVELS; i++) player(`ding-${i}` as SfxName);
   player('fanfare');
 }
 
@@ -73,10 +79,11 @@ function playSfx(name: SfxName): void {
   }
 }
 
-/** 小档：每张答对——轻震 + 「叮」。 */
-export function feelSmallWin(soundOn: boolean): void {
+/** 小档：每张答对——轻震 + 「叮」。level 1–5 = 组内连续答对第几张（封顶 5），音高一级级往上。 */
+export function feelSmallWin(soundOn: boolean, level: number = 1): void {
   vibrate('light');
-  if (soundOn) playSfx('ding');
+  const lv = Math.min(WIN_LEVELS, Math.max(1, Math.floor(level)));
+  if (soundOn) playSfx(`ding-${lv}` as SfxName);
 }
 
 /** 大档：一组做完 / 连续 7·30·100 天——中震 + 三音上行。 */
