@@ -8,7 +8,15 @@ const shardCollection = db.collection('atoms').doc('private-progress').collectio
 const SHARD_COUNT = 32;
 
 function json(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+  // CORS：浏览器发带 Authorization 的 POST 前先 OPTIONS 预检，预检必须明说允许哪些方法和头，
+  // 否则浏览器把 POST 拦在本地（2026-10-14 查实：云端只见 OPTIONS 204、从没见过 POST，所以一直 0 条）。
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': 'authorization, content-type',
+    'access-control-max-age': '86400',
+  });
   res.end(JSON.stringify(body));
 }
 
