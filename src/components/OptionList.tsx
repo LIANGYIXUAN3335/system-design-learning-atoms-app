@@ -8,6 +8,8 @@ const LETTERS = 'ABCDEFGH';
 export interface OptionListProps {
   /** options in DISPLAY order */
   options: string[];
+  /** optional English/helper text in DISPLAY order */
+  optionSubtexts?: Array<string | null | undefined>;
   /** display indexes of the correct answers (already remapped) */
   correctDisplay: Set<number>;
   /** display indexes currently selected (multi) */
@@ -22,6 +24,7 @@ export interface OptionListProps {
 
 export function OptionList({
   options,
+  optionSubtexts,
   correctDisplay,
   selected,
   revealed,
@@ -34,6 +37,7 @@ export function OptionList({
   return (
     <View style={{ gap: 9 }}>
       {options.map((opt, k) => {
+        const subtext = optionSubtexts?.[k]?.trim();
         let borderColor = colors.line;
         let backgroundColor = colors.card;
         if (revealed) {
@@ -67,6 +71,7 @@ export function OptionList({
               >
                 {opt}
               </Text>
+              {subtext ? <Text style={[styles.optionEn, { color: colors.muted }]}>{subtext}</Text> : null}
               {optionDiagrams?.[k] ? <MermaidView spec={optionDiagrams[k]!} /> : null}
             </View>
           </Pressable>
@@ -87,4 +92,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   key: { fontWeight: '700', width: 18, fontSize: 16, lineHeight: 24 },
+  optionEn: { fontSize: 12.5, lineHeight: 18, marginTop: 3 },
 });

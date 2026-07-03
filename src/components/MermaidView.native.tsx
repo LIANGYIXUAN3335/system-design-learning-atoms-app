@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Asset } from 'expo-asset';
@@ -51,7 +51,12 @@ function ensureViewer(): Promise<{ html: string; dirUri: string }> {
       if (mermaidJs.length < MIN_LIB_CHARS) {
         // A copy interrupted mid-write used to pass the exists check forever.
         await FileSystem.deleteAsync(mermaidUri, { idempotent: true }).catch(() => {});
-        throw new Error(`cached mermaid.js is truncated (${mermaidJs.length} chars) - reopen this card to re-copy`);
+        await copyAssetTo(require('../../assets/mermaid.min.txt'), mermaidUri);
+        const recopied = await FileSystem.readAsStringAsync(mermaidUri);
+        if (recopied.length < MIN_LIB_CHARS) {
+          throw new Error(`cached mermaid.js is truncated (${recopied.length} chars)`);
+        }
+        return { html: inlineMermaid(shellHtml, recopied), dirUri };
       }
       return { html: inlineMermaid(shellHtml, mermaidJs), dirUri };
     })();
@@ -64,6 +69,7 @@ function ensureViewer(): Promise<{ html: string; dirUri: string }> {
 
 export function MermaidView({ spec }: { spec: string }) {
   const { colors, isDark } = useTheme();
+  const webViewRef = useRef<React.ElementRef<typeof WebView> | null>(null);
   const [viewer, setViewer] = useState<{ html: string; dirUri: string } | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [height, setHeight] = useState(160);
@@ -71,6 +77,7 @@ export function MermaidView({ spec }: { spec: string }) {
   useEffect(() => {
     let alive = true;
     setFailed(null);
+    setHeight(160);
     ensureViewer()
       .then((v) => alive && setViewer(v))
       .catch((e) => alive && setFailed(e instanceof Error ? e.message : String(e)));
@@ -83,6 +90,9 @@ export function MermaidView({ spec }: { spec: string }) {
     () => `window.__render(${JSON.stringify(spec)}, ${isDark ? 'true' : 'false'}); true;`,
     [spec, isDark],
   );
+  const renderWhenReady = useCallback(() => {
+    webViewRef.current?.injectJavaScript(injected);
+  }, [injected]);
 
   if (failed) {
     const reason = failed.split('\n')[0]?.trim();
@@ -104,6 +114,7 @@ export function MermaidView({ spec }: { spec: string }) {
     >
       {viewer ? (
         <WebView
+          ref={webViewRef}
           key={`${spec}-${isDark}`}
           source={{ html: viewer.html, baseUrl: viewer.dirUri }}
           originWhitelist={['*']}
@@ -112,12 +123,14 @@ export function MermaidView({ spec }: { spec: string }) {
           allowFileAccess
           allowFileAccessFromFileURLs
           allowingReadAccessToURL={viewer.dirUri}
-          injectedJavaScript={injected}
           onMessage={(e) => {
             const data = e.nativeEvent.data;
             if (data.startsWith('ERR:')) setFailed(data.slice(4).trim() || 'unknown Mermaid render error');
             else {
-              if (data === 'READY') return;
+              if (data === 'READY') {
+                renderWhenReady();
+                return;
+              }
               const h = parseInt(data.startsWith('H:') ? data.slice(2) : data, 10);
               if (Number.isFinite(h) && h > 0) setHeight(Math.min(h + 8, 600));
             }
