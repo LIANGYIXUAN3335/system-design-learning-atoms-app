@@ -1,0 +1,2244 @@
+[
+  {
+    "id": "sd-deep-dives-time-series-databases-001",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "when-to-use",
+    "scenario": "系统要存储大量按时间追加的监控指标，查询通常按时间范围和少量标签筛选。",
+    "q": "什么时候该选择时间序列数据库（TSDB）？",
+    "options": [
+      "只要数据里有 timestamp 字段就必须用 TSDB",
+      "当业务需要强事务和复杂外键约束时",
+      "当通用数据库在高写入、时间范围查询、保留策略和压缩上出现真实瓶颈时",
+      "当核心需求是跨全部 series 做 Top-K 排序时"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "决定性约束是通用数据库先撑不住高写入、时间范围查询或保留/压缩需求；仅有 timestamp 字段不构成理由。先用 Postgres/DynamoDB 顶，顶不住再上专用系统。",
+    "why_en": "A time-series database is worth adopting once a general-purpose database genuinely bottlenecks on write volume, time-range queries, or retention, not just because the data happens to have a timestamp.",
+    "whenOtherWins": "如果查询核心是跨海量 series 的全局排序或强事务/复杂 join，Postgres/DynamoDB 等通用方案通常更直接。",
+    "tags": [
+      "tsdb",
+      "fit"
+    ],
+    "tradeoff": "专用 TSDB 的写入/压缩优化 vs 通用数据库的事务与关系能力",
+    "options_en": [
+      "Any time your data has a timestamp field, you must use a TSDB.",
+      "When the business needs strong transactions and complex foreign keys.",
+      "When a general-purpose database hits real bottlenecks on high write volume, time-range queries, retention, and compression.",
+      "When the core need is Top-K ranking across all series."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TSDB",
+        "fullName": "Time-Series Database",
+        "meaning": "时间序列数据库，为高吞吐追加写和按时间范围查询优化的专用数据库。",
+        "meaningEn": "A TSDB, or time-series database, is purpose-built for high-throughput append writes and time-range queries."
+      },
+      {
+        "term": "Postgres",
+        "meaning": "常用开源关系型数据库，强于事务和复杂查询。",
+        "meaningEn": "Postgres is a popular open-source relational database strong at transactions and complex queries."
+      },
+      {
+        "term": "DynamoDB",
+        "meaning": "AWS 托管的 NoSQL 键值/文档数据库。",
+        "meaningEn": "DynamoDB is AWS's managed NoSQL key-value and document database."
+      },
+      {
+        "term": "Top-K",
+        "meaning": "在大量数据里找出按某指标排名前 K 名的查询模式。",
+        "meaningEn": "Top-K is the query pattern of finding the highest-ranked K results by some metric."
+      }
+    ],
+    "table": {
+      "headers": [
+        "System",
+        "Writes",
+        "Query"
+      ],
+      "rows": [
+        [
+          "TSDB",
+          "seq append",
+          "time range + tag"
+        ],
+        [
+          "Postgres",
+          "in-place",
+          "joins + txns"
+        ],
+        [
+          "DynamoDB",
+          "key-based",
+          "point lookup"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-002",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale",
+    "scenario": "云监控系统有 100,000 台服务器，每台每 10 秒上报 5 个指标（CPU/内存/磁盘/网络），算下来约 50,000 点/秒、一天约 43 亿点。",
+    "q": "这个写入量级对存储引擎的设计意味着什么？",
+    "options": [
+      "这个量级下单机 Postgres 加两个索引就能长期稳定支撑，不需要改变写入方式",
+      "这个量级只影响读延迟，写入可以随意排队，不需要特别设计",
+      "这个量级下随机原地更新和逐行索引维护会撑不住，写路径必须转向顺序追加和批量整理",
+      "只要磁盘足够大，这个量级对存储引擎设计没有实质影响"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "50,000 点/秒、一天 43 亿点意味着随机 I/O 和逐行索引会先被拖垮；这正是 append-only + LSM 这类设计存在的原因。",
+    "why_en": "At roughly 50,000 points per second and 4.3 billion points a day, random I/O and per-row indexing become the bottleneck, which is exactly why append-only and LSM-style engines exist.",
+    "tags": [
+      "tsdb",
+      "numbers",
+      "scale"
+    ],
+    "options_en": [
+      "At this scale, a single Postgres instance with two indexes can support it indefinitely without changing how writes work.",
+      "At this scale, only read latency is affected, so writes can queue freely without special design.",
+      "At this scale, in-place random updates and per-row index maintenance can't keep up, so the write path must shift to sequential appends with batched reorganization.",
+      "As long as disks are big enough, this scale has no real effect on storage engine design."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-003",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "postgres-limit",
+    "q": "把大规模指标按 timestamp、host、metric_name、value 存到一张普通 Postgres 行式表，会先在哪里出问题？",
+    "options": [
+      "只要给 host 和 metric_name 分别建索引，就能同时保证写入吞吐和查询延迟",
+      "问题只出现在磁盘空间上，不会影响写入吞吐或查询延迟",
+      "标签字符串按行重复存储，加上高写入下的索引维护，会同时拖慢写入并膨胀存储",
+      "只要把 value 列类型换成 REAL 而不是 DOUBLE PRECISION 就能解决"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "决定性约束是每行都重复存 host/metric_name 字符串，且高写入下索引维护很重；加索引或换数据类型都治标不治本。",
+    "why_en": "The real bottleneck is repeated label strings in every row plus heavy index maintenance under high write volume, which indexing alone or a smaller numeric type can't fix.",
+    "tags": [
+      "tsdb",
+      "postgres",
+      "limit"
+    ],
+    "options_en": [
+      "Adding separate indexes on host and metric_name alone is enough to guarantee both write throughput and query latency.",
+      "The problem only shows up in disk space; it doesn't affect write throughput or query latency.",
+      "Repeating label strings in every row plus heavy index maintenance under high write volume slows writes and bloats storage at the same time.",
+      "Switching the value column from DOUBLE PRECISION to REAL is enough to fix it."
+    ],
+    "codeSample": "CREATE TABLE metrics (\n  timestamp TIMESTAMP,\n  host VARCHAR(255),\n  metric_name VARCHAR(255),\n  value DOUBLE PRECISION\n);\n-- 4.3B rows/day → host+metric_name 反复重复\n-- 50k writes/s 起步，索引越加写入越慢",
+    "lang": "sql"
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-004",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "examples",
+    "q": "以下哪些属于时间序列数据库（TSDB）？",
+    "options": [
+      "ZooKeeper",
+      "InfluxDB",
+      "Prometheus",
+      "TimescaleDB"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "InfluxDB、Prometheus、TimescaleDB 都是面向时间序列的存储/查询系统；ZooKeeper 是协调服务，管理配置和分布式锁，不是 TSDB。",
+    "why_en": "InfluxDB, Prometheus, and TimescaleDB are time-series systems, while ZooKeeper is a coordination service for configuration and distributed locks, not a TSDB.",
+    "tags": [
+      "tsdb",
+      "examples"
+    ],
+    "options_en": [
+      "ZooKeeper",
+      "InfluxDB",
+      "Prometheus",
+      "TimescaleDB"
+    ],
+    "termDefinitions": [
+      {
+        "term": "InfluxDB",
+        "meaning": "面向时间序列的开源数据库，内置 LSM 风格存储引擎。",
+        "meaningEn": "InfluxDB is an open-source database built specifically for time-series storage using an LSM-style engine."
+      },
+      {
+        "term": "TimescaleDB",
+        "meaning": "基于 Postgres 扩展实现的时间序列数据库。",
+        "meaningEn": "TimescaleDB is a time-series database implemented as a Postgres extension."
+      },
+      {
+        "term": "Prometheus",
+        "meaning": "拉取式监控与时间序列存储系统，常配合告警使用。",
+        "meaningEn": "Prometheus is a pull-based monitoring and time-series system commonly paired with alerting."
+      },
+      {
+        "term": "ZooKeeper",
+        "meaning": "分布式协调服务，管理配置、命名和分布式锁，不是时间序列数据库。",
+        "meaningEn": "ZooKeeper is a distributed coordination service for configuration, naming, and locks, not a time-series database."
+      }
+    ],
+    "table": {
+      "headers": [
+        "System",
+        "Type",
+        "Storage"
+      ],
+      "rows": [
+        [
+          "InfluxDB",
+          "TSDB",
+          "LSM engine"
+        ],
+        [
+          "TimescaleDB",
+          "TSDB",
+          "Postgres ext"
+        ],
+        [
+          "Prometheus",
+          "TSDB",
+          "Pull + local"
+        ],
+        [
+          "ZooKeeper",
+          "Coordination",
+          "In-mem tree"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "append-only",
+    "q": "Append-only（只追加写）存储的核心思想是什么？",
+    "options": [
+      "每次写入都先扫描全表",
+      "新数据总是追加到文件末尾，避免原地随机更新",
+      "只允许删除，不允许写入",
+      "每个指标都单独创建数据库"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "追加写把昂贵的随机 I/O 转成顺序 I/O，特别适合大量持续写入的指标流。代价是之后需要靠 compaction/index 让读取仍然可接受。",
+    "why_en": "Append-only storage writes new points at the end of files, turning random writes into fast sequential writes.",
+    "tags": [
+      "tsdb",
+      "append-only"
+    ],
+    "diagram": "flowchart LR\n  A[\"Metric point\"] --> B[\"Memory buffer\"]\n  B --> C[\"Append segment\"]\n  C --> D[\"Compact later\"]",
+    "options_en": [
+      "Every write first scans the entire table.",
+      "New data is always appended to the end of a file, avoiding in-place random updates.",
+      "Only deletes are allowed, no writes.",
+      "Each metric gets its own separate database."
+    ],
+    "termDefinitions": [
+      {
+        "term": "append-only storage",
+        "meaning": "只在文件末尾追加新数据，不做原地更新的写入方式。",
+        "meaningEn": "Append-only storage always writes new data to the end of a file instead of updating in place."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "io",
+    "q": "在磁盘 I/O 模式上，append-only 写入相比传统原地更新的优势是什么？",
+    "options": [
+      "它让每次写入都必须先随机寻址到旧 block 再修改",
+      "它省去定位旧数据、读、改、写的步骤，只在文件尾部顺序追加",
+      "它保证所有查询都不必再使用任何索引",
+      "它只能在纯内存数据库里生效，磁盘数据库用不了"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "原地更新要先定位旧位置再读改写，产生随机 I/O；append-only 只在文件尾追加，把随机变顺序，代价是空间需要靠后台整理回收。",
+    "why_en": "In-place updates need to locate, read, modify, and rewrite old data, causing random I/O, while append-only writes sequentially at the end and reclaims space later via background compaction.",
+    "tags": [
+      "tsdb",
+      "io",
+      "append-only"
+    ],
+    "tradeoff": "顺序追加换取写入吞吐 vs 原地更新换取即时空间复用",
+    "options_en": [
+      "It forces every write to randomly seek to an old block and modify it first.",
+      "It skips locating, reading, modifying, and rewriting old data, appending sequentially at the end of the file instead.",
+      "It guarantees every query no longer needs any index.",
+      "It only works for pure in-memory databases, not disk-based ones."
+    ],
+    "termDefinitions": [
+      {
+        "term": "random I/O",
+        "meaning": "对磁盘上分散位置的读写，需要额外寻址开销。",
+        "meaningEn": "Random I/O reads or writes scattered disk locations and pays extra seek overhead."
+      },
+      {
+        "term": "sequential I/O",
+        "meaning": "按顺序连续读写磁盘位置，没有寻址开销。",
+        "meaningEn": "Sequential I/O reads or writes contiguous disk locations without seek overhead."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-007",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "io",
+    "scenario": "为高吞吐指标流选型时，需要判断随机写和顺序写在机械硬盘上的量级差异。",
+    "q": "机械硬盘上，随机 I/O 相比顺序 I/O 的数量级差异大致是什么？",
+    "options": [
+      "随机 I/O 永远比顺序 I/O 快 100 倍",
+      "SSD 无论随机还是顺序都完全一样，二者无差别",
+      "机械硬盘随机操作通常只有百级 ops/s，顺序写吞吐可以高出一到两个数量级",
+      "磁盘 I/O 模式与数据库写入设计无关"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "机械硬盘随机操作受限于磁头寻道，通常百级 ops/s；顺序写能到万级甚至更高。这个差距正是 append-only 设计存在的理由。",
+    "why_en": "Spinning disks are limited to roughly hundreds of random operations per second because of head seeks, while sequential writes can reach far higher throughput, which is exactly why append-only design pays off.",
+    "tags": [
+      "tsdb",
+      "numbers",
+      "io"
+    ],
+    "options_en": [
+      "Random I/O is always 100 times faster than sequential I/O.",
+      "SSDs perform identically whether access is random or sequential.",
+      "Spinning disks typically manage only hundreds of random ops per second, while sequential writes can be one to two orders of magnitude higher.",
+      "Disk I/O pattern has nothing to do with database write design."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSD",
+        "fullName": "Solid-State Drive",
+        "meaning": "固态硬盘，没有机械寻道臂，但顺序访问仍比随机访问更友好。",
+        "meaningEn": "An SSD is flash-based storage with no mechanical seek arm, though sequential access is still friendlier than random access."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-008",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "lsm",
+    "q": "把 LSM tree 写入路径按顺序排列：",
+    "steps": [
+      "后台 compaction 合并多个 SSTable，清理重复数据和 tombstone",
+      "新数据先写入内存中的有序 memtable",
+      "memtable 满后顺序刷盘成不可变的有序 SSTable",
+      "查询时可能需要检查 memtable 和多个磁盘文件"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3
+    ],
+    "why": "LSM 把前台随机写转为内存写和顺序刷盘，再把组织数据的成本放到后台 compaction。读取会承担检查多个文件的成本。",
+    "why_en": "LSM trees write to a sorted memtable, flush immutable SSTables, compact them in the background, and may check multiple files on reads.",
+    "diagram": "flowchart LR\nWrite[Incoming points] --> Memtable[Sorted memtable]\nMemtable --> SSTable[Immutable SSTable]\nSSTable --> Compaction[Background compaction]\nCompaction --> Larger[Large sorted files]\nQuery[Query] --> Memtable\nQuery --> SSTable",
+    "tags": [
+      "tsdb",
+      "lsm"
+    ],
+    "termDefinitions": [
+      {
+        "term": "LSM tree",
+        "fullName": "Log-Structured Merge Tree",
+        "meaning": "把随机写转成顺序写，再靠后台合并整理数据的存储结构。",
+        "meaningEn": "An LSM tree turns random writes into sequential writes and reorganizes data later via background merges."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "LSM 刷盘后生成的不可变有序文件。",
+        "meaningEn": "An SSTable is the immutable sorted file an LSM tree writes when it flushes memory to disk."
+      },
+      {
+        "term": "memtable",
+        "fullName": "Memory Table",
+        "meaning": "LSM 中驻留内存的有序缓冲结构，接收最新写入。",
+        "meaningEn": "A memtable is the in-memory sorted buffer that absorbs the newest writes in an LSM tree."
+      },
+      {
+        "term": "compaction",
+        "meaning": "合并多个存储文件、清理重复和已删除数据的后台过程。",
+        "meaningEn": "Compaction is the background process that merges storage files and removes stale or deleted data."
+      },
+      {
+        "term": "tombstone",
+        "meaning": "标记某条数据已删除的占位记录，等 compaction 时才真正清除。",
+        "meaningEn": "A tombstone is a marker recording that a value was deleted; it is physically removed only during compaction."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-009",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "lsm",
+    "q": "LSM（Log-Structured Merge Tree）的 memtable 为什么通常保持有序？",
+    "options": [
+      "为了让所有写入都必须等待磁盘完成排序后才算成功",
+      "为了强制所有查询必须全表扫描，不能走索引",
+      "为了把每个 key 随机分散写到不同文件，避免热点",
+      "为了刷盘后直接生成有序 SSTable，方便二分查找、范围扫描和后续合并"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "内存里排序成本低，刷盘时直接顺序写出有序文件；有序文件支持二分查找、范围扫描，也让后台 merge-sort compaction 更高效。",
+    "why_en": "A sorted memtable flushes into a sorted SSTable, enabling binary search, efficient ranges, and merge-based compaction.",
+    "tags": [
+      "tsdb",
+      "lsm",
+      "memtable"
+    ],
+    "options_en": [
+      "So that every write must wait for the disk to finish sorting before it's considered successful.",
+      "So that every query is forced to do a full scan instead of using an index.",
+      "So that each key is randomly scattered across different files to avoid hotspots.",
+      "So that flushing produces an already-sorted SSTable, enabling binary search, range scans, and later merge-based compaction."
+    ],
+    "optionMeanings": [
+      "误以为排序是为了拖慢写入确认速度。",
+      "误以为有序结构会禁止索引查询。",
+      "误以为有序是为了打散 key 分布。",
+      "有序 memtable 刷盘后直接是有序 SSTable。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "memtable",
+        "fullName": "Memory Table",
+        "meaning": "LSM 中驻留内存的有序缓冲结构，接收最新写入。",
+        "meaningEn": "A memtable is the in-memory sorted buffer that absorbs the newest writes in an LSM tree."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "LSM 刷盘后生成的不可变有序文件。",
+        "meaningEn": "An SSTable is the immutable sorted file an LSM tree writes when it flushes memory to disk."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-010",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "lsm-tradeoff",
+    "q": "LSM tree（日志结构合并树）的主要取舍是什么？",
+    "options": [
+      "牺牲所有写入能力，换取只读性能",
+      "牺牲部分读性能和写放大，换取高写入吞吐",
+      "牺牲压缩能力，换取更高空间占用",
+      "完全没有任何后台开销，因此性能只受磁盘限制"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "读可能要查多个 SSTable，compaction 会重写数据产生写放大。它适合高写入场景，而不是所有 workload 的默认答案。",
+    "why_en": "LSM trees trade some read cost and write amplification for much higher write throughput.",
+    "tags": [
+      "tsdb",
+      "lsm",
+      "tradeoff"
+    ],
+    "tradeoff": "高写入吞吐 vs 读放大与写放大",
+    "options_en": [
+      "It gives up all write capability in exchange for read-only performance.",
+      "It trades some read performance and write amplification for much higher write throughput.",
+      "It gives up compression capability in exchange for higher space usage.",
+      "It has zero background overhead, so performance is limited only by disk."
+    ],
+    "termDefinitions": [
+      {
+        "term": "LSM tree",
+        "fullName": "Log-Structured Merge Tree",
+        "meaning": "把随机写转成顺序写，再靠后台合并整理数据的存储结构。",
+        "meaningEn": "An LSM tree turns random writes into sequential writes and reorganizes data later via background merges."
+      },
+      {
+        "term": "write amplification",
+        "meaning": "由于 compaction 反复重写数据，实际磁盘写入量大于逻辑写入量的现象。",
+        "meaningEn": "Write amplification means the actual bytes written to disk exceed the logical write size because compaction rewrites data multiple times."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-011",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "compression",
+    "q": "补全 delta encoding 的思想：",
+    "text": "Delta encoding 不反复存完整值，而是存相邻值之间的 {{difference}}；时间序列相邻点通常变化小，所以这些 delta 更容易被 {{compressed}}。",
+    "why": "CPU、内存、流量等指标通常连续且变化平滑，delta 值比原始值小。配合可变长编码能显著降低存储。",
+    "why_en": "Delta encoding stores differences between adjacent values, which compress well when time-series data changes gradually.",
+    "tags": [
+      "tsdb",
+      "compression"
+    ],
+    "diagram": "flowchart LR\n  A[\"t1 t2 t3\"] --> B[\"deltas\"]\n  B --> C[\"delta of delta\"]\n  C --> D[\"compressed block\"]",
+    "codeSample": "Raw values:     45.2  45.3  45.1  45.4\nDelta encoded:  45.2  +0.1  -0.2  +0.3\n# 只存差值，差值比原值小很多，更容易压缩",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "delta encoding",
+        "meaning": "存相邻值之间的差而不是完整值的编码方式。",
+        "meaningEn": "Delta encoding stores the difference between adjacent values instead of the full value each time."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "compression",
+    "q": "varint（variable-length encoding，变长整数编码）在 TSDB 压缩中解决什么问题？",
+    "options": [
+      "让所有字符串自动转换成图片格式存储",
+      "强制每条记录都补齐到固定 1MB 大小",
+      "让数值小的整数只占 1-2 字节，而不是固定 4/8 字节",
+      "让浮点数从此无法用任何方式存储"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "delta 往往是小数值，varint 能让小值占用 1-2 个字节。它放大了 delta encoding 的空间收益。",
+    "why_en": "Variable-length encoding stores small deltas in fewer bytes instead of always using a fixed-width integer.",
+    "tags": [
+      "tsdb",
+      "compression",
+      "varint"
+    ],
+    "options_en": [
+      "It automatically converts all strings into image format for storage.",
+      "It forces every record to pad out to a fixed 1MB size.",
+      "It lets small integers take only 1-2 bytes instead of a fixed 4 or 8 bytes.",
+      "It makes floating-point numbers impossible to store at all."
+    ],
+    "codeSample": "varint(1)        = 0x01            (1 byte)\nvarint(300)      = 0xAC 0x02       (2 bytes)\nvarint(1000000)  = 0xC0 0x84 0x3D  (3 bytes)\n# 值越小，占用字节越少；delta 编码后大多是小数值",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "varint",
+        "fullName": "Variable-length Integer",
+        "meaning": "变长整数编码，用更少字节表示小数值。",
+        "meaningEn": "Varint is a variable-length integer encoding that stores small numbers in fewer bytes."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "timestamps",
+    "q": "时间戳 delta-of-delta（二阶差分）编码为什么对固定采样间隔特别有效？",
+    "options": [
+      "因为 timestamp 不能被排序",
+      "因为相邻 timestamp 的间隔经常相同，二阶差分大量为 0",
+      "因为它会丢弃真实采样时间，只保留序号",
+      "因为所有 timestamp 都必须先转成字符串再比较"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "如果每 10 秒采样一次，timestamp 的 delta 基本恒定，delta-of-delta 接近 0。大量 0 非常容易压缩。",
+    "why_en": "Delta-of-delta compression works well because regular sampling intervals make second-order timestamp deltas mostly zero.",
+    "tags": [
+      "tsdb",
+      "timestamps",
+      "compression"
+    ],
+    "options_en": [
+      "Because timestamps cannot be sorted.",
+      "Because the interval between adjacent timestamps is often constant, so second-order deltas are mostly zero.",
+      "Because it discards the real sample time and keeps only a sequence number.",
+      "Because every timestamp must first be converted to a string before comparison."
+    ],
+    "codeSample": "Raw timestamps:   1000  1010  1020  1030  1040\nDeltas:              10    10    10    10\nDelta-of-delta:            0     0     0\n# 间隔恒定 → 二阶差分几乎全 0 → 极易压缩",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "delta-of-delta",
+        "meaning": "对增量再做一次差分的二阶编码，常用于规律采样的时间戳。",
+        "meaningEn": "Delta-of-delta encoding takes the difference of deltas, which collapses to near zero for regularly spaced timestamps."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-014",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "floats",
+    "q": "TSDB 对浮点值常用 XOR 压缩的直觉是什么？",
+    "options": [
+      "浮点数在时间序列里完全无法做任何压缩处理",
+      "XOR 运算会把所有数值变成同一个常数输出",
+      "XOR 压缩只对文本字符串生效，对浮点数无效",
+      "相邻浮点值接近时，XOR 后多数 bit 是 0，只需存差异部分"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "相邻指标值通常很接近，二进制表示也有大量相同位。XOR 后只保留有意义的差异位，能显著减少空间。",
+    "why_en": "XOR compression exploits similar adjacent floating-point values because their XOR contains many zero bits.",
+    "tags": [
+      "tsdb",
+      "floats",
+      "compression"
+    ],
+    "options_en": [
+      "Floating-point values in time series can't be compressed at all.",
+      "XOR turns all values into the same constant output.",
+      "XOR compression only works on text strings, not floats.",
+      "When adjacent float values are close, XORing them leaves mostly zero bits, so only the differing part needs to be stored."
+    ],
+    "codeSample": "Value 1: 0 10000010 01101000101000111101011\nValue 2: 0 10000010 01101000110000100000000\nXOR:     0 00000000 00000000011000011101011\n#          ^^^^^^^^^^ 前导零很多，只存有效位",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "XOR compression",
+        "meaning": "利用相邻浮点数按位异或后大量为 0 位来压缩数值的技术。",
+        "meaningEn": "XOR compression exploits the fact that XORing similar adjacent floating-point values leaves mostly zero bits."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-015",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "storage-efficiency",
+    "scenario": "监控系统每条指标点只有 timestamp 和一个 float，理论上很小，但落到普通行式表后磁盘占用远超预期。",
+    "q": "为什么一条普通指标点的原始信息很小，但行式存储仍可能很浪费？",
+    "options": [
+      "因为每条指标都会被数据库自动复制成完整的一段视频文件保存",
+      "因为原始数值本身只有十几字节，但每行还反复存 host、metric_name 等标签字符串",
+      "因为 timestamp 这个字段本身在磁盘上要占用大约 10MB 空间",
+      "因为浮点数类型在关系数据库里天生完全无法进行任何压缩"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "实际数值部分很小，空间膨胀多来自重复标签和行式元数据。TSDB 通过 series-oriented 存储和压缩减少这种重复。",
+    "why_en": "The raw timestamp and value are small, but row stores waste space by repeating labels and row metadata for every point.",
+    "tags": [
+      "tsdb",
+      "storage"
+    ],
+    "options_en": [
+      "Because every point gets automatically duplicated into a full video file by the database.",
+      "Because the raw value itself is only a dozen or so bytes, but every row still repeats label strings like host and metric_name.",
+      "Because the timestamp field alone takes about 10MB of disk space.",
+      "Because floating-point types in relational databases inherently cannot be compressed at all."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "time-partitioning",
+    "q": "Time-based partitioning 在 TSDB 中的含义是什么？",
+    "options": [
+      "按用户名哈希把数据随机拆分成数量不受控的表",
+      "把所有历史数据永远放进一个不可删除的大文件",
+      "按时间窗口把数据切成不同 partition/chunk，比如按天或按周划分",
+      "只根据 metric 的数值大小做分区，不看时间"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "时间序列查询天然带时间范围，按时间窗口组织能让写入、读取和保留策略都更简单。不同 partition 可以在同机或多机上。",
+    "why_en": "Time-based partitioning groups points into time-windowed chunks such as daily or weekly partitions.",
+    "tags": [
+      "tsdb",
+      "partitioning"
+    ],
+    "diagram": "flowchart TD\n  A[\"Time range\"] --> B[\"Day partition\"]\n  A --> C[\"Week partition\"]\n  B --> D[\"Drop old partition\"]",
+    "options_en": [
+      "Randomly hash-splitting data by username into an unbounded number of tables.",
+      "Keeping all historical data forever in one file that can never be deleted.",
+      "Splitting data into partitions or chunks by time window, such as daily or weekly.",
+      "Partitioning only by the metric's numeric value, ignoring time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "time-based partitioning",
+        "meaning": "按时间窗口（如按天/周）把数据切成不同 partition/chunk。",
+        "meaningEn": "Time-based partitioning groups data into chunks by time window, such as daily or weekly."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-017",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "time-partitioning",
+    "q": "Time-based partitioning 带来哪些收益？",
+    "options": [
+      "所有高基数标签都会自动变低基数",
+      "新写入集中到当前时间 partition",
+      "保留策略可直接 drop 旧 partition",
+      "时间范围查询可以跳过不相关 partition"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "按时间组织同时优化写入局部性、查询裁剪和数据过期。它不能解决 tag cardinality 爆炸。",
+    "why_en": "Time partitions localize writes, prune reads by time range, and make retention as simple as dropping old partitions.",
+    "tags": [
+      "tsdb",
+      "partitioning"
+    ],
+    "options_en": [
+      "All high-cardinality tags automatically become low-cardinality.",
+      "New writes concentrate on the current time partition.",
+      "Retention can simply drop entire old partitions.",
+      "Time-range queries can skip irrelevant partitions."
+    ],
+    "termDefinitions": [
+      {
+        "term": "time-based partitioning",
+        "meaning": "按时间窗口（如按天/周）把数据切成不同 partition/chunk。",
+        "meaningEn": "Time-based partitioning groups data into chunks by time window, such as daily or weekly."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "retention",
+    "q": "为什么 TSDB 的保留策略通常比在巨表上 DELETE 旧行更便宜？",
+    "options": [
+      "因为所有历史数据会在保留期到期后自动变成 0 字节但仍保留行",
+      "因为保留策略执行时完全不需要读取任何元数据",
+      "因为 TSDB 设计上永远不会删除任何数据",
+      "因为旧数据按时间分区存放，可直接删除整段旧文件"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "drop partition 是元数据/文件级操作，避免在巨表里扫描并删除海量旧行。监控数据常有明确生命周期，所以这个收益很大。",
+    "why_en": "Retention is cheap because old time partitions can be dropped instead of deleting rows from a massive table.",
+    "tags": [
+      "tsdb",
+      "retention"
+    ],
+    "options_en": [
+      "Because all historical data automatically shrinks to 0 bytes at expiry but rows remain.",
+      "Because executing retention needs no metadata lookup at all.",
+      "Because a TSDB is designed to never delete any data.",
+      "Because old data lives in its own time partition, so retention can simply drop that entire file."
+    ],
+    "termDefinitions": [
+      {
+        "term": "time-based partitioning",
+        "meaning": "按时间窗口（如按天/周）把数据切成不同 partition/chunk。",
+        "meaningEn": "Time-based partitioning groups data into chunks by time window, such as daily or weekly."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "bloom-filter",
+    "scenario": "一次按 series 查询要检查多个 SSTable，直接挨个读盘代价很高，需要先低成本排除不可能的文件。",
+    "q": "Bloom filter（布隆过滤器）在 LSM/TSDB 读取路径中的作用是什么？",
+    "options": [
+      "保证所有聚合查询完全不需要读取任何磁盘数据",
+      "不读磁盘就能判断某个 SSTable 一定没有目标 series，或者可能有",
+      "把所有压缩算法都替换成 Bloom filter 一种方案",
+      "把所有 false positive 结果都变成 false negative"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Bloom filter 可以快速跳过不含目标 key 的文件。它可能误报“也许有”，但不会误报“肯定没有”。",
+    "why_en": "A Bloom filter lets the database skip SSTables that definitely do not contain a queried series without disk reads.",
+    "tags": [
+      "tsdb",
+      "bloom-filter"
+    ],
+    "diagram": "flowchart LR\n  A[\"Query series\"] --> B[\"Block bloom\"]\n  B --> C{\"Maybe present?\"}\n  C -->|\"no\"| D[\"Skip block\"]\n  C -->|\"yes\"| E[\"Read block\"]",
+    "options_en": [
+      "It guarantees every aggregation query needs zero disk reads at all.",
+      "Without touching disk, it tells you an SSTable definitely does not contain a series, or maybe does.",
+      "It replaces every compression algorithm with a single Bloom filter.",
+      "It turns every false positive result into a false negative."
+    ],
+    "optionMeanings": [
+      "误以为 Bloom filter 能让聚合完全跳过磁盘读取。",
+      "它是用来低成本排除不相关 SSTable 的快速判断。",
+      "混淆了 Bloom filter 和压缩算法这两类机制。",
+      "把两种误差的方向（漏报/误报）弄反了。"
+    ],
+    "optionScenarioImpacts": [
+      "实际匹配的 SSTable 仍然需要真正读盘确认。",
+      "能把要检查的候选 SSTable 数量大幅减少。",
+      "Bloom filter 不压缩数据，只做成员判断。",
+      "false positive 只多读一次，false negative 才是真正致命的。"
+    ],
+    "optionDirectness": [
+      "不直接；聚合仍要读真正命中的文件。",
+      "最直接；这正是它在读路径里的作用。",
+      "不直接；它和压缩是两回事。",
+      "不直接；两种误差的方向搞反了。"
+    ],
+    "codeSample": "Query: series host=server-42\nSSTable-1 bloom: “not here”   → skip (0 磁盘读)\nSSTable-2 bloom: “not here”   → skip (0 磁盘读)\nSSTable-3 bloom: “maybe here” → 读盘校验\n# 只有 “maybe” 才真正触发磁盘 I/O",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "Bloom filter",
+        "meaning": "概率型数据结构，能确定判断“一定没有”，“可能有”时需要进一步确认。",
+        "meaningEn": "A Bloom filter is a probabilistic structure that can say a key is definitely absent, while a maybe-present result needs further checking."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "LSM 刷盘后生成的不可变有序文件。",
+        "meaningEn": "An SSTable is the immutable sorted file an LSM tree writes when it flushes memory to disk."
+      },
+      {
+        "term": "false positive / false negative",
+        "meaning": "false positive 指误报“可能有”但实际没有；false negative 指漏报“没有”但实际有。",
+        "meaningEn": "A false positive wrongly reports maybe-present when the key is absent; a false negative wrongly reports absent when the key is actually present."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "bloom-filter",
+    "q": "Bloom filter 的 false positive / false negative 特性是什么？",
+    "options": [
+      "它有时会漏掉真实存在的 key，即产生 false negative",
+      "它保证零误差，既没有 false positive 也没有 false negative",
+      "它可能误报“也许有”但实际没有；绝不会漏报“没有”但实际有",
+      "它只能用于对 key 做精确计数，不能做成员判断"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Bloom filter 的核心保证是 no false negatives。false positive 只会导致多读一次文件，不会漏结果。",
+    "why_en": "Bloom filters can have false positives but no false negatives, so they may cause extra reads but do not miss existing keys.",
+    "tags": [
+      "tsdb",
+      "bloom-filter",
+      "contrast"
+    ],
+    "tradeoff": "多读几次文件（false positive）vs 绝不漏掉真实数据（no false negative）",
+    "options_en": [
+      "It sometimes misses keys that really exist, producing a false negative.",
+      "It guarantees zero error, with neither false positives nor false negatives.",
+      "It may falsely say maybe-present when absent, but never falsely says absent when the key is actually present.",
+      "It can only be used for exact key counting, not membership checks."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Bloom filter",
+        "meaning": "概率型数据结构，能确定判断“一定没有”，“可能有”时需要进一步确认。",
+        "meaningEn": "A Bloom filter is a probabilistic structure that can say a key is definitely absent, while a maybe-present result needs further checking."
+      },
+      {
+        "term": "false positive / false negative",
+        "meaning": "false positive 指误报“可能有”但实际没有；false negative 指漏报“没有”但实际有。",
+        "meaningEn": "A false positive wrongly reports maybe-present when the key is absent; a false negative wrongly reports absent when the key is actually present."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-021",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "bloom-filter",
+    "scenario": "为百万级 series、几十个 SSTable 的 TSDB 评估 Bloom filter 的内存开销是否划算。",
+    "q": "一个调优良好的 Bloom filter，典型的内存开销和误报率大致是什么量级？",
+    "options": [
+      "必须每个 key 占用 10KB 才能正常工作",
+      "约 10 bits/key 就能做到约 1% 的 false positive 率",
+      "false positive 率永远是 100%，形同虚设",
+      "只能用于少于 10 个 key 的小文件"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "这不是要死记硬背的精确值，但说明 Bloom filter 用很少内存就能跳过大量无关 SSTable，是数量级上的直觉。",
+    "why_en": "A practical Bloom filter can use around 10 bits per key for about a 1 percent false positive rate.",
+    "tags": [
+      "tsdb",
+      "bloom-filter",
+      "numbers"
+    ],
+    "options_en": [
+      "It must use 10KB per key to work at all.",
+      "About 10 bits per key can achieve roughly a 1 percent false positive rate.",
+      "The false positive rate is always 100 percent, making it useless.",
+      "It only works for small files with fewer than 10 keys."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Bloom filter",
+        "meaning": "概率型数据结构，能确定判断“一定没有”，“可能有”时需要进一步确认。",
+        "meaningEn": "A Bloom filter is a probabilistic structure that can say a key is definitely absent, while a maybe-present result needs further checking."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-022",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "downsampling",
+    "q": "Downsampling / rollup 在 TSDB 中解决什么问题？",
+    "options": [
+      "让所有原始数据永远保持最高分辨率并无限复制",
+      "把时间戳删除，使数据无法按时间查询",
+      "把老数据降到更粗粒度，减少历史查询需要扫描的数据量",
+      "只用于加密用户密码"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "近期数据常需要高分辨率，历史数据通常只看趋势。rollup 用更粗的时间桶保存预聚合结果，换取更快历史查询和更低存储。",
+    "why_en": "Downsampling stores lower-resolution rollups for older data so historical queries scan far fewer points.",
+    "tags": [
+      "tsdb",
+      "downsampling"
+    ],
+    "diagram": "flowchart LR\n  A[\"Raw points\"] --> B[\"1m buckets\"]\n  B --> C[\"5m rollup\"]\n  C --> D[\"Long range query\"]",
+    "options_en": [
+      "Keep all raw data at maximum resolution forever with unlimited replication.",
+      "Delete timestamps so data can no longer be queried by time.",
+      "Reduce older data to coarser granularity so historical queries scan far less data.",
+      "It is only used to encrypt user passwords."
+    ],
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换存储和查询效率。",
+        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for storage and query speed."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Tier",
+        "Grain",
+        "Use"
+      ],
+      "rows": [
+        [
+          "Last 24h",
+          "10s raw",
+          "debug recent"
+        ],
+        [
+          "Last 7d",
+          "1-min avg",
+          "recent trend"
+        ],
+        [
+          "Last 30d",
+          "5-min avg",
+          "monthly view"
+        ],
+        [
+          "Last 1y",
+          "1-hour avg",
+          "yearly trend"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-023",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "rollups",
+    "q": "Rollup 通常会为每个时间桶预聚合哪些值？",
+    "options": [
+      "完整用户会话视频",
+      "min",
+      "max",
+      "sum/count"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "min、max、sum、count 能支持平均值、范围和趋势类查询。它们不需要保留每个原始点就能回答多数历史 dashboard 问题。",
+    "why_en": "Rollups usually store aggregates such as min, max, sum, and count for each time bucket.",
+    "tags": [
+      "tsdb",
+      "rollups"
+    ],
+    "options_en": [
+      "A complete recording of the user's session video.",
+      "min",
+      "max",
+      "sum/count"
+    ],
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换存储和查询效率。",
+        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for storage and query speed."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-024",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "rollups",
+    "scenario": "Dashboard 把一天历史数据用 5 分钟粒度的 rollup 展示，而不是原始 10 秒采样点。",
+    "q": "相比直接扫描原始 10 秒采样点，用 5 分钟 rollup 回答“过去一天趋势”的查询，设计上带来了什么？",
+    "options": [
+      "扫描的数据点数量完全不变，只是换了一种展示方式",
+      "查询需要扫描的数据点数量级下降，历史大范围查询明显更快，但会牺牲一部分时间精度",
+      "rollup 会让查询变慢，因为要先做聚合计算",
+      "rollup 只影响存储成本，不影响查询要扫描多少数据"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "原始 10 秒采样一天有 8,640 点，5 分钟 rollup 只有 288 个桶，两个数量级的差距直接决定长范围查询要扫多少数据。",
+    "why_en": "Raw 10-second sampling produces 8,640 points a day while 5-minute rollups produce only 288 buckets, and that order-of-magnitude gap is what makes long-range queries fast.",
+    "tags": [
+      "tsdb",
+      "numbers",
+      "rollups"
+    ],
+    "options_en": [
+      "The number of points scanned stays exactly the same; only the display changes.",
+      "The number of points to scan drops by orders of magnitude, making large historical queries much faster at the cost of some time resolution.",
+      "Rollups make queries slower because they require upfront aggregation.",
+      "Rollups only affect storage cost, not how much data a query scans."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-025",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "requirements-negotiation",
+    "scenario": "面试官说要保存 1 年 10 秒级指标，但多数 dashboard 只看长期趋势。",
+    "q": "更成熟的回应是什么？",
+    "options": [
+      "直接照单全收，保存全部原始点一整年，不讨论任何成本",
+      "直接把最近 24 小时的数据也删掉以省空间",
+      "建议近期保留细粒度，老数据降采样成分钟级 rollup，并向面试官确认是否可接受",
+      "把所有历史数据都压缩成只剩最后一个点"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "这是需求谈判：先指出原始数据量巨大，再提出保留精度与成本之间的折中。即使面试官不同意，也能体现你会主动识别未来瓶颈。",
+    "why_en": "A strong interview answer negotiates raw retention by keeping fine resolution for recent data and rolling up older data.",
+    "whenOtherWins": "如果业务确实需要长期逐点审计或法务追溯，就必须保留原始点，并相应扩容存储与查询方案。",
+    "tags": [
+      "tsdb",
+      "interview",
+      "rollups"
+    ],
+    "tradeoff": "精度换成本的降采样提案 vs 原样保留全部原始点",
+    "options_en": [
+      "Just accept it as-is and store every raw point for a full year without discussing cost.",
+      "Delete even the most recent 24 hours of data to save space.",
+      "Propose keeping fine resolution for recent data and rolling older data up to minute-level buckets, then confirm with the interviewer whether that's acceptable.",
+      "Compress all historical data down to just the last point."
+    ],
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换存储和查询效率。",
+        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for storage and query speed."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-026",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "block-metadata",
+    "q": "Block-level metadata 在 TSDB 查询中有什么用？",
+    "options": [
+      "强制数据库把每个 block 都完整读一遍，不允许跳过",
+      "把所有 metric name 随机替换成一串数字",
+      "只在处理用户登录鉴权请求时才会被用到",
+      "记录每个 block 的 min/max，用来跳过不可能匹配的 block"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "如果查询条件与 block 的 min/max 范围不相交，数据库可以直接 prune。它和时间分区一起减少无效扫描。",
+    "why_en": "Block metadata such as min and max values lets the engine prune blocks that cannot match a query.",
+    "tags": [
+      "tsdb",
+      "block-metadata"
+    ],
+    "options_en": [
+      "Force the database to fully read every block, never allowing a skip.",
+      "Randomly replace every metric name with a number.",
+      "It is only used when handling user login authentication.",
+      "Record each block's min and max so queries can skip blocks that cannot match."
+    ],
+    "codeSample": "block_0.min_ts=1700000000  block_0.max_ts=1700003600\nblock_0.min_val=0.0        block_0.max_val=4.8\n# 查询 value > 10 时，跳过 max_val=4.8 的 block_0，无需读盘",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "block-level metadata",
+        "meaning": "记录每个数据 block 的 min/max 等统计信息，用于跳过不可能匹配的 block。",
+        "meaningEn": "Block-level metadata records stats like min and max per block so queries can skip blocks that cannot match."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-027",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "data-model",
+    "q": "补全 TSDB 的基本数据模型：",
+    "text": "TSDB 通常把数据组织成 {{measurement/metric}}、可索引的 {{tags}}、实际数值 {{fields}} 和 {{timestamps}}。",
+    "why": "measurement 类似表名，tags 是筛选维度，fields 是被测值，timestamp 定义时间位置。这个区分决定查询是否高效。",
+    "why_en": "Time-series data is usually modeled as measurements, tags, fields, and timestamps.",
+    "tags": [
+      "tsdb",
+      "data-model"
+    ],
+    "table": {
+      "headers": [
+        "Part",
+        "Example",
+        "Indexed?"
+      ],
+      "rows": [
+        [
+          "metric",
+          "cpu_usage",
+          "yes"
+        ],
+        [
+          "tags",
+          "host, region",
+          "yes"
+        ],
+        [
+          "field",
+          "value",
+          "usually no"
+        ]
+      ]
+    },
+    "codeSample": "cpu_usage,host=server-1,region=us-west value=45.2 1699999200000000000\n# measurement=cpu_usage，tags=host+region，field=value，timestamp=末尾纳秒",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "measurement",
+        "meaning": "类似表名，标识一种指标类型，比如 cpu_usage。",
+        "meaningEn": "A measurement is like a table name identifying a metric type, such as cpu_usage."
+      },
+      {
+        "term": "tag",
+        "meaning": "可索引的元数据维度，用于过滤，比如 host、region。",
+        "meaningEn": "A tag is indexed metadata used for filtering, such as host or region."
+      },
+      {
+        "term": "field",
+        "meaning": "实际测量值，通常不建索引，比如 value。",
+        "meaningEn": "A field is the actual measured value, usually not indexed, such as value."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-028",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "tags-vs-fields",
+    "q": "在 TSDB 中，tags 和 fields 最关键的区别是什么？",
+    "options": [
+      "fields 才是用于过滤的索引元数据，tags 只能存浮点数值",
+      "tags 是可索引的过滤元数据；fields 是实际测量值，通常不建索引",
+      "tags 和 fields 在存储和查询上完全没有区别，可以互换使用",
+      "fields 只能用来存时间戳，不能存其他测量值"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "把常用过滤维度放 tags 可以利用索引；把高基数或只需存储的值放 fields 可以避免 series 爆炸。建模错误会严重影响性能。",
+    "why_en": "Tags are indexed metadata for filtering, while fields are the measured values and are usually not indexed.",
+    "tags": [
+      "tsdb",
+      "tags",
+      "fields"
+    ],
+    "tradeoff": "tags 建索引换来快速过滤 vs fields 不建索引避免 series 爆炸",
+    "options_en": [
+      "Fields are actually the indexed metadata for filtering, while tags can only store floating-point values.",
+      "Tags are indexed metadata for filtering; fields are the actual measured values and are usually not indexed.",
+      "Tags and fields are completely interchangeable for storage and querying.",
+      "Fields can only store timestamps, not other measured values."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tag",
+        "meaning": "可索引的元数据维度，用于过滤，比如 host、region。",
+        "meaningEn": "A tag is indexed metadata used for filtering, such as host or region."
+      },
+      {
+        "term": "field",
+        "meaning": "实际测量值，通常不建索引，比如 value。",
+        "meaningEn": "A field is the actual measured value, usually not indexed, such as value."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Part",
+        "Indexed?",
+        "Best for"
+      ],
+      "rows": [
+        [
+          "Tag",
+          "yes",
+          "low-card filter"
+        ],
+        [
+          "Field",
+          "no",
+          "measured value"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-029",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "series",
+    "q": "TSDB 里一个 series 通常由什么唯一确定？",
+    "options": [
+      "客户端发起请求时 IP 地址的最后一段数字",
+      "数据库进程本次启动的系统时间戳",
+      "measurement 加上一组具体 tag 值的唯一组合",
+      "series 里数值最大的那一个点"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "例如 cpu_usage + host=server-1 + region=us-west + env=prod 会形成一个 series。相同 series 的点通常被物理上放在一起。",
+    "why_en": "A series is typically the unique combination of a measurement and its tag values.",
+    "tags": [
+      "tsdb",
+      "series"
+    ],
+    "options_en": [
+      "The last segment of the client's IP address at request time.",
+      "The system timestamp of when the database process last started.",
+      "The unique combination of a measurement plus a specific set of tag values.",
+      "Whichever point in the series happens to have the largest value."
+    ],
+    "termDefinitions": [
+      {
+        "term": "series",
+        "meaning": "measurement 加上一组具体 tag 值构成的一条时间序列。",
+        "meaningEn": "A series is one time-ordered stream identified by a measurement plus a specific set of tag values."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-030",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "storage-engine",
+    "q": "把典型 TSDB 写入/存储引擎步骤按顺序排列：",
+    "steps": [
+      "buffer 达到阈值后刷盘成不可变压缩文件",
+      "数据写入 WAL 以便崩溃恢复",
+      "后台 compaction 合并小文件、减少查询要检查的文件数",
+      "数据进入按 measurement/tag 组织的内存 buffer"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2
+    ],
+    "why": "WAL 负责 durability，buffer 负责吸收新写入，flush 生成压缩文件，compaction 再优化读取路径。这个组合就是很多 TSDB 的核心写路径。",
+    "why_en": "A TSDB often writes to the WAL, buffers points in memory, flushes compressed immutable files, and compacts them in the background.",
+    "diagram": "flowchart LR\nPoint[Metric point] --> WAL[WAL]\nPoint --> Buffer[In-memory buffer]\nBuffer --> File[Compressed immutable file]\nFile --> Compact[Background compaction]\nCompact --> QueryFiles[Query-optimized files]",
+    "tags": [
+      "tsdb",
+      "storage-engine"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "写入先落地的日志，用于崩溃后恢复未持久化的数据。",
+        "meaningEn": "A WAL is an append-only log written before data is applied, used to recover uncommitted writes after a crash."
+      },
+      {
+        "term": "memtable",
+        "fullName": "Memory Table",
+        "meaning": "LSM 中驻留内存的有序缓冲结构，接收最新写入。",
+        "meaningEn": "A memtable is the in-memory sorted buffer that absorbs the newest writes in an LSM tree."
+      },
+      {
+        "term": "compaction",
+        "meaning": "合并多个存储文件、清理重复和已删除数据的后台过程。",
+        "meaningEn": "Compaction is the background process that merges storage files and removes stale or deleted data."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-031",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "file-format",
+    "q": "TSDB 数据文件末尾的 series index 通常记录什么？",
+    "options": [
+      "系统里全部用户账号的密码明文备份记录",
+      "series key 映射到对应 block 的偏移量",
+      "每个 HTTP 请求头里携带的完整字段内容",
+      "训练机器学习模型过程中产生的 GPU 日志"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "文件 index 让查询特定 series 时可以先定位 block，再读数据，而不是从头扫描整个文件。文章强调这通常只需要少量 seek。",
+    "why_en": "The file index maps series keys to the block offsets containing their data.",
+    "tags": [
+      "tsdb",
+      "file-format",
+      "index"
+    ],
+    "options_en": [
+      "A plaintext backup of every user account's password.",
+      "A mapping from series key to the block offset containing its data.",
+      "The full header fields carried on every HTTP request.",
+      "GPU logs produced while training a machine learning model."
+    ],
+    "codeSample": "INDEX（文件尾部）:\n  \"cpu_usage,host=server-1,region=us-west\" → block 0\n  \"cpu_usage,host=server-2,region=us-west\" → block 1\n# 查 series 只需 2 次 seek：先查 index，再读对应 block",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "series index",
+        "meaning": "文件尾部维护的 series key 到 block offset 的映射表。",
+        "meaningEn": "A series index is the mapping at the end of a data file from series key to block offset."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-032",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "query-execution",
+    "q": "把 TSDB 查询执行路径按顺序排列：",
+    "steps": [
+      "从内存 buffer 和磁盘文件读取并合并结果",
+      "根据 tag filter 在 tag index 中定位匹配 series",
+      "边读边做聚合，而不是先把所有点加载进内存",
+      "根据时间范围选择相关 partitions/chunks"
+    ],
+    "answerOrder": [
+      3,
+      1,
+      0,
+      2
+    ],
+    "why": "查询先用时间范围和标签索引缩小候选数据，再合并最新内存数据和磁盘数据。聚合通常是 streaming 的，减少内存压力。",
+    "why_en": "Query execution prunes partitions by time, finds series via tag indexes, merges buffer and disk data, and streams aggregations.",
+    "tags": [
+      "tsdb",
+      "query-execution"
+    ],
+    "diagram": "flowchart TD\n  A[\"Query tags and time\"] --> B[\"Tag index\"]\n  B --> C[\"Series ids\"]\n  C --> D[\"Time blocks\"]\n  D --> E[\"Aggregate\"]",
+    "termDefinitions": [
+      {
+        "term": "tag index",
+        "meaning": "把 tag 值映射到匹配 series 集合的内存索引，类似倒排索引。",
+        "meaningEn": "A tag index maps tag values to the set of matching series, similar to an inverted index."
+      },
+      {
+        "term": "streaming aggregation",
+        "meaning": "边读取数据边累积聚合结果，不必先把全部数据加载进内存。",
+        "meaningEn": "Streaming aggregation accumulates results as data is read instead of loading everything into memory first."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-033",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "tag-index",
+    "q": "TSDB 的 tag index 和 Elasticsearch 的 inverted index 在直觉上有什么相似？",
+    "options": [
+      "两者的作用都只是对浮点数值做压缩编码而已",
+      "都把可过滤的值映射到包含它的对象集合",
+      "两者都完全不支持对多个条件做集合交集",
+      "两者都只能运行在浏览器前端环境里，不能用于服务端"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "TSDB tag index 可以把 region=us-west 映射到相关 series，把 env=prod 映射到另一组 series，再取交集。它避免扫描全部数据块。",
+    "why_en": "A tag index maps tag values to matching series, much like an inverted index maps terms to documents.",
+    "tags": [
+      "tsdb",
+      "tag-index"
+    ],
+    "options_en": [
+      "Both of them only compress floating-point values.",
+      "Both map a filterable value to the set of objects that contain it.",
+      "Neither supports intersecting multiple filter conditions.",
+      "Both only run inside a browser front end, never on a server."
+    ],
+    "codeSample": "Tag index:  region=us-west → [Series1, Series2]\nInverted:   \"claude\"      → [doc7, doc19]\n# 同一套思路：value → 匹配对象集合，再做交集",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "tag index",
+        "meaning": "把 tag 值映射到匹配 series 集合的内存索引，类似倒排索引。",
+        "meaningEn": "A tag index maps tag values to the set of matching series, similar to an inverted index."
+      },
+      {
+        "term": "inverted index",
+        "meaning": "把 token 映射到包含它的文档集合的索引结构。",
+        "meaningEn": "An inverted index maps tokens to the set of documents that contain them."
+      },
+      {
+        "term": "Elasticsearch",
+        "meaning": "基于倒排索引的搜索与分析引擎。",
+        "meaningEn": "Elasticsearch is a search and analytics engine built on an inverted index."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-034",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "multi-tag-query",
+    "q": "查询 region='us-west' AND env='prod' 时，tag index 通常会怎么用？",
+    "options": [
+      "不看任何索引，直接随机读取所有 block 逐个比对",
+      "先把 env 这个 tag 从索引里整个删除再查询",
+      "只检查 value 字段是否大于 0，忽略两个 tag 条件",
+      "分别查两个 tag 各自的 series 集合，再取交集"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "集合交集能快速得到同时满足多个 tag 条件的 series。之后只需要读取这些 series 对应的 block。",
+    "why_en": "A multi-tag query intersects the series sets for each tag predicate before reading data blocks.",
+    "tags": [
+      "tsdb",
+      "multi-tag-query"
+    ],
+    "options_en": [
+      "Ignore every index and randomly scan every block one by one.",
+      "Delete the env tag from the index entirely before querying.",
+      "Only check whether the value field is greater than 0, ignoring both tag conditions.",
+      "Look up the series set for each tag separately, then intersect the two sets."
+    ],
+    "codeSample": "region=us-west → [Series1, Series2]\nenv=prod       → [Series1, Series2, Series3]\n交集 = [Series1, Series2]  # 只需读这两个 series 对应的 block",
+    "lang": "text",
+    "termDefinitions": [
+      {
+        "term": "tag index",
+        "meaning": "把 tag 值映射到匹配 series 集合的内存索引，类似倒排索引。",
+        "meaningEn": "A tag index maps tag values to the set of matching series, similar to an inverted index."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-035",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "series-locality",
+    "q": "为什么 series-oriented 存储比普通行式表更适合指标查询？",
+    "options": [
+      "它让所有数据都不再需要保存时间戳字段",
+      "它会彻底禁止用户按任何 tag 做过滤查询",
+      "同一 series 的点物理上更集中，查询时更少分散读取",
+      "它规定整个数据库里每个 series 只能存一条数据"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "监控查询常围绕某些 host/service/region 的时间范围。把相关点放在连续 block 中，能减少随机读取并提升压缩率。",
+    "why_en": "Series-oriented storage colocates related points, reducing scattered reads and improving compression for time-range queries.",
+    "tags": [
+      "tsdb",
+      "series-locality"
+    ],
+    "tradeoff": "同 series 物理集中换取更少分散读取 vs 行式表按插入顺序存储更简单",
+    "options_en": [
+      "It means data no longer needs to store a timestamp field at all.",
+      "It completely bans filtering by any tag.",
+      "Points from the same series sit closer together physically, so querying it touches fewer scattered reads.",
+      "It restricts the whole database to storing only one point per series."
+    ],
+    "termDefinitions": [
+      {
+        "term": "series",
+        "meaning": "measurement 加上一组具体 tag 值构成的一条时间序列。",
+        "meaningEn": "A series is one time-ordered stream identified by a measurement plus a specific set of tag values."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-036",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "streaming-aggregation",
+    "q": "TSDB 查询 mean(value) GROUP BY time(5m) 时，为什么通常不需要先把所有点加载到内存？",
+    "options": [
+      "平均值不需要任何输入数据",
+      "聚合可以边读取边累积 sum/count/min/max",
+      "磁盘会自动返回最终答案",
+      "tag index 会直接存所有聚合结果"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "聚合函数可以流式计算，只保留每个桶的中间状态。这样查询大时间范围时内存压力更可控。",
+    "why_en": "Aggregations can be streamed by maintaining bucket state such as sum and count as points are read.",
+    "tags": [
+      "tsdb",
+      "aggregation"
+    ],
+    "options_en": [
+      "The average requires no input data at all.",
+      "Aggregation can accumulate sum, count, min, and max while streaming through the data.",
+      "The disk automatically returns the final answer.",
+      "The tag index directly stores every aggregation result."
+    ],
+    "codeSample": "SELECT mean(value) FROM cpu_usage\nWHERE host = 'server-1' AND time > now() - 1h\nGROUP BY time(5m)\n# 引擎边读边维护每个 5m 桶的 sum/count，不必先加载全部点",
+    "lang": "sql",
+    "termDefinitions": [
+      {
+        "term": "streaming aggregation",
+        "meaning": "边读取数据边累积聚合结果，不必先把全部数据加载进内存。",
+        "meaningEn": "Streaming aggregation accumulates results as data is read instead of loading everything into memory first."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-037",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "time-locality",
+    "q": "TSDB 查询快的两个 locality 直觉是什么？",
+    "options": [
+      "用户密码局部性和 CSS 局部性",
+      "随机分区局部性和全表扫描局部性",
+      "只写不读局部性和只读不写局部性",
+      "时间局部性和 series 局部性"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "时间局部性让查询只看相关 partition；series 局部性让同一 tag 组合的数据块集中。两者共同减少磁盘访问。",
+    "why_en": "Time-series databases exploit both time locality and series locality to minimize disk access.",
+    "tags": [
+      "tsdb",
+      "locality"
+    ],
+    "options_en": [
+      "Password locality and CSS locality.",
+      "Random partition locality and full-table-scan locality.",
+      "Write-only locality and read-only locality.",
+      "Time locality and series locality."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-038",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "q": "TSDB 中 cardinality 指的是什么？",
+    "options": [
+      "磁盘上文件的权限数量",
+      "每秒 CPU 指令数",
+      "唯一 tag 组合，也就是 series 的数量",
+      "SQL join 的列数"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "series 数量由 measurement 和 tag 组合决定。cardinality 高会让内存 tag index 和元数据膨胀。",
+    "why_en": "Cardinality is the number of unique tag combinations, or series, that the database must track.",
+    "tags": [
+      "tsdb",
+      "cardinality"
+    ],
+    "options_en": [
+      "The number of file permission bits on disk.",
+      "The number of CPU instructions executed per second.",
+      "The number of unique tag combinations, i.e., the number of series.",
+      "The number of columns in a SQL join."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cardinality",
+        "meaning": "某个维度上唯一值组合的数量，这里指唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique tag combinations, i.e. the number of distinct series."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Tag",
+        "Series #",
+        "Verdict"
+      ],
+      "rows": [
+        [
+          "region",
+          "small bounded",
+          "good tag"
+        ],
+        [
+          "host_id",
+          "large but useful",
+          "careful"
+        ],
+        [
+          "request_id",
+          "unbounded",
+          "bad tag"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-039",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "q": "为什么 user_id、request_id 这类高基数值通常不应该作为 TSDB tag？",
+    "options": [
+      "它们在写入时完全没办法被序列化成字节",
+      "它们会造出海量唯一 series，压垮内存索引并拖慢查询",
+      "它们的取值格式一定不允许是字符串类型",
+      "它们会导致所有数据的时间戳顺序颠倒"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "TSDB 会为每个唯一 tag 组合维护索引和元数据。把高基数值放 tag 会迅速耗尽内存，失去性能收益。",
+    "why_en": "High-cardinality values like user IDs create too many series and can overwhelm the in-memory index.",
+    "tags": [
+      "tsdb",
+      "cardinality",
+      "tags"
+    ],
+    "options_en": [
+      "They simply cannot be serialized into bytes when written.",
+      "They create massive numbers of unique series, overwhelming the in-memory index and slowing queries.",
+      "Their values are never allowed to be strings.",
+      "They cause every timestamp to be reversed in order."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cardinality",
+        "meaning": "某个维度上唯一值组合的数量，这里指唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique tag combinations, i.e. the number of distinct series."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-040",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "tags-vs-fields",
+    "scenario": "你必须随指标记录 request_id，但查询很少按 request_id 过滤。",
+    "q": "在 TSDB 中更适合把 request_id 放在哪里？",
+    "options": [
+      "放 tag，因为所有字段都应该建索引",
+      "放 timestamp，替代原始采样时间",
+      "放 measurement name，让每个请求单独建一个 measurement",
+      "放 field，避免高基数 tag 造成 series 爆炸"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "不常作为过滤条件的高基数值应作为 field 存储。这样仍能写入，但不会把 tag index 撑爆。",
+    "why_en": "A rarely filtered high-cardinality value should be stored as a field rather than a tag.",
+    "whenOtherWins": "如果某个维度低基数且经常用于过滤，比如 region/env/service，放 tag 才能利用索引。",
+    "tags": [
+      "tsdb",
+      "fields",
+      "cardinality"
+    ],
+    "tradeoff": "放 field 换取可控 series 数量 vs 放 tag 换取可索引过滤",
+    "options_en": [
+      "Put it in a tag, because every field should be indexed.",
+      "Put it in timestamp, replacing the original sample time.",
+      "Put it in measurement name, giving every request its own measurement.",
+      "Put it in a field, avoiding a high-cardinality tag that explodes the series count."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tag",
+        "meaning": "可索引的元数据维度，用于过滤，比如 host、region。",
+        "meaningEn": "A tag is indexed metadata used for filtering, such as host or region."
+      },
+      {
+        "term": "field",
+        "meaning": "实际测量值，通常不建索引，比如 value。",
+        "meaningEn": "A field is the actual measured value, usually not indexed, such as value."
+      },
+      {
+        "term": "cardinality",
+        "meaning": "某个维度上唯一值组合的数量，这里指唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique tag combinations, i.e. the number of distinct series."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Part",
+        "Indexed?",
+        "Best for"
+      ],
+      "rows": [
+        [
+          "Tag",
+          "yes",
+          "low-card filter"
+        ],
+        [
+          "Field",
+          "no",
+          "measured value"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-041",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "assumptions",
+    "q": "补全 TSDB 的关键数据假设：",
+    "text": "TSDB 的高性能依赖一些假设：tags 的 cardinality 较 {{low}}，采样时间较 {{regular}}，相邻数据点的 delta 较 {{small}}。",
+    "why": "这些假设让 tag index、时间压缩、value 压缩和时间分区都有效。一旦假设不成立，TSDB 可能比通用数据库更差。",
+    "why_en": "Time-series databases perform best when tags are low cardinality, samples are regular, and adjacent values have small deltas.",
+    "tags": [
+      "tsdb",
+      "assumptions"
+    ],
+    "termDefinitions": [
+      {
+        "term": "cardinality",
+        "meaning": "某个维度上唯一值组合的数量，这里指唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique tag combinations, i.e. the number of distinct series."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-042",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "performance",
+    "scenario": "面试官问，把写入、时间分区、压缩、索引这些优化叠加后，TSDB 相比通用数据库大概能快多少。",
+    "q": "对目标 workload 而言，TSDB 相比通用数据库的性能收益大致是什么量级？",
+    "options": [
+      "永远只快 1%，几乎感觉不到差别",
+      "永远慢 100x，专用系统反而更差",
+      "通常能比通用数据库快一到两个数量级，比如 10-100x",
+      "只影响 UI 展示，不影响存储或查询本身"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "这个收益来自多种设计叠加：append-only、LSM、压缩、时间分区、Bloom filter、rollup 和 block pruning。前提是 workload 符合 TSDB 假设。",
+    "why_en": "For the right workload, time-series databases can deliver order-of-magnitude improvements such as 10 to 100 times better performance.",
+    "tags": [
+      "tsdb",
+      "numbers",
+      "performance"
+    ],
+    "options_en": [
+      "It's always only 1 percent faster, barely noticeable.",
+      "It's always 100x slower; the specialized system is actually worse.",
+      "It typically delivers one to two orders of magnitude better performance, roughly 10 to 100x.",
+      "It only affects the UI display, not storage or query itself."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "anti-pattern",
+    "scenario": "题目是统计全站 Top-K 热门 item，需要跨大量 series 排序和聚合，而不是按少量标签查时间窗口。",
+    "q": "是否应该因为数据带时间就默认上 TSDB？",
+    "options": [
+      "应该，只要数据字段里出现时间就必须优先考虑 TSDB",
+      "应该，因为 TSDB 能自动帮你处理所有排序和聚合逻辑",
+      "不应该，因为 TSDB 这类系统从设计上就无法存储任何数字类型",
+      "不应该；Top-K 要跨大量 series 做排序聚合，TSDB 不一定好用"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "TSDB 擅长按时间和低基数标签定位 series，不一定擅长跨海量 series 做全局排序聚合。Top-K 可能更适合流处理、预聚合或通用存储方案。",
+    "why_en": "A time-series database is not automatically a good fit for global Top-K queries across many series.",
+    "whenOtherWins": "如果查询主要是某些 host/service 的时间窗口指标和 dashboard，TSDB 才更自然。",
+    "tags": [
+      "tsdb",
+      "anti-pattern",
+      "top-k"
+    ],
+    "tradeoff": "TSDB 的时间+低基数标签过滤 vs Top-K 需要的跨海量 series 全局排序",
+    "options_en": [
+      "Yes, whenever a field contains time you must prioritize a TSDB.",
+      "Yes, because a TSDB automatically handles all sorting and aggregation logic for you.",
+      "No, because TSDBs are fundamentally unable to store any numeric type.",
+      "No; Top-K needs sorting and aggregation across huge numbers of series, which a TSDB is not necessarily good at."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Top-K",
+        "meaning": "在大量数据里找出按某指标排名前 K 名的查询模式。",
+        "meaningEn": "Top-K is the query pattern of finding the highest-ranked K results by some metric."
+      },
+      {
+        "term": "TSDB",
+        "fullName": "Time-Series Database",
+        "meaning": "时间序列数据库，为高吞吐追加写和按时间范围查询优化的专用数据库。",
+        "meaningEn": "A TSDB, or time-series database, is purpose-built for high-throughput append writes and time-range queries."
+      }
+    ],
+    "table": {
+      "headers": [
+        "System",
+        "Writes",
+        "Query"
+      ],
+      "rows": [
+        [
+          "TSDB",
+          "seq append",
+          "time range + tag"
+        ],
+        [
+          "Postgres",
+          "in-place",
+          "joins + txns"
+        ],
+        [
+          "DynamoDB",
+          "key-based",
+          "point lookup"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "monitoring",
+    "scenario": "云监控平台持续接收 CPU、内存、磁盘、网络指标，用户主要看最近一小时/一周图表和告警。",
+    "q": "为什么 TSDB 比普通行式表更贴合？",
+    "options": [
+      "因为它天生就提供比关系数据库更强的外键约束能力",
+      "因为它针对追加写、时间分区、压缩和 rollup 做了专门优化",
+      "因为它的所有数据都只保存在内存里，完全不需要磁盘",
+      "因为它能自动理解业务含义，不需要工程师建模"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "监控指标是 TSDB 的典型 workload：写入连续、查询按时间范围、标签维度相对可控。TSDB 的存储和查询路径正是围绕这些特征设计的。",
+    "why_en": "Monitoring metrics fit TSDBs because they are append-heavy, time-windowed, compressible, and often queried by series tags.",
+    "whenOtherWins": "如果平台更重事务、关系约束或复杂 join，Postgres 仍可能是主存储，TSDB 只作为指标侧存储。",
+    "tags": [
+      "tsdb",
+      "monitoring",
+      "fit"
+    ],
+    "tradeoff": "追加写+时间分区+压缩的读写优化 vs 通用数据库的事务/关系能力",
+    "options_en": [
+      "Because it inherently offers stronger foreign-key constraints than a relational database.",
+      "Because it is purpose-built for append writes, time partitioning, compression, and rollups.",
+      "Because all its data lives only in memory and needs no disk at all.",
+      "Because it automatically understands business meaning without any modeling by engineers."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TSDB",
+        "fullName": "Time-Series Database",
+        "meaning": "时间序列数据库，为高吞吐追加写和按时间范围查询优化的专用数据库。",
+        "meaningEn": "A TSDB, or time-series database, is purpose-built for high-throughput append writes and time-range queries."
+      }
+    ],
+    "table": {
+      "headers": [
+        "System",
+        "Writes",
+        "Query"
+      ],
+      "rows": [
+        [
+          "TSDB",
+          "seq append",
+          "time range + tag"
+        ],
+        [
+          "Postgres",
+          "in-place",
+          "joins + txns"
+        ],
+        [
+          "DynamoDB",
+          "key-based",
+          "point lookup"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-045",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "buffer",
+    "q": "TSDB 查询时为什么通常要同时看内存 buffer 和磁盘文件？",
+    "options": [
+      "磁盘上的文件永远是空的，不会保存任何数据",
+      "内存 buffer 里只会缓存用户的头像图片",
+      "最新数据可能还在内存 buffer，较老数据已刷到磁盘",
+      "只有同时查内存和磁盘，才能把时间过滤功能禁用掉"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "写入先进入内存结构，达到阈值才刷盘。查询最近窗口时必须合并尚未刷盘的新点和已持久化的旧点。",
+    "why_en": "Queries merge in-memory buffered points with older disk files because recent data may not have been flushed yet.",
+    "tags": [
+      "tsdb",
+      "buffer",
+      "query"
+    ],
+    "options_en": [
+      "Disk files are always empty and never store any data.",
+      "The in-memory buffer only caches user avatar images.",
+      "The newest data may still be in the in-memory buffer while older data has already been flushed to disk.",
+      "Checking both memory and disk is the only way to disable time filtering."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-046",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "write-read-design",
+    "q": "“writes are optimized to assist reads” 在 TSDB 里的意思更接近哪一个？",
+    "options": [
+      "写入路径完全不用考虑后续任何查询模式",
+      "写入时故意把数据打乱顺序，让查询变得更难",
+      "写入时只保留每个 series 最后一个值，其余全部丢弃",
+      "写入按 series/time 组织并压缩，让后续查询少读更顺序"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "TSDB 前台写入仍然很快，但它不是随便 append；数据会按 series、时间块、压缩格式和索引组织，服务后续时间范围查询。",
+    "why_en": "TSDB writes organize data by series and time so later reads touch fewer and more contiguous blocks.",
+    "tags": [
+      "tsdb",
+      "storage",
+      "query"
+    ],
+    "options_en": [
+      "The write path never needs to consider any future query pattern.",
+      "Writes deliberately shuffle data out of order to make queries harder.",
+      "Writes keep only the last value per series and discard everything else.",
+      "Writes organize and compress data by series and time so later reads touch fewer, more sequential blocks."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-047",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "building-blocks",
+    "q": "以下哪些属于 TSDB 的核心 building blocks（构建模块）？",
+    "options": [
+      "Append-only storage",
+      "Two-phase commit for bank transfers",
+      "LSM tree / background compaction",
+      "Delta/XOR compression"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "TSDB 的性能来自追加写、LSM、压缩、时间分区、Bloom filter、rollup 和 block metadata 的组合。银行转账事务不是本文 TSDB 核心模式。",
+    "why_en": "Core TSDB building blocks include append-only storage, LSM-style compaction, and specialized compression.",
+    "tags": [
+      "tsdb",
+      "building-blocks"
+    ],
+    "options_en": [
+      "Append-only storage",
+      "Two-phase commit for bank transfers",
+      "LSM tree / background compaction",
+      "Delta/XOR compression"
+    ],
+    "optionMeanings": [
+      "只在文件尾追加写入，避免原地随机更新。",
+      "跨多节点保证事务原子提交的协调协议。",
+      "把随机写转顺序写、后台合并整理的存储结构。",
+      "针对相邻值/浮点数的专用压缩技术。"
+    ],
+    "optionScenarioImpacts": [
+      "TSDB 写路径的地基，后续所有优化建立在它上面。",
+      "银行转账等强一致场景的机制，不是 TSDB 追加写的核心。",
+      "TSDB 高写入吞吐的核心存储结构。",
+      "让指标存储体积显著变小的关键手段。"
+    ],
+    "optionDirectness": [
+      "正确；append-only 是 TSDB 写路径的地基。",
+      "错误；这是事务系统的机制，不属于本文讨论的 TSDB 模式。",
+      "正确；LSM 是 TSDB 高写入吞吐的核心结构。",
+      "正确；压缩是 TSDB 空间效率的关键手段。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "two-phase commit",
+        "fullName": "Two-Phase Commit",
+        "meaning": "跨多个节点分两阶段（准备+提交）保证事务原子性的协议。",
+        "meaningEn": "Two-phase commit is a protocol that coordinates a prepare phase and a commit phase to make a distributed transaction atomic."
+      },
+      {
+        "term": "LSM tree",
+        "fullName": "Log-Structured Merge Tree",
+        "meaning": "把随机写转成顺序写，再靠后台合并整理数据的存储结构。",
+        "meaningEn": "An LSM tree turns random writes into sequential writes and reorganizes data later via background merges."
+      },
+      {
+        "term": "append-only storage",
+        "meaning": "只在文件末尾追加新数据，不做原地更新的写入方式。",
+        "meaningEn": "Append-only storage always writes new data to the end of a file instead of updating in place."
+      },
+      {
+        "term": "delta encoding",
+        "meaning": "存相邻值之间的差而不是完整值的编码方式。",
+        "meaningEn": "Delta encoding stores the difference between adjacent values instead of the full value each time."
+      },
+      {
+        "term": "XOR compression",
+        "meaning": "利用相邻浮点数按位异或后大量为 0 位来压缩数值的技术。",
+        "meaningEn": "XOR compression exploits the fact that XORing similar adjacent floating-point values leaves mostly zero bits."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-048",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "building-blocks",
+    "q": "以下哪些优化主要帮助 TSDB 的读取路径？",
+    "options": [
+      "Bloom filters 跳过无关 SSTable",
+      "把所有 tag 都换成 user_id",
+      "Block-level metadata 做 pruning",
+      "Tag index 快速定位 matching series"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "Bloom filter、block metadata 和 tag index 都是在减少不必要读取。把高基数 user_id 放 tag 反而会破坏性能。",
+    "why_en": "Bloom filters, block metadata, and tag indexes help the read path skip irrelevant files, blocks, and series.",
+    "tags": [
+      "tsdb",
+      "read-optimization"
+    ],
+    "options_en": [
+      "Bloom filters skip irrelevant SSTables.",
+      "Replace every tag with user_id.",
+      "Block-level metadata prunes blocks.",
+      "A tag index quickly locates matching series."
+    ],
+    "optionMeanings": [
+      "用概率结构提前排除不含目标 key 的文件。",
+      "把高基数字段错当成理想的 tag 选择。",
+      "用 block 的 min/max 统计跳过不可能匹配的 block。",
+      "把 tag 值映射到匹配 series 集合。"
+    ],
+    "optionScenarioImpacts": [
+      "减少不必要的磁盘读取次数。",
+      "user_id 通常唯一，会制造海量 series，拖垮索引。",
+      "在时间分区之上再加一层过滤。",
+      "避免扫描全部 series 就能定位目标。"
+    ],
+    "optionDirectness": [
+      "正确；是读路径优化。",
+      "错误；这会破坏而不是优化读取路径。",
+      "正确；是读路径优化。",
+      "正确；是读路径优化。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Bloom filter",
+        "meaning": "概率型数据结构，能确定判断“一定没有”，“可能有”时需要进一步确认。",
+        "meaningEn": "A Bloom filter is a probabilistic structure that can say a key is definitely absent, while a maybe-present result needs further checking."
+      },
+      {
+        "term": "block-level metadata",
+        "meaning": "记录每个数据 block 的 min/max 等统计信息，用于跳过不可能匹配的 block。",
+        "meaningEn": "Block-level metadata records stats like min and max per block so queries can skip blocks that cannot match."
+      },
+      {
+        "term": "tag index",
+        "meaning": "把 tag 值映射到匹配 series 集合的内存索引，类似倒排索引。",
+        "meaningEn": "A tag index maps tag values to the set of matching series, similar to an inverted index."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-049",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把“是否使用 TSDB”的决策链按顺序排列：",
+    "steps": [
+      "如果这些假设不成立，回到 Postgres/DynamoDB/流处理等更通用方案",
+      "需要高吞吐追加写和按时间范围查询",
+      "选择 TSDB，并用时间分区、压缩、rollup 和 tag index 优化",
+      "检查 tag cardinality 是否可控、采样是否规律、相邻值是否可压缩",
+      "确认是否能接受历史数据降采样和最终一致的指标视图"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      4,
+      2,
+      0
+    ],
+    "why": "先确认 workload，再验证 TSDB 假设和业务可接受的精度/一致性，最后才选型。面试里这样能避免“看到 timestamp 就上 TSDB”。",
+    "why_en": "The decision should start with the workload, validate TSDB assumptions and precision tradeoffs, then choose TSDB or fall back to simpler storage.",
+    "tags": [
+      "tsdb",
+      "decision"
+    ],
+    "tradeoff": "先验证 TSDB 假设成立 vs 直接因为有时间戳就选型",
+    "termDefinitions": [
+      {
+        "term": "TSDB",
+        "fullName": "Time-Series Database",
+        "meaning": "时间序列数据库，为高吞吐追加写和按时间范围查询优化的专用数据库。",
+        "meaningEn": "A TSDB, or time-series database, is purpose-built for high-throughput append writes and time-range queries."
+      },
+      {
+        "term": "cardinality",
+        "meaning": "某个维度上唯一值组合的数量，这里指唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique tag combinations, i.e. the number of distinct series."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-050",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "summary",
+    "q": "TSDB 的性能收益主要来自哪些可利用的数据特征？",
+    "options": [
+      "时间天然有序，适合按窗口分区",
+      "同一 series 的相邻值和 timestamp 往往相似，适合压缩",
+      "每条数据都需要跨表强事务",
+      "查询常按低基数 tag 和时间范围裁剪"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "TSDB 是为特定形状的数据和查询设计的。强事务和复杂关系不是它的核心优势。",
+    "why_en": "TSDBs gain performance by exploiting time order, compressible adjacent points, and low-cardinality tag filtering.",
+    "tags": [
+      "tsdb",
+      "summary"
+    ],
+    "options_en": [
+      "Time is naturally ordered, which fits windowed partitioning.",
+      "Adjacent values and timestamps within the same series tend to be similar, which compresses well.",
+      "Every point needs a strong cross-table transaction.",
+      "Queries are usually pruned by low-cardinality tags and a time range."
+    ]
+  }
+]

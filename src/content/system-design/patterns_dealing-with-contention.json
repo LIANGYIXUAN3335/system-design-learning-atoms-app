@@ -1,0 +1,1336 @@
+[
+  {
+    "id": "sd-patterns-dealing-with-contention-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "definition",
+    "q": "Contention 在系统设计里指什么？",
+    "options": [
+      "多个进程同时竞争同一个资源，例如最后一张票或同一个拍卖品",
+      "系统只有读请求没有写请求",
+      "数据库只存静态配置",
+      "服务之间没有任何共享状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Contention 是多个并发操作争抢同一资源。如果不协调，会出现 race condition、重复预订、重复扣款或状态不一致。",
+    "why_en": "Contention happens when multiple processes compete for the same resource at the same time.",
+    "tags": [
+      "contention",
+      "definition",
+      "concurrency"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "lost-update",
+    "q": "Lost update 的本质是什么？",
+    "options": [
+      "两个请求读到同一个旧值，各自基于旧值写回，导致一个更新覆盖或破坏另一个",
+      "数据库磁盘损坏导致数据丢失",
+      "缓存 TTL 太短导致 miss",
+      "用户忘记点击提交"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Lost update 是 read-modify-write 周期里的经典竞态：读和写不是一个原子动作，中间状态可能被别人改变。",
+    "why_en": "A lost update occurs when concurrent read-modify-write cycles act on the same stale value.",
+    "tags": [
+      "lost-update",
+      "race-condition",
+      "read-modify-write"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-003",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "race-condition",
+    "q": "按正确顺序排列“最后一张票被卖两次”的竞态流程：",
+    "steps": [
+      "Bob 在 Alice 写回前也读到还有 1 张票",
+      "Alice 和 Bob 都决定可以购买并继续扣款",
+      "Alice 读到 available_seats = 1",
+      "两次更新都提交，库存可能到 -1，且两人都收到确认"
+    ],
+    "answerOrder": [
+      2,
+      0,
+      1,
+      3
+    ],
+    "why": "问题出在读库存和写库存之间有窗口，两个请求都基于同一个旧事实行动。同步机制的目标就是关闭这个窗口。",
+    "why_en": "The race happens because both buyers act on the same stale seat count before either write closes the gap.",
+    "tags": [
+      "race-condition",
+      "tickets",
+      "sequence"
+    ],
+    "diagram": "sequenceDiagram\n  participant A as Buyer A\n  participant DB as Inventory\n  participant B as Buyer B\n  A->>DB: read one left\n  B->>DB: read one left\n  A->>DB: write sold\n  B->>DB: write sold again"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "conditional-write",
+    "scenario": "你只需要“有库存时才把库存减 1”，这个规则能直接写成当前行上的 WHERE 条件。",
+    "q": "最简单且并发安全的做法是什么？",
+    "options": [
+      "先 SELECT 再在应用里判断，再无条件 UPDATE",
+      "用单条 conditional UPDATE：WHERE available_seats > 0",
+      "给整个数据库加全局锁",
+      "把所有请求都丢弃"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "当检查条件就是写入行上的谓词时，数据库可以在同一条 UPDATE 中完成检查和修改。失败者会匹配 0 行或被序列化失败打回。",
+    "why_en": "A conditional update makes the check and the write one atomic database operation.",
+    "whenOtherWins": "如果决策需要应用代码读多行、找连续座位或调用外部服务，单条 WHERE 谓词就不够，需要锁、OCC 或 reservation。",
+    "tags": [
+      "conditional-write",
+      "atomicity",
+      "fit"
+    ],
+    "diagram": "flowchart TD\n  R[Request buy]\n  U[UPDATE where seats gt zero]\n  C{Rows changed}\n  S[Success]\n  F[Sold out]\n  R --> U --> C\n  C -->|one| S\n  C -->|zero| F"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-005",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "conditional-write",
+    "scenario": "你要用 SQL 原子地减少库存，只允许库存大于 0 时成功。",
+    "q": "哪一项最准确描述这段 SQL 的作用？",
+    "options": [
+      "它先读再无条件写，仍会超卖",
+      "它把检查和 decrement 合成一个原子写，只有 available_seats > 0 时才匹配",
+      "它会锁住整个 concerts 表直到服务重启",
+      "它一定会抛异常而不是返回 0 行"
+    ],
+    "answer": [
+      1
+    ],
+    "codeSample": "UPDATE concerts\nSET available_seats = available_seats - 1\nWHERE concert_id = 'weeknd_tour'\n  AND available_seats > 0;",
+    "lang": "sql",
+    "why": "这就是 SQL 里的 compare-and-set：条件仍成立才修改。并发失败时通常表现为 affected rows = 0，而不是业务自动回滚。",
+    "why_en": "The SQL encodes compare-and-set by updating only if the current row still satisfies the predicate.",
+    "whenOtherWins": "如果还要创建 ticket 记录，必须把后续 INSERT 绑定到 UPDATE 是否真的成功，通常放在同一事务里。",
+    "tags": [
+      "conditional-write",
+      "sql",
+      "compare-and-set"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "affected-rows",
+    "q": "Conditional UPDATE 匹配 0 行时，应用层最容易犯什么错误？",
+    "options": [
+      "以为语句失败会自动抛错，于是继续执行 INSERT 创建 ticket",
+      "正确检查 affected row count 并回滚",
+      "立刻通知用户失败",
+      "停止后续写入"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "UPDATE 0 rows 通常是成功执行但没有改任何行，不会自动失败。后续逻辑必须依赖 affected rows，否则会出现“没抢到座位但创建了票”。",
+    "why_en": "A zero-row update often is not an exception, so the application must check the affected count before continuing.",
+    "tags": [
+      "conditional-write",
+      "affected-rows",
+      "transactions"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-007",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "transaction",
+    "scenario": "你要在扣减库存成功时才创建 ticket，避免库存没扣成功但票被插入。",
+    "q": "这段 SQL 的关键保护点是什么？",
+    "options": [
+      "INSERT 从 reservation CTE 读取，只有 UPDATE RETURNING 出行时才插入",
+      "INSERT 永远无条件执行",
+      "COMMIT 会自动判断库存是否足够",
+      "CTE 会让所有座位永久锁定"
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "BEGIN;\nWITH reservation AS (\n  UPDATE concerts\n  SET available_seats = available_seats - 1\n  WHERE concert_id = 'weeknd_tour'\n    AND available_seats > 0\n  RETURNING concert_id\n)\nINSERT INTO tickets (user_id, concert_id)\nSELECT 'user123', concert_id FROM reservation;\nCOMMIT;",
+    "lang": "sql",
+    "why": "UPDATE 成功才 RETURNING 一行，INSERT 才有输入。这样“扣库存”和“出票”被绑定成一个事务单元。",
+    "why_en": "The insert is driven by the update result, so no ticket is created unless the guarded update succeeded.",
+    "whenOtherWins": "如果业务逻辑在应用层更清楚，也可以检查 affected row count，失败时显式 rollback。",
+    "tags": [
+      "transaction",
+      "conditional-write",
+      "sql"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "resource-granularity",
+    "q": "只保护 concert 的 available_seats counter，为什么仍可能卖出同一个座位 A15 两次？",
+    "options": [
+      "counter 只能回答“还有没有票”，不能回答“这个具体座位是否可用”",
+      "counter 永远无法减到 0",
+      "数据库不会执行 UPDATE",
+      "seat_number 不能存字符串"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Guard 必须保护真正被争抢的资源。若用户争的是 A15，就要让 A15 成为可被条件更新的 row/key，而不是只维护总数。",
+    "why_en": "The guard must protect the actual contended resource, not just a derived aggregate counter.",
+    "tags": [
+      "resource-granularity",
+      "tickets",
+      "guard"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-009",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "resource-granularity",
+    "scenario": "两个用户都想买同一个具体座位 A15，而不是任意一张票。",
+    "q": "最应该把条件写在什么资源上？",
+    "options": [
+      "tickets/seats 中 A15 这行：WHERE seat_number='A15' AND status='available'",
+      "只写 concert 总库存 counter",
+      "只写用户表",
+      "只写付款表"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "A15 是真正被争抢的单元，所以要对它的 status 做 conditional write。总库存可作为派生数据或缓存。",
+    "why_en": "When the specific seat is contested, the conditional write must target that seat row.",
+    "whenOtherWins": "如果业务只卖任意库存、不分具体座位，总库存 counter 的 conditional decrement 就足够。",
+    "tags": [
+      "resource-granularity",
+      "conditional-write",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-010",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "compare-and-set",
+    "q": "哪些机制本质上都在做 compare-and-set？（多选）",
+    "options": [
+      "SQL WHERE predicate on write",
+      "DynamoDB ConditionExpression",
+      "Redis SET NX",
+      "HTTP If-Match"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "它们都表达“只有当前状态仍符合预期时才写”。具体存储不同，核心动作都是把检查和写入绑定。",
+    "why_en": "These mechanisms all write only if the current state still matches the expected condition.",
+    "tags": [
+      "compare-and-set",
+      "conditional-write",
+      "patterns"
+    ],
+    "table": {
+      "headers": [
+        "Mechanism",
+        "Compare value",
+        "Set if match"
+      ],
+      "rows": [
+        [
+          "Conditional update",
+          "Current row predicate",
+          "New row state"
+        ],
+        [
+          "OCC version",
+          "Version number",
+          "New version"
+        ],
+        [
+          "Redis SET NX",
+          "Key absent",
+          "Reservation token"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "pessimistic-locking",
+    "scenario": "用户要买 4 个相邻座位，应用必须先读 seat map、找连续空位，再写入 claim；这个判断无法写成单行 WHERE 谓词。",
+    "q": "更适合的并发控制方式是什么？",
+    "options": [
+      "Pessimistic locking：SELECT ... FOR UPDATE 锁住候选座位再决策",
+      "无条件 UPDATE 所有座位",
+      "只用总库存 counter",
+      "不做任何同步"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这是典型 read-decide-write：决策在应用代码里，数据库无法在单条 WHERE 中重做判断。先锁住读到的座位，再在锁内做决策。",
+    "why_en": "Pessimistic locking fits read-decide-write logic that cannot be collapsed into one write predicate.",
+    "whenOtherWins": "如果规则能写成单行谓词，conditional write 更便宜；如果冲突很少，OCC 可能更快。",
+    "tags": [
+      "pessimistic-locking",
+      "for-update",
+      "fit"
+    ],
+    "diagram": "sequenceDiagram\n  participant A as Worker A\n  participant DB as DB Row\n  participant B as Worker B\n  A->>DB: select for update\n  B->>DB: waits\n  A->>DB: commit\n  B->>DB: lock granted"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "pessimistic-locking",
+    "q": "`SELECT ... FOR UPDATE` 的作用是什么？",
+    "options": [
+      "锁住选中的行，使其他事务在你提交前不能修改这些行",
+      "把查询变成只读缓存",
+      "自动发送付款请求",
+      "永久删除没选中的座位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "FOR UPDATE 是事务内的行级锁。它让你在读和写之间保持被读资源不变，但会让其他冲突事务等待。",
+    "why_en": "SELECT FOR UPDATE locks selected rows so other transactions cannot modify them until commit.",
+    "tags": [
+      "pessimistic-locking",
+      "row-lock",
+      "sql"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-013",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lock-failure-modes",
+    "q": "Pessimistic locking 的常见失败模式有哪些？（多选）",
+    "options": [
+      "锁太多行或整张表，导致写入被串行化",
+      "持锁太久，尤其在事务里调用慢 I/O 或支付 API",
+      "不同事务按不同顺序拿锁，形成 deadlock",
+      "锁会让所有冲突自动消失且没有成本"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "锁的成本来自等待。范围越大、时间越长、顺序越不一致，越容易造成瓶颈或 deadlock。",
+    "why_en": "Pessimistic locks can bottleneck throughput when they are too broad, held too long, or acquired inconsistently.",
+    "tags": [
+      "locks",
+      "failure-modes",
+      "deadlock"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "lock-duration",
+    "scenario": "你在座位锁事务中调用外部 payment API，支付可能耗时几秒。",
+    "q": "更好的设计原则是什么？",
+    "options": [
+      "不要在持有数据库锁时做慢 I/O；支付前或释放锁后处理",
+      "把锁持有 10 分钟直到用户离开页面",
+      "锁整张 seats 表",
+      "让所有买家等待同一个支付调用"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "慢 I/O 会把所有等待同一资源的事务拖住。数据库锁应该覆盖最小行集和最短时间。",
+    "why_en": "Do not hold database locks across slow I/O because every waiter inherits that external latency.",
+    "whenOtherWins": "如果需要跨支付等待保留座位，应该用带 TTL 的 reservation/distributed lock，而不是事务锁。",
+    "tags": [
+      "locks",
+      "payment",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-015",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "deadlock",
+    "q": "银行转账里 Alice->Bob 和 Bob->Alice 同时发生，为什么可能 deadlock？",
+    "options": [
+      "两个事务按相反顺序拿账户锁，各自持有一个锁并等待另一个",
+      "数据库不能存账户余额",
+      "转账一定不需要事务",
+      "因为两个用户名字不同"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "循环等待是 deadlock 的核心。事务 A 锁 Alice 等 Bob，事务 B 锁 Bob 等 Alice，双方都无法继续。",
+    "why_en": "Deadlock occurs when transactions acquire the same locks in opposite orders and wait on each other.",
+    "tags": [
+      "deadlock",
+      "locks",
+      "banking"
+    ],
+    "diagram": "flowchart TD\n  A[A locks Alice]\n  B[B locks Bob]\n  C[A waits for Bob]\n  D[B waits for Alice]\n  X[Deadlock]\n  A --> C --> X\n  B --> D --> X"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "deadlock",
+    "scenario": "多个事务需要同时锁定两位用户账户，但业务方向可能相反。",
+    "q": "预防 deadlock 的标准做法是什么？",
+    "options": [
+      "按全局一致顺序拿锁，例如按 user_id 从小到大",
+      "永远先锁发起人",
+      "随机顺序拿锁",
+      "不处理 deadlock 错误"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "所有事务按同一确定性顺序获取资源，就不会形成循环等待。即使如此，仍要把数据库 deadlock abort 当作可重试错误处理。",
+    "why_en": "Consistent lock ordering prevents circular waits, and deadlock errors should still be retried.",
+    "whenOtherWins": "如果只锁单行资源，deadlock 风险小很多；如果跨多个资源，就必须明确锁顺序。",
+    "tags": [
+      "deadlock",
+      "ordered-locking",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-017",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "occ",
+    "q": "Optimistic concurrency control 的基本假设是什么？",
+    "options": [
+      "冲突较少，所以先让大家执行，到写入时用 version 检测冲突",
+      "冲突总是非常高，所以先阻塞所有人",
+      "数据库不需要任何版本字段",
+      "所有写入都可以无条件覆盖"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "OCC 不提前拿锁，而是在写入时检查“我读到的版本是否仍然是当前版本”。低冲突时避免锁等待。",
+    "why_en": "Optimistic concurrency assumes conflicts are rare and detects them with a version check at write time.",
+    "tags": [
+      "occ",
+      "optimistic-concurrency",
+      "version"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "occ",
+    "scenario": "多个管理员偶尔编辑同一个产品描述，冲突很少，读写比例高。",
+    "q": "哪种并发控制通常最合适？",
+    "options": [
+      "OCC：用 version/ETag 检测冲突并重试",
+      "长时间分布式锁",
+      "SERIALIZABLE 所有事务",
+      "全局队列串行化所有编辑"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "低冲突场景不值得为每次写都付锁成本。OCC 让无冲突路径很快，偶尔冲突再重试或提示用户。",
+    "why_en": "OCC fits rare-conflict edits because the common path avoids blocking and only retries on conflict.",
+    "whenOtherWins": "如果同一资源持续高并发争抢，重试会堆积，悲观锁或队列串行化更可控。",
+    "tags": [
+      "occ",
+      "low-contention",
+      "fit"
+    ],
+    "diagram": "flowchart TD\n  R[Read value version]\n  W[Compute new value]\n  U[Update where version matches]\n  C{Conflict}\n  OK[Commit]\n  RE[Retry]\n  R --> W --> U --> C\n  C -->|no| OK\n  C -->|yes| RE"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-019",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "occ",
+    "scenario": "Alice 读到 version=42 后尝试更新；如果别人先改过，version 已经不是 42。",
+    "q": "这段 SQL 如何检测冲突？",
+    "options": [
+      "WHERE version = 42 让 stale write 匹配 0 行，应用检查后回滚或重试",
+      "它会忽略 version 并强制覆盖",
+      "它只检查 available_seats，不检查版本",
+      "它会自动等待 10 分钟"
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "UPDATE concerts\nSET available_seats = available_seats - 1,\n    version = version + 1\nWHERE concert_id = 'weeknd_tour'\n  AND version = 42;",
+    "lang": "sql",
+    "why": "版本列每次写都会递增。写入时版本不匹配说明行已被别人改过，这次操作必须失败、重读或重试。",
+    "why_en": "The version predicate detects stale writes because any intervening update changes the version.",
+    "whenOtherWins": "如果规则能单条 conditional write 表达，不一定需要额外 version；如果冲突很高，锁可能更便宜。",
+    "tags": [
+      "occ",
+      "version",
+      "sql"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-020",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "occ-version",
+    "q": "哪些值可以作为 OCC 的版本检查？（多选）",
+    "options": [
+      "专用递增 version column",
+      "每次写都会变化且分辨率足够的 updated_at",
+      "只单调变化的业务值，如只会上升的 high bid",
+      "可能 A->B->A 的普通业务值且无额外保护"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "版本值必须能可靠反映中间写入。专用递增列最安全；普通业务值可能出现 ABA，不能随便复用。",
+    "why_en": "A version token must change reliably on every write, with a dedicated incrementing column being the safest default.",
+    "tags": [
+      "occ",
+      "version",
+      "aba"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "aba",
+    "q": "OCC 里的 ABA problem 是什么？",
+    "options": [
+      "值从 A 变到 B 又变回 A，版本检查只看相等会误以为什么都没发生",
+      "两个锁按同一顺序获取",
+      "队列里只有一个 worker",
+      "Redis TTL 自动过期"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "如果用业务值当版本，值可能绕一圈回到原值，等值检查看不出中间变化。专用递增 version 可以避免这个问题。",
+    "why_en": "The ABA problem occurs when a value changes away and back, fooling an equality-based optimistic check.",
+    "tags": [
+      "aba",
+      "occ",
+      "version"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-022",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "occ-vs-locking",
+    "q": "高冲突场景下，为什么 pessimistic locking 往往比 OCC 更合适？",
+    "options": [
+      "OCC 会产生大量失败重试，成本可能超过提前排队等待的锁",
+      "OCC 永远不能保证正确性",
+      "锁不会降低并发",
+      "OCC 只能用于读请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "OCC 的优势是低冲突时不阻塞；高冲突时大家都写失败再重试，浪费工作。锁 upfront 更可预测。",
+    "why_en": "Under high contention, optimistic retries can waste more work than simply locking up front.",
+    "tags": [
+      "occ",
+      "pessimistic-locking",
+      "contrast"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-023",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "write-skew",
+    "q": "Write skew 指什么？",
+    "options": [
+      "两个事务读取重叠集合并写不同的行，单独看都合法，合起来破坏跨行约束",
+      "两个事务写同一行导致版本冲突",
+      "Redis key 过期",
+      "数据库磁盘空间不足"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Write skew 的难点是没有同一行冲突。条件写、行锁、version check 都可能看不到“读集合被别人改变”这件事。",
+    "why_en": "Write skew happens when transactions write different rows but jointly violate an invariant based on overlapping reads.",
+    "tags": [
+      "write-skew",
+      "isolation",
+      "cross-row"
+    ],
+    "diagram": "flowchart TD\n  A[Doctor A sees B on call]\n  B[Doctor B sees A on call]\n  C[A goes off call]\n  D[B goes off call]\n  X[Invariant broken]\n  A --> C --> X\n  B --> D --> X"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "isolation-levels",
+    "scenario": "On-call 表要求至少一人值班；Alice 和 Bob 各自读到还有对方在值班，于是同时把自己改成 inactive，写的是不同 row。",
+    "q": "哪种机制能让数据库捕获这种 write skew？",
+    "options": [
+      "SERIALIZABLE isolation，并把 serialization error 当作可重试",
+      "只给 Alice 行加 version",
+      "只更新 Bob 行",
+      "READ UNCOMMITTED"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Write skew 没有共享写入行，弱隔离级别看不到冲突。SERIALIZABLE 让结果等价于事务串行执行，因此会中止其中一个。",
+    "why_en": "Serializable isolation catches write skew by ensuring the result matches some serial transaction order.",
+    "whenOtherWins": "如果能把“至少一人值班”物化到 team row 的计数或锁上，单行 guard/lock 往往比全事务 SERIALIZABLE 更便宜。",
+    "tags": [
+      "serializable",
+      "write-skew",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-025",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "isolation-levels",
+    "q": "文中列出的常见隔离级别包括哪些？（多选）",
+    "options": [
+      "READ UNCOMMITTED",
+      "READ COMMITTED",
+      "REPEATABLE READ",
+      "SERIALIZABLE"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这四个是常见关系数据库隔离级别。捕获 write skew 的通常是 SERIALIZABLE，而不是 weaker levels。",
+    "why_en": "The common SQL isolation levels are read uncommitted, read committed, repeatable read, and serializable.",
+    "tags": [
+      "isolation-levels",
+      "serializable",
+      "sql"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-026",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "serializable-cost",
+    "q": "为什么不应默认把所有高并发路径都设成 SERIALIZABLE？",
+    "options": [
+      "它需要跟踪读写依赖，冲突时 abort/retry，成本最高",
+      "它比 READ COMMITTED 更弱",
+      "它只适用于 Redis",
+      "它不能处理任何跨行约束"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "SERIALIZABLE 能覆盖更复杂冲突，但会增加开销和重试。能用 conditional write、锁或 OCC 解决时，通常更便宜。",
+    "why_en": "Serializable isolation is powerful but expensive because it tracks dependencies and may abort work.",
+    "tags": [
+      "serializable",
+      "cost",
+      "tradeoffs"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "materialize-conflict",
+    "scenario": "一个约束本来跨多行，例如 team 至少要有一个 active on-call engineer，但你想避免每次用 SERIALIZABLE。",
+    "q": "更便宜的重构思路是什么？",
+    "options": [
+      "把约束物化到单个 team row 上，例如 active_count 或对 team row 加 FOR UPDATE",
+      "让每个 engineer row 独立无保护更新",
+      "把隔离级别降到 READ UNCOMMITTED",
+      "删除约束"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "数据库只能保护它能看见的冲突。把跨行约束落到一个可锁/可条件更新的 row，就回到了单资源 contention。",
+    "why_en": "Materializing a cross-row invariant onto one row turns it into a conflict the database can guard directly.",
+    "whenOtherWins": "如果约束天然复杂且难以物化，SERIALIZABLE 或业务级补偿可能仍然必要。",
+    "tags": [
+      "materialize-conflict",
+      "serializable",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-028",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "distributed-locks",
+    "q": "Distributed lock 和数据库事务锁的关键区别是什么？",
+    "options": [
+      "Distributed lock 是带独立生命周期的 lease/状态记录，可跨等待、外部调用或多个步骤存在",
+      "Distributed lock 只能存在于单个 SQL transaction 内",
+      "Distributed lock 不需要过期时间或释放",
+      "Distributed lock 只能保护读请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "数据库锁随事务结束释放，不适合 10 分钟 checkout。Distributed lock 把“谁持有资源、何时过期”作为数据存起来，让所有服务器可见。",
+    "why_en": "A distributed lock is a lease with its own lifetime, unlike a transaction lock that ends with the database transaction.",
+    "tags": [
+      "distributed-lock",
+      "lease",
+      "reservation"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "distributed-locks",
+    "scenario": "Ticketmaster 用户选中 A15 后需要 10 分钟填写支付信息，期间不能让别人拿走座位。",
+    "q": "应该用什么机制保护体验和正确性？",
+    "options": [
+      "事务内 FOR UPDATE 锁住座位 10 分钟",
+      "带 TTL 的 reservation/distributed lock，记录 reserved_by 和 reserved_until",
+      "什么都不做，支付后再抢座",
+      "只看总库存 counter"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "长时间用户等待不应持有数据库事务锁。带 TTL 的 reservation 让座位短期被占用，超时自动释放，也避免用户填完支付才发现座位没了。",
+    "why_en": "Seat checkout needs a TTL reservation rather than a long database transaction lock.",
+    "whenOtherWins": "如果只是毫秒级 read-decide-write，FOR UPDATE 或 conditional write 更简单，不需要分布式锁。",
+    "tags": [
+      "distributed-lock",
+      "ticketmaster",
+      "reservation"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "redis-lock",
+    "scenario": "你想用 Redis 实现短期座位 hold，要求只有没人持有时才能创建，并自动过期。",
+    "q": "Redis 命令形态里最关键的两个元素是什么？",
+    "options": [
+      "SET with NX 和 TTL/EX",
+      "GET 后无条件 SET",
+      "KEYS * 扫描所有 key",
+      "只用 DEL"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "NX 保证 key 不存在时才创建，TTL/EX 保证 holder 崩溃或放弃后自动释放。缺少 NX 会让后来的请求覆盖已有锁。",
+    "why_en": "Redis SET with NX and an expiration atomically creates a lock only if it does not already exist.",
+    "whenOtherWins": "如果 double-grant 会破坏核心数据一致性，普通 Redis TTL lock 可能不够强，需要数据库条件写或 ZooKeeper/etcd。",
+    "tags": [
+      "redis",
+      "distributed-lock",
+      "ttl"
+    ],
+    "table": {
+      "headers": [
+        "Element",
+        "Purpose"
+      ],
+      "rows": [
+        [
+          "NX",
+          "Only acquire if absent"
+        ],
+        [
+          "TTL",
+          "Avoid permanent orphan lock"
+        ],
+        [
+          "Token",
+          "Release only your own lock"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-031",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "redis-lock",
+    "q": "Redis TTL lock 的经典风险是什么？",
+    "options": [
+      "持有者因 GC pause 或网络慢超过 TTL 后，锁被别人拿到，短时间内两方都以为自己持有锁",
+      "TTL 永远不会过期",
+      "NX 会允许所有人同时写",
+      "Redis 不能设置 key"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "TTL 是自动清理的来源，也是 lease 的边界。holder 超过租约继续执行时，就可能出现 double-grant 语义风险。",
+    "why_en": "A TTL lock can be double-granted if the holder stalls past the lease and continues acting.",
+    "tags": [
+      "redis",
+      "ttl",
+      "failure-mode"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-032",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "db-reservation",
+    "scenario": "你已经有 seats 表，想用数据库列实现 10 分钟 reservation，不引入 Redis。",
+    "q": "这段 SQL 的关键语义是什么？",
+    "options": [
+      "只有未被预订或预订已过期时才抢到 hold；更新 1 行代表成功",
+      "它会覆盖任何人的有效 reservation",
+      "它必须依赖后台清理 job 才能让过期 hold 可用",
+      "它无法表达过期时间"
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "UPDATE seats\nSET reserved_by = 'user123',\n    reserved_until = NOW() + INTERVAL '10 minutes'\nWHERE seat_id = 'A15'\n  AND (reserved_until IS NULL OR reserved_until < NOW());",
+    "lang": "sql",
+    "why": "过期逻辑写在 WHERE 里，所以旧 hold 到期后天然被视为空闲。优点是一致性贴近主数据，缺点是数据库写路径更热。",
+    "why_en": "The database reservation succeeds only if the seat is free or the old hold has expired.",
+    "whenOtherWins": "高 QPS 临时 hold 可用 Redis 更快；强一致核心数据则数据库列更直接。",
+    "tags": [
+      "reservation",
+      "sql",
+      "distributed-lock"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-033",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "coordination-services",
+    "q": "ZooKeeper/etcd 做分布式锁相比 Redis/DB reservation 的特点是什么？（多选）",
+    "options": [
+      "提供更强的协调语义和故障处理",
+      "依赖共识协议维护一致性",
+      "运维复杂度更高，需要维护独立协调集群",
+      "一定比 Redis 更简单"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "ZooKeeper/etcd 是专门的协调服务，适合复杂故障场景，但引入新的运维面。不要为了普通 reservation 默认上它们。",
+    "why_en": "ZooKeeper and etcd provide robust coordination through consensus, but add operational complexity.",
+    "tags": [
+      "zookeeper",
+      "etcd",
+      "distributed-lock"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-034",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "technique-map",
+    "q": "下列技术映射哪些正确？（多选）",
+    "options": [
+      "Conditional write: SQL WHERE / DynamoDB ConditionExpression / Redis SET NX",
+      "OCC: version column / HTTP ETag If-Match / etcd revision",
+      "Pessimistic locking: SELECT ... FOR UPDATE 或 mutex",
+      "Serializable isolation: 大多数 NoSQL 默认都完整支持"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "这些是同一并发控制思想在不同系统里的形态。Serializable 主要是关系数据库能力，很多 NoSQL/分布式存储不提供同等语义。",
+    "why_en": "The same concurrency patterns appear under different names in SQL, DynamoDB, Redis, HTTP, and etcd.",
+    "tags": [
+      "technique-map",
+      "patterns",
+      "stores"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-035",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "choosing-approach",
+    "q": "按从简单到复杂的思路排列 contention 工具选择顺序：",
+    "steps": [
+      "如果决策必须跨等待、外部调用或多个步骤，用 distributed lock/reservation",
+      "如果检查能写成当前行谓词，先用 conditional write",
+      "如果是 read-decide-write，高冲突用 pessimistic locking，低冲突用 OCC",
+      "如果 invariant 跨不同 row 且没有共享冲突，用 SERIALIZABLE 或物化到单行"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      3,
+      0
+    ],
+    "why": "原则是用第一个能覆盖正确性的简单工具。不要一开始就上外部分布式锁。",
+    "why_en": "Choose the simplest tool that protects the gap, escalating from conditional writes to locks, OCC, serializable, and reservations.",
+    "tags": [
+      "choosing-approach",
+      "decision-chain",
+      "tradeoffs"
+    ],
+    "diagram": "flowchart TD\n  C[Conditional write]\n  L[Short DB lock]\n  O[Optimistic version]\n  D[Distributed coordination]\n  C --> L --> O --> D"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-036",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "choosing-approach",
+    "scenario": "你的规则是“只有订单还没取消，才能把它标记为 shipped”，检查就是同一行 status 谓词。",
+    "q": "最合适的起点是什么？",
+    "options": [
+      "Conditional UPDATE with WHERE status != 'cancelled'",
+      "ZooKeeper 集群",
+      "SERIALIZABLE 所有事务",
+      "长时间 Redis lock"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这是同一行谓词守卫，单条 conditional write 最简单。锁和分布式协调都会增加不必要复杂度。",
+    "why_en": "A same-row status predicate is best handled by a simple conditional update.",
+    "whenOtherWins": "如果 shipping 决策还要读多个表、调用库存服务或等待人工确认，就可能需要更强协调。",
+    "tags": [
+      "conditional-write",
+      "choosing-approach",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-037",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "choosing-approach",
+    "scenario": "多个用户会高频抢同一个资源，冲突很常见，而且决策需要先读再在应用代码中判断。",
+    "q": "优先考虑哪种机制？",
+    "options": [
+      "Pessimistic locking",
+      "OCC 并让所有人不断失败重试",
+      "不做同步",
+      "READ UNCOMMITTED"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "高冲突下，提前排队通常比让大量请求做完工作再失败重试更稳定。锁能让竞争有序发生。",
+    "why_en": "High-contention read-decide-write paths usually favor pessimistic locking over repeated optimistic retries.",
+    "whenOtherWins": "如果冲突很少，OCC 能避免锁等待；如果需要跨用户等待，则 reservation 更合适。",
+    "tags": [
+      "pessimistic-locking",
+      "high-contention",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-038",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "interview-signals",
+    "q": "哪些面试场景应主动识别为 contention 风险？（多选）",
+    "options": [
+      "多人抢有限资源，如票、库存、司机、拍卖品",
+      "需要防止 double booking 或 double charging",
+      "高并发更新账户余额、库存或协作文档",
+      "单用户本地偏好设置且没人共享"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "共享资源 + 并发写 + 强一致需求，就是 contention 信号。单用户私有状态通常没有竞争，不要过度设计。",
+    "why_en": "Contention signals include shared limited resources, double-booking risks, and concurrent writes to important state.",
+    "tags": [
+      "interview-signals",
+      "contention",
+      "recognition"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-039",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "auction",
+    "scenario": "在线拍卖中，多人同时对同一 item 出价，bid 只会上升。",
+    "q": "常见的并发控制选择是什么？",
+    "options": [
+      "OCC，用 current high bid 作为单调 version/guard，只接受更高且基于预期状态的出价",
+      "完全无条件覆盖最高价",
+      "每个出价都锁整个数据库 10 分钟",
+      "按用户偏好随机接受"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "拍卖很适合 OCC：高价单调上升，业务值本身可作为 guard，失败者重读当前最高价后重新出价。",
+    "why_en": "Auctions fit optimistic concurrency because the high bid is a monotonic guard for accepting new bids.",
+    "whenOtherWins": "如果最后几秒同一 item 极热，可能要额外队列串行化该 item 的出价。",
+    "tags": [
+      "auction",
+      "occ",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-040",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "ticketmaster",
+    "scenario": "票务系统里，用户选择座位后要填写支付信息，不能让他们最后才发现座位被抢。",
+    "q": "最能改善 UX 的 contention 方案是什么？",
+    "options": [
+      "选择座位时立即创建 10 分钟 TTL reservation",
+      "支付完成后再检查座位是否还在",
+      "所有座位都只用总库存 counter",
+      "让用户线下确认"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "临时 reservation 把竞争窗口缩到选座瞬间，避免用户花时间填支付后失败。它同时是正确性和体验优化。",
+    "why_en": "A short seat reservation shrinks the contention window and avoids checkout failures after payment entry.",
+    "whenOtherWins": "如果资源选择和提交都在毫秒内完成，单事务条件写或行锁可能已经足够。",
+    "tags": [
+      "ticketmaster",
+      "reservation",
+      "ux"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-041",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "banking",
+    "q": "银行/支付系统中，什么时候 contention 问题会变成 distributed transaction 问题？",
+    "options": [
+      "当一次资金移动必须原子跨多个服务或 shard 的不同 source of truth",
+      "当同一数据库里更新两个账户行",
+      "当只有读取余额",
+      "当用户修改昵称"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "单库内的余额更新可用锁或 OCC；跨服务/跨 shard 原子转账已经超出 contention pattern，进入 multi-step/distributed transaction。",
+    "why_en": "Money movement becomes a distributed-transaction problem when it must atomically span multiple sources of truth.",
+    "tags": [
+      "banking",
+      "distributed-transaction",
+      "boundary"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-042",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "ride-sharing",
+    "scenario": "派单系统向司机发请求后，10 秒内不想让同一司机收到多个同时请求。",
+    "q": "合适的做法是什么？",
+    "options": [
+      "把 driver 状态设为 pending_request，并带过期时间或 TTL",
+      "继续给同一司机并发发多个请求",
+      "只更新乘客表",
+      "把所有司机永久锁住"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "临时状态 reservation 能阻止重复派单，超时后自动恢复可用。可用 cache TTL 或数据库 status + expiration timestamp。",
+    "why_en": "A temporary pending-request status reserves the driver briefly and prevents simultaneous dispatches.",
+    "whenOtherWins": "如果只是查询附近司机而不发起独占请求，不需要 reservation；真正抢占司机时才需要。",
+    "tags": [
+      "ride-sharing",
+      "reservation",
+      "ttl"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-043",
+    "format": "multi",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "flash-sale",
+    "q": "Flash sale / inventory 系统常会组合哪些办法？（多选）",
+    "options": [
+      "库存更新用 OCC 或 conditional write",
+      "购物车短期 hold 用 TTL reservation",
+      "高峰请求可用队列削峰或串行化热 SKU",
+      "完全不检查库存"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "库存扣减是正确性路径，购物车 hold 是体验优化，队列可吸收尖峰。真实系统常组合多种机制。",
+    "why_en": "Flash sales often combine guarded inventory updates, temporary cart holds, and queues for hot items.",
+    "tags": [
+      "flash-sale",
+      "inventory",
+      "combination"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "reviews",
+    "scenario": "Yelp 类系统里，多个用户同时给同一家餐厅写 review，需要更新 avg_rating 和 review_count。",
+    "q": "合理的并发控制是什么？",
+    "options": [
+      "给 restaurant row 加专用 version，用 OCC 更新平均分",
+      "无条件覆盖 avg_rating",
+      "所有餐厅共用一个全局锁",
+      "只更新 review 表，不考虑聚合一致性"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "多条 review 并发更新同一个 business 聚合值时，OCC 能检测 stale 聚合并重试计算。专用 version 避免 ABA。",
+    "why_en": "Restaurant aggregate updates fit OCC with a dedicated version to avoid stale rating writes.",
+    "whenOtherWins": "如果评分聚合允许延迟，异步流式聚合也可以减少写路径 contention。",
+    "tags": [
+      "reviews",
+      "occ",
+      "aggregation"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-045",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "overcomplication",
+    "q": "面试里为什么不要一看到并发就直接上 Redis distributed lock？",
+    "options": [
+      "新组件会增加故障模式，很多场景用数据库事务、行锁或 OCC 已经足够",
+      "Redis 永远不能存任何锁",
+      "分布式锁总是比条件写简单",
+      "数据库从来不能处理并发"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "外部分布式锁是有成本的：可用性、TTL 语义、故障恢复、运维。先用 source of truth 能直接保证的简单机制。",
+    "why_en": "Distributed locks add components and failure modes, so prefer database-native guards when they are sufficient.",
+    "tags": [
+      "overcomplication",
+      "distributed-lock",
+      "tradeoffs"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-046",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "no-contention",
+    "scenario": "用户只更新自己的私有 todo list 或个人偏好，没有其他用户竞争同一资源。",
+    "q": "需要复杂 contention coordination 吗？",
+    "options": [
+      "通常不需要；基础写入或简单 OCC 即可",
+      "必须上 ZooKeeper",
+      "必须全站串行化",
+      "必须使用 SERIALIZABLE"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "单用户私有状态没有共享资源竞争。不要为了不存在的 contention 引入锁和协调服务。",
+    "why_en": "Single-user private state usually has no contention, so complex coordination is unnecessary.",
+    "whenOtherWins": "如果同一文档被多人协作编辑，就变成共享资源，需要 OCC、CRDT 或协作编辑机制。",
+    "tags": [
+      "no-contention",
+      "private-state",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-047",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-resource",
+    "q": "为什么 sharding、load balancing、read replicas 对“所有人写同一个 hot row”帮助有限？",
+    "options": [
+      "竞争集中在同一个 source of truth 上，写冲突无法靠分散应用服务器或读副本消除",
+      "它们会自动把一行拆成无限行",
+      "read replicas 可以承接所有写入",
+      "load balancer 会改变数据库行级锁语义"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "热点资源的瓶颈是单个被争抢的值。应用层扩容只会让更多请求排队到同一行/同一 key。",
+    "why_en": "When everyone writes the same resource, the bottleneck is the single source of truth, not the number of app servers.",
+    "tags": [
+      "hot-resource",
+      "single-source",
+      "scaling"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-048",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "queue-serialization",
+    "scenario": "一个稀有商品或名人关注按钮被海量请求同时写，且必须对这个资源保持强一致。",
+    "q": "当无法把问题拆开时，哪种策略能彻底消除并发写冲突？",
+    "options": [
+      "把该资源的请求放入专属队列，由单 worker 顺序处理",
+      "让所有请求继续并发写同一行",
+      "增加更多 read replicas",
+      "让客户端随机决定成功"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "队列串行化把并发竞争变成有序处理，吞吐被单 worker 限制，但系统不会在锁冲突和重试中崩掉。",
+    "why_en": "Queue-based serialization removes write contention by processing one hot resource's requests sequentially.",
+    "whenOtherWins": "如果业务能拆成多个独立资源，例如 10 个相同库存分开卖，先改变问题本身通常更好。",
+    "tags": [
+      "queue-serialization",
+      "hot-resource",
+      "fit"
+    ],
+    "diagram": "flowchart TD\n  W[Many writers]\n  Q[Single queue partition]\n  P[One processor]\n  S[Serialized updates]\n  W --> Q --> P --> S"
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-049",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "queue-serialization",
+    "q": "Queue-based serialization 的取舍是什么？（多选）",
+    "options": [
+      "消除同一资源上的并发写冲突",
+      "把尖峰请求缓冲起来",
+      "限制该资源最大处理吞吐，并需要 standby/故障恢复",
+      "无限提高单资源写吞吐"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "队列让系统稳定，但不是魔法扩容。你把 contention 问题换成了串行处理和队列延迟问题。",
+    "why_en": "Queue serialization improves stability but caps throughput and requires failure handling for the worker.",
+    "tags": [
+      "queue-serialization",
+      "tradeoffs",
+      "latency"
+    ]
+  },
+  {
+    "id": "sd-patterns-dealing-with-contention-050",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "source-of-truth",
+    "q": "按正确顺序排列处理 contention 的核心思路：",
+    "steps": [
+      "让 contended thing 成为单个可保护的 row/key/item",
+      "识别真正被争抢的资源是什么",
+      "根据 gap 形状选择 conditional write、lock、OCC、serializable 或 reservation",
+      "避免默认引入外部分布式锁，先用 source of truth 能保证的最简单机制"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3
+    ],
+    "why": "所有技术都围绕同一个目标：在权威数据所在处保护真正的竞争资源。工具选择取决于要保护的间隙有多大。",
+    "why_en": "Contention handling starts by identifying the true contested resource and guarding it at its source of truth with the simplest fitting tool.",
+    "tags": [
+      "source-of-truth",
+      "decision-chain",
+      "contention"
+    ],
+    "diagram": "flowchart TD\n  I[Identify shared resource]\n  T[Pick source of truth]\n  C[Protect atomic change]\n  M[Measure contention]\n  I --> T --> C --> M"
+  }
+]
