@@ -1,0 +1,1056 @@
+[
+  {
+    "id": "lld-concurrency-scarcity-001",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "definition",
+    "q": "并发稀缺性问题关注的核心是什么？",
+    "options": [
+      "有限资源如何在更多并发请求之间分配",
+      "如何让所有字段私有",
+      "如何渲染 UI",
+      "如何命名设计模式"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "稀缺性的危险不是状态被写坏，而是资源不够：连接、内存、GPU、带宽、并发槽位。问题是等待、超时、复用和释放。",
+    "why_en": "Scarcity is about sharing limited capacity such as connections, memory, GPUs, or concurrent operation slots among more demand.",
+    "tags": [
+      "scarcity",
+      "capacity",
+      "resources"
+    ],
+    "diagram": "flowchart LR\n  U[\"many callers\"] --> S[\"limited permits\"]\n  S --> R[\"scarce resource\"]\n  S --> B[\"block or fail when empty\"]"
+  },
+  {
+    "id": "lld-concurrency-scarcity-002",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "connection-pool",
+    "scenario": "服务启动时创建 5 个数据库连接，100 个请求同时需要查询；第 6 个请求必须等连接归还。",
+    "q": "这最像哪类问题？",
+    "options": [
+      "Correctness",
+      "Scarcity",
+      "纯 OOP 继承",
+      "浏览器事件循环"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "连接数量少于请求数量，核心是容量治理。需要池化和等待策略，避免请求永久卡住。",
+    "why_en": "This is scarcity because a fixed number of database connections must be reused across more concurrent requests.",
+    "whenOtherWins": "如果两个线程能同时拿到同一个连接对象，那同时还有 correctness bug。",
+    "tags": [
+      "connection-pool",
+      "scarcity",
+      "fit"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-003",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "resource-leak",
+    "q": "连接被取出后永不归还，最直接的系统表现是什么？",
+    "options": [
+      "新请求可能一直阻塞等待，服务看起来挂住",
+      "数据库自动创建无限连接",
+      "所有查询立即失败并释放线程",
+      "只影响日志顺序"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "资源泄漏会把池容量逐步吃光。系统不一定崩溃，但线程都卡在等待资源，用户看到超时。",
+    "why_en": "Leaked resources can exhaust the pool so new requests block indefinitely even though nothing visibly crashed.",
+    "tags": [
+      "resource-leak",
+      "connection-pool",
+      "hang"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-004",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "semaphore",
+    "q": "信号量最适合表达哪种稀缺性？",
+    "options": [
+      "最多 N 个操作同时运行，但没有具体对象要发放",
+      "多个字段必须一起更新",
+      "消息必须按 actor 顺序处理",
+      "对象构造参数很多"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "信号量发放的是许可，不是资源对象。它适合限制并发下载、外部 API 调用、图片处理等操作数量。",
+    "why_en": "A semaphore fits capacity limits where threads need permission to run but not a specific reusable object.",
+    "tags": [
+      "semaphore",
+      "concurrency-limit",
+      "fit"
+    ],
+    "diagram": "flowchart LR\n  A[5 permits] --> B[task 1]\n  A --> C[task 2]\n  A --> D[task 3]\n  A -.0 left.-> E[task waits]"
+  },
+  {
+    "id": "lld-concurrency-scarcity-005",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "semaphore",
+    "scenario": "外部 API 每个账号最多 5 个并发请求，任何调用结束或失败都要归还名额。",
+    "q": "这段代码的关键安全点是什么？",
+    "codeSample": "class APIClient:\n    def __init__(self):\n        self._semaphore = threading.Semaphore(5)\n\n    def make_request(self, endpoint):\n        with self._semaphore:\n            return self._http_client.get(endpoint)",
+    "lang": "python",
+    "options": [
+      "上下文管理保证离开作用域时释放许可",
+      "每个请求都会创建新 semaphore",
+      "它会缓存 HTTP 响应",
+      "它把请求改成单线程执行"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "信号量要点是 acquire 和 release 成对出现。Python 的 with 表达了异常时也释放许可。",
+    "why_en": "The context manager pairs acquire and release so the semaphore permit is returned even if the request fails.",
+    "whenOtherWins": "如果需要拿到具体连接对象，就用阻塞队列资源池，而不是只有许可的信号量。",
+    "tags": [
+      "semaphore",
+      "python",
+      "api-client"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-006",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "semaphore",
+    "scenario": "下载管理器允许用户提交很多 URL，但系统最多同时下载 3 个，下载对象本身不需要池化复用。",
+    "q": "最简洁的控制方式是什么？",
+    "options": [
+      "3 个许可的信号量",
+      "10 个连接对象的阻塞队列",
+      "读写锁",
+      "状态机模式"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这里限制的是并发下载数量，不是要把固定对象发给线程。信号量正好表达“最多 3 个在飞”。",
+    "why_en": "A three-permit semaphore directly caps the number of active downloads without managing reusable resource objects.",
+    "whenOtherWins": "如果下载必须由固定 worker 线程消费队列任务，也可以用有界队列 + worker pool 来调度。",
+    "tags": [
+      "download-manager",
+      "semaphore",
+      "concurrency-limit"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-007",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "semaphore",
+    "q": "信号量代码里忘记 finally/release 的结果是什么？",
+    "options": [
+      "许可被永久泄漏，容量逐渐归零",
+      "许可数量自动翻倍",
+      "只会影响当前线程日志",
+      "所有等待线程立即成功"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "忘 release 是信号量第一大坑。失败路径不归还许可，系统最后会没有任何线程能进入受限区。",
+    "why_en": "Forgetting to release semaphore permits leaks capacity until the limited operation can no longer proceed.",
+    "tags": [
+      "semaphore",
+      "finally",
+      "leak"
+    ],
+    "diagram": "sequenceDiagram\n  participant T as Thread\n  participant S as Semaphore\n  participant W as Waiters\n  T->>S: acquire permit\n  T--xT: error path skips release\n  W->>S: acquire\n  S-->>W: blocks forever when permits leak"
+  },
+  {
+    "id": "lld-concurrency-scarcity-008",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "pool-vs-semaphore",
+    "q": "资源池与信号量最重要的区别是什么？",
+    "options": [
+      "资源池发放具体对象；信号量只发放许可",
+      "信号量只能用于单线程",
+      "资源池不能阻塞等待",
+      "两者没有区别"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "连接池里的连接有 socket、认证、事务状态等具体对象身份。信号量只能告诉你“可以做”，不能告诉你“用哪一个连接”。",
+    "why_en": "A resource pool hands out concrete reusable objects, while a semaphore only grants permission to proceed.",
+    "tags": [
+      "resource-pool",
+      "semaphore",
+      "contrast"
+    ],
+    "table": {
+      "headers": [
+        "Tool",
+        "Controls",
+        "Returns object?"
+      ],
+      "rows": [
+        [
+          "Semaphore",
+          "how many may enter",
+          "no"
+        ],
+        [
+          "Pool",
+          "which reusable item",
+          "yes"
+        ],
+        [
+          "Queue",
+          "work waiting",
+          "items or tasks"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-concurrency-scarcity-009",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "resource-pool",
+    "scenario": "你要实现数据库连接池，线程必须拿到实际 Connection 对象，用完归还。",
+    "q": "为什么用 BlockingQueue 保存连接？",
+    "codeSample": "self._pool = queue.Queue(maxsize=pool_size)\nfor _ in range(pool_size):\n    self._pool.put(self._create_connection())\n\nconn = self._pool.get()\ntry:\n    conn.execute(query)\nfinally:\n    self._pool.put(conn)",
+    "lang": "python",
+    "options": [
+      "队列保存可复用对象，空时阻塞，归还时唤醒等待者",
+      "队列让连接变成无状态",
+      "队列会自动重写 SQL",
+      "队列保证查询一定成功"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "阻塞队列既是可用连接集合，也是等待机制。finally 保证连接不会因为异常丢失。",
+    "why_en": "The blocking queue stores available connection objects and blocks callers when none are available until one is returned.",
+    "whenOtherWins": "如果只是限制同时调用外部 API 的数量且没有对象可复用，信号量更简单。",
+    "tags": [
+      "resource-pool",
+      "blocking-queue",
+      "connection"
+    ],
+    "diagram": "flowchart LR\n  C1[\"client\"] --> Q[(connection pool queue)]\n  Q --> DB[\"borrowed connection\"]\n  DB --> Q\n  Q --> C2[\"next client\"]"
+  },
+  {
+    "id": "lld-concurrency-scarcity-010",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "initialization",
+    "scenario": "面试官问连接池应该启动时全建好，还是按需懒加载。没有特别强调启动时间。",
+    "q": "面试里更稳妥的默认回答是什么？",
+    "options": [
+      "构造函数里预先创建全部连接",
+      "每次请求都新建连接",
+      "懒加载且不加任何同步",
+      "永远不创建连接"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "预创建更简单，避免懒加载并发竞态，并让运行时延迟可预测。只有启动时间很重要时再讨论懒加载。",
+    "why_en": "Eagerly creating pool resources is the simpler interview default because it avoids lazy initialization races and gives predictable request latency.",
+    "whenOtherWins": "如果启动必须很快或资源很昂贵且不一定会用到，懒加载可行，但要同步创建数量和上限。",
+    "tags": [
+      "initialization",
+      "connection-pool",
+      "tradeoff"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-011",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "stale-resource",
+    "q": "连接池把已经断开的连接发给调用方，说明还缺什么考虑？",
+    "options": [
+      "借出前验证或失败时丢弃并重建连接",
+      "把池改成无界",
+      "删除 release",
+      "只使用原子计数器"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "池化对象可能因为网络、空闲超时或服务端关闭而失效。生产设计通常要验证、替换或在失败后淘汰。",
+    "why_en": "A production pool may need to validate resources and replace stale ones before handing them out.",
+    "tags": [
+      "connection-validation",
+      "resource-pool",
+      "stale"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-012",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "bounded-pool",
+    "q": "连接池内部队列为什么也要设容量为 pool_size？",
+    "options": [
+      "防止池里持有超过上限的连接对象",
+      "让 get 永远返回 None",
+      "让连接自动变快",
+      "避免所有线程等待"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "池的容量就是资源上限。无界队列配合懒创建或错误归还会让池突破设计容量。",
+    "why_en": "The queue capacity should match the pool size so the pool cannot hold more resource objects than intended.",
+    "tags": [
+      "bounded-queue",
+      "pool-size",
+      "resource-pool"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-013",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "timeouts",
+    "scenario": "HTTP 请求从连接池取连接；如果所有连接卡在慢查询上，调用方不能无限等待到负载均衡器先超时。",
+    "q": "应该如何获取连接？",
+    "options": [
+      "poll/get 带超时，超时后返回明确错误",
+      "take 永久阻塞",
+      "busy-wait 直到有连接",
+      "创建无上限新连接"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "请求路径要有失败边界。超时获取让线程回到调用方，返回 503、重试或降级，而不是永远占着请求线程。",
+    "why_en": "Timeout-based acquire lets request handlers fail gracefully instead of blocking forever waiting for a resource.",
+    "whenOtherWins": "离线批任务可以接受长时间等待时，永久阻塞或更长超时可能更简单。",
+    "tags": [
+      "timeout",
+      "request-path",
+      "connection-pool"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-014",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "timeouts",
+    "scenario": "连接池获取连接最多等 timeout_sec，拿不到就让上层决定返回错误。",
+    "q": "这段代码的生产意义是什么？",
+    "codeSample": "try:\n    return self._pool.get(timeout=self._timeout)\nexcept queue.Empty:\n    raise RuntimeError('No connection available')",
+    "lang": "python",
+    "options": [
+      "给资源等待设置上限，避免请求线程永久阻塞",
+      "保证查询在 timeout 内完成",
+      "自动扩大连接池",
+      "把异常吞掉继续执行"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "超时限制的是等待资源的时间，不是下游查询一定成功的时间。它让过载变成可处理错误。",
+    "why_en": "The timeout bounds resource-wait time and turns overload into an explicit error path.",
+    "whenOtherWins": "如果资源等待是内部队列且用户不受影响，可以选择阻塞直到资源可用。",
+    "tags": [
+      "timeout",
+      "python",
+      "resource-pool"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-015",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "number",
+    "sub": "timeouts",
+    "q": "数据库查询通常约 100ms 时，文章给出的连接获取超时启发式例子是多少量级？",
+    "options": [
+      "约 5ms",
+      "约 500ms",
+      "约 30 秒",
+      "约 10 分钟"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "超时要给正常波动留余量，但要小于客户端或负载均衡器超时。100ms 查询配 500ms 获取等待是文中的合理示例。",
+    "why_en": "For roughly 100-millisecond database work, a 500-millisecond acquire timeout is a reasonable example buffer.",
+    "tags": [
+      "timeout",
+      "number",
+      "heuristic"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-016",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "fairness",
+    "q": "严格公平队列在高竞争下的典型取舍是什么？",
+    "options": [
+      "更接近 FIFO，但可能降低吞吐",
+      "吞吐更高且没有任何成本",
+      "只能用于无界队列",
+      "会破坏资源上限"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "公平性减少“老等待者一直拿不到”的风险，但调度限制会减少优化空间。连接池通常近似公平就够。",
+    "why_en": "Strict fairness can enforce FIFO-like serving under contention but usually costs throughput.",
+    "tags": [
+      "fairness",
+      "fifo",
+      "tradeoff"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-017",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "limit-concurrent-operations",
+    "scenario": "图像处理服务要限制同时进行的 CPU 密集转换数量为 5，但转换任务由请求线程直接执行。",
+    "q": "应使用什么？",
+    "options": [
+      "5 许可 semaphore 包住转换",
+      "连接对象池",
+      "Observer 模式",
+      "无界任务队列"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "限制并发操作数量就是信号量的主场。它不要求固定 worker，也不要求复用具体对象。",
+    "why_en": "A five-permit semaphore caps active image transformations regardless of which request thread performs them.",
+    "whenOtherWins": "如果转换必须排队由固定 worker 处理，就用有界任务队列和 worker pool。",
+    "tags": [
+      "image-processing",
+      "semaphore",
+      "cpu"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-018",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "limit-concurrent-operations",
+    "q": "哪些场景是“限制同时运行的操作数”？（多选）",
+    "options": [
+      "外部 API 每账号最多 10 个并发请求",
+      "视频转码最多 3 个任务同时跑",
+      "图片处理最多 5 个转换同时跑",
+      "数据库连接对象需要被取出和归还"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "前三个只需要限制操作数量，信号量足够。数据库连接是具体可复用对象，应该用资源池。",
+    "why_en": "API calls, video transcodes, and image transformations are operation limits, while database connections are reusable objects.",
+    "tags": [
+      "concurrency-limit",
+      "examples",
+      "semaphore"
+    ],
+    "table": {
+      "headers": [
+        "Scenario",
+        "Permit means",
+        "Good primitive"
+      ],
+      "rows": [
+        [
+          "5 downloads",
+          "one running operation",
+          "semaphore"
+        ],
+        [
+          "10 DB connections",
+          "one reusable connection",
+          "pool plus queue"
+        ],
+        [
+          "100MB in flight",
+          "one MB budget unit",
+          "weighted semaphore"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-concurrency-scarcity-019",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "aggregate-consumption",
+    "scenario": "文件上传大小不同，系统要限制同时在途的数据总量为 100MB，而不是限制上传个数。",
+    "q": "哪种建模最合适？",
+    "options": [
+      "信号量许可代表资源单位，比如 1 permit = 1MB",
+      "每个上传都只消耗 1 个固定许可",
+      "只用读写锁",
+      "使用 Singleton 上传器"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "聚合消耗关注总量，操作大小不同。让许可代表 MB 这类资源单位，可以让大任务占更多容量，小任务占更少容量。",
+    "why_en": "Use semaphore permits as resource units when operations consume variable amounts of a shared budget.",
+    "whenOtherWins": "如果所有操作成本相同，只限制并发个数的普通 semaphore 更简单。",
+    "tags": [
+      "aggregate-consumption",
+      "semaphore",
+      "memory"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-020",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "number",
+    "sub": "aggregate-consumption",
+    "q": "用 1 个许可表示 1MB，100MB 总预算时，一个 15MB 上传应获取多少许可？",
+    "options": [
+      "1",
+      "5",
+      "15",
+      "100"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "资源单位建模下，操作获取与消耗量相同的许可。上传完成后释放同样数量。",
+    "why_en": "With one permit per megabyte, a 15-megabyte upload acquires 15 permits and releases 15 when done.",
+    "tags": [
+      "aggregate-consumption",
+      "number",
+      "permits"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-021",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "aggregate-consumption",
+    "q": "哪些场景属于“限制聚合资源消耗”？（多选）",
+    "options": [
+      "所有线程总共最多 500MB buffer",
+      "同时在途上传总数据量受限",
+      "磁盘同时写入数据量受限",
+      "恰好最多 3 个下载任务"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "聚合消耗的关键是每个操作消耗量不同。最多 3 个下载是固定个数限制，不是资源单位预算。",
+    "why_en": "Aggregate-consumption limits apply when each operation uses a variable amount of memory, bandwidth, or disk capacity.",
+    "tags": [
+      "aggregate-consumption",
+      "memory",
+      "bandwidth"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-022",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "rate-vs-capacity",
+    "q": "“限制在途 100MB 数据”和“限制 100MB/s 吞吐率”有什么不同？",
+    "options": [
+      "前者是容量预算，后者需要按时间补充的限速算法如 token bucket",
+      "两者都只需普通互斥锁",
+      "前者必须用 Singleton，后者必须用 Builder",
+      "没有区别"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "许可代表在途容量时，完成后释放；速率限制需要随时间产生令牌，控制每秒通过量。",
+    "why_en": "In-flight capacity is a held budget, while throughput rate limiting needs time-replenished permits such as a token bucket.",
+    "tags": [
+      "rate-limit",
+      "token-bucket",
+      "contrast"
+    ],
+    "table": {
+      "headers": [
+        "Limit type",
+        "Controls",
+        "Example"
+      ],
+      "rows": [
+        [
+          "in flight budget",
+          "current memory held",
+          "max 100MB uploads"
+        ],
+        [
+          "throughput rate",
+          "units per second",
+          "100MB per second"
+        ],
+        [
+          "pool size",
+          "reusable objects",
+          "20 connections"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-concurrency-scarcity-023",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "reuse-expensive-objects",
+    "scenario": "机器学习服务有 4 块 GPU，每块加载了模型权重，请求需要拿到一块具体 GPU 运行推理。",
+    "q": "最合适的结构是什么？",
+    "options": [
+      "BlockingQueue 保存 4 个 GPU 引用",
+      "4 许可 semaphore 且不记录 GPU 对象",
+      "读写锁保护日志",
+      "Factory 每次创建新 GPU"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "请求需要具体 GPU 对象，不只是许可。阻塞队列发放和回收 GPU 引用，空时等待。",
+    "why_en": "A blocking queue of GPU handles fits because requests need a concrete reusable GPU object, not just permission.",
+    "whenOtherWins": "如果所有 GPU 调度由单独队列和 worker 完成，请求也可以提交任务而不是直接借 GPU。",
+    "tags": [
+      "gpu",
+      "resource-pool",
+      "blocking-queue"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-024",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "reuse-expensive-objects",
+    "q": "哪些资源通常适合池化复用？（多选）",
+    "options": [
+      "数据库连接",
+      "GPU 上下文或已加载模型的 GPU 引用",
+      "文件句柄",
+      "一个没有状态的 if 判断"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "这些对象创建昂贵、数量有限或带有系统资源。无状态判断没有池化价值。",
+    "why_en": "Database connections, GPU contexts, and file handles are scarce stateful resources that often benefit from pooling.",
+    "tags": [
+      "resource-pool",
+      "examples",
+      "expensive-objects"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-025",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "utilization",
+    "scenario": "worker 任务长短差异很大，一个 worker 卡在长任务时其他 worker 可能空闲。",
+    "q": "提高资源利用率可以考虑什么？",
+    "options": [
+      "work stealing",
+      "把队列改成无界",
+      "删除所有超时",
+      "把每个任务都加全局锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "work stealing 让空闲 worker 从其他 worker 队列偷任务，适合长短任务混合造成的不均衡。",
+    "why_en": "Work stealing helps keep workers busy when task durations are uneven.",
+    "whenOtherWins": "普通面试先讲治理上限；只有被追问“如何保持资源满载”时再谈 work stealing。",
+    "tags": [
+      "utilization",
+      "work-stealing",
+      "workers"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-026",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "utilization",
+    "scenario": "系统要写 1000 条很小的数据库记录，如果每条都获取释放一次连接，池管理开销很高。",
+    "q": "提升吞吐的常见技巧是什么？",
+    "options": [
+      "批处理，把多条小写入合成一次连接使用",
+      "为每条记录创建新连接",
+      "把连接池设为 0",
+      "禁用所有错误处理"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "批处理用一次获取做更多有效工作，降低协调和往返开销。它通常以单条延迟换总体吞吐。",
+    "why_en": "Batching amortizes pool and round-trip overhead by doing more useful work per acquired resource.",
+    "whenOtherWins": "如果单条请求必须最低延迟，批处理等待凑批可能不合适。",
+    "tags": [
+      "batching",
+      "utilization",
+      "throughput"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-027",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "utilization",
+    "scenario": "固定 10 个连接在高峰不够、低峰浪费；团队愿意接受调参复杂度。",
+    "q": "可以考虑哪种池策略？",
+    "options": [
+      "adaptive sizing，根据利用率扩缩池",
+      "永远固定为 1",
+      "无界创建连接",
+      "让请求自己决定是否建连接"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "自适应池根据需求增长和空闲收缩，能改善利用率。代价是调参困难，增长过快会压垮下游。",
+    "why_en": "Adaptive pool sizing can improve utilization by growing under load and shrinking when idle, but it is harder to tune safely.",
+    "whenOtherWins": "面试基础实现应先用固定有界池，简单且可控。",
+    "tags": [
+      "adaptive-sizing",
+      "utilization",
+      "pool"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-028",
+    "topic": "low-level-design",
+    "format": "chain",
+    "atomType": "fit",
+    "sub": "scarcity-decision",
+    "q": "把稀缺性问题的工具选择链排好：",
+    "steps": [
+      "如果需要发放具体可复用对象，用 BlockingQueue 资源池",
+      "先判断限制的是操作个数、资源单位还是对象实例",
+      "如果限制同时运行数量，用 semaphore",
+      "如果操作消耗量不同，用许可代表资源单位"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      3,
+      0
+    ],
+    "why": "稀缺性先看“缺的是什么”。许可适合数量或单位预算，队列适合具体对象复用。",
+    "why_en": "Scarcity tool choice starts by identifying whether the scarce thing is operation slots, resource units, or reusable objects.",
+    "tags": [
+      "decision-chain",
+      "scarcity",
+      "fit"
+    ],
+    "diagram": "flowchart TD\n  A[\"need to cap concurrent use\"] --> B{\"resource reused?\"}\n  B -- no --> C[\"semaphore\"]\n  B -- yes --> D[\"resource pool\"]\n  D --> E[\"borrow, validate, return\"]"
+  },
+  {
+    "id": "lld-concurrency-scarcity-029",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "consequence",
+    "sub": "pitfalls",
+    "q": "稀缺性设计的常见坑有哪些？（多选）",
+    "options": [
+      "忘记 release/归还资源",
+      "使用无界队列或无界池",
+      "请求路径无限等待资源",
+      "所有获取都设置合理超时并处理失败"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "前三个会导致容量泄漏、OOM 或用户超时。合理超时和失败处理是修复方向。",
+    "why_en": "Scarcity bugs usually come from leaked permits, unbounded queues, and unbounded waiting on request paths.",
+    "tags": [
+      "pitfalls",
+      "scarcity",
+      "timeouts"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-030",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "fairness",
+    "scenario": "资源竞争激烈，业务要求等待更久的请求优先拿到资源，即使吞吐略降也可以。",
+    "q": "应关注什么特性？",
+    "options": [
+      "公平/FIFO 等待策略",
+      "无界队列",
+      "随机释放许可",
+      "删除资源上限"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "公平策略减少饥饿，通常以吞吐为代价。只有业务真的要求时才启用严格公平。",
+    "why_en": "Fair or FIFO waiting can reduce starvation under contention, usually at some throughput cost.",
+    "whenOtherWins": "普通连接池大多近似公平就够，优先保持实现简单和吞吐稳定。",
+    "tags": [
+      "fairness",
+      "starvation",
+      "fifo"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-031",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "semaphore",
+    "q": "补全信号量口诀：",
+    "text": "信号量解决“最多同时 {{N}} 个操作”；线程进入前 {{acquire}}，结束后必须在 finally 或等价结构里 {{release}}。",
+    "why": "这句话覆盖了信号量的容量语义和最重要的泄漏防线。",
+    "why_en": "A semaphore caps concurrent operations by acquiring before work and releasing afterward, preferably in a finally-like construct.",
+    "tags": [
+      "semaphore",
+      "cloze",
+      "release"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-032",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "resource-pool",
+    "q": "补全资源池口诀：",
+    "text": "当线程需要拿到具体的可复用对象时，用 {{BlockingQueue}} 保存可用对象；{{get/take}} 借出，{{put}} 归还。",
+    "why": "资源池不是只数许可，而是管理对象生命周期。队列天然表达“没有可用对象就等”。",
+    "why_en": "A resource pool uses a blocking queue to hand out concrete reusable objects and take them back.",
+    "tags": [
+      "resource-pool",
+      "cloze",
+      "blocking-queue"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-033",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "request-path",
+    "scenario": "服务线程在等待资源时已经接近客户端超时；继续等可能让用户先断开但线程还占着。",
+    "q": "更健康的行为是什么？",
+    "options": [
+      "在小于客户端超时的边界内失败并释放请求线程",
+      "继续无限等待直到资源出现",
+      "创建无上限资源",
+      "吞掉错误并假装成功"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "请求路径要把过载转成明确失败，而不是让线程池被等待耗尽。超时应早于上游超时。",
+    "why_en": "Request paths should fail before upstream timeouts so threads are not stuck waiting for resources the user has already given up on.",
+    "whenOtherWins": "后台批处理没有用户等待时，可以选择更长等待或排队。",
+    "tags": [
+      "request-path",
+      "timeout",
+      "overload"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-034",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "scarcity-vs-correctness",
+    "q": "“最多 5 个下载同时进行”和“两个线程不能同时占同一个座位”的区别是？",
+    "options": [
+      "前者是容量限制，后者是共享状态正确性",
+      "两者都只需观察者模式",
+      "前者不能阻塞，后者不能加锁",
+      "两者完全相同"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "下载限制关心同时运行数，信号量可解。座位问题关心 seat owner 不变量，锁住检查和写入更关键。",
+    "why_en": "A download cap is a scarcity capacity problem, while double booking is a correctness invariant problem.",
+    "tags": [
+      "contrast",
+      "scarcity",
+      "correctness"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-035",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "connection-pool",
+    "scenario": "面试官问“为什么不用 semaphore 实现连接池？”",
+    "q": "最好的回答是什么？",
+    "options": [
+      "semaphore 只能限制数量，还需要某处存放并发放 Connection 对象",
+      "semaphore 不能阻塞线程",
+      "semaphore 会创建数据库连接",
+      "连接池不需要容量上限"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "连接池问题有两层：容量上限和对象分发。阻塞队列同时保存可用连接并处理空池等待。",
+    "why_en": "A semaphore can cap usage but does not store or hand out the actual connection objects.",
+    "whenOtherWins": "如果每次操作不需要具体对象，只需要并发许可，semaphore 就足够。",
+    "tags": [
+      "connection-pool",
+      "semaphore",
+      "interview"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-036",
+    "topic": "low-level-design",
+    "format": "chain",
+    "atomType": "fit",
+    "sub": "connection-pool",
+    "q": "把安全执行一次池化连接查询的步骤排好：",
+    "steps": [
+      "在 finally 中把连接放回池",
+      "从池中带超时获取连接",
+      "执行查询或调用资源操作",
+      "如果获取超时，向调用方返回可处理错误"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      2,
+      0
+    ],
+    "acceptAltOrders": [
+      [
+        1,
+        2,
+        0,
+        3
+      ]
+    ],
+    "why": "严格说获取成功才会执行查询并进入 finally；获取失败走错误路径。核心顺序是限时获取、使用、必归还。",
+    "why_en": "A safe pool operation bounds acquisition time, uses the resource only after success, and always returns it in a finally path.",
+    "tags": [
+      "connection-pool",
+      "chain",
+      "timeout"
+    ],
+    "diagram": "flowchart TD\n  A[acquire] --> B[use resource]\n  B --> C{success?}\n  C -->|yes| D[return result]\n  C -->|error| E[throw]\n  D --> F[finally release]\n  E --> F"
+  },
+  {
+    "id": "lld-concurrency-scarcity-037",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "utilization",
+    "q": "当面试官从“别超过限制”转向“如何保持资源满载”时，哪些技术可以提？（多选）",
+    "options": [
+      "work stealing",
+      "batching",
+      "adaptive pool sizing",
+      "忘记 release 让资源一直忙"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "前三个都是提高利用率的常见方向。泄漏资源只会制造假忙和阻塞。",
+    "why_en": "Work stealing, batching, and adaptive sizing are utilization techniques, while leaked resources only create blockage.",
+    "tags": [
+      "utilization",
+      "work-stealing",
+      "batching"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-038",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "interview-answer",
+    "scenario": "题目是“设计一个连接池”，你已经说明 BlockingQueue 存连接。面试官继续问边界条件。",
+    "q": "最应该补充哪组点？",
+    "options": [
+      "finally 归还、获取超时、容量有界、可选验证连接",
+      "使用深继承树",
+      "把所有方法做 static",
+      "队列无界且不处理异常"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "连接池面试主要看资源不会泄漏、请求不会无限等、池不会无限增长，以及坏连接不会被反复发放。",
+    "why_en": "A strong connection-pool answer covers return-in-finally, bounded capacity, acquire timeouts, and optional resource validation.",
+    "whenOtherWins": "如果题目只是限制并发 API 调用，连接验证这类对象池细节不需要展开。",
+    "tags": [
+      "interview-answer",
+      "connection-pool",
+      "edge-cases"
+    ]
+  },
+  {
+    "id": "lld-concurrency-scarcity-039",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "summary",
+    "q": "补全稀缺性总结：",
+    "text": "稀缺性题先问缺的是：{{操作槽位}}、{{资源单位}}，还是{{具体对象}}；分别对应普通信号量、单位许可预算、阻塞队列资源池。",
+    "why": "这个三分法能快速区分下载限并发、内存预算和连接池。",
+    "why_en": "Scarcity maps to operation slots, resource units, or concrete objects, which correspond to semaphores, unit permits, or queue-backed pools.",
+    "tags": [
+      "summary",
+      "scarcity",
+      "decision-tree"
+    ]
+  }
+]

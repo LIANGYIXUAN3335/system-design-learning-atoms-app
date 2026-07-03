@@ -1,0 +1,997 @@
+[
+  {
+    "id": "lld-problem-breakdowns-inventory-management-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "requirements",
+    "q": "Inventory Management 基础需求包含哪些能力？（多选）",
+    "options": [
+      "跨多个仓库跟踪产品库存",
+      "按仓库 add/remove stock",
+      "查询哪些仓库可满足某产品数量",
+      "仓库间 transfer stock",
+      "低库存告警和线程安全"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "题目核心是库存数量、跨仓库协调、低库存通知和并发正确性。产品目录、订单支付、持久化都被排除。",
+    "why_en": "The base inventory system tracks stock across warehouses, supports add/remove/transfer/availability, fires low-stock alerts, and must be thread-safe.",
+    "table": {
+      "headers": [
+        "Area",
+        "Base responsibility",
+        "Out of scope"
+      ],
+      "rows": [
+        [
+          "Stock",
+          "add, remove, query",
+          "product catalog"
+        ],
+        [
+          "Warehouse",
+          "per-location quantity",
+          "shipping zones"
+        ],
+        [
+          "Transfer",
+          "cross-warehouse move",
+          "order payment"
+        ],
+        [
+          "Alerts",
+          "low-stock notification",
+          "marketing emails"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "entity-pruning",
+    "scenario": "产品目录由外部系统管理，本系统只收到 productId 并记录数量。",
+    "q": "Product 应如何建模？",
+    "options": [
+      "作为 string 或整数 key，而不是实体类",
+      "完整 Product 类，包含名称、图片和价格",
+      "AlertListener 的子类",
+      "Warehouse 的内部锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "本系统不管理产品生命周期或属性，只按 productId 计数。把外部目录建成实体会扩大范围。",
+    "why_en": "Product stays a key because catalog management is outside the inventory system.",
+    "whenOtherWins": "如果需求加入产品创建、分类、属性校验或生命周期管理，Product 才值得成为实体。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-003",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "entities",
+    "q": "最终设计中的核心类型有哪些？（多选）",
+    "options": [
+      "InventoryManager",
+      "Warehouse",
+      "AlertConfig",
+      "AlertListener"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "Manager 负责编排多仓库操作，Warehouse 管单仓库存量和告警，AlertConfig/AlertListener 解耦阈值和通知动作。",
+    "why_en": "The design uses an InventoryManager, per-location Warehouses, AlertConfig value objects, and an AlertListener interface.",
+    "diagram": "classDiagram\nclass InventoryManager {\n  -Map warehouses\n  +transfer(product,from,to,qty)\n}\nclass Warehouse {\n  -Map inventory\n  -Map alertConfigs\n  +removeStock(product,qty)\n}\nclass AlertConfig {\n  +threshold\n  +listener\n}\nclass AlertListener {\n  <<interface>>\n  +onLowStock(...)\n}\nInventoryManager --> Warehouse : routes\nWarehouse --> AlertConfig : owns\nAlertConfig --> AlertListener : calls"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "manager",
+    "q": "InventoryManager 为什么保存 Map<string, Warehouse>？",
+    "options": [
+      "根据 warehouseId O(1) 路由 add/remove/transfer 请求",
+      "为了按产品名排序",
+      "为了替代每个 Warehouse 的 inventory map",
+      "为了触发所有告警"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "外部 API 用 warehouseId 指定目标仓库，map 明确表达 ID 到 Warehouse 的关系。list 扫描也能做，但意图和效率都不如 map。",
+    "why_en": "A warehouse map lets the manager route operations by warehouse ID directly."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "warehouse-state",
+    "scenario": "一个 Warehouse 要保存每个 productId 的当前库存，并支持产品不存在时视为 0。",
+    "q": "核心数据结构是什么？",
+    "options": [
+      "Map<productId,int> inventory",
+      "List<InventoryManager>",
+      "单个 totalQuantity 整数",
+      "Map<Warehouse,AlertListener>"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每个产品数量都独立变化，按 productId 查找和更新需要 map。未出现过的产品默认 0。",
+    "why_en": "A warehouse inventory map stores the quantity for each product ID with missing products treated as zero.",
+    "whenOtherWins": "如果只有一个产品，单个整数足够；多产品库存需要 map。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "warehouse-state",
+    "q": "Warehouse 需要直接持有哪些字段？（多选）",
+    "options": [
+      "id",
+      "inventory: Map<string,int>",
+      "alertConfigs: Map<string,List<AlertConfig>>",
+      "其他仓库列表"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "Warehouse 管理一个地点自己的库存和告警配置。跨仓库视角属于 InventoryManager。",
+    "why_en": "Warehouse owns its ID, product quantities, and product-specific alert configs, not the whole fleet."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "alerts",
+    "scenario": "同一产品可能有 50 件预警和 10 件紧急告警，并通知不同渠道。",
+    "q": "alertConfigs 为什么是 productId -> List<AlertConfig>？",
+    "options": [
+      "支持同一产品多个阈值和 listener",
+      "因为每个产品只能有一个告警",
+      "为了替代库存数量",
+      "为了把仓库 ID 存成 list"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "多个阈值可对应不同通知机制。AlertConfig 把 threshold 和 listener 成对保存，避免并行数组或含义不清的 map。",
+    "why_en": "A list of AlertConfig per product supports multiple thresholds and notification handlers."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-008",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "observer",
+    "q": "AlertListener 接口体现了什么设计原则？",
+    "options": [
+      "Observer/DIP：Warehouse 只依赖通知抽象，不依赖邮件或 webhook 实现",
+      "Singleton：全局只有一个监听器",
+      "Composite：监听器包含仓库",
+      "Factory：监听器创建库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Warehouse 只调用 onLowStock，具体 email、webhook、log 由实现决定。库存逻辑不依赖低层通知机制。",
+    "why_en": "AlertListener decouples warehouse inventory logic from concrete notification channels."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-009",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "alert-config",
+    "q": "补全 AlertConfig 的职责：",
+    "text": "AlertConfig 是把 {{threshold}} 和 {{AlertListener}} 绑定在一起的轻量值对象。",
+    "why": "它让配置关系显式化。看到 List<AlertConfig> 就知道这是多个低库存告警规则。",
+    "why_en": "AlertConfig pairs a low-stock threshold with the listener that should be notified."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "availability",
+    "scenario": "调用 getWarehousesWithAvailability('WIDGET', 100)。",
+    "q": "InventoryManager 应如何实现？",
+    "options": [
+      "遍历所有 Warehouse，调用 checkAvailability，收集可满足的 warehouseId",
+      "只检查第一个仓库",
+      "把所有仓库库存相加后返回一个 ID",
+      "直接扣减库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "需求问“哪些仓库各自可以满足数量”，不是系统总量。Manager 负责跨仓库聚合结果。",
+    "why_en": "Availability checks each warehouse independently and returns the IDs that can fulfill the quantity.",
+    "whenOtherWins": "如果需求是跨仓拆单 fulfill，则需要返回组合计划而不只是单仓库列表。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "no-negative",
+    "scenario": "Warehouse 当前只有 2 个 WIDGET，请求 removeStock('WIDGET', 10)。",
+    "q": "正确行为是什么？",
+    "options": [
+      "返回 false 且库存不变",
+      "把库存设为 -8",
+      "先扣再异步补偿",
+      "触发 addStock"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "不允许负库存是不变量。removeStock 必须在写入前检查 currentQty >= quantity。",
+    "why_en": "removeStock must reject insufficient stock and leave the quantity unchanged.",
+    "whenOtherWins": "如果系统支持 backorder，可以单独建 reserved/backordered 状态，但不能偷偷让 physical inventory 为负。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-012",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "remove-stock",
+    "scenario": "实现 Warehouse.removeStock，要求线程安全且不能负库存。",
+    "q": "这段伪代码的关键保证是什么？",
+    "codeSample": "removeStock(productId, quantity)\n    synchronized(this)\n        if quantity <= 0 return false\n        current = inventory.get(productId) ?: 0\n        if current < quantity return false\n        newQty = current - quantity\n        inventory[productId] = newQty\n        alerts = getAlertsToFire(productId, current, newQty)\n    fire(alerts)\n    return true",
+    "lang": "text",
+    "options": [
+      "检查和扣减在同一仓库锁内完成，且告警在锁外触发",
+      "先触发告警再扣减库存",
+      "允许负库存",
+      "每个产品都全局锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同一锁保护 read-modify-write，防止并发扣减穿插。回调放锁外，避免慢 I/O 阻塞库存操作。",
+    "why_en": "The method keeps validation and mutation atomic while firing alert callbacks outside the lock.",
+    "whenOtherWins": "如果高吞吐下同仓库不同产品并发很多，可考虑 per-product locks，但复杂度更高。",
+    "diagram": "flowchart TD\nA[\"lock warehouse\"] --> B{\"qty valid and enough stock?\"}\nB -- no --> C[\"return false\"]\nB -- yes --> D[\"update inventory\"]\nD --> E[\"collect alerts\"]\nE --> F[\"unlock warehouse\"]\nF --> G[\"fire listeners outside lock\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-013",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "alert-threshold",
+    "q": "低库存告警为什么不应“每次 newQty < threshold 都触发”？",
+    "options": [
+      "库存已经低于阈值时每次扣减都会重复报警，造成噪音",
+      "因为低库存不需要通知",
+      "因为 addStock 不能改变数量",
+      "因为 listener 只能调用一次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "持续低库存不是每次变化都值得重复通知。只在从阈值以上跌到阈值以下时报警更可操作。",
+    "why_en": "Alerting on every below-threshold update spams notifications while the stock remains low."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-014",
+    "format": "cloze",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "alert-threshold",
+    "q": "补全阈值穿越条件：",
+    "text": "只有当 previousQty {{>= threshold}} 且 newQty {{< threshold}} 时，才触发低库存告警。",
+    "why": "这个条件天然防重复，也天然重置：库存补回阈值以上后，下次跌破会再次触发。",
+    "why_en": "The downward-crossing condition prevents duplicate alerts and naturally resets after stock recovers.",
+    "table": {
+      "headers": [
+        "previousQty",
+        "newQty",
+        "threshold",
+        "Fire?"
+      ],
+      "rows": [
+        [
+          "15",
+          "9",
+          "10",
+          "yes"
+        ],
+        [
+          "9",
+          "7",
+          "10",
+          "no"
+        ],
+        [
+          "7",
+          "22",
+          "10",
+          "no"
+        ],
+        [
+          "22",
+          "9",
+          "10",
+          "yes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-015",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "alert-reset",
+    "q": "按顺序排列阈值告警的 reset 行为：",
+    "steps": [
+      "库存从 15 降到 9，阈值 10，触发告警。",
+      "库存从 9 降到 7，不再触发。",
+      "库存从 7 补到 22，不触发。",
+      "库存从 22 降到 9，再次触发。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "没有额外 hasFired 状态，previous/new 的比较就表达了恢复后可再次报警。",
+    "why_en": "Comparing previous and new quantities gives duplicate prevention and reset behavior without extra state."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "alert-locking",
+    "scenario": "AlertListener 可能发送邮件或调用 webhook。",
+    "q": "为什么不能在 synchronized(this) 内直接调用 listener.onLowStock？",
+    "options": [
+      "慢 I/O 会长时间持有仓库锁，甚至 listener 回调仓库导致死锁",
+      "listener 无法接收参数",
+      "告警必须先于库存写入",
+      "Java 不允许接口回调"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "锁内只应做快速内存操作。先收集 alertsToFire，释放锁后再执行外部回调。",
+    "why_en": "Alert callbacks should run outside the warehouse lock to avoid blocking or deadlocking inventory operations.",
+    "whenOtherWins": "如果 listener 是纯内存、可靠且不会回调仓库，锁内调用也能工作，但生产上不稳。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-017",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "synchronization",
+    "q": "Warehouse 中哪些 public 方法应同步访问共享状态？（多选）",
+    "options": [
+      "addStock",
+      "removeStock",
+      "getStock",
+      "checkAvailability",
+      "setLowStockAlert"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "写方法需要互斥，读方法也要看到一致和最新的库存/配置。统一仓库锁最易证明正确。",
+    "why_en": "All public methods touching warehouse state should synchronize to provide atomicity and consistent reads."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-018",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "lock-granularity",
+    "q": "Warehouse 级粗粒度锁的主要取舍是什么？",
+    "options": [
+      "简单正确，但同一仓库不同产品的操作不能并行",
+      "吞吐最高但很难证明",
+      "会让 removeStock 不检查库存",
+      "只适用于单线程"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每次操作只是少量 map 访问和告警收集，锁持有时间短。基础范围下清晰性比 per-product 锁的复杂度更重要。",
+    "why_en": "A warehouse-level lock is simple and correct, though it serializes operations on different products in the same warehouse."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "per-product-lock",
+    "scenario": "同一仓库里不同产品的并发操作极多，warehouse 级锁成为瓶颈。",
+    "q": "更细粒度的优化是什么？",
+    "options": [
+      "为每个 productId 维护独立 lock，并用 ConcurrentHashMap 管理状态",
+      "完全去掉锁",
+      "只锁 AlertListener",
+      "把所有产品拆成不同 Warehouse"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "per-product lock 允许产品 A 和 B 并行，但需要线程安全 map、锁生命周期管理和多产品操作的锁顺序。",
+    "why_en": "Per-product locking improves concurrency but adds lock management and ordering complexity.",
+    "whenOtherWins": "如果竞争低或实现时间有限，warehouse 级锁是更好的默认选择。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-020",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "transfer-race",
+    "q": "按顺序排列 naive transfer 的 TOCTOU bug：",
+    "steps": [
+      "线程 A checkAvailability 看到源仓库有 50 件。",
+      "线程 B 在 A remove 前扣走 50 件。",
+      "线程 A 继续 remove 或忽略失败。",
+      "线程 A 仍向目标仓库 add 50 件，产生幻影库存或中间状态错误。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "check 和 use 分属不同临界区，另一个线程可以插入。跨仓库操作需要更强原子性。",
+    "why_en": "The naive transfer has a time-of-check-to-time-of-use race between checking and removing stock.",
+    "diagram": "sequenceDiagram\nparticipant A as Thread A\nparticipant B as Thread B\nparticipant S as Source Warehouse\nparticipant T as Target Warehouse\nA->>S: checkAvailability = true\nB->>S: remove 50\nA->>S: remove or ignore failure\nA->>T: add 50\nNote over A,T: check and use were not atomic"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "transfer",
+    "scenario": "transfer(productId, EAST, WEST, 5) 要求对外看起来原子。",
+    "q": "最正确的基础方案是什么？",
+    "options": [
+      "按稳定顺序同时锁住两个 Warehouse，再 remove source、add destination",
+      "先 remove，再晚点 add，不需要锁目标",
+      "只检查 availability 不扣减",
+      "把库存加到目标后再检查源"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同时持有两把仓库锁能避免外部观察到库存从两个仓库都消失。稳定顺序防止双向 transfer 死锁。",
+    "why_en": "Atomic transfer locks both warehouses in a consistent order before removing and adding stock.",
+    "whenOtherWins": "如果业务接受在途中间状态，应把 Transfer 建成一等实体，而不是假装瞬移。",
+    "diagram": "flowchart TD\nA[\"sort warehouse ids\"] --> B[\"lock first warehouse\"]\nB --> C[\"lock second warehouse\"]\nC --> D{\"source has enough stock?\"}\nD -- no --> E[\"unlock and return false\"]\nD -- yes --> F[\"remove from source\"]\nF --> G[\"add to target\"]\nG --> H[\"unlock and return true\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-022",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "transfer-locking",
+    "scenario": "两个线程可能同时 EAST->WEST 和 WEST->EAST 转移。",
+    "q": "这段伪代码为什么按 ID 排序加锁？",
+    "codeSample": "firstId = min(fromWarehouseId, toWarehouseId)\nsecondId = max(fromWarehouseId, toWarehouseId)\nsynchronized(warehouses[firstId])\n    synchronized(warehouses[secondId])\n        if !from.removeStock(productId, quantity) return false\n        to.addStock(productId, quantity)\n        return true",
+    "lang": "text",
+    "options": [
+      "防止两个相反方向 transfer 形成循环等待死锁",
+      "让字典序更好看",
+      "保证 EAST 永远是源仓库",
+      "使 removeStock 可以忽略库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "所有线程都按同一全局顺序获取锁，就不会出现 A 持有 EAST 等 WEST、B 持有 WEST 等 EAST。",
+    "why_en": "Consistent lock ordering prevents deadlock when transfers lock two warehouses.",
+    "whenOtherWins": "如果只用数据库事务，锁顺序由数据库和事务隔离处理，但应用仍要理解死锁风险。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-023",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "reentrant-locks",
+    "q": "文章为什么提醒 atomic transfer 方案假设 reentrant locks？",
+    "options": [
+      "已经持有 Warehouse 锁时再调用 synchronized removeStock/addStock 会再次获取同一锁",
+      "reentrant locks 会自动创建库存",
+      "非重入锁更快所以必须用",
+      "只有 reentrant locks 能比较字符串"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "如果锁不可重入，线程持有仓库锁后调用内部同步方法会自我死锁。无重入语言需要 non-locking 内部 helper。",
+    "why_en": "Calling synchronized warehouse methods while holding their locks requires reentrant locks or non-locking internal helpers."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "transfer-validation",
+    "scenario": "transfer 的 fromWarehouseId 和 toWarehouseId 相同。",
+    "q": "合理处理是什么？",
+    "options": [
+      "返回 false 或 no-op，但基础实现通常拒绝",
+      "执行 remove 再 add 同一仓库并触发告警两次",
+      "删除该仓库",
+      "随机选择目标仓库"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同仓库转移没有业务意义，且可能制造多余告警或锁问题。明确拒绝最简单。",
+    "why_en": "A transfer from a warehouse to itself should be rejected or treated as a no-op by explicit design.",
+    "whenOtherWins": "如果 API 语义需要幂等 no-op，可以返回 true 且不改变状态。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-025",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "manager-methods",
+    "q": "InventoryManager 的主要 API 包括哪些？（多选）",
+    "options": [
+      "addStock(warehouseId,productId,quantity)",
+      "removeStock(warehouseId,productId,quantity)",
+      "transfer(productId,from,to,quantity)",
+      "getWarehousesWithAvailability(productId,quantity)",
+      "setLowStockAlert(warehouseId,productId,threshold,listener)"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "这些方法对应最终需求，Manager 只负责查仓库和跨仓协调。实际库存状态由 Warehouse 拥有。",
+    "why_en": "InventoryManager exposes add, remove, transfer, availability lookup, and alert configuration APIs."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "input-validation",
+    "scenario": "调用 addStock 或 removeStock 时 quantity <= 0。",
+    "q": "应如何处理？",
+    "options": [
+      "addStock 抛错或拒绝，removeStock 返回 false；不要改变库存",
+      "把负数 addStock 当成 removeStock",
+      "把 0 当成触发告警",
+      "允许库存变负"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "数量必须是正数才能表达库存变化。负数操作会绕过不变量并混淆 API 语义。",
+    "why_en": "Stock mutation quantities should be positive and invalid quantities should not change inventory.",
+    "whenOtherWins": "如果需要调整库存到某个目标数，应设计 setStock/adjustment API，并记录审计原因。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "availability-concurrency",
+    "scenario": "checkAvailability 和 removeStock 被不同线程同时调用。",
+    "q": "为什么 checkAvailability 也要同步？",
+    "options": [
+      "保证读到一致库存并具有正确内存可见性",
+      "让查询变慢才正确",
+      "因为它会修改库存",
+      "因为 listener 要求同步"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "未同步读可能看到陈旧或中间状态。对于共享 map，读写都应遵守同一同步规则。",
+    "why_en": "Synchronized reads ensure consistent and visible inventory state under concurrent access.",
+    "whenOtherWins": "读多写少可用读写锁优化，但仍要有同步策略。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "alert-config-validation",
+    "scenario": "调用 setLowStockAlert(productId, threshold, listener)，threshold=0 或 listener=null。",
+    "q": "应该怎么做？",
+    "options": [
+      "拒绝无效配置",
+      "创建一个永远触发的告警",
+      "忽略 listener 只保存 threshold",
+      "把 threshold 改成 1"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "低库存阈值必须为正，listener 不能为空，否则触发时无可执行动作。配置错误应早失败。",
+    "why_en": "Invalid alert thresholds or null listeners should be rejected when configuring alerts.",
+    "whenOtherWins": "如果业务允许 0 库存告警，条件可改为 threshold >= 0，但必须明确。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-029",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "result-semantics",
+    "q": "补全库存操作的返回语义：",
+    "text": "addStock 通常返回 {{void}}，因为加库存总可成功；removeStock 返回 {{boolean}}，因为库存不足时可能失败。",
+    "why": "API 返回值应反映操作是否有可预期失败。加库存失败一般是无效仓库或参数错误，用异常更清晰。",
+    "why_en": "addStock can be void while removeStock returns success because only removal can fail from insufficient stock."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "reservation-extension",
+    "scenario": "电商结账需要 5 分钟，不能让两个用户都看到“最后 1 件可买”并在付款时失败。",
+    "q": "应加入哪种机制？",
+    "options": [
+      "库存 reservation：reserveStock、confirmReservation、releaseReservation",
+      "直接在支付成功后才检查库存",
+      "把库存扣成负数再补偿",
+      "永久锁住该产品"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "reservation 把 physical stock 与 reserved stock 分开，开始结账时占用可售数量，成功付款再真正扣减。",
+    "why_en": "A reservation system holds available inventory during checkout and confirms or releases it later.",
+    "whenOtherWins": "如果业务采用乐观售卖并接受缺货退款，可能不做 reservation，而在订单确认后补救。",
+    "diagram": "flowchart TD\nA[\"checkout starts\"] --> B{\"available = inventory - reserved\"}\nB -->|enough| C[\"create Reservation\"]\nC --> D[\"increase reserved\"]\nD --> E{\"payment result\"}\nE -->|success| F[\"confirm: reduce inventory and reserved\"]\nE -->|timeout/cancel| G[\"release: reduce reserved\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-031",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "reservation-extension",
+    "q": "引入库存 reservation 后 Warehouse 需要新增哪些状态？（多选）",
+    "options": [
+      "reserved: Map<productId,int>",
+      "reservations: Map<reservationId,Reservation>",
+      "Reservation(productId,quantity,expiresAt)",
+      "每个产品的图片 URL"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "available = inventory - reserved。reservation 记录过期时间，支持确认或释放。",
+    "why_en": "Inventory reservations require reserved counts, reservation records, and expiration timestamps."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-032",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "reservation-extension",
+    "q": "库存 reservation 的正确流程是什么？",
+    "steps": [
+      "reserveStock 检查 inventory - reserved 是否足够。",
+      "创建 Reservation(productId, quantity, expiresAt)。",
+      "增加 reserved[productId]。",
+      "支付成功时 confirmReservation 扣减 inventory、减少 reserved、删除 reservation。",
+      "超时或放弃时 releaseReservation 减少 reserved、删除 reservation。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "reservation 不立即减少 physical inventory，但会减少可售库存。确认和释放是两个互斥后续路径。",
+    "why_en": "Reservation reserves available quantity first, then either confirms into real removal or releases the hold.",
+    "diagram": "stateDiagram-v2\n[*] --> RESERVED : reserveStock\nRESERVED --> CONFIRMED : payment success\nRESERVED --> RELEASED : cancel or timeout\nCONFIRMED --> [*]\nRELEASED --> [*]"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "reservation-cleanup",
+    "scenario": "用户关掉浏览器，没有主动 releaseReservation。",
+    "q": "系统还需要什么？",
+    "options": [
+      "后台任务周期扫描并释放 expired reservations",
+      "永远保留 reserved 数量",
+      "等下一次 addStock 自动删除所有 reservation",
+      "让 AlertListener 清库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "没有清理，reserved 库存会永久锁住。超时值是业务权衡，常见 5-15 分钟。",
+    "why_en": "Expired reservation cleanup is needed so abandoned checkouts do not hold inventory forever.",
+    "whenOtherWins": "如果用外部 TTL 存储，过期可由存储层驱动，但仍要处理释放 reserved 的一致性。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-034",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "in-transit",
+    "scenario": "仓库转移真实需要 3-5 天运输，库存不应在源和目标间瞬移。",
+    "q": "更真实的建模是什么？",
+    "options": [
+      "把 Transfer 建成能持有库存的一等实体",
+      "仍然同时 remove source 和 add destination",
+      "把库存从系统总量中删除",
+      "把目标仓库提前加库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "运输中库存不在任一仓库可售，但仍属于系统总量。Transfer 作为临时 holder 能准确表达在途状态。",
+    "why_en": "A first-class Transfer entity can hold in-transit inventory without making it available at either warehouse.",
+    "whenOtherWins": "面试基础范围可以用原子瞬移 transfer，简单满足需求。",
+    "diagram": "flowchart LR\nS[\"source warehouse\"] -->|ship| X[\"Transfer holder\"]\nX -->|arrive| T[\"target warehouse\"]\nX --> Q[\"in transit stock\"]\nQ --> N[\"not sellable but counted in system total\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-035",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "inventory-holder",
+    "q": "Transfer as InventoryHolder 的“aha”是什么？",
+    "options": [
+      "库存可以暂时存在于仓库以外的持有者中，系统总量仍可核对",
+      "Transfer 必须继承 Warehouse 所有行为",
+      "在途库存应可售",
+      "完成 transfer 不需要目标仓库"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "把 Transfer 看作临时库存容器，能同时支持查询总库存和禁止在途库存履约。",
+    "why_en": "Modeling Transfer as an inventory holder accounts for in-transit stock without making it available for orders."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-036",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "in-transit",
+    "q": "在途 Transfer 实体通常保存哪些信息？（多选）",
+    "options": [
+      "id",
+      "productId 和 quantity",
+      "fromWarehouseId 和 toWarehouseId",
+      "createdAt 或状态"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这些字段让系统知道哪批库存、从哪里来、到哪里去、是否完成。完成时再把库存加入目标仓库。",
+    "why_en": "A transfer record identifies the in-transit product, quantity, endpoints, and lifecycle metadata."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-037",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "out-of-scope",
+    "scenario": "有人想在基础设计里加入订单处理、支付、仓库服务范围和产品目录。",
+    "q": "应该怎么处理？",
+    "options": [
+      "明确这些 out of scope，保持库存核心模型",
+      "全部塞进 InventoryManager",
+      "让 Warehouse 负责支付",
+      "把 productId 替换成 Product 复杂对象"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "库存系统只管理数量和库存相关操作。订单、支付、产品目录是独立系统，会显著扩大设计。",
+    "why_en": "Order processing, payment, serviceability, and catalog management are outside the scoped inventory model.",
+    "whenOtherWins": "如果面试官明确扩展到订单系统，再增加 Order/Reservation/Fulfillment 等实体。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-038",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "atomic-transfer",
+    "q": "原子转移 EAST -> WEST 5 件的正确状态变化是什么？",
+    "steps": [
+      "按稳定顺序锁住 EAST 和 WEST。",
+      "在锁内调用 EAST.removeStock，确认库存足够并扣到 2。",
+      "在仍持有两把锁时调用 WEST.addStock，加到 5。",
+      "释放两把锁并返回 true。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "锁持有期间外部线程不能看到缺失中间态。remove 失败则不 add，两个仓库保持原状。",
+    "why_en": "Atomic transfer locks both warehouses, removes from source, adds to destination, and releases locks only after completion."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-039",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "alert-scope",
+    "scenario": "低库存告警触发时 listener 需要知道是哪一个仓库。",
+    "q": "Warehouse 为什么需要 id 字段？",
+    "options": [
+      "回调 onLowStock 时传 warehouseId 给 listener",
+      "用来决定产品价格",
+      "用来替代 productId",
+      "用来生成线程锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "告警没有 warehouseId 就无法判断哪处库存不足。Warehouse 自己持有 id 最直接。",
+    "why_en": "Warehouse stores its ID so low-stock notifications can identify the location."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-040",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "manager-vs-warehouse",
+    "q": "为什么低库存 alert 配置放在 Warehouse，而不是 InventoryManager？",
+    "options": [
+      "告警是某仓库某产品的库存状态规则，Warehouse 拥有相关数量变化",
+      "Manager 不能访问仓库",
+      "AlertConfig 需要所有仓库总量",
+      "listener 只能在 Manager 中调用"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Warehouse 最懂自己产品数量变化，能在 add/remove 后判断阈值穿越。Manager 只负责路由和跨仓协调。",
+    "why_en": "Alert configuration belongs to Warehouse because it owns the per-product quantity changes that trigger alerts."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-041",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "config-startup",
+    "scenario": "需求说仓库固定在系统初始化时创建。",
+    "q": "InventoryManager 构造函数应该如何处理 warehouseIds？",
+    "options": [
+      "遍历 ids，创建 Warehouse(id) 并放入 map",
+      "每次 addStock 时懒创建任意 warehouseId",
+      "忽略 ids",
+      "要求调用方自己传 Warehouse map 且不校验"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "固定启动配置让 Manager 在构造时建立完整仓库集合。无效 warehouseId 后续应快速失败。",
+    "why_en": "The manager eagerly creates configured warehouses at startup because the warehouse set is fixed."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-042",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "alert-result",
+    "scenario": "removeStock 从 15 扣到 9，阈值 10。",
+    "q": "getAlertsToFire 应返回什么？",
+    "options": [
+      "包含该阈值 listener 的 alert 列表",
+      "null，因为库存仍非零",
+      "立即调用 listener 并持锁等待",
+      "删除 alert config"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "阈值从上方穿越到下方，应收集待触发告警。真正回调在释放锁后执行。",
+    "why_en": "Downward threshold crossing should collect the matching listeners for firing after the lock is released.",
+    "whenOtherWins": "如果 newQty 等于 threshold 且规则是低于 threshold，则不触发；若业务定义为 <=，条件要调整。"
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-043",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "senior-signals",
+    "q": "Senior 级库存题回答应主动覆盖哪些点？（多选）",
+    "options": [
+      "transfer 的 TOCTOU race",
+      "同时锁两个仓库并按稳定顺序防死锁",
+      "reentrant lock 或 non-locking helper 的要求",
+      "告警回调放锁外",
+      "reservation/in-transit 扩展"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "高级回答的重点是并发正确性和业务状态演进。单纯 Map 加减不足以覆盖题目风险。",
+    "why_en": "Senior inventory answers focus on transfer races, ordered locking, reentrancy, alert callbacks outside locks, and realistic extensions."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-044",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "decision-chain",
+    "q": "按顺序排列库存系统主设计链路：",
+    "steps": [
+      "Product 降级为 productId key，Warehouse 成为库存状态拥有者。",
+      "澄清多仓库库存、add/remove、availability、transfer、alerts、thread-safe。",
+      "InventoryManager 作为 facade 路由单仓操作并协调跨仓操作。",
+      "AlertConfig/AlertListener 解耦阈值和通知渠道。",
+      "Warehouse 方法用锁保护库存，transfer 额外按顺序锁两仓库。"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3,
+      4
+    ],
+    "why": "这条链路从范围和实体裁剪，到职责分层、通知解耦和并发正确性。",
+    "why_en": "The design chain moves from scope to entity pruning, orchestration, alert abstraction, and concurrency correctness."
+  },
+  {
+    "id": "lld-problem-breakdowns-inventory-management-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "invariant",
+    "scenario": "面试最后让你总结库存系统最重要的不变量。",
+    "q": "哪一个最准确？",
+    "options": [
+      "任何 Warehouse 的任何 productId 库存都不能为负，跨仓 transfer 要么整体成功要么不改变可观察总量",
+      "低库存每次查询都必须报警",
+      "所有仓库必须有相同库存",
+      "transfer 可以短暂丢失库存"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "非负库存和原子 transfer 是库存系统正确性的核心。告警是附加通知，不应破坏库存不变量。",
+    "why_en": "The core invariant is non-negative per-warehouse stock and atomic cross-warehouse transfers when strict consistency is required.",
+    "whenOtherWins": "如果建模在途库存，transfer 不再是瞬移，但系统总库存仍应在 Warehouse 和 Transfer holders 间守恒。"
+  }
+]

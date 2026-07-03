@@ -1,0 +1,968 @@
+[
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "requirements",
+    "q": "BookMyShow 基础需求包含哪些能力？（多选）",
+    "options": [
+      "按标题搜索电影",
+      "浏览某个影院的未来场次",
+      "用户选择具体座位并一次预订多个座位",
+      "支付处理和座位差异定价"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "基础系统覆盖搜索、浏览、查看座位、预订、并发防重和取消。支付、座位类型、价格和改签被排除。",
+    "why_en": "The base movie-booking design covers search, browsing, seat selection, booking, concurrency, and cancellation, but not payment or pricing."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-002",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "low-level-design",
+    "sub": "seat-layout",
+    "q": "补全标准座位布局：",
+    "text": "每个 screen 使用相同座位布局：行 {{A-Z}}，每行座位号 {{0-20}}，所以每个 showtime 有 {{546}} 个座位。",
+    "why": "统一布局把 Screen 降级成 label，避免为每个厅建独立座位结构。座位 ID 用字符串即可表达，如 A5。",
+    "why_en": "The standardized A-Z by 0-20 layout makes screen-specific seat configuration unnecessary."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "entity-pruning",
+    "scenario": "面试官同意所有 screen 都采用同一座位布局，只需要告诉用户在哪个厅看。",
+    "q": "Screen 应该如何建模？",
+    "options": [
+      "独立类，拥有 seat map 和 booking logic",
+      "Showtime 上的 screenLabel 字符串字段",
+      "Reservation 的子类",
+      "Movie 上的全局常量"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Screen 不维护差异化状态，也不执行业务规则，只是“Screen 3”这类导航标签。降级为字段能减少无意义实体。",
+    "why_en": "Screen can be a label because standardized layouts remove its state and behavior.",
+    "whenOtherWins": "如果不同厅有不同座位布局、无障碍座、屏幕属性或维护状态，Screen 才值得成为实体。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "seat-model",
+    "scenario": "用户选择 A5、A6 这类座位；当前系统不需要座位价格、状态机或锁对象。",
+    "q": "Seat 最适合怎么表示？",
+    "options": [
+      "字符串 ID，例如 A5",
+      "含有价格、锁和 bookedBy 的实体",
+      "Movie 的字段",
+      "Theater 的枚举"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "座位在基础范围内只是稳定标识，不拥有行为。字符串自带相等和哈希，足够作为预订列表元素。",
+    "why_en": "A seat can be a string identifier when it has no behavior beyond equality and hashing.",
+    "whenOtherWins": "如果采用 per-seat locking、座位等级、无障碍属性或独立生命周期，就应把 Seat 升级为类。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "entities",
+    "q": "哪个类拥有某一场具体电影的座位状态和预订并发控制？",
+    "options": [
+      "Movie",
+      "Theater",
+      "Showtime",
+      "BookingSystem"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "每个 showtime 是真正可预订单位：同一电影在不同时间或影院有不同座位状态。把状态放在 Showtime 可以把并发锁粒度控制在单场。",
+    "why_en": "Showtime owns booking state because each screening has its own seat availability and concurrency boundary.",
+    "diagram": "classDiagram\n  class BookingSystem\n  class Showtime\n  class Reservation\n  class Movie\n  BookingSystem --> Showtime\n  Showtime --> Movie\n  Showtime --> Reservation\n  Showtime : reservedSeats\n  Showtime : bookingLock"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "entities",
+    "q": "最终实体设计中哪些是类？（多选）",
+    "options": [
+      "BookingSystem",
+      "Movie",
+      "Theater",
+      "Showtime",
+      "Reservation"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "这些对象都有查询、连接或状态职责。Seat 和 Screen 在基础范围内分别是字符串和值字段。",
+    "why_en": "BookingSystem, Movie, Theater, Showtime, and Reservation are classes, while Seat and Screen stay lightweight.",
+    "diagram": "classDiagram\n  class BookingSystem\n  class Movie\n  class Theater\n  class Showtime\n  class Reservation\n  BookingSystem --> Showtime\n  Showtime --> Movie\n  Showtime --> Reservation"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "booking-state",
+    "scenario": "Showtime 需要判断哪些座位已被订，并支持取消后释放座位。",
+    "q": "本文默认选择的单一事实来源是什么？",
+    "options": [
+      "Showtime.reservations 列表",
+      "每个 Seat 对象的 booked flag",
+      "BookingSystem 的全局 bookedSeats map",
+      "Theater 的 occupiedRows 数组"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Reservation 本身包含 seatIds，因此所有 reservation 的集合就能推导已订座位。减少第二份 bookedSeats 状态能降低同步错误。",
+    "why_en": "The reservations list is the source of truth because booked seats are exactly the seats inside active reservations.",
+    "whenOtherWins": "如果 availability 检查成为瓶颈，可以维护 bookedSeats Set，但每次 book/cancel 必须和 reservations 同步。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-008",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "relationships",
+    "q": "补全核心关系：",
+    "text": "BookingSystem 持有 {{List<Theater>}}；Theater 持有 {{List<Showtime>}}；Showtime 引用 {{Movie}} 并保存 {{List<Reservation>}}；Reservation 反向引用 {{Showtime}}。",
+    "why": "反向引用让取消时能从 reservation 找回所属场次，不必全系统扫描。关系清晰比把所有数据塞进 orchestrator 更易维护。",
+    "why_en": "Reservation keeps a Showtime back-reference so cancellation can route directly to the state owner.",
+    "diagram": "flowchart TD\n  M[\"Movie\"] --> S[\"Showtime\"]\n  T[\"Theater\"] --> S\n  S --> R[\"Reservation\"]\n  R --> Seats[\"seat ids\"]\n  S --> State[\"reserved seat set\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-009",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "cancellation",
+    "scenario": "用户只提供 confirmationId 要取消预订，系统需要释放该预订的座位。",
+    "q": "Reservation 为什么要保存 showtime 反向引用？",
+    "options": [
+      "取消时能直接路由到拥有座位状态的 Showtime",
+      "让 Reservation 自己修改所有影院数据",
+      "为了搜索电影标题",
+      "为了替代 confirmationId"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "取消需要修改 Showtime 的 reservations 列表。反向引用避免从所有 theater/showtime/reservation 中做 O(n) 查找。",
+    "why_en": "The Showtime back-reference lets cancellation reach the object that owns the seat state.",
+    "whenOtherWins": "如果使用数据库或全局 reservationId 索引，也仍可通过外键或索引找到 showtime；核心是取消要路由到状态拥有者。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "search",
+    "scenario": "用户搜索“Inception”，需要返回可预订的影院和时间，而不只是电影对象。",
+    "q": "searchMovies(title) 应返回什么更有用？",
+    "options": [
+      "匹配电影的未来 Showtime 列表",
+      "只返回 Movie.title 字符串",
+      "所有 Theater 对象不筛选",
+      "一个布尔值"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "用户下一步是选场次和座位，因此返回可行动 showtime 更直接。只返回电影名会导致客户端再做一轮查询。",
+    "why_en": "Search should return actionable future showtimes rather than just movie titles.",
+    "whenOtherWins": "如果产品只是电影目录浏览而非订票入口，返回 Movie 列表会更合适。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "indexes",
+    "q": "为什么 BookingSystem 构造时会建立 showtimesById 和 reservationsById？",
+    "options": [
+      "避免订票和取消时反复扫描所有影院和场次",
+      "让所有 Movie 变成可变对象",
+      "替代 Showtime 的锁",
+      "强制所有场次按时间排序"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "showtimeId 和 confirmationId 是外部 API 输入，索引能直接路由请求。它们是读路径优化，也表达 lookup 意图。",
+    "why_en": "Lookup indexes route booking and cancellation requests directly instead of scanning the whole object graph."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-012",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "indexes",
+    "q": "BookingSystem 构造阶段可建立哪些索引？（多选）",
+    "options": [
+      "moviesById",
+      "showtimesByMovieId",
+      "showtimesById",
+      "reservationsById 初始为空"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "前三个从已有 theater/showtime 数据构建，reservationsById 随成功 booking 增长。索引越多，动态更新时越要小心同步。",
+    "why_en": "The constructor can build movie and showtime indexes, while the reservation index starts empty and grows on bookings.",
+    "table": {
+      "headers": [
+        "Index",
+        "Key",
+        "Speeds up"
+      ],
+      "rows": [
+        [
+          "moviesByTitle",
+          "normalized title",
+          "searchMovies"
+        ],
+        [
+          "showtimesByTheater",
+          "theater id",
+          "browse theater schedule"
+        ],
+        [
+          "reservationsById",
+          "reservation id",
+          "cancel and lookup"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "browse",
+    "scenario": "用户打开某个影院页面，想知道今天有哪些电影和时间。",
+    "q": "getShowtimesAtTheater 应返回什么？",
+    "options": [
+      "该影院未来 showtime 列表，让 UI 自行按电影分组",
+      "每部电影一个单独查询 token",
+      "所有已过期 showtime",
+      "只返回影院名称"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "一次返回所有未来场次避免先取电影再逐个取时间的 N+1 形状。UI 可以用 showtime.movie 自行分组。",
+    "why_en": "Returning future showtimes gives the client everything needed to group by movie without N+1 queries.",
+    "whenOtherWins": "如果后端直接负责页面聚合，也可以返回按电影分组的 DTO，但领域模型仍可保持 showtime 列表。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-014",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "booking-flow",
+    "scenario": "BookingSystem.book 收到 showtimeId 和 seatIds，需要创建预订并委托状态拥有者。",
+    "q": "这段伪代码体现了哪种职责分配？",
+    "codeSample": "book(showtimeId, seatIds)\n    showtime = showtimesById[showtimeId]\n    reservation = Reservation(generateId(), showtime, seatIds)\n    showtime.book(reservation)\n    reservationsById[reservation.id] = reservation\n    return reservation",
+    "lang": "text",
+    "options": [
+      "BookingSystem 编排和索引，Showtime 原子校验并保存",
+      "BookingSystem 直接写入座位状态",
+      "Reservation 自己取消并释放座位",
+      "Theater 负责所有锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "BookingSystem 只负责路由和创建记录；真正的可用性检查和写入在 Showtime 内完成。失败时 reservation 不会注册到全局索引。",
+    "why_en": "BookingSystem orchestrates while Showtime performs atomic validation and storage.",
+    "whenOtherWins": "如果使用持久化数据库，showtime.book 的原子性可能由事务或唯一约束承载。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "atomic-booking",
+    "scenario": "用户同时选择 A5、A6、A7，但 A6 已被别人预订。",
+    "q": "正确行为是什么？",
+    "options": [
+      "整个预订失败，A5 和 A7 也不能被部分占用",
+      "先订 A5 和 A7，跳过 A6",
+      "为 A6 生成候补票",
+      "把 A6 从别人的 reservation 移过来"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "多座位预订必须 all-or-nothing。先验证所有座位，再做任何状态修改，才能避免部分成功。",
+    "why_en": "Multi-seat booking must be all-or-nothing, with all seats validated before storing the reservation.",
+    "whenOtherWins": "如果产品支持拆单或推荐替代座位，应显式设计新的用户确认流程，而不是静默部分成功。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-016",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "race-condition",
+    "q": "按正确顺序排列双订座位的竞态链路：",
+    "steps": [
+      "线程 A 和线程 B 都看到 A5 可用。",
+      "两个线程都把包含 A5 的 reservation 加入列表。",
+      "check availability 和 add reservation 没有在同一个临界区。",
+      "结果两个用户拿到同一座位。"
+    ],
+    "answerOrder": [
+      2,
+      0,
+      1,
+      3
+    ],
+    "why": "这是典型 check-then-act 竞态。修复方式是把“检查所有座位”和“保存 reservation”放进同一个 Showtime 锁内。",
+    "why_en": "The double-booking bug is a check-then-act race between availability checking and reservation storage.",
+    "diagram": "sequenceDiagram\n  participant U1\n  participant S as Showtime\n  participant U2\n  U1->>S: check A5 free\n  U2->>S: check A5 free\n  U1->>S: reserve A5\n  U2->>S: reserve A5"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-017",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "synchronization",
+    "scenario": "两个用户可能同时预订同一场电影的同一座位。",
+    "q": "这段 Showtime.book 伪代码的关键保证是什么？",
+    "codeSample": "book(reservation)\n    synchronized(this)\n        for seatId in reservation.seatIds\n            if !isValidSeatId(seatId) throw InvalidSeat\n        for seatId in reservation.seatIds\n            if !isAvailable(seatId) throw Unavailable\n        reservations.add(reservation)",
+    "lang": "text",
+    "options": [
+      "可用性检查和保存 reservation 是原子的",
+      "所有场次全局串行化",
+      "座位永远不需要验证",
+      "取消不需要锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "锁的粒度是单个 Showtime，避免同一场次内双订。不同 showtime 可以并行预订，不受这个锁影响。",
+    "why_en": "The synchronized block makes the check-and-store sequence atomic for one showtime.",
+    "whenOtherWins": "如果单场超高并发成为瓶颈，可以升级为 per-seat locking，但需要排序加锁避免死锁。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-018",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "lock-granularity",
+    "q": "per-showtime 锁相比 per-seat 锁的主要优点是什么？",
+    "options": [
+      "实现简单、无多锁死锁风险、Seat 可保持字符串",
+      "可以让同一座位被多人预订",
+      "吞吐量一定最高",
+      "不需要校验座位 ID"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "per-showtime 锁把同一场次所有预订串行化，牺牲一些并行度换清晰正确性。基础面试范围内临界区短，通常足够。",
+    "why_en": "Per-showtime locking is simple and avoids multi-lock deadlock while keeping Seat as a string."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "per-seat-locking",
+    "scenario": "热门首映场同一 showtime 每秒上百人抢不同座位，per-showtime 锁成为瓶颈。",
+    "q": "更高吞吐的替代设计是什么？",
+    "options": [
+      "把 Seat 升级为含 lock/bookedBy 的类，并按 seatId 排序获取锁",
+      "把所有请求随机延迟",
+      "删除 reservation 列表",
+      "让 Theater 级别加全局锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "per-seat locking 只阻塞争抢相同座位的预订。多座位预订必须按稳定顺序加锁，否则可能死锁。",
+    "why_en": "Per-seat locking improves throughput but requires sorted lock acquisition to avoid deadlock.",
+    "whenOtherWins": "普通场次或面试基础范围用 per-showtime 锁更稳，除非明确需要优化同场并发。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-020",
+    "format": "cloze",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "deadlock",
+    "q": "补全 per-seat locking 的死锁规避规则：",
+    "text": "多座位预订要先对 seatIds 做{{排序}}，所有线程都按同一顺序获取锁，避免 A 锁 A5 等 A6、B 锁 A6 等 A5 的{{循环等待}}。",
+    "why": "一旦一次操作需要拿多把锁，稳定加锁顺序就是最基本的死锁预防。这个复杂度是 per-seat 方案的主要代价。",
+    "why_en": "Sorted lock acquisition prevents circular waits when a booking needs multiple seat locks.",
+    "diagram": "flowchart TD\n  A[\"selected seats\"] --> B[\"sort seat ids\"]\n  B --> C[\"lock A5\"]\n  C --> D[\"lock A6\"]\n  D --> E[\"check and reserve\"]\n  E --> F[\"release reverse order\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-021",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "showtime-methods",
+    "q": "Showtime 的核心方法通常包括哪些？（多选）",
+    "options": [
+      "isAvailable(seatId)",
+      "getAvailableSeats()",
+      "book(reservation)",
+      "cancel(reservation)"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这四个方法都围绕单场次座位状态展开。查询和修改都集中在 Showtime，有助于维持不变量。",
+    "why_en": "Showtime centers the seat-state operations: availability, listing, booking, and cancellation."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "available-seats",
+    "scenario": "前端座位图需要知道哪些座位可选，基础布局固定。",
+    "q": "getAvailableSeats 的合理做法是什么？",
+    "options": [
+      "从 reservations 收集 booked set，再遍历固定 546 座布局过滤",
+      "返回所有座位不看 reservation",
+      "只返回第一排",
+      "调用支付系统判断"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "reservations 是事实来源，booked set 是局部派生结构。固定布局扫描成本是常数级，足够清晰。",
+    "why_en": "Available seats can be derived by subtracting booked seats from the fixed layout.",
+    "whenOtherWins": "如果布局可变，应让 Screen 或 SeatLayout 提供完整座位集合，而不是硬编码 A-Z/0-20。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "seat-validation",
+    "scenario": "用户提交 seatId='AA99' 或 'Z21'。",
+    "q": "Showtime.book 应如何处理？",
+    "options": [
+      "在锁内校验所有 seatId 是否属于 A-Z 和 0-20",
+      "先保存 reservation，之后异步清理",
+      "把无效座位当作已售罄",
+      "让 Movie 校验座位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "座位合法性和可用性都要在同一原子 booking 流程里检查。无效输入不能创建 reservation。",
+    "why_en": "Seat IDs should be validated inside the atomic booking flow before any reservation is stored.",
+    "whenOtherWins": "如果座位布局由外部配置提供，校验应委托给 SeatLayout，但仍要在写入前完成。",
+    "diagram": "flowchart TD\n  A[\"book(seats)\"] --> L[\"showtime lock\"]\n  L --> B{\"all seats free?\"}\n  B -- no --> R[\"reject\"]\n  B -- yes --> C[\"mark seats reserved\"]\n  C --> D[\"create reservation\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-024",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "cancellation",
+    "scenario": "用户取消 confirmationId，系统已经通过 reservationsById 找到 reservation。",
+    "q": "这段取消流程为什么能释放座位？",
+    "codeSample": "cancelReservation(id)\n    reservation = reservationsById[id]\n    showtime = reservation.getShowtime()\n    showtime.cancel(reservation)\n    reservationsById.remove(id)\n\nShowtime.cancel(reservation)\n    synchronized(this)\n        reservations.remove(reservation)",
+    "lang": "text",
+    "options": [
+      "座位可用性由 reservations 推导，移除 reservation 就释放座位",
+      "必须逐个 Seat.markFree 才能释放",
+      "取消只删除全局索引，不影响座位",
+      "取消应由 Movie 完成"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "因为没有第二份 bookedSeats 状态，取消只需从 Showtime 的 reservations 中删除。全局索引也要删除，防止重复取消。",
+    "why_en": "Removing the reservation from Showtime frees its seats because availability is derived from the reservation list.",
+    "whenOtherWins": "如果维护 bookedSeats Set，取消必须同时从 reservations 和 bookedSeats 中删除。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-025",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "movie-identity",
+    "q": "Movie 为什么要有 id 而不只存 title？",
+    "options": [
+      "重映或翻拍可能同名，id 才是稳定身份",
+      "title 不能用于搜索",
+      "id 用来表示座位号",
+      "Movie 不该被引用"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "用户按标题搜索，但系统内部需要稳定唯一身份连接 showtime。两个 Dune 或同名电影不应被混为一谈。",
+    "why_en": "Movie needs an ID because titles are searchable but not guaranteed unique."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "immutability",
+    "scenario": "Reservation 构造时收到 seatIds 列表，调用方之后可能修改原列表。",
+    "q": "Reservation 应该怎么保护自身状态？",
+    "options": [
+      "构造和 getSeatIds 时做 defensive copy",
+      "直接保存外部列表引用",
+      "让调用方保证不改",
+      "把 seatIds 存成字符串拼接"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Reservation 是预订记录，创建后不应被外部列表修改。防御性拷贝能保护不可变语义。",
+    "why_en": "Defensive copies keep a reservation's seat list immutable from external mutation.",
+    "whenOtherWins": "在不可变集合默认的语言中，可以直接存不可变列表。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-027",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "edge-cases",
+    "q": "BookingSystem.book 应处理哪些失败情况？（多选）",
+    "options": [
+      "showtimeId 为空或不存在",
+      "seatIds 为空",
+      "任一 seatId 无效",
+      "任一座位已不可用"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "路由输入、座位合法性和可用性都可能失败。任何失败都不应留下 reservation 或索引记录。",
+    "why_en": "Booking failures must leave no reservation behind, whether the issue is routing, input, invalid seats, or unavailable seats."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "past-showtimes",
+    "scenario": "用户搜索电影时，系统里还保留了昨天的 showtime 对象。",
+    "q": "searchMovies 和 getShowtimesAtTheater 应如何处理？",
+    "options": [
+      "只返回 future showtimes",
+      "返回所有过去和未来场次",
+      "删除 Movie 对象",
+      "把过去场次当作免费票"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "过去场次不可预订，返回它们会给用户不可操作结果。内存中是否保留旧场次是另一个清理问题。",
+    "why_en": "Search and browsing should return future showtimes because past showtimes are not bookable.",
+    "whenOtherWins": "如果是历史订单或排片管理后台，过去场次才可能需要返回。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-029",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "successful-booking",
+    "q": "成功预订 A5/A6 的正确顺序是什么？",
+    "steps": [
+      "Showtime 在锁内校验 A5/A6 合法且可用。",
+      "BookingSystem 通过 showtimesById 找到对应 Showtime。",
+      "Showtime 把 reservation 加入自己的 reservations。",
+      "BookingSystem 把 confirmationId -> reservation 写入 reservationsById。"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3
+    ],
+    "why": "状态写入顺序确保 Showtime 先接受预订，全局取消索引后注册。若 Showtime 抛错，索引不会污染。",
+    "why_en": "The booking flow routes first, atomically stores in Showtime, then registers the confirmation index.",
+    "diagram": "sequenceDiagram\n  participant U as User\n  participant B as BookingSystem\n  participant S as Showtime\n  participant R as Reservation\n  U->>B: book A5,A6\n  B->>S: book seats\n  S->>S: check and reserve\n  S->>R: create reservation\n  S-->>B: reservation id"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "dynamic-schedule",
+    "scenario": "后续要求运行时添加新的 showtime，而不是只在构造时加载。",
+    "q": "addShowtime 必须同步更新哪些结构？",
+    "options": [
+      "Theater 的 showtimes、showtimesById、moviesById、showtimesByMovieId",
+      "只更新 Theater 的名字",
+      "只更新 reservationsById",
+      "不需要任何索引"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "构造时建立过的所有派生索引，在动态写入时都要同步维护。否则搜索或订票会漏掉新场次。",
+    "why_en": "Dynamic additions must update every index that the constructor would have populated.",
+    "whenOtherWins": "如果索引改为查询时实时扫描，则动态更新更简单但读路径更慢。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-031",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "removal",
+    "scenario": "运营要删除某个 showtime，但已有 active reservations。",
+    "q": "最安全的基础处理是什么？",
+    "options": [
+      "拒绝删除，先取消并通知所有 reservation",
+      "直接删除并保留无主 reservation",
+      "只从 movie index 删除",
+      "把票自动挪到任意其他场次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "删除有票场次会让 confirmationId 和 reservation 指向悬空对象。基础设计应拒绝，等取消和通知完成后再删。",
+    "why_en": "Removing a showtime with active reservations should be rejected until reservations are handled.",
+    "whenOtherWins": "如果业务支持场次取消流程，可发事件给通知监听器并批量退款/取消后再清理索引。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "seat-holds",
+    "scenario": "真实购票中用户选座后要花 30-60 秒支付，不能让别人抢走同一座位。",
+    "q": "应加入哪种机制？",
+    "options": [
+      "临时 SeatHold，过期后释放，支付成功后 confirm 成 Reservation",
+      "立即永久创建 Reservation，即使支付失败也不释放",
+      "只在支付成功后再检查座位",
+      "让用户截图证明先选"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "hold 把座位状态从二元变成 available/held/booked。它改善结账体验，但需要超时清理和确认流程。",
+    "why_en": "Temporary holds protect selected seats during checkout and then either convert to reservations or expire.",
+    "whenOtherWins": "如果支付被明确排除且 booking 是瞬时操作，基础 book() 不需要 hold。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-033",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "seat-holds",
+    "q": "加入 temporary holds 后，isAvailable 应检查哪些状态？（多选）",
+    "options": [
+      "是否被现有 Reservation 预订",
+      "是否被未过期 SeatHold 持有",
+      "是否被已过期 hold 持有",
+      "是否电影标题匹配"
+    ],
+    "answer": [
+      0,
+      1
+    ],
+    "why": "已过期 hold 应清理或视为无效，不应继续占座。电影标题不参与单个座位的可用性判断。",
+    "why_en": "Availability with holds must exclude booked seats and seats held by non-expired holds."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-034",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "seat-holds",
+    "q": "临时 hold 转正式预订的正确流程是什么？",
+    "steps": [
+      "holdSeats 在同一 Showtime 锁内确认座位可用并记录 expiresAt。",
+      "用户完成支付后提交 holdId。",
+      "confirmHold 检查 hold 存在且未过期。",
+      "删除 hold 并把 reservation 加入 reservations。",
+      "后台任务清理无人确认的过期 hold。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "hold 和 booking 使用同一把 showtime 锁，可以防止 hold 与 reservation 互相穿插。过期清理防止座位永久锁住。",
+    "why_en": "Seat holds share the showtime lock, confirm into reservations, and need cleanup for abandoned holds.",
+    "diagram": "stateDiagram\n  [*] --> Available\n  Available --> Held\n  Held --> Booked: pay\n  Held --> Available: timeout\n  Booked --> Available: cancel"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-035",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "state-pattern",
+    "q": "文章为什么说 seat hold 引入的是小型状态生命周期？",
+    "options": [
+      "座位从 available 到 held 再到 booked 或 released，有明确转换规则",
+      "Movie 会从上映变成下映",
+      "Theater 会变成 Reservation",
+      "Search 会变成支付"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "一旦状态转换带规则，就要小心非法转换。三态时简单字段足够，状态继续增多时可以考虑 State pattern。",
+    "why_en": "Seat holds introduce a lifecycle with available, held, booked, and released transitions."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-036",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "timeout-policy",
+    "scenario": "为 SeatHold 选择过期时间，用户需要输入支付信息。",
+    "q": "合理的设计判断是什么？",
+    "options": [
+      "5-10 分钟常见，但业务可调整，过短伤害用户，过长锁住座位",
+      "必须固定 1 秒",
+      "必须永不过期",
+      "必须等电影开场后才过期"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "timeout 是业务权衡，不是固定算法常量。可用 Strategy 封装不同场景的超时策略，但基础设计可先用配置值。",
+    "why_en": "Hold timeout is a business tradeoff between checkout usability and seat availability.",
+    "whenOtherWins": "高需求首映场可能使用更短 hold，低峰场次可以更宽松。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-037",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "single-source",
+    "q": "为什么不把 Reservation.cancel() 做成直接修改 Showtime？",
+    "options": [
+      "Reservation 是记录，不应拥有 Showtime 的 reservation list 修改权",
+      "Reservation 没有 confirmationId",
+      "Showtime 不应该知道 seatIds",
+      "取消不需要释放座位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "修改座位状态的权力留在 Showtime，能把并发控制集中在一个对象。Reservation 只携带取消所需数据。",
+    "why_en": "Reservation is a record, while Showtime owns the mutable booking state and synchronization."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-038",
+    "format": "cloze",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "index-tradeoff",
+    "q": "补全索引维护代价：",
+    "text": "showtimesById、moviesById、showtimesByMovieId 让读路径更快，但动态 add/remove 时必须保持这些{{派生索引}}和 theater.showtimes 的{{同步}}。",
+    "why": "这是所有 denormalized data 的共同代价。读性能提升换来写路径更容易出错。",
+    "why_en": "Indexes speed reads but make writes responsible for keeping denormalized structures in sync."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-039",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "thread-safety",
+    "scenario": "用户取消 reservation 的同时，另一个用户试图预订同一批座位。",
+    "q": "为什么 Showtime.cancel 也应该同步？",
+    "options": [
+      "避免预订扫描 reservations 时看到并发修改中的列表",
+      "因为取消要重新搜索电影",
+      "因为 synchronized 会自动退款",
+      "因为 Seat 字符串不支持删除"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "book 和 cancel 都读写同一 reservations 列表，必须使用同一并发边界。否则可能出现迭代和修改交错。",
+    "why_en": "Cancel must synchronize with booking because both mutate the same reservations list."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-040",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "factory-scope",
+    "scenario": "有人提议新增 Payment、SeatPrice、SeatType、RescheduleService。",
+    "q": "基础需求下应该怎么回应？",
+    "options": [
+      "指出它们都被排除或暂不需要，先保持 booking/cancel 核心模型",
+      "全部实现以显示完整性",
+      "把它们都塞进 BookingSystem",
+      "让 Movie 负责支付"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "LLD 面试要展示范围控制。超出需求的功能会分散注意力并增加不必要状态。",
+    "why_en": "Scope control keeps the design focused on booking and cancellation rather than excluded features.",
+    "whenOtherWins": "如果面试官明确加入支付、座位等级或改签，再扩展相应实体和状态机。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-041",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "senior-signals",
+    "q": "Senior 级 BookMyShow 回答应主动覆盖哪些点？（多选）",
+    "options": [
+      "check-then-act 竞态",
+      "per-showtime vs per-seat locking",
+      "Reservation 到 Showtime 的 back-reference",
+      "临时 seat hold 如何复用同步模型"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "高级回答的核心是并发和状态归属。只列类名不足以证明能防止双订。",
+    "why_en": "Senior answers should cover race conditions, lock granularity, routing references, and temporary holds.",
+    "table": {
+      "headers": [
+        "Concern",
+        "Owner",
+        "Why"
+      ],
+      "rows": [
+        [
+          "Seat availability",
+          "Showtime",
+          "per-show state"
+        ],
+        [
+          "Search indexes",
+          "BookingSystem",
+          "cross-show lookup"
+        ],
+        [
+          "Cancellation record",
+          "Reservation",
+          "immutable booking facts"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-042",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "decision-chain",
+    "q": "按顺序排列 BookMyShow 的主设计链路：",
+    "steps": [
+      "把 Showtime 定为座位状态和并发锁的拥有者。",
+      "澄清搜索、浏览、固定布局、多座位 booking、取消和并发要求。",
+      "把 Seat/Screen 降级成字符串或字段，保留 Movie/Theater/Reservation。",
+      "BookingSystem 建立索引并负责路由。",
+      "Showtime.book 在锁内完成 all-or-nothing 校验和保存。"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3,
+      4
+    ],
+    "why": "从范围到实体裁剪，再到状态拥有者和并发边界，是这题的核心论证顺序。",
+    "why_en": "The design chain moves from scope and entity pruning to Showtime-owned state, indexing, and atomic booking."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "error-handling",
+    "scenario": "用户用已经取消过的 confirmationId 再次取消。",
+    "q": "基础设计如何处理？",
+    "options": [
+      "reservationsById 找不到，返回 ReservationNotFound 或 invalid",
+      "自动恢复刚才的 reservation",
+      "把票转移到下一场",
+      "只删除 seatIds"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "取消成功后全局索引删除该 confirmationId，再次使用和随机 ID 一样不可用。无需额外 usedReservations 集合。",
+    "why_en": "After cancellation removes the reservation index entry, repeated cancellation is treated as not found.",
+    "whenOtherWins": "如果产品要求区分“已取消”和“不存在”，需要保留历史 reservation 状态或审计记录。"
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-044",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "complexity",
+    "q": "getAvailableSeats 的复杂度为什么在基础设计中可接受？",
+    "options": [
+      "固定布局只有 546 个座位，加上已订座位扫描，成本很小",
+      "因为它不需要看 reservations",
+      "因为它只在系统启动时运行",
+      "因为 546 是 O(1) 但 reservations 不能扫描"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "固定布局扫描是常数级，reservation 数量也有限。为它维护更多长期状态未必值得。",
+    "why_en": "A fixed 546-seat layout and modest reservation counts make derived availability cheap enough."
+  },
+  {
+    "id": "lld-problem-breakdowns-bookmyshow-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "invariant",
+    "scenario": "面试最后要你总结这个系统最关键的不变量。",
+    "q": "哪一个最准确？",
+    "options": [
+      "同一 showtime 内，一个 seatId 最多出现在一个 active reservation 中",
+      "同一 movie 只能在一个 theater 上映",
+      "每个 theater 只能有一个 screen",
+      "每个 user 一次只能订一个座位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "所有并发控制都服务于这个不变量。book 的锁和 all-or-nothing 校验就是为了保证座位不会双订。",
+    "why_en": "The central invariant is that a seat within one showtime appears in at most one active reservation.",
+    "whenOtherWins": "加入 hold 后，应扩展为一个 seatId 最多处于一个 active reservation 或未过期 hold 中。"
+  }
+]

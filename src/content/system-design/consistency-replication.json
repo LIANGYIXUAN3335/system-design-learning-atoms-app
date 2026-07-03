@@ -1,0 +1,200 @@
+[
+  {
+    "id": "cr-001",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "replication",
+    "scenario": "商品详情页：读远多于写，写很少，用户能容忍读到略微陈旧的数据（比如库存数字晚几百毫秒）。",
+    "q": "扩展读性能最合适的做法是？",
+    "options": [
+      "加只读从库（主从复制，异步）",
+      "把所有读写都压到一台更大的主库",
+      "给每个读请求加分布式锁",
+      "关闭复制只留一台机器"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "读多写少、可容忍轻微陈旧，正是主从复制的典型场景：写走主库，读分摊到多个异步复制的从库，读吞吐随从库数量扩展。",
+    "why_en": "A read-heavy workload that tolerates slight staleness is the classic case for leader-follower replication: writes go to the leader and reads fan out to asynchronously-replicated followers.",
+    "whenOtherWins": "若某用户必须立刻读到自己刚写的值（read-your-writes），就把该用户的读临时路由到主库——决定因素是「能否容忍复制延迟」。",
+    "diagram": "flowchart LR\n  C[客户端] -->|写| L[(主库 Leader)]\n  C -->|读| F1[(从库 Follower)]\n  C -->|读| F2[(从库 Follower)]\n  L -.->|异步复制| F1\n  L -.->|异步复制| F2",
+    "tags": [
+      "replication"
+    ],
+    "origin": "seed"
+  },
+  {
+    "id": "cr-002",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "同步复制 vs 异步复制，最主要的取舍是？",
+    "options": [
+      "同步更快但会丢数据",
+      "异步保证零丢失但更慢",
+      "同步不丢已确认的写但写更慢；异步写更快但可能丢最近的写",
+      "两者完全等价"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "同步复制等从库确认才算写成功——主库挂了也不丢已确认的写，代价是写延迟高、从库慢会拖累写。异步不等，写快、可用性好，但主库崩溃可能丢掉还没复制出去的写。",
+    "why_en": "Synchronous replication waits for a follower to acknowledge, so no confirmed write is lost on failover, at the cost of higher write latency; asynchronous is faster and more available but can lose the most recent writes.",
+    "table": {
+      "headers": [
+        "维度",
+        "同步复制",
+        "异步复制"
+      ],
+      "rows": [
+        [
+          "数据安全",
+          "主库挂了不丢已确认的写",
+          "可能丢最近未复制的写"
+        ],
+        [
+          "写延迟",
+          "高（等从库确认）",
+          "低（不等）"
+        ],
+        [
+          "可用性",
+          "从库慢会拖累写",
+          "主库可独立提交"
+        ]
+      ]
+    },
+    "tags": [
+      "replication"
+    ],
+    "origin": "seed"
+  },
+  {
+    "id": "cr-003",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "replication-lag",
+    "scenario": "系统用主从异步复制。某用户刚在主库改了自己的资料。",
+    "q": "紧接着他从某个从库读自己的资料，最可能发生什么？",
+    "options": [
+      "一定读到刚写的新值",
+      "可能读到旧值（复制还没同步到）",
+      "读操作报错",
+      "主库自动回滚这次写"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "异步复制有延迟，写到主库后从库需要时间同步；这段窗口内读从库会读到旧值，即 read-your-writes 被破坏。缓解：写后一段时间把该用户的读路由到主库，或让用户读自己的写走主库。",
+    "why_en": "Async replication has lag, so a follower read right after a write can return a stale value—read-your-writes is violated. Mitigate by routing that user's reads to the leader for a short window.",
+    "diagram": "sequenceDiagram\n  participant C as 客户端\n  participant L as 主库\n  participant F as 从库\n  C->>L: 写 资料=新\n  L-->>F: 异步复制 有延迟\n  C->>F: 立刻读 资料\n  F-->>C: 返回旧值",
+    "tags": [
+      "replication",
+      "replication-lag"
+    ],
+    "origin": "seed"
+  },
+  {
+    "id": "cr-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "quorum",
+    "scenario": "无主(去中心化)存储，N=3 个副本，想在不引入单点主库的前提下，尽量保证读到最新写入。",
+    "q": "读写法定数(quorum)该怎么配？",
+    "options": [
+      "W=1, R=1",
+      "W=2, R=2（使 W+R>N）",
+      "W=1, R=1 并关闭复制",
+      "随机，不用管 W 和 R"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "无主复制用法定数保证一致性：只要写法定数 W + 读法定数 R > N，读集合与最近的写集合必然相交，就能读到最新值。N=3 时 W=R=2 即满足。",
+    "why_en": "In leaderless replication a read reflects the latest write whenever W + R > N, because the read and write quorums must overlap; for N=3, W=R=2 works.",
+    "table": {
+      "headers": [
+        "N",
+        "W",
+        "R",
+        "W+R>N?",
+        "保证读到最新?"
+      ],
+      "rows": [
+        [
+          "3",
+          "2",
+          "2",
+          "是 (4>3)",
+          "是"
+        ],
+        [
+          "3",
+          "1",
+          "1",
+          "否 (2<3)",
+          "否"
+        ],
+        [
+          "3",
+          "3",
+          "1",
+          "是 (4>3)",
+          "是，但写慢"
+        ]
+      ]
+    },
+    "tags": [
+      "replication",
+      "quorum"
+    ],
+    "origin": "seed"
+  },
+  {
+    "id": "cr-005",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "quorum",
+    "q": "补全无主复制的法定数不等式：",
+    "text": "在同一副本集合、无并发冲突且读端能解析版本时，要让读写 quorum 相交，需满足 {{W}} + {{R}} > {{N}}。",
+    "why": "W+R>N 保证读法定数和写法定数重叠；但“读到最新值”还依赖同一副本集合、无 sloppy quorum、无并发写，以及读端用版本/时间戳选择最新值。",
+    "why_en": "The quorum inequality W + R > N guarantees overlap between read and write sets, but freshness also depends on the same replica set, no sloppy quorum or concurrent conflicts, and version resolution.",
+    "tags": [
+      "replication",
+      "quorum"
+    ],
+    "origin": "seed"
+  },
+  {
+    "id": "cr-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "failover",
+    "scenario": "主从架构里，主库突然宕机。",
+    "q": "系统怎样恢复可写？",
+    "options": [
+      "永远无法再写",
+      "通过故障转移(failover)：从库经选举产生新主库",
+      "客户端直接改写从库文件",
+      "自动退化成无主模式"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "主库宕机后进入故障转移：从库检测到主库失联 → 发起/参与选举 → 胜出者成为新主库并接管写入。代价是选举窗口内短暂不可写，且异步复制下可能丢掉老主库还没复制出去的写。",
+    "why_en": "On leader failure the system fails over: a follower detects the outage, an election runs, and the winner becomes the new leader—at the cost of a brief write outage and possible loss of un-replicated writes.",
+    "diagram": "stateDiagram-v2\n  [*] --> Follower\n  Follower --> Candidate: 检测到主库失联\n  Candidate --> Leader: 赢得选举\n  Candidate --> Follower: 收到更高任期\n  Leader --> Follower: 发现更高任期",
+    "tags": [
+      "replication",
+      "failover"
+    ],
+    "origin": "seed"
+  }
+]

@@ -1,0 +1,1001 @@
+[
+  {
+    "id": "lld-problem-breakdowns-parking-lot-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "requirements",
+    "q": "Parking Lot 基础需求包含哪些能力？（多选）",
+    "options": [
+      "支持 Motorcycle、Car、Large Vehicle 三类车",
+      "入场时自动分配兼容车位并发 ticket",
+      "出场时用 ticketId 校验、计费、释放车位",
+      "支付处理、摄像头、预约和 UI"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "基础系统只覆盖入场分配、票据、出场计费和状态释放。支付、硬件和预约都被明确排除。",
+    "why_en": "The base parking lot handles compatible spot assignment, ticket issuance, ticket-based exit, fee calculation, and spot release."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "entity-pruning",
+    "scenario": "系统只需要知道车辆是 motorcycle、car 还是 large 来匹配车位。",
+    "q": "Vehicle 应如何建模？",
+    "options": [
+      "VehicleType enum，而不是 Vehicle 类",
+      "完整 Vehicle 类，含车牌、车主、保险",
+      "Ticket 的父类",
+      "ParkingSpot 的子类"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "车辆是外部对象，本系统不管理它的状态。基础范围只需要分类标签用于匹配。",
+    "why_en": "Vehicle stays a type enum because the lot only needs the vehicle category for spot compatibility.",
+    "whenOtherWins": "如果需求加入车牌识别、黑名单、常客账户或车辆历史，Vehicle 才可能成为实体。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-003",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "entities",
+    "q": "最终设计中的核心实体有哪些？（多选）",
+    "options": [
+      "ParkingLot",
+      "ParkingSpot",
+      "Ticket",
+      "VehicleType/SpotType enum"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "ParkingLot 编排，ParkingSpot 表示物理车位属性，Ticket 记录一次停车会话，枚举表达分类。",
+    "why_en": "The model centers on ParkingLot, ParkingSpot, Ticket, and distinct vehicle and spot type enums.",
+    "diagram": "classDiagram\n  class ParkingLot\n  class ParkingSpot\n  class Ticket\n  ParkingLot --> ParkingSpot\n  ParkingLot --> Ticket\n  Ticket --> ParkingSpot : spotId"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "occupancy",
+    "scenario": "车辆入场时 ticket 一生成，该 spot 就被分配，即使车还没物理开到车位。",
+    "q": "本文选择如何表示 occupied 状态？",
+    "options": [
+      "ParkingLot 维护 occupiedSpotIds Set",
+      "ParkingSpot 自己保存 occupied boolean",
+      "完全从 activeTickets 每次推导",
+      "Ticket 自己释放车位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "文章把停车场占用视为系统管理的 assignment 关系，因此由 orchestrator 维护索引。Set 是 activeTickets 的派生索引，换来清晰并发边界。",
+    "why_en": "The parking lot models occupancy as an assignment managed by the orchestrator through an occupied spot ID set.",
+    "whenOtherWins": "如果更强调物理车位状态，ParkingSpot.occupied 也可行；Amazon Locker 就采用了实体持有物理占用状态。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "state-ownership",
+    "q": "Parking Lot 和 Amazon Locker 在占用状态上的核心差异是什么？",
+    "options": [
+      "Parking Lot 把占用看作 ticket 分配关系，Locker 把占用看作物理包裹状态",
+      "Parking Lot 不需要 occupancy",
+      "Locker 不需要 token",
+      "二者必须完全相同"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "车位被分配给 ticket 是关系状态；包裹是否在格口中是物理状态。这个语义差异解释了不同建模选择。",
+    "why_en": "Parking occupancy is assignment-like, while locker occupancy is physical package presence.",
+    "table": {
+      "headers": [
+        "System",
+        "Occupied means",
+        "State owner"
+      ],
+      "rows": [
+        [
+          "Parking lot",
+          "spot assigned to ticket",
+          "ParkingLot set"
+        ],
+        [
+          "Locker",
+          "package physically inside",
+          "Compartment status"
+        ],
+        [
+          "BookMyShow",
+          "seat belongs to reservation",
+          "Showtime set"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "derive-occupancy",
+    "q": "完全从 activeTickets 推导 occupiedSpotIds 的优点和缺点是什么？",
+    "options": [
+      "最少冗余，但每次找车位要扫描 tickets，且并发时要锁整个 map",
+      "最快且无任何复杂度",
+      "无法知道 ticket 对应 spot",
+      "会自动防止所有 race"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "推导状态概念上干净，但重复计算和并发迭代会麻烦。维护 Set 是受控冗余，像数据库索引。",
+    "why_en": "Deriving occupancy from active tickets avoids redundancy but makes allocation scans and concurrency harder."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-007",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "state-ownership",
+    "q": "补全状态归属心法：",
+    "text": "判断状态属于实体还是 orchestrator，可问它是实体的{{内在属性}}，还是系统管理的{{关系/分配}}。",
+    "why": "车位大小是内在属性，当前被哪个 ticket 占用是关系。这个判断有助于解释设计取舍。",
+    "why_en": "State ownership depends on whether the state is intrinsic to an entity or a relationship managed by the system."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "ticket",
+    "scenario": "入场成功后，系统要在出场时识别停车会话、车位、车型和入场时间。",
+    "q": "Ticket 应保存哪些核心字段？",
+    "options": [
+      "id、spotId、vehicleType、entryTime",
+      "完整 ParkingSpot 引用、支付卡、摄像头图片",
+      "只保存 vehicleType",
+      "只保存 hourlyRate"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Ticket 是一次停车会话的不可变记录。出场计费和释放车位都依赖这些字段。",
+    "why_en": "Ticket records the parking session with ID, spot ID, vehicle type, and entry time.",
+    "diagram": "classDiagram\n  class Ticket\n  class Vehicle\n  class ParkingSpot\n  Ticket --> Vehicle\n  Ticket --> ParkingSpot\n  Ticket : spotId\n  Ticket : entryTime"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-009",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "ticket-reference",
+    "q": "Ticket 为什么存 spotId 而不是 ParkingSpot 引用？",
+    "options": [
+      "Ticket 是记录，存 ID 更简单，避免它导航或修改 Spot",
+      "ParkingSpot 不能有 id",
+      "spotId 无法释放车位",
+      "Ticket 必须负责定价"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Ticket 不应该伸手修改领域对象。ParkingLot 用 spotId 更新 occupiedSpotIds 即可，符合 Law of Demeter。",
+    "why_en": "Ticket stores a spot ID to remain a simple record rather than a navigational object."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "pricing",
+    "scenario": "需求只有所有车型同一 hourly rate，按小时向上取整。",
+    "q": "计费逻辑应放在哪里？",
+    "options": [
+      "ParkingLot.computeFee",
+      "Ticket.calculateFee 并存 rate",
+      "ParkingSpot.getSpotType",
+      "VehicleType enum"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "计费是停车场业务政策，不是 ticket 记录本身的职责。简单需求下放在 ParkingLot 足够。",
+    "why_en": "Fee calculation is a parking lot business policy, not behavior of the ticket record.",
+    "whenOtherWins": "如果要支持多种复杂定价模型，可抽 PricingStrategy，而不是一开始就过度设计。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-011",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "low-level-design",
+    "sub": "money-time",
+    "q": "补全计费锚点：",
+    "text": "金额应以最小货币单位如 {{cents}} 的整数保存；时长按小时计费并 {{向上取整}}，所以 5 分钟也算 1 小时。",
+    "why": "浮点金额会产生精度问题。向上取整规则让不足一小时也收费一小时。",
+    "why_en": "Use integer cents for money and round parking duration up to whole hours."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "active-tickets",
+    "scenario": "出场 API 收到 ticketId，需要快速验证票据并找到 entryTime 和 spotId。",
+    "q": "activeTickets 应该用什么结构？",
+    "options": [
+      "Map<String, Ticket>",
+      "List<Ticket> 且每次扫描是唯一选择",
+      "Set<ParkingSpot>",
+      "单个 currentTicket"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "map 直接表达“通过 ticketId 查票”的意图，性能也更好。虽然停车场规模下差异不大，map 更清晰。",
+    "why_en": "A ticket map makes lookup by ticket ID explicit and direct.",
+    "whenOtherWins": "极小系统用 list 扫描也能工作，但没有 map 语义清楚。",
+    "table": {
+      "headers": [
+        "Map",
+        "Key",
+        "Purpose"
+      ],
+      "rows": [
+        [
+          "activeTickets",
+          "ticket id",
+          "find session on exit"
+        ],
+        [
+          "occupiedSpotIds",
+          "spot id",
+          "fast availability check"
+        ],
+        [
+          "spotsByType",
+          "spot type",
+          "find compatible spot"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-013",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "enter-flow",
+    "scenario": "车辆入场，系统要找兼容空位并发票。",
+    "q": "这段 enter 伪代码体现的状态变化是什么？",
+    "codeSample": "enter(vehicleType)\n    spot = findAvailableSpot(vehicleType)\n    if spot == null throw NoSpace\n    occupiedSpotIds.add(spot.id)\n    ticket = Ticket(generateId(), spot.id, vehicleType, now())\n    activeTickets[ticket.id] = ticket\n    return ticket",
+    "lang": "text",
+    "options": [
+      "先占用 spotId，再创建并保存 ticket，最后返回 ticket",
+      "先创建 ticket 但不占车位",
+      "只更新 ParkingSpot.occupied",
+      "出场时才分配车位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "入场成功要同时建立车位占用索引和票据索引。找不到兼容空位时不能改变任何状态。",
+    "why_en": "Entry claims a compatible spot, creates a ticket, stores it, and returns it.",
+    "whenOtherWins": "多入口并发下，这段 find+add 必须放在同一锁内。",
+    "diagram": "flowchart LR\n  A[\"vehicle arrives\"] --> B[\"find spot\"]\n  B --> C[\"mark spot occupied\"]\n  C --> D[\"create ticket\"]\n  D --> E[\"store active ticket\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "find-spot",
+    "scenario": "基础需求要求 exact compatible spot，不提“摩托可停汽车位”等 fallback。",
+    "q": "findAvailableSpot 默认如何找？",
+    "options": [
+      "扫描 spots，找 spotType 与 vehicleType 映射相同且 spotId 不在 occupiedSpotIds",
+      "任意空位都可用",
+      "优先最大车位给所有车",
+      "按最近出口复杂排序"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "基础规则是兼容类型匹配。没有需求时不引入复杂分配策略或 fallback。",
+    "why_en": "The base allocation scans for an unoccupied spot with the required compatible type.",
+    "whenOtherWins": "如果扩展允许 motorcycle 用 car spot，映射逻辑或分配策略需要支持 fallback 顺序。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "exit-flow",
+    "scenario": "用户出场提供 ticketId，ticket 存在且未使用。",
+    "q": "exit 的正确顺序是什么？",
+    "options": [
+      "查 ticket -> 计算 fee -> remove occupied spot -> remove active ticket -> 返回 fee",
+      "先删 ticket 再计算 fee",
+      "只计算 fee 不释放 spot",
+      "释放所有同类型车位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "出场完成后车位可再次分配，ticket 不能再次使用。顺序要保证有 ticket 数据时完成计费。",
+    "why_en": "Exit looks up the ticket, computes the fee, frees the spot, removes the active ticket, and returns the fee.",
+    "diagram": "sequenceDiagram\n  participant V as Vehicle\n  participant L as ParkingLot\n  participant T as Ticket\n  V->>L: exit(ticketId)\n  L->>T: load active ticket\n  L->>L: calculate fee\n  L->>L: free spot\n  L->>L: remove active ticket"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-016",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "exit-flow",
+    "scenario": "用户可能重复使用同一张 ticket 出场。",
+    "q": "这段 exit 伪代码如何防止 double exit？",
+    "codeSample": "exit(ticketId)\n    if ticketId == null || ticketId == '' throw InvalidTicket\n    ticket = activeTickets[ticketId]\n    if ticket == null throw InvalidTicket\n    fee = computeFee(ticket.entryTime, now())\n    occupiedSpotIds.remove(ticket.spotId)\n    activeTickets.remove(ticketId)\n    return fee",
+    "lang": "text",
+    "options": [
+      "成功出场后删除 activeTickets 项，下一次查不到同一 ticket",
+      "在 Ticket 上增加 usedCount",
+      "允许重复计费",
+      "只删除 occupiedSpotIds"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "activeTickets 是可用票据集合。移除后，已使用票据和随机无效票据都表现为 invalid。",
+    "why_en": "Removing the ticket from activeTickets makes repeated exits with the same ticket invalid.",
+    "whenOtherWins": "如果要区分“从未存在”和“已使用”，需要 usedTickets 或历史记录。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "fee",
+    "scenario": "车辆停了 2.5 小时，hourlyRateCents=500。",
+    "q": "应收多少？",
+    "options": [
+      "1500 cents",
+      "1250 cents",
+      "1000 cents",
+      "0 cents"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "按小时向上取整，2.5 小时算 3 小时。3 * 500 = 1500 cents。",
+    "why_en": "A 2.5-hour stay rounds up to three hours, producing a 1500-cent fee at 500 cents per hour.",
+    "whenOtherWins": "如果产品要求按分钟计费或首小时免费，computeFee 规则需要调整或抽策略。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-018",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "edge-cases",
+    "q": "ParkingLot 应处理哪些基础错误？（多选）",
+    "options": [
+      "无兼容空位时拒绝入场",
+      "ticketId 空或不存在时拒绝出场",
+      "已使用 ticket 再次出场时拒绝",
+      "金额用浮点导致精度误差"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "前三个是业务错误，最后一个是实现风险。金额用整数 cents 避免浮点精度问题。",
+    "why_en": "The design rejects full-lot entry, invalid or reused tickets, and uses integer money to avoid floating-point errors."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-019",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "separate-enums",
+    "q": "为什么 VehicleType 和 SpotType 即使值相同也分成两个 enum？",
+    "options": [
+      "车辆类型和车位类型是不同概念，未来兼容关系可能变化",
+      "语言不允许复用 enum",
+      "为了增加类数量",
+      "因为 Ticket 不能存 VehicleType"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "分开建模让“摩托可停汽车位”这类兼容逻辑更清晰。相同标签不代表同一领域概念。",
+    "why_en": "Vehicle type and spot type are different concepts even if their current labels match."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "spot",
+    "scenario": "ParkingSpot 在本文中只表示物理车位属性。",
+    "q": "它需要哪些字段？",
+    "options": [
+      "id 和 spotType",
+      "occupied boolean、ticket map、hourlyRate",
+      "entryTime 和 fee",
+      "所有 activeTickets"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ParkingSpot 是纯数据对象，保存物理身份和兼容类型。占用和票据由 ParkingLot 管理。",
+    "why_en": "ParkingSpot stores intrinsic properties: its ID and spot type.",
+    "whenOtherWins": "如果选用实体自管物理占用方案，可在 ParkingSpot 加 occupied/status。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-021",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "entry-exit-cycle",
+    "q": "按顺序排列一次停车会话的状态变化：",
+    "steps": [
+      "findAvailableSpot 找到空车位 B。",
+      "occupiedSpotIds 加入 B。",
+      "创建 Ticket(T123,B,CAR,entryTime) 并放入 activeTickets。",
+      "exit(T123) 计算 fee。",
+      "occupiedSpotIds 删除 B，activeTickets 删除 T123。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "同一会话由 occupiedSpotIds 和 activeTickets 两个索引共同表达。出场必须同时清理。",
+    "why_en": "A parking session claims a spot, stores a ticket, computes a fee on exit, and clears both indexes.",
+    "diagram": "sequenceDiagram\n  participant Gate\n  participant Lot\n  participant Ticket\n  Gate->>Lot: enter(CAR)\n  Lot->>Lot: claim spot B\n  Lot->>Ticket: create T123\n  Gate->>Lot: exit(T123)\n  Lot->>Lot: fee and release B"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "ticket-immutability",
+    "scenario": "Ticket 已经发给用户，后续会用来计费和释放车位。",
+    "q": "Ticket 字段应如何设计？",
+    "options": [
+      "构造后只读，不暴露修改方法",
+      "允许用户修改 entryTime",
+      "让 ParkingSpot 修改 ticketId",
+      "每次出场前随机重写 spotId"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Ticket 是会话记录，应稳定反映入场事实。不可变让计费和验证更可靠。",
+    "why_en": "Ticket should be immutable because it records the facts of the parking session."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "pricing-extension",
+    "scenario": "后续要求 motorcycle 3 美元/小时，car 5 美元/小时，large 8 美元/小时。",
+    "q": "最简单合理的扩展是什么？",
+    "options": [
+      "ParkingLot 保存 Map<VehicleType,long> hourlyRates，computeFee 用 ticket.vehicleType 查 rate",
+      "立刻抽复杂 PricingStrategy",
+      "让 Ticket 自己保存所有价格",
+      "每个 SpotType 建一个 ParkingLot"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "只有按车型不同费率时，map 足够简单。Strategy 留给更复杂、可替换的定价规则。",
+    "why_en": "A map from vehicle type to hourly rate is enough for simple per-type pricing.",
+    "whenOtherWins": "如果要支持动态定价、折扣、会员、节假日策略，PricingStrategy 才更合适。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-024",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "strategy-yagni",
+    "q": "为什么基础需求下不一开始就抽 PricingStrategy？",
+    "options": [
+      "只有一个简单 hourly rule，提前抽象违反 YAGNI",
+      "Strategy pattern 永远不好",
+      "Ticket 无法传给策略",
+      "费用不需要测试"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "抽象要为真实变化付费。当前只有单一计费规则，ParkingLot.computeFee 更直接。",
+    "why_en": "A pricing strategy is premature when the only requirement is one simple hourly rule."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-025",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "multi-floor",
+    "scenario": "后续扩展为 10 层商场停车楼。",
+    "q": "最自然新增实体是什么？",
+    "options": [
+      "ParkingFloor，ParkingLot 持有 floors，Floor 持有 spots",
+      "把 floorNumber 塞进 hourlyRate",
+      "每层一个独立系统且不能共享 ticket",
+      "删除 ParkingSpot"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ParkingFloor 是 ParkingLot 和 ParkingSpot 之间的容器。spotId 可以包含楼层信息，如 3-A15。",
+    "why_en": "A multi-floor garage introduces ParkingFloor between ParkingLot and ParkingSpot.",
+    "whenOtherWins": "如果只需显示楼层而无楼层级别逻辑，也可把 floorNumber 放在 ParkingSpot 上。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-026",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "multi-floor",
+    "q": "多层扩展后可采用哪些车位分配策略？（多选）",
+    "options": [
+      "低楼层优先",
+      "按可用数量平衡各层",
+      "按目的地或入口距离选择",
+      "随机永远选择最远楼层"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "不同策略优化不同体验：靠近出口、避免拥堵或靠近目的地。复杂时可抽 AllocationStrategy。",
+    "why_en": "Multi-floor allocation can prioritize lower floors, balance capacity, or optimize destination proximity.",
+    "table": {
+      "headers": [
+        "Strategy",
+        "Optimizes",
+        "Typical use"
+      ],
+      "rows": [
+        [
+          "nearest",
+          "driver walking distance",
+          "small lots"
+        ],
+        [
+          "level first",
+          "traffic distribution",
+          "multi level lots"
+        ],
+        [
+          "type compatible",
+          "fit by vehicle type",
+          "mixed spot sizes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "concurrency",
+    "scenario": "多个入口同时调用 enter(CAR)，两个线程都看到同一个 spot 空闲。",
+    "q": "这是哪类问题，最简单修复是什么？",
+    "options": [
+      "check-then-act race；同步整个 enter 关键区",
+      "内存泄漏；重启服务",
+      "浮点精度；用 cents",
+      "路径解析错误；用 resolvePath"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "findAvailableSpot 和 occupiedSpotIds.add 必须原子化。同步 enter 足够简单且停车场吞吐通常远低于锁能力。",
+    "why_en": "Concurrent entries can race between finding and claiming a spot, so the critical section should be synchronized.",
+    "whenOtherWins": "极高并发可用更细粒度的原子 check-and-add 或数据库事务。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-028",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "concurrency",
+    "scenario": "实现多入口并发下的入场分配。",
+    "q": "这段锁的作用是什么？",
+    "codeSample": "enter(vehicleType)\n    synchronized(this)\n        spot = findAvailableSpot(vehicleType)\n        if spot == null throw NoSpace\n        occupiedSpotIds.add(spot.id)\n        ticket = Ticket(generateId(), spot.id, vehicleType, now())\n        activeTickets[ticket.id] = ticket\n        return ticket",
+    "lang": "text",
+    "options": [
+      "把查找空位、占用和保存 ticket 做成一个原子操作",
+      "只保护 fee 计算",
+      "让两个入口拿到同一 spot",
+      "替代 ticketId"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "锁住整个关键区能防止两个线程分配同一车位。这个粒度在停车场规模下通常足够。",
+    "why_en": "The lock makes spot search, claim, and ticket creation atomic across entrances.",
+    "whenOtherWins": "如果持久化到数据库，应使用事务和唯一约束或 SELECT FOR UPDATE。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "rw-lock",
+    "scenario": "想让多个入口并发搜索空位，只在占用时短暂独占。",
+    "q": "文章提到的更细方案是什么？",
+    "options": [
+      "读锁搜索，写锁 double-check 后占用，失败则重试",
+      "完全不锁读写",
+      "只锁 activeTickets 不锁 occupiedSpotIds",
+      "每个 ticket 一个锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "读写锁允许多个搜索并行，但 read 和 write 之间可能被别人抢先，所以写锁内要二次检查。",
+    "why_en": "A read-write approach searches concurrently, then double-checks and claims under the write lock.",
+    "whenOtherWins": "对 3-5 个入口的普通停车场，方法级互斥更简单且性能足够。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-030",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "concurrency-race",
+    "q": "按顺序排列多入口 race：",
+    "steps": [
+      "入口 A 和 B 同时调用 findAvailableSpot。",
+      "二者都看到 spot B 不在 occupiedSpotIds。",
+      "A 创建 ticket 指向 B。",
+      "B 也创建 ticket 指向 B。",
+      "两辆车拿到同一个车位。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "问题窗口在检查空闲和写入占用之间。必须把它们作为同一临界区。",
+    "why_en": "The race occurs when two entrances observe the same free spot before either claims it.",
+    "diagram": "sequenceDiagram\n  participant A as Gate A\n  participant S as spot B\n  participant B as Gate B\n  A->>S: sees free\n  B->>S: sees free\n  A->>S: claim\n  B->>S: claim"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-031",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "scale",
+    "q": "文章为什么说同步整个 enter 在现实停车场通常足够？",
+    "options": [
+      "入场频率远低于锁可处理吞吐，车通过闸机/支付耗时远大于内存操作",
+      "锁会让车位无限增加",
+      "停车场只有一个 spot",
+      "ticket map 查找很慢"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "工程取舍要看数量级。停车场入口事件频率很低，简单正确方案优先。",
+    "why_en": "A coarse enter lock is usually fine because parking-lot arrival rates are tiny compared with in-memory critical-section throughput."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "nodejs-note",
+    "scenario": "有人说 Node.js 单线程就没有 race。",
+    "q": "如何回应？",
+    "options": [
+      "异步 await 之间仍可能交错，持久化时要靠数据库事务或分布式锁保证原子性",
+      "单线程永远不会有逻辑 race",
+      "Node.js 不能做停车场",
+      "只要用 Set 就自动事务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "单线程事件循环避免同一时刻执行两段 JS，但异步 I/O 会把请求流程切开。数据库层仍要保证 check-and-claim 原子。",
+    "why_en": "Single-threaded event loops can still interleave async workflows, so persistence needs transactional protection."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "invalid-ticket",
+    "scenario": "ticketId 从未存在或已经出场使用过。",
+    "q": "基础 exit 应返回什么语义？",
+    "options": [
+      "同样视为 invalid ticket",
+      "区分成两个复杂错误是必需的",
+      "自动重新发 ticket",
+      "照常释放任意 spot"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "activeTickets 只表示当前有效票据集合。不存在和已使用对出场流程都是不可用。",
+    "why_en": "A ticket not in activeTickets is invalid whether it never existed or was already used.",
+    "whenOtherWins": "客服或审计需要区分时，可以保存历史 used tickets 和状态。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-034",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "spot-status",
+    "scenario": "后续要支持车位维修或封闭。",
+    "q": "在本文当前占用建模下，最自然的新增状态在哪里？",
+    "options": [
+      "ParkingSpot 增加 status 或 ParkingLot 增加 disabledSpotIds，分配时跳过",
+      "Ticket 增加维修人员",
+      "VehicleType 增加 BROKEN",
+      "把 hourlyRate 设为 0"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "维修是车位自身或可用性约束，不是 ticket 会话。基础文章没实现，但可沿分配过滤扩展。",
+    "why_en": "Maintenance can be modeled as spot status or disabled spot IDs that allocation skips.",
+    "whenOtherWins": "如果车位物理状态很多，ParkingSpot.status enum 更适合；临时屏蔽少数 spot 用 disabled set 更轻。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-035",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "exposed-status",
+    "q": "为什么基础 API 不主动加 getAvailableSpots 或 getParkingStatus？",
+    "options": [
+      "需求没要求，暴露内部状态会扩大 API；监控需求来了再加",
+      "这些方法无法实现",
+      "它们会破坏 ticketId",
+      "用户必须知道全部车位"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "接口应围绕核心工作流。过早暴露内部集合会增加耦合。",
+    "why_en": "The base API stays focused on entry and exit until status queries are explicitly required."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-036",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "out-of-scope",
+    "q": "哪些功能被明确排除？（多选）",
+    "options": [
+      "支付处理",
+      "物理闸机硬件",
+      "摄像头/监控",
+      "UI/display",
+      "预约或预订"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "这些是现实停车系统的重要模块，但基础 LLD 只建停车会话和车位分配。",
+    "why_en": "Payment, gate hardware, cameras, UI, and reservations are out of scope for the base parking lot."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-037",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "fee-flow",
+    "q": "出场计费的正确顺序是什么？",
+    "steps": [
+      "从 activeTickets 取出 ticket。",
+      "计算 exitTime - entryTime。",
+      "按小时向上取整。",
+      "乘以 hourlyRateCents。",
+      "释放 spot 并删除 ticket。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "必须先有 ticket 才能知道 entryTime 和 spotId。删除 ticket 前先取足计费和释放所需数据。",
+    "why_en": "Exit fee calculation uses the active ticket's entry time, rounds duration up, multiplies by rate, and then clears state."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-038",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "full-lot",
+    "scenario": "所有 car spotId 都在 occupiedSpotIds 中，车辆类型为 CAR。",
+    "q": "enter(CAR) 应如何处理？",
+    "options": [
+      "拒绝入场且不创建 ticket",
+      "发 ticket 但 spotId 为空",
+      "占用 motorcycle spot",
+      "把旧 ticket 删除"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "没有兼容空位就不能创建停车会话。创建无 spot 的 ticket 会破坏 exit 释放逻辑。",
+    "why_en": "Entry must fail without creating a ticket when no compatible spot is available.",
+    "whenOtherWins": "如果支持候补或排队，可创建 WaitingRequest，但不是基础 ticket。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-039",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "allocation-extension",
+    "scenario": "多层停车楼希望根据不同目标选择不同分配策略。",
+    "q": "何时应引入 AllocationStrategy？",
+    "options": [
+      "当分配规则会在低楼层优先、均衡、目的地接近等策略间切换时",
+      "基础单层 exact match 一开始就必须引入",
+      "当 Ticket 没有 entryTime 时",
+      "当金额用 cents 时"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Strategy 适合真实可替换算法。基础单一规则下直接实现更简洁。",
+    "why_en": "AllocationStrategy is useful when spot selection policies genuinely vary.",
+    "diagram": "flowchart TD\n  A[\"one simple allocation rule\"] --> B[\"inline method\"]\n  C[\"multiple changing policies\"] --> D[\"AllocationStrategy\"]\n  D --> E[\"nearest, cheapest, level aware\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-040",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "state-summary",
+    "q": "补全三类对象职责：",
+    "text": "ParkingLot 管 {{分配、activeTickets、occupiedSpotIds、计费}}；ParkingSpot 管 {{id 和 spotType}}；Ticket 管 {{ticketId、spotId、vehicleType、entryTime}}。",
+    "why": "职责边界清晰后，入场和出场流程都变成 orchestrator 对简单记录和物理资源的协调。",
+    "why_en": "ParkingLot owns workflows and indexes, ParkingSpot owns intrinsic spot properties, and Ticket records a session."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-041",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "senior-signals",
+    "q": "Senior 级 Parking Lot 回答应主动覆盖哪些点？（多选）",
+    "options": [
+      "Vehicle 不建实体的理由",
+      "occupied flag/derived/Set 三种方案权衡",
+      "Ticket 用 map 按 ID 查找",
+      "金额用整数 cents",
+      "多入口并发 race 和锁"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "高级答案要能解释状态归属、数量级和并发，而不仅是列类图。",
+    "why_en": "Senior answers explain entity pruning, occupancy tradeoffs, ticket lookup, integer money, and multi-entrance races."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-042",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "decision-chain",
+    "q": "按顺序排列 Parking Lot 主设计链路：",
+    "steps": [
+      "ParkingLot 作为入口，持有 spots、occupiedSpotIds、activeTickets、hourlyRateCents。",
+      "澄清三类车、自动兼容分配、ticket、出场计费和释放。",
+      "Vehicle 降级为 enum，Ticket 建成不可变会话记录。",
+      "占用建模为 ParkingLot 维护的关系索引 Set。",
+      "enter/exit 分别原子维护 ticket 和 occupied spot 状态。"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3,
+      4
+    ],
+    "why": "从范围到实体裁剪，再到状态归属和流程不变量，是这题的主要论证路径。",
+    "why_en": "The design chain moves from scoped workflows to entity pruning, orchestrator state, occupancy indexing, and lifecycle updates."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "invariant",
+    "scenario": "面试最后让你总结最重要的不变量。",
+    "q": "哪一个最准确？",
+    "options": [
+      "active ticket 指向的 spotId 必须在 occupiedSpotIds 中；成功 exit 后二者都被删除",
+      "所有车辆必须有 Vehicle 实体",
+      "车位名称全局按楼层排序",
+      "所有 ticket 永久有效"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ParkingLot 用两个索引表达同一会话。入场创建两者，出场清理两者，才能避免重复出场或重复分配。",
+    "why_en": "The key invariant is that active tickets and occupied spot IDs stay in sync for each parking session.",
+    "whenOtherWins": "如果从 activeTickets 推导 occupancy，则不需要 Set，但分配时要保护对 tickets 的读取和修改。"
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-044",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "expected-levels",
+    "q": "中级候选人在本题应能稳定说明什么？",
+    "options": [
+      "ParkingLot 编排、ParkingSpot 只存属性、Ticket 是数据记录，且能处理 full lot/invalid ticket/double exit",
+      "必须实现多层策略和并发锁",
+      "必须使用数据库事务",
+      "必须把 Vehicle 建成类"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "中级重点是职责清晰和关键边界情况。高级再深入占用模型和并发多入口。",
+    "why_en": "A mid-level answer should clearly separate ParkingLot, ParkingSpot, and Ticket and handle the key entry and exit edge cases."
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "rounding-edge",
+    "scenario": "entryTime 和 exitTime 相同，车辆几乎立刻出场。",
+    "q": "按“hourly rounded up”规则应如何思考？",
+    "options": [
+      "如果 durationMillis 为 0，是否收 0 或 1 小时要先澄清；非零不足一小时向上为 1",
+      "永远收 0",
+      "永远收 24 小时",
+      "无法计算"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "文章强调部分小时向上取整，但 0 分钟是否有最低收费是产品语义。面试中应主动澄清或定义。",
+    "why_en": "Partial hours round up, while the exact zero-duration minimum charge should be clarified as a product rule.",
+    "whenOtherWins": "如果业务明确最低一小时收费，则 duration 0 也返回一小时费用。"
+  }
+]

@@ -1,0 +1,981 @@
+[
+  {
+    "id": "lld-problem-breakdowns-logging-service-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "requirements",
+    "q": "Logging Service 基础需求包含哪些点？（多选）",
+    "options": [
+      "五个级别 DEBUG < INFO < WARN < ERROR < FATAL",
+      "每条记录包含 timestamp、level、message、threadName",
+      "每个 destination 有自己的 minLevel 和 formatter",
+      "并发写同一 destination 时字节不能交错"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "题目重点是同步日志库的核心模型和并发写安全。异步、热更新、远程目的地和层级 logger 是后续扩展。",
+    "why_en": "The base logger has ordered levels, immutable records, per-destination thresholds and formats, and non-interleaved concurrent writes.",
+    "table": {
+      "headers": [
+        "Requirement",
+        "Model choice"
+      ],
+      "rows": [
+        [
+          "ordered levels",
+          "LogLevel enum"
+        ],
+        [
+          "record fields",
+          "immutable LogRecord"
+        ],
+        [
+          "per target policy",
+          "Destination minLevel and Formatter"
+        ],
+        [
+          "no byte interleaving",
+          "per-destination lock"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-002",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "levels",
+    "q": "补全日志级别顺序：",
+    "text": "LogLevel 的自然顺序是 {{DEBUG < INFO < WARN < ERROR < FATAL}}，destination 用它与 {{minLevel}} 比较来过滤。",
+    "why": "级别是固定枚举，不需要为每个级别建类。顺序比较直接支持阈值过滤。",
+    "why_en": "Log levels are an ordered enum used for per-destination threshold filtering."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "log-record",
+    "scenario": "每次 logger.info('x') 都要把 timestamp、level、message、threadName 一起传给多个 destination。",
+    "q": "最合适的建模是什么？",
+    "options": [
+      "不可变 LogRecord 值对象",
+      "四个参数到处传",
+      "Destination 内部临时拼接全局变量",
+      "每个字段单独一个类"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这些字段总是一起出现、一起格式化，建成不可变记录能稳定方法签名。未来加 requestId 也只改记录结构。",
+    "why_en": "LogRecord groups per-call data into one immutable value object that all destinations consume.",
+    "whenOtherWins": "非常小的脚本可直接传参数，但库设计中记录对象更稳。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-004",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "immutability",
+    "q": "LogRecord 字段为什么应只读？",
+    "options": [
+      "一条日志代表某时刻事实，destination/formatter 不应互相竞态修改它",
+      "只读字段写入更快所以必需",
+      "Formatter 需要修改 message",
+      "threadName 会随着写入变化"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "不可变记录可安全地被多个 destination 和 formatter 读取。它也让格式化可以在锁外并行执行。",
+    "why_en": "Immutable log records can be safely shared across destinations and formatted concurrently."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "timestamp-capture",
+    "scenario": "一条 log 调用会写到 console 和 file 两个 destination。",
+    "q": "timestamp 和 threadName 应在哪里捕获？",
+    "options": [
+      "Logger.log 顶部，只创建一次 LogRecord",
+      "每个 Destination.write 内单独捕获",
+      "每个 Formatter.format 内捕获",
+      "FileSink.write 后捕获"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "同一次 log 调用的所有目的地应看到同一条记录和同一时间点。放在 destination 内会造成同一记录不同时间戳。",
+    "why_en": "Logger.log captures timestamp and thread name once so every destination sees the same record.",
+    "whenOtherWins": "如果目的地需要记录实际写入时间，可以额外加 emittedAt/writeTime，但不能替代事件时间。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "entities",
+    "q": "最终模型包含哪些核心类型？（多选）",
+    "options": [
+      "Logger",
+      "LogRecord",
+      "Formatter",
+      "Destination",
+      "Sink",
+      "LogLevel"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "why": "Logger 编排，LogRecord 携带数据，Formatter 序列化，Sink 输出字节，Destination 组合阈值/格式/输出并加锁。",
+    "why_en": "The core model separates orchestration, record data, formatting, output sinks, destination policy, and log levels.",
+    "diagram": "classDiagram\nclass Logger {\n  -Destination[] destinations\n  +log(level,message)\n}\nclass LogRecord {\n  +timestamp\n  +level\n  +message\n  +threadName\n}\nclass Destination {\n  -minLevel\n  -Formatter formatter\n  -Sink sink\n  +write(record)\n}\nclass Formatter {\n  <<interface>>\n  +format(record)\n}\nclass Sink {\n  <<interface>>\n  +write(text)\n}\nLogger --> Destination : fans out\nDestination --> Formatter : formats\nDestination --> Sink : writes\nLogger --> LogRecord : creates"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "logger-state",
+    "scenario": "配置在启动时设置一次，不支持 runtime addDestination。",
+    "q": "Logger 应保存什么状态？",
+    "options": [
+      "不可变 destinations 列表",
+      "一个全局 mutable formatter",
+      "当前 threadName",
+      "所有日志文本历史"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Logger 只需要 fan-out 到配置好的目的地。列表不可变后并发遍历无需额外锁。",
+    "why_en": "Logger only needs an immutable destination list because configuration is fixed at startup.",
+    "whenOtherWins": "如果支持热更新或动态目的地，destination list 的读写需要原子替换或锁。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-008",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "formatter",
+    "q": "为什么 Formatter 应独立于 Destination？",
+    "options": [
+      "格式和输出目标是两个独立变化轴，分离可避免 N×M 类爆炸",
+      "Formatter 需要持有文件句柄",
+      "Destination 无法比较 level",
+      "JSON 只能写到 console"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "PlainText/JSON 可以配 Console/File/Remote 任意组合。把格式抽成策略，新增格式不改输出目标。",
+    "why_en": "Formatter separates serialization from output target and prevents a format-by-destination class explosion.",
+    "table": {
+      "headers": [
+        "Variation axis",
+        "Examples",
+        "Abstraction"
+      ],
+      "rows": [
+        [
+          "format",
+          "plain text, JSON",
+          "Formatter"
+        ],
+        [
+          "output target",
+          "console, file, remote",
+          "Sink"
+        ],
+        [
+          "policy",
+          "minLevel, lock",
+          "Destination"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-009",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "destination-design",
+    "scenario": "目前有 Console 和 File，未来可能加 Remote；每个目的地都要 filter-format-write。",
+    "q": "文章最终选择的结构是什么？",
+    "options": [
+      "一个 concrete Destination 组合 Formatter、minLevel 和 Sink",
+      "Destination 里 switch(type) 分支写不同目标",
+      "只用 ConsoleDestination/FileDestination 继承树",
+      "每个格式目标组合一个类，如 JsonFileDestination"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "组合保留统一 filter-format 流程，又把输出变化放到 Sink。新增 RemoteSink 不需要改 Logger 或 Destination。",
+    "why_en": "A concrete Destination composed with a Formatter and Sink keeps policy central and output targets extensible.",
+    "whenOtherWins": "小型一次性实现用继承也可接受，关键是能解释 composition 和 inheritance 的取舍。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-010",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "type-switch",
+    "q": "Destination 内部用 type 字段和 switch 写 console/file 有什么问题？",
+    "options": [
+      "新增目标要修改已有类并增加只对某类型有效的字段",
+      "switch 不能运行",
+      "console 无法写字符串",
+      "filePath 必须用于所有目标"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "type switch 会让 Destination 越来越臃肿，违反 Open/Closed。每个新 target 都要改已有逻辑。",
+    "why_en": "A type-switch destination grows brittle because every new target edits existing code and adds target-specific fields."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "template-method",
+    "q": "抽象 Destination + ConsoleDestination/FileDestination 的优点是什么？",
+    "options": [
+      "把 filter-format-lock invariant 放在基类，子类只实现 doWrite",
+      "完全避免继承复杂度",
+      "让 Formatter 不再需要",
+      "所有 target 共用同一个文件句柄"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Template Method 能防止子类忘记过滤或格式化。但对于单一写入变化轴，组合 Sink 更灵活。",
+    "why_en": "The inheritance variant centralizes the filter-format-write template but composes less flexibly than Sink."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "sink",
+    "scenario": "需要把实际“把字符串写到某个目标”的行为抽象出来。",
+    "q": "Sink 的职责是什么？",
+    "options": [
+      "只接收 formatted string 并写到目标",
+      "判断 minLevel",
+      "创建 LogRecord",
+      "解析 JSON"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Sink 很窄：ConsoleSink 写 stdout，FileSink 写文件，未来 RemoteSink 写网络。过滤、格式化和锁都留在 Destination。",
+    "why_en": "Sink is responsible only for writing an already formatted string to a target.",
+    "whenOtherWins": "如果只有一个输出目标且永不扩展，Sink 接口可能是额外结构；本题明确要适配未来目标。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-013",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "log-flow",
+    "q": "一次 Logger.log 的正确高层流程是什么？",
+    "steps": [
+      "捕获 now() 和 currentThread().name。",
+      "用 level/message/timestamp/threadName 创建 LogRecord。",
+      "顺序遍历 immutable destinations。",
+      "每个 destination 独立过滤、格式化、加锁写入。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "Logger 不做 destination 阈值过滤，也不持有全局写锁。每个 destination 自己决定是否写。",
+    "why_en": "Logger creates one record and fans it out, while each destination independently filters, formats, and writes.",
+    "diagram": "sequenceDiagram\nparticipant App\nparticipant Logger\nparticipant Record as LogRecord\nparticipant D as Destination\nApp->>Logger: info(message)\nLogger->>Record: create once\nLogger->>D: write(record)\nD->>D: filter, format, lock, sink.write\nD-->>Logger: done"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-014",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "destination-write",
+    "scenario": "实现同步 Destination.write，要求并发写同一目标时字节不交错。",
+    "q": "这段伪代码的关键设计是什么？",
+    "codeSample": "write(record)\n    if record.level < minLevel return\n    formatted = formatter.format(record)\n    lock.acquire()\n    try\n        sink.write(formatted)\n    catch e\n        stderr.write('logger: sink write failed')\n    finally\n        lock.release()",
+    "lang": "text",
+    "options": [
+      "阈值过滤和格式化在锁外，sink.write 在 destination 锁内，失败不抛给调用方",
+      "整个 Logger.log 全局加锁",
+      "格式化也必须持锁",
+      "sink 失败应中断所有 destination"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "锁只保护共享输出资源，临界区保持最小。单个 sink 失败被隔离，调用方和其他目的地不受影响。",
+    "why_en": "Destination.write filters and formats outside the lock, protects sink writes with a per-destination lock, and isolates sink failures.",
+    "whenOtherWins": "如果 formatter 有共享可变状态，也必须同步或改成无状态；本文假设 formatter 是纯函数。",
+    "diagram": "flowchart TD\nA[\"Destination.write(record)\"] --> B{\"level >= minLevel?\"}\nB -- no --> C[\"return\"]\nB -- yes --> D[\"format outside lock\"]\nD --> E[\"lock destination\"]\nE --> F[\"sink.write(formatted)\"]\nF --> G[\"unlock in finally\"]\nF --> H[\"on failure: stderr diagnostic\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "lock-placement",
+    "scenario": "两个线程同时写同一个 file destination，但另一个 console destination 很快。",
+    "q": "锁应放在哪里？",
+    "options": [
+      "每个 Destination 一个锁，只保护它自己的 sink.write",
+      "Logger.log 全局一把锁",
+      "每个 LogRecord 一把锁",
+      "每个 Formatter 一把锁"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "共享资源是具体 destination 的输出目标。全局锁会让慢文件写阻塞无关 console 写。",
+    "why_en": "The lock belongs per destination because each destination protects its own output resource.",
+    "whenOtherWins": "如果多个 Destination 共享同一底层 stream，需要把锁下沉到共享 sink 或 stream。",
+    "diagram": "flowchart LR\nT1[\"thread A\"] --> F[\"file destination lock\"]\nT2[\"thread B\"] --> F\nT3[\"thread C\"] --> C[\"console destination lock\"]\nF --> FW[\"file sink\"]\nC --> CW[\"console sink\"]\nN[\"no global logger lock\"] --> C"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-016",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "global-lock",
+    "q": "同步整个 Logger.log 的主要缺点是什么？",
+    "options": [
+      "一个慢 destination 会阻塞所有日志调用和其他 destination",
+      "它无法保证文件不交错",
+      "它会让 LogRecord 可变",
+      "它无法过滤级别"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "全局锁虽然正确，但粒度太粗。每个输出资源独立锁才能让无关目的地并行。",
+    "why_en": "A global logger lock is correct but too coarse because one slow destination blocks everything."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-017",
+    "format": "cloze",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "format-outside-lock",
+    "q": "补全格式化放在锁外的前提：",
+    "text": "formatter.format(record) 可以在锁外执行，因为 LogRecord 是{{不可变}}，Formatter 被设计为{{纯函数/无共享可变状态}}。",
+    "why": "这缩短了临界区。若 formatter 有内部缓存或可变状态，就要额外同步。",
+    "why_en": "Formatting can happen outside the lock when records are immutable and formatters are stateless."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "failure-handling",
+    "scenario": "FileSink 因磁盘满抛 IOException，Logger 还配置了 ConsoleSink。",
+    "q": "Destination.write 应如何处理？",
+    "options": [
+      "捕获异常，写 stderr 诊断并返回，不让异常逃到业务代码",
+      "把异常抛给 logger 调用方",
+      "停止遍历其他 destination",
+      "永久关闭所有 logger"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "日志库不应让业务因为写日志失败而崩溃，也不能静默失败。stderr 诊断能暴露 sink 故障。",
+    "why_en": "A sink failure should not crash the caller or stop other destinations, but should emit a diagnostic.",
+    "whenOtherWins": "极简实现可吞掉异常，但生产上最好有 stderr 或内部 status logger，并做限流。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-019",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "silent-failure",
+    "q": "完全吞掉 sink.write 异常的风险是什么？",
+    "options": [
+      "日志文件可能坏了几天没人发现",
+      "业务一定崩溃",
+      "其他 destination 会自动重试",
+      "message 会变成 null"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "吞异常保护调用方，但没有可观测性。stderr 或状态 logger 是折中方案。",
+    "why_en": "Swallowing sink failures silently can hide broken logging for a long time."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-020",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "formatters",
+    "q": "Formatter 实现可以包括哪些？（多选）",
+    "options": [
+      "PlainTextFormatter",
+      "JsonFormatter",
+      "未来 CSV/key-value formatter",
+      "FileSink"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "Formatter 负责序列化 LogRecord。FileSink 是输出目标，不是格式。",
+    "why_en": "Formatters serialize records, while sinks write formatted strings to targets."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "file-sink",
+    "scenario": "FileSink 每次写日志都要输出到同一个文件。",
+    "q": "文件句柄应如何管理？",
+    "options": [
+      "构造时打开并复用 append writer",
+      "每条日志重新 open/close",
+      "让 Formatter 打开文件",
+      "把文件内容存在 LogRecord"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每次 open syscall 成本高且没有必要。FileSink 拥有文件 writer，Destination 负责同步调用。",
+    "why_en": "FileSink should open the file once and append through a reused writer.",
+    "whenOtherWins": "如果写入目标是短生命周期临时文件，可以每次打开，但普通 logger 不应这样做。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "flush",
+    "scenario": "进程崩溃前最后几条日志可能仍在缓冲区。",
+    "q": "真实 FileSink 通常还要考虑什么？",
+    "options": [
+      "按每条或有界间隔 flush",
+      "每次写都删除文件",
+      "永不关闭文件",
+      "把 flush 放到 Formatter"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "只在 close 时 flush 对 logger 不理想，因为崩溃时可能看不到最近日志。flush 策略是可靠性和性能的权衡。",
+    "why_en": "A real file sink needs a flush strategy so recent logs are visible before a crash.",
+    "whenOtherWins": "高吞吐系统可能批量 flush，降低 I/O 成本但接受小窗口数据丢失。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-023",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "threshold",
+    "q": "为什么 Logger 不在全局层面按 level 过滤？",
+    "options": [
+      "每个 destination 有自己的 minLevel，同一 record 可能写 console 但不写 file",
+      "全局过滤更安全",
+      "Logger 没有 level 参数",
+      "Destination 无法比较枚举"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "阈值是 destination 的配置。全局过滤会错误丢掉某些目的地本应接收的记录。",
+    "why_en": "Threshold filtering belongs to Destination because each destination has its own minimum level."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-024",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "out-of-scope",
+    "q": "基础版本明确排除哪些生产功能？（多选）",
+    "options": [
+      "异步/缓冲写",
+      "运行时热加载配置",
+      "远程/网络目的地",
+      "层级命名 logger"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这些都是真实 logger 重要功能，但它们叠加在核心模型之上，不应抢基础设计。",
+    "why_en": "Async writes, config hot reload, remote sinks, and hierarchical loggers are scoped as extensions."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-025",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "async-extension",
+    "scenario": "log() 不能被慢文件或网络写阻塞。",
+    "q": "最自然的非阻塞扩展是什么？",
+    "options": [
+      "每个 Destination 一个 bounded BlockingQueue 和 worker thread",
+      "每条日志创建一个新线程写所有目的地",
+      "删除锁并直接并发写",
+      "把 formatter 改成 async"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "调用方只入队，单 consumer worker 串行写 sink，天然保持 destination 内顺序并可去掉该 sink 锁。bounded queue 还能定义背压策略。",
+    "why_en": "A bounded queue and worker per destination make log calls mostly enqueue operations while one consumer writes the sink.",
+    "whenOtherWins": "同步 v1 更简单；只有调用延迟成为要求时才引入队列和 worker 生命周期。",
+    "diagram": "flowchart TD\nA[\"caller log()\"] --> B[\"Destination filter\"]\nB --> C[\"bounded queue\"]\nC --> D[\"worker thread\"]\nD --> E[\"format record\"]\nE --> F[\"sink.write\"]\nG[\"shutdown\"] --> H[\"drain queue and join worker\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-026",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "async-extension",
+    "q": "异步 Destination 需要额外考虑哪些问题？（多选）",
+    "options": [
+      "worker 生命周期和 shutdown drain",
+      "queue 满时的 overflow policy",
+      "写失败在 worker 线程上的诊断",
+      "是否批量写和 flush"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "异步不是只加一个队列。它把写入时机移到后台，带来关闭、丢弃、背压和可观测性问题。",
+    "why_en": "Async logging adds worker lifecycle, overflow, diagnostics, batching, and flushing decisions."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-027",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "overflow-policy",
+    "q": "bounded queue 满时为什么必须有明确策略？",
+    "options": [
+      "block、drop-new、drop-old、throw 都有不同业务代价",
+      "队列永远不会满",
+      "满队列会自动扩容无限",
+      "worker 会自动暂停业务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步日志在压力下必须在“不阻塞调用方”和“不丢日志”之间取舍。策略不能含糊。",
+    "why_en": "A full async logging queue forces an explicit tradeoff between blocking callers and dropping records."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "hierarchical-loggers",
+    "scenario": "生产框架支持 getLogger('com.app.service.payments') 并继承父级配置。",
+    "q": "应如何扩展？",
+    "options": [
+      "给 Logger 加 name/parent，并用 LoggerFactory 注册表按名称返回同一实例",
+      "每次 getLogger 都 new 一个独立 Logger",
+      "把 logger name 存在 Sink",
+      "让 Formatter 决定继承"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "层级 logger 需要 dotted-name 树和共享注册表。Factory 是少数合理的全局状态，因为相同名字应返回同一 logger。",
+    "why_en": "Hierarchical named loggers use a factory registry with parent links for inherited configuration.",
+    "whenOtherWins": "单一应用全局 logger 不需要该复杂度。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-029",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "effective-config",
+    "q": "层级 logger 中为什么要缓存 effective level？",
+    "options": [
+      "log() 是热路径，每次沿 parent chain 查配置会增加开销",
+      "缓存能让文件自动 flush",
+      "缓存能替代 destination",
+      "缓存避免创建 LogRecord"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "真实 logger 的调用频率极高。配置变化时失效缓存，比每条日志都递归查父级更合理。",
+    "why_en": "Effective configuration is cached because log calls are a hot path."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-030",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "destination-design-chain",
+    "q": "按顺序排列 Destination 设计推理链：",
+    "steps": [
+      "type switch 会随着新目标增长并塞入只对某目标有效的字段。",
+      "抽象 Destination + doWrite 能集中 filter-format invariant。",
+      "组合 Sink 把实际输出变成接口，Destination 保持 concrete。",
+      "最终 Destination 组合 minLevel、Formatter、Sink 和 lock。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "文章不是直接给答案，而是比较 switch、继承和组合。高级回答要能复述这个取舍。",
+    "why_en": "The destination design evolves from type switches to template inheritance to a compositional Sink abstraction."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-031",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "failure-flow",
+    "q": "FileSink 写失败时的合理处理顺序是什么？",
+    "steps": [
+      "FileSink.write 抛异常。",
+      "Destination catch 该异常。",
+      "Destination 向 stderr/status logger 写一条有界诊断。",
+      "Destination release lock 并正常返回。",
+      "Logger 继续或完成其他 destinations，业务调用方不感知异常。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "这个流程隔离单个目的地故障，同时避免完全静默。finally 释放锁是必须的。",
+    "why_en": "A destination failure is caught, diagnosed, unlocked, and isolated from other destinations and the caller.",
+    "diagram": "sequenceDiagram\nparticipant D as Destination\nparticipant S as FileSink\nparticipant E as stderr\nparticipant L as Logger\nD->>S: sink.write(text)\nS--xD: IOException\nD->>E: bounded diagnostic\nD->>D: release lock\nD-->>L: return normally"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "convenience-methods",
+    "scenario": "调用方会在大量代码中写日志。",
+    "q": "为什么 Logger 还要 debug/info/warn/error/fatal 这些便捷方法？",
+    "options": [
+      "减少调用点噪音，内部只委托 log(level,message)",
+      "让每个级别一个类",
+      "让 Formatter 知道级别",
+      "避免创建 LogRecord"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "基础逻辑仍集中在 log。便捷方法提升 API ergonomics，不改变模型。",
+    "why_en": "Convenience methods improve call-site ergonomics while delegating to the single log method."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "null-message",
+    "scenario": "调用 logger.info(null) 或空字符串。",
+    "q": "文章倾向如何处理？",
+    "options": [
+      "接受为 message 原样记录，明确选择立场",
+      "直接让整个应用崩溃",
+      "把 null 当作 FATAL",
+      "静默丢掉所有 destinations"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "logger 不必过度验证调用方消息；关键是明确策略。更重要的错误处理是 destination 写失败。",
+    "why_en": "The logger can accept null or empty messages as-is if that policy is explicit."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-034",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "destination-state",
+    "q": "Destination 需要保存哪些字段？（多选）",
+    "options": [
+      "Formatter",
+      "minLevel",
+      "Sink",
+      "per-destination lock"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这些字段正好支撑 filter-format-lock-write。Destination 不需要知道 Logger 的全部配置。",
+    "why_en": "Destination owns the formatter, threshold, sink, and lock for its output resource."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-035",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "remote-extension",
+    "scenario": "未来要把日志写到远程 HTTP 端点。",
+    "q": "在本文设计中新增什么最自然？",
+    "options": [
+      "RemoteSink 实现 Sink",
+      "RemoteDestination 重写 Logger.log",
+      "RemoteFormatter 兼任网络客户端",
+      "在 Destination.write 加 switch case"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "输出目标的变化轴在 Sink。新增 RemoteSink 不改 Formatter、Destination 或 Logger。",
+    "why_en": "A remote output target slots in as a new Sink implementation.",
+    "whenOtherWins": "如果远程写需要重试、批量和队列，可能组合 AsyncDestination 或包装 Sink，但核心扩展点仍是 Sink。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-036",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "global-state",
+    "q": "为什么层级 LoggerFactory 注册表是“少数合理的全局状态”？",
+    "options": [
+      "同名 logger 在任意调用点都应返回同一实例，这是需求本身",
+      "全局状态总是最好",
+      "Formatter 必须全局唯一",
+      "Sink 无法传参"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "日志框架的命名 logger 需要全局可寻址身份。这个全局性是显式需求，不是偶然耦合。",
+    "why_en": "The logger factory registry is justified because named loggers must be shared by name across the application."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-037",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "json-format",
+    "scenario": "实现 JsonFormatter。",
+    "q": "它应该输入和输出什么？",
+    "options": [
+      "输入 LogRecord，输出包含 timestamp/level/thread/message 的 JSON 字符串",
+      "输入 Sink，输出文件句柄",
+      "输入 level，输出 bool",
+      "输入 message，直接写 stdout"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Formatter 是纯序列化策略，不做过滤和 I/O。JSON 格式只是 LogRecord 的一种字符串表现。",
+    "why_en": "JsonFormatter serializes a LogRecord into a JSON string without doing filtering or I/O.",
+    "whenOtherWins": "如果日志结构需要额外字段，如 loggerName 或 contextMap，应先加入 LogRecord。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-038",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "per-destination-threshold",
+    "scenario": "Console minLevel=DEBUG，File minLevel=WARN，调用 logger.info('user logged in')。",
+    "q": "结果应该是什么？",
+    "options": [
+      "console 写入，file 静默丢弃",
+      "两个都写入",
+      "两个都丢弃",
+      "file 写入，console 丢弃"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "INFO >= DEBUG 但 INFO < WARN。每个 destination 独立过滤同一个 LogRecord。",
+    "why_en": "The console accepts INFO under DEBUG threshold while the file drops it under WARN threshold.",
+    "whenOtherWins": "如果配置为全局 minLevel，则结果可能不同，但题目要求每个 destination 自己有阈值。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-039",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "async-flow",
+    "q": "异步 destination 的正确高层流程是什么？",
+    "steps": [
+      "write(record) 先按 minLevel 过滤。",
+      "通过 bounded queue 入队 LogRecord 并尽快返回。",
+      "worker 线程从 queue.take() 取记录。",
+      "worker format(record) 并 sink.write(formatted)。",
+      "shutdown 时 signal worker、drain queue、join。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "异步把写入移到单消费者 worker，既降低调用方延迟，也给每个目的地天然顺序。关闭流程防止缓冲日志丢失。",
+    "why_en": "Async destinations enqueue records for a single worker to format and write, then drain on shutdown."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-040",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "thread-order",
+    "q": "同步 per-destination lock 能保证什么，不能保证什么？",
+    "options": [
+      "保证同一 destination 的字节不交错；不保证跨线程全局调用顺序",
+      "保证所有 destination 顺序完全一致",
+      "保证没有 I/O 失败",
+      "保证所有 formatter 串行"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "谁先拿到锁谁先写，同一文件不会字节交错。不同 destination 或全局时间顺序不是基础需求。",
+    "why_en": "The per-destination lock prevents interleaved bytes but does not promise global ordering across threads."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-041",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "senior-signals",
+    "q": "Senior 级 Logging 回答应主动覆盖哪些点？（多选）",
+    "options": [
+      "format vs sink 的两个变化轴",
+      "LogRecord 不可变且时间在线程调用处捕获",
+      "per-destination lock 而非 global lock",
+      "sink 失败不崩业务但有诊断",
+      "async queue 的 overflow 和 shutdown"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "高级答案要展示系统思维：扩展轴、并发、故障隔离和生产可运维性。",
+    "why_en": "Senior answers cover extension axes, immutable event capture, per-resource locking, failure isolation, and async operational concerns."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-042",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "decision-chain",
+    "q": "按顺序排列 Logging Service 主设计链路：",
+    "steps": [
+      "Logger 持有不可变 destinations，并在 log 顶部构造 LogRecord。",
+      "澄清同步 v1、per-destination 阈值/格式、并发写不交错。",
+      "抽出 Formatter 和 Sink，Destination 组合二者和 minLevel。",
+      "Destination 用 per-resource lock 包住 sink.write。",
+      "失败在 Destination 内诊断并隔离，扩展时可加 async queue。"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3,
+      4
+    ],
+    "why": "这个链路从范围和 API，到组合模型、并发和故障处理。按此表达能避免过早设计异步系统。",
+    "why_en": "The design chain moves from scoped synchronous logging to record creation, composition, per-resource locking, and failure isolation.",
+    "diagram": "flowchart TD\nA[\"scope sync logger\"] --> B[\"Logger creates immutable LogRecord\"]\nB --> C[\"Destination owns threshold and formatter\"]\nC --> D[\"Sink abstracts output target\"]\nD --> E[\"per-destination lock protects write\"]\nE --> F[\"diagnose failures; async is extension\"]"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "invariant",
+    "scenario": "你要总结这个 logger 的核心并发不变量。",
+    "q": "哪一个最准确？",
+    "options": [
+      "同一 Destination 上一次 sink.write 对其他写是原子的，记录字节不会交错",
+      "所有日志永不丢失",
+      "所有线程按调用时间严格排序",
+      "所有 destination 必须写完全相同级别"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "题目明确要求同一目标的记录字节不交错。可靠性和全局排序是更强需求，不属于同步 v1。",
+    "why_en": "The key concurrency invariant is atomic writes per destination so records do not interleave on the same target.",
+    "whenOtherWins": "如果要求严格顺序或不丢日志，需要队列、持久化缓冲和更复杂的失败策略。"
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-044",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "expected-levels",
+    "q": "中级答案在本题最应稳定识别什么？",
+    "options": [
+      "Formatter 和输出目标应分离，用组合避免 N×M 类组合",
+      "必须实现 Log4j 完整功能",
+      "必须支持分布式日志聚合",
+      "必须使用继承"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "需求明确“格式和目的地独立变化”。中级候选人应能快速拆成 Formatter 与目标抽象。",
+    "why_en": "A mid-level answer should separate formatting from output targets to avoid class explosion."
+  },
+  {
+    "id": "lld-problem-breakdowns-logging-service-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "minimal-api",
+    "scenario": "有人想给 Logger 暴露 addDestination、removeDestination、reloadConfig。",
+    "q": "基础需求下应该怎么做？",
+    "options": [
+      "不暴露；配置启动时固定，保持 destinations immutable",
+      "全部实现以显示完整性",
+      "把它们放在 LogRecord",
+      "让 Sink 修改 Logger 配置"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "YAGNI：热更新明确 out of scope。不可变配置简化并发遍历和 API。",
+    "why_en": "Since configuration is fixed at startup, keeping destinations immutable avoids unnecessary concurrency complexity.",
+    "whenOtherWins": "如果需求加入热更新，可用原子替换 destination 列表或配置管理器。"
+  }
+]

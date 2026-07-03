@@ -1,0 +1,1224 @@
+[
+  {
+    "id": "sd-patterns-long-running-tasks-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "definition",
+    "q": "Managing Long-Running Tasks 模式的核心思想是什么？",
+    "options": [
+      "把请求拆成“快速确认”和“后台处理”两阶段",
+      "让用户的 HTTP 请求一直等到任务完成",
+      "把所有重任务都放进 API server 同步执行",
+      "只靠前端轮询，不记录任务状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "长任务模式让 Web server 快速验证、入队并返回 job_id，耗时工作由 worker pool 异步完成。这样避免 HTTP timeout 和糟糕等待体验。",
+    "why_en": "The pattern splits work into immediate acknowledgment and asynchronous background processing.",
+    "tags": [
+      "long-running-tasks",
+      "definition",
+      "async"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-002",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "sync-problem",
+    "q": "为什么 45 秒 PDF 生成不适合放在同步 HTTP 请求里？",
+    "options": [
+      "Web server 和 load balancer 常有 30-60 秒 timeout，且用户体验很差",
+      "PDF 不能通过网络返回",
+      "数据库不能查询报表数据",
+      "浏览器不支持下载 PDF"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "长时间同步请求容易超时，用户也不知道是否正在处理，可能刷新或重复提交。异步任务能立即确认并提供状态。",
+    "why_en": "A 45-second synchronous request risks timeouts and poor user feedback, so it should be handled asynchronously.",
+    "tags": [
+      "sync-problem",
+      "timeout",
+      "ux"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-003",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "trigger-signals",
+    "q": "哪些操作一听就应该考虑 long-running task 模式？（多选）",
+    "options": [
+      "视频转码",
+      "PDF / data export 生成",
+      "批量邮件发送",
+      "读取当前用户 profile 的一行数据库记录"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "视频、报表、批量发送、图像处理、CSV 导入等都可能耗时数秒到数分钟。简单 profile 读取通常同步返回即可。",
+    "why_en": "Video transcoding, reports, exports, and bulk emails are classic long-running task triggers.",
+    "tags": [
+      "trigger-signals",
+      "examples",
+      "async"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "async-flow",
+    "scenario": "用户点击“Generate Report”，生成过程预计 2 分钟，且用户不需要同步拿到结果。",
+    "q": "API 最合适的响应方式是什么？",
+    "options": [
+      "验证请求、创建 job、入队并立即返回 job_id",
+      "保持 HTTP 连接 2 分钟直到完成",
+      "让用户不断刷新页面但不记录状态",
+      "直接拒绝所有报表请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "job_id 让客户端可以查询状态或接收通知，后台 worker 处理真正耗时工作。用户请求不再被长任务阻塞。",
+    "why_en": "The API should enqueue the work and immediately return a job ID for status tracking.",
+    "whenOtherWins": "如果操作必须在用户继续前同步完成且只需几十毫秒，普通同步 API 更简单。",
+    "tags": [
+      "async-flow",
+      "job-id",
+      "fit"
+    ],
+    "diagram": "flowchart LR\n  A[\"POST job\"] --> B[\"DB pending\"]\n  B --> C[\"Queue\"]\n  C --> D[\"Worker\"]"
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-005",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "end-to-end-flow",
+    "q": "按正确顺序排列 async worker pool 的基本流程：",
+    "steps": [
+      "Worker 从 queue 取消息，用 job_id 读取详情",
+      "Web server 创建 status='pending' 的 job 记录",
+      "Worker 更新状态为 processing，执行真正耗时工作",
+      "Web server 把 job_id 推入 queue 并立即返回给客户端",
+      "Worker 存储结果并更新状态为 completed 或 failed"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2,
+      4
+    ],
+    "why": "Web server 只负责接受和排队，worker 负责处理和更新状态。queue 解耦两者。",
+    "why_en": "The web tier creates and enqueues the job, while workers fetch, process, and update its status.",
+    "diagram": "sequenceDiagram\n  participant C as Client\n  participant W as Web Server\n  participant DB as Job DB\n  participant Q as Queue\n  participant P as Worker\n  C->>W: submit task\n  W->>DB: create pending job\n  W->>Q: enqueue job_id\n  W-->>C: job_id\n  P->>Q: pull job_id\n  P->>DB: processing/completed",
+    "tags": [
+      "async-flow",
+      "worker-pool",
+      "sequence"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "components",
+    "q": "实现 long-running task 模式通常至少需要哪些组件？（多选）",
+    "options": [
+      "Message queue",
+      "Worker pool",
+      "Job status store",
+      "把所有任务存在浏览器内存"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "queue 负责缓冲和交付，workers 负责执行，status store 让用户和系统知道任务进度、结果和失败原因。",
+    "why_en": "The core components are a queue, workers, and a durable job-status store.",
+    "tags": [
+      "components",
+      "queue",
+      "workers"
+    ],
+    "table": {
+      "headers": [
+        "Component",
+        "Role",
+        "Failure concern"
+      ],
+      "rows": [
+        [
+          "Job table",
+          "status source",
+          "idempotency"
+        ],
+        [
+          "Queue",
+          "buffer work",
+          "visibility timeout"
+        ],
+        [
+          "Worker pool",
+          "execute jobs",
+          "retries and DLQ"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "queue-role",
+    "q": "Message queue 在这个模式中的主要作用是什么？",
+    "options": [
+      "在 Web server 和 worker 之间持久缓冲任务，并解耦两者扩缩容",
+      "直接生成 PDF",
+      "替代数据库中的 job status",
+      "让客户端不用发请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "queue 接收 job_id，让 workers 按自己的速度消费。它还能提供可见的 backlog、retry 和 failure handling。",
+    "why_en": "The queue durably buffers jobs between the web tier and workers, decoupling their scaling.",
+    "tags": [
+      "queue",
+      "buffer",
+      "decoupling"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "queue-payload",
+    "scenario": "一个任务的输入很大，包含用户参数、文件位置和配置。你要把任务送进 SQS，SQS 有消息大小限制。",
+    "q": "queue message 里更应该放什么？",
+    "options": [
+      "只放 job_id，worker 再从数据库读取完整详情",
+      "把完整大对象塞进消息正文",
+      "把二进制文件塞进 queue",
+      "不创建 job 记录"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "queue message 保持小而稳定，job DB 保存完整上下文和状态。SQS 等队列有消息大小限制，且大 payload 会增加重试和传输成本。",
+    "why_en": "Put a small job ID in the queue and store full job details in a durable database.",
+    "whenOtherWins": "如果 job payload 很小且无需持久查询，直接放少量参数也可以，但仍要注意大小和幂等。",
+    "tags": [
+      "queue",
+      "payload",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-009",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "queue-options",
+    "q": "关于常见 queue 选择，哪些说法正确？（多选）",
+    "options": [
+      "Redis + Bull/BullMQ 简单好用，但 memory-first，强 durability 要谨慎",
+      "SQS 运维负担低，但通常只传 job_id，且按消息计费",
+      "RabbitMQ 支持复杂 routing，但自运维成本较高",
+      "Kafka 适合高吞吐、可回放和已有事件流栈"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "不同队列的核心取舍是 durability、运维、routing、重放和规模。面试里选你能解释的方案比背一个唯一答案更重要。",
+    "why_en": "Queue choices trade off durability, operations, routing flexibility, replayability, and scale.",
+    "tags": [
+      "queue-options",
+      "redis",
+      "sqs",
+      "kafka"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "queue-options",
+    "scenario": "一个 startup 想快速上线报表任务，规模中等，希望自动 retry、delayed jobs、priority queues 都容易用。",
+    "q": "哪个方案常见且上手快？",
+    "options": [
+      "Redis + Bull/BullMQ",
+      "自己写 TCP 协议",
+      "只用浏览器 localStorage",
+      "把任务写进日志文件"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Redis + Bull/BullMQ 是很多团队的实用起点，简单、功能够用。硬崩溃下 durability 要评估，强保证可考虑 SQS/RabbitMQ。",
+    "why_en": "Redis with Bull or BullMQ is a practical startup-friendly queue choice, though durability must be evaluated.",
+    "whenOtherWins": "如果不能丢任何任务、希望托管高可用，SQS 或 RabbitMQ 这类更 durable 的队列更合适。",
+    "tags": [
+      "redis",
+      "bullmq",
+      "queue-options"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "worker-runtime",
+    "scenario": "任务可能运行几个小时，你需要能 SSH 调试、控制依赖和本地磁盘，不想被函数执行时长限制卡住。",
+    "q": "Worker 运行方式优先选什么？",
+    "options": [
+      "普通服务器或容器化 workers",
+      "只能用短时 serverless function",
+      "Web browser tab",
+      "数据库 trigger 执行所有工作"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "长任务适合由普通进程或容器 worker 执行，环境可控、时长不受 Lambda 15-60 分钟限制。容器还能获得编排和自动扩缩容。",
+    "why_en": "Long jobs often fit server or container workers because they avoid serverless execution limits.",
+    "whenOtherWins": "如果工作短、突发、无状态且运行时间在函数限制内，serverless 可以降低运维。",
+    "tags": [
+      "workers",
+      "runtime",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-012",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "worker-runtime",
+    "q": "关于 worker 运行方式，哪些取舍正确？（多选）",
+    "options": [
+      "普通服务器最简单可控，但要管理机器和闲置容量",
+      "Serverless 适合突发短任务，但有执行时长、冷启动和本地存储限制",
+      "容器 workers 在灵活性和自动扩缩容之间折中",
+      "Serverless 永远适合所有长任务"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "worker runtime 要和任务时长、资源、运维要求匹配。不要把所有异步任务都默认塞进 serverless。",
+    "why_en": "Worker runtime choices trade off control, operations, execution limits, and autoscaling.",
+    "tags": [
+      "workers",
+      "serverless",
+      "containers"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "independent-scaling",
+    "scenario": "Web 请求很轻，但视频转码需要 GPU；你不想让登录/API server 都跑在昂贵 GPU 机器上。",
+    "q": "该模式如何处理资源不匹配？",
+    "options": [
+      "Web tier 和 GPU worker pool 分开部署、独立扩缩容",
+      "所有服务都用 GPU 机器",
+      "禁止视频上传",
+      "让浏览器转码所有视频"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步 worker pool 让不同资源画像的工作分开运行：Web server 用便宜通用实例，GPU/CPU-heavy workers 用专门机器。",
+    "why_en": "Async workers let web servers and GPU-heavy processing scale on different hardware.",
+    "whenOtherWins": "如果所有请求都很轻且资源需求一致，单一服务部署更简单。",
+    "tags": [
+      "independent-scaling",
+      "gpu",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-014",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "benefits",
+    "q": "Long-running task 模式带来的收益包括哪些？（多选）",
+    "options": [
+      "API 快速返回，避免长请求 timeout",
+      "Web servers 和 workers 独立扩缩容",
+      "worker 崩溃不拖垮用户请求路径",
+      "减少对 job status、queue depth、worker health 的监控需求"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "它改善响应时间、资源利用和故障隔离，但也增加 queue、worker、状态和监控复杂度。",
+    "why_en": "The pattern improves response time, independent scaling, and fault isolation, but adds monitoring and state complexity.",
+    "tags": [
+      "benefits",
+      "scaling",
+      "fault-isolation"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-015",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "tradeoffs",
+    "q": "引入 async worker pool 后会新增哪些成本？（多选）",
+    "options": [
+      "更多系统复杂度：queue、workers、job DB",
+      "Eventual consistency：API 返回时工作还没完成",
+      "需要状态查询、重试、失败处理和监控",
+      "用户永远不能知道任务状态"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "异步不是免费午餐。你换来了 fast ack，但必须设计状态、通知、重试、DLQ 和 backpressure。",
+    "why_en": "Async processing adds queues, workers, eventual consistency, job tracking, retries, and monitoring.",
+    "tags": [
+      "tradeoffs",
+      "eventual-consistency",
+      "monitoring"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "user-feedback",
+    "scenario": "用户提交报表后不应该盯着 loading spinner 45 秒，但也需要知道进度和结果。",
+    "q": "产品侧应该提供什么？",
+    "options": [
+      "job status endpoint、进度页，完成后 email/push/WebSocket/SSE 通知",
+      "什么都不显示",
+      "永远让用户刷新页面",
+      "把报表结果同步塞进首次响应"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步任务必须配套状态和通知，否则用户不知道任务是否被接收、排队、处理中或失败。",
+    "why_en": "Long-running tasks need status APIs and completion notifications so users understand progress.",
+    "whenOtherWins": "很短且可同步完成的操作不需要额外状态页。",
+    "tags": [
+      "user-feedback",
+      "status",
+      "notification"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-017",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "status-model",
+    "q": "Job status 通常至少会经历哪些状态？",
+    "options": [
+      "pending -> processing -> completed/failed",
+      "completed -> pending -> deleted",
+      "only success",
+      "only unknown"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "pending 表示已接受但未开始，processing 表示 worker 正在执行，completed/failed 表示终态。重试和错误信息可作为额外字段。",
+    "why_en": "A basic job state model is pending, processing, and then completed or failed.",
+    "tags": [
+      "status-model",
+      "job-db",
+      "state"
+    ],
+    "diagram": "stateDiagram-v2\n  [*] --> pending\n  pending --> running\n  running --> succeeded\n  running --> failed\n  failed --> retrying\n  retrying --> running"
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "worker-crash",
+    "q": "如果 worker 处理中崩溃，queue 系统通常如何恢复？",
+    "options": [
+      "通过 heartbeat/visibility timeout 判断 worker 死亡，把 job 重新交给其他 worker",
+      "立刻丢弃 job",
+      "要求用户重新提交所有任务",
+      "Web server 同步补做任务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "worker 需要持续表明自己还活着。心跳消失或 visibility timeout 到期后，任务可被重新投递。",
+    "why_en": "Queues recover from worker crashes using heartbeats or visibility timeouts that allow another worker to retry the job.",
+    "tags": [
+      "worker-crash",
+      "heartbeat",
+      "retry"
+    ],
+    "diagram": "flowchart TD\n  A[\"Worker takes job\"] --> B[\"Heartbeat\"]\n  B --> C{\"Worker alive?\"}\n  C -->|\"yes\"| D[\"Complete\"]\n  C -->|\"no\"| E[\"Timeout requeue\"]"
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-019",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "heartbeat",
+    "q": "文章给出的 heartbeat/timeout 起点通常是多少？",
+    "options": [
+      "10-30 秒",
+      "1 毫秒",
+      "24 小时",
+      "1 年"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "10-30 秒是很多系统的合理起点：太长会拖延恢复，太短会增加噪音并可能误判 GC pause。",
+    "why_en": "A heartbeat or timeout around 10 to 30 seconds is a common starting point.",
+    "tags": [
+      "heartbeat",
+      "numbers",
+      "failure-handling"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "timeout-terms",
+    "q": "不同 queue 对“worker 是否还活着”的机制名称可能不同，哪项映射合理？",
+    "options": [
+      "SQS visibility timeout、RabbitMQ heartbeat、Kafka session timeout",
+      "SQS CSS selector、RabbitMQ CDN TTL、Kafka HTTP cookie",
+      "Postgres WebSocket、Redis DNS、Kafka CSS",
+      "都叫 TCP teardown"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "概念相同：如果 worker 没有及时确认还活着或提交进度，系统就认为任务可重新处理。",
+    "why_en": "SQS visibility timeout, RabbitMQ heartbeat, and Kafka session timeout all help detect failed consumers.",
+    "tags": [
+      "heartbeat",
+      "sqs",
+      "rabbitmq",
+      "kafka"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "dlq",
+    "q": "Dead Letter Queue（DLQ）解决什么问题？",
+    "options": [
+      "反复失败的 poison job 无限重试，拖垮 worker",
+      "Web server 响应太快",
+      "用户不知道 job_id",
+      "数据库不能存状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "超过最大重试次数后，把 job 移到 DLQ 隔离，避免一直消耗 worker。DLQ 增长通常意味着代码 bug 或坏数据。",
+    "why_en": "A dead letter queue isolates repeatedly failing jobs so healthy work can continue.",
+    "tags": [
+      "dlq",
+      "poison-message",
+      "failure-handling"
+    ],
+    "diagram": "flowchart LR\n  A[\"Job fails\"] --> B[\"Retry\"]\n  B --> C{\"Max attempts?\"}\n  C -->|\"no\"| B\n  C -->|\"yes\"| D[\"DLQ\"]"
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-022",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "dlq",
+    "q": "任务通常失败多少次后应进入 DLQ？",
+    "options": [
+      "3-5 次",
+      "0 次，永远不重试",
+      "1000 次",
+      "无限次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "3-5 次能覆盖短暂错误，又不会让永久坏数据无限占用 worker。具体次数取决于任务成本和错误类型。",
+    "why_en": "Jobs commonly move to a dead letter queue after about three to five failed attempts.",
+    "tags": [
+      "dlq",
+      "numbers",
+      "retry"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-023",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "dlq",
+    "q": "DLQ 设计中应该监控哪些信号？（多选）",
+    "options": [
+      "DLQ depth 是否增长",
+      "失败原因分布",
+      "从 DLQ 修复后重新投递的流程",
+      "忽略 DLQ，因为它只存垃圾"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "DLQ 是生产故障信号，不是垃圾桶。持续增长意味着系统需要人工调查、代码修复或数据清洗。",
+    "why_en": "A growing dead letter queue is an operational signal that needs investigation and repair.",
+    "tags": [
+      "dlq",
+      "monitoring",
+      "operations"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "idempotency",
+    "scenario": "用户不耐烦连续点击“Generate Report”三次，三个请求输入完全一样。",
+    "q": "如何避免重复创建相同任务？",
+    "options": [
+      "使用 idempotency key，已有相同 key 的 job 就返回现有 job_id",
+      "盲目创建三个 job",
+      "只靠前端禁用按钮",
+      "随机选择一个请求丢弃且不返回状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "idempotency key 把同一次业务意图映射到同一个 job。前端防抖有帮助，但后端必须兜底。",
+    "why_en": "An idempotency key maps repeated submissions of the same operation to the existing job.",
+    "whenOtherWins": "如果任务本来就允许多次执行且每次结果独立，可以不用合并，但仍要明确语义。",
+    "tags": [
+      "idempotency",
+      "duplicate-work",
+      "fit"
+    ],
+    "table": {
+      "headers": [
+        "Layer",
+        "Technique",
+        "Prevents"
+      ],
+      "rows": [
+        [
+          "API",
+          "idempotency key",
+          "duplicate job rows"
+        ],
+        [
+          "Worker",
+          "dedupe output",
+          "duplicate side effects"
+        ],
+        [
+          "DB",
+          "unique constraint",
+          "race duplicates"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-025",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "idempotent-work",
+    "q": "为什么 worker 执行本身也要尽量 idempotent？（多选）",
+    "options": [
+      "worker 崩溃后 job 可能被重试",
+      "queue 交付常是 at-least-once",
+      "重复发送邮件、重复扣款等 side effect 很危险",
+      "idempotent 会让任务永远不失败"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "异步系统里重复执行很正常。worker 应在发送邮件、写文件、扣款前检查是否已完成，或使用外部服务的 idempotency key。",
+    "why_en": "Workers should be idempotent because retries and at-least-once delivery can repeat side effects.",
+    "tags": [
+      "idempotency",
+      "at-least-once",
+      "side-effects"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-026",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "idempotency",
+    "scenario": "提交 job 时，客户端传入 idempotency_key，你要避免重复 job。",
+    "q": "这段伪代码的关键语义是什么？",
+    "options": [
+      "先查 key，存在则返回旧 job_id；不存在才创建并入队",
+      "每次都创建新 job",
+      "只在内存里保存 key，重启后丢失",
+      "忽略 user_id 和 job_type"
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "def submit_job(user_id, job_type, data, key):\n    existing = db.get_job_by_key(key)\n    if existing:\n        return existing.id\n    job_id = db.create_job(user_id, job_type, data)\n    db.store_idempotency_key(key, job_id)\n    queue.push(job_id)\n    return job_id",
+    "lang": "python",
+    "why": "幂等入口要在持久存储里建立 key -> job_id 映射。否则重复点击或网络重试会创建重复任务。",
+    "why_en": "The idempotency key is persisted so repeated submissions return the same job instead of creating duplicates.",
+    "whenOtherWins": "实际实现还需要数据库唯一约束或事务，避免并发提交同一个 key 时竞态创建两个 job。",
+    "tags": [
+      "idempotency",
+      "code",
+      "job-submission"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-027",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "backpressure",
+    "q": "Backpressure 在 async worker 系统中指什么？",
+    "options": [
+      "当 workers 处理不过来时，主动放慢或拒绝新 job 接收",
+      "让 queue 无限增长",
+      "只增加前端 loading 文案",
+      "让所有 worker 停止心跳"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Backpressure 防止系统接受超过处理能力的工作。否则 queue 深度、等待时间和内存/存储成本都会失控。",
+    "why_en": "Backpressure slows or rejects new job intake when workers cannot keep up.",
+    "tags": [
+      "backpressure",
+      "queue-depth",
+      "scaling"
+    ],
+    "table": {
+      "headers": [
+        "Signal",
+        "Action",
+        "Goal"
+      ],
+      "rows": [
+        [
+          "Queue depth rising",
+          "scale workers",
+          "reduce wait"
+        ],
+        [
+          "Workers saturated",
+          "rate limit submitters",
+          "protect system"
+        ],
+        [
+          "Long jobs blocking",
+          "split queues",
+          "avoid head of line"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "backpressure",
+    "scenario": "Black Friday 时 job 流量突然 10x，queue 已经堆到几百万，用户等待时间变成数小时。",
+    "q": "应优先讨论哪些措施？",
+    "options": [
+      "按 queue depth autoscale workers，并在过深时返回 system busy/限流",
+      "继续无条件接收所有 job",
+      "只看 CPU，不看 queue depth",
+      "删除所有 pending job"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "queue depth 是 worker 系统的关键扩容指标。处理不过来时，扩容和限流要同时考虑。",
+    "why_en": "Use queue depth for autoscaling and apply rate limits or busy responses when the backlog is too deep.",
+    "whenOtherWins": "如果任务可延迟数小时且用户可接受，可以继续排队，但仍要明确 SLA 和容量上限。",
+    "tags": [
+      "backpressure",
+      "autoscaling",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-029",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "autoscaling",
+    "q": "为什么 worker pool 扩容通常看 queue depth，而不是只看 CPU？",
+    "options": [
+      "queue depth 直接反映 backlog 和等待时间，CPU 高时可能已经排队很久",
+      "CPU 永远没有意义",
+      "queue depth 只适合 Web server",
+      "worker 不会消耗 CPU"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步系统的用户体验取决于排队时延。CPU 是资源信号，queue depth 是工作积压信号。",
+    "why_en": "Queue depth better captures backlog and wait time, while CPU alone can lag the actual service-level problem.",
+    "tags": [
+      "autoscaling",
+      "queue-depth",
+      "metrics"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-030",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "mixed-workloads",
+    "q": "把 5 秒 PDF 和 5 小时年终报表放同一个 FIFO queue，会有什么问题？",
+    "options": [
+      "短任务被长任务阻塞，产生 head-of-line blocking",
+      "短任务一定更快完成",
+      "worker 会自动知道优先级",
+      "所有任务都变成 5 秒"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "长任务占住 worker，短任务排在后面会等很久。混合耗时任务需要分队列、优先级或拆分长任务。",
+    "why_en": "Mixed short and very long jobs in one queue can cause head-of-line blocking.",
+    "tags": [
+      "mixed-workloads",
+      "head-of-line-blocking",
+      "queues"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-031",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "mixed-workloads",
+    "scenario": "有些报告 5 秒，有些报告 5 小时，你想保持 fast queue 响应。",
+    "q": "应如何拆分 worker/queue？",
+    "options": [
+      "按 job type 或预期耗时拆 fast queue 和 slow queue，并分别配置 worker 数和机器规格",
+      "所有任务都进一个 queue",
+      "先运行 5 小时任务再运行 5 秒任务",
+      "取消状态跟踪"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "拆队列能隔离不同 SLA 和资源需求。无法提前预测时，可先进入 fast queue，超过时间限制再迁移到 slow queue。",
+    "why_en": "Separate queues by job type or expected duration to keep short jobs responsive and tune workers independently.",
+    "whenOtherWins": "如果所有任务耗时相近，单队列更简单。",
+    "tags": [
+      "mixed-workloads",
+      "queues",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "job-dependencies",
+    "scenario": "生成报告需要 fetch data -> generate PDF -> email user 三个步骤，且每步可能重试。",
+    "q": "简单链式依赖可以怎么做？",
+    "options": [
+      "每个 worker 完成后 queue 下一步 job，并在 job context 中带 workflow_id 和上一步产物",
+      "把所有状态只存在 worker 内存",
+      "失败后永远从头开始且不记录原因",
+      "让客户端手动触发每一步"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "简单链可以由前一步显式排下一步，并携带可重试上下文。复杂分支/并行流程再考虑 workflow orchestrator。",
+    "why_en": "For simple chains, each worker can enqueue the next step with workflow context and retryable outputs.",
+    "whenOtherWins": "如果有复杂分支、并行、补偿或长期等待，用 Step Functions、Temporal 或 Airflow 更清晰。",
+    "tags": [
+      "job-dependencies",
+      "workflow",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "workflow-orchestration",
+    "scenario": "任务依赖包含分支、并行步骤、每步独立 retry 和可视化状态，你发现 worker 之间互相 queue 下一步变得很乱。",
+    "q": "下一步应考虑什么？",
+    "options": [
+      "Workflow orchestrator，如 AWS Step Functions、Temporal、Airflow",
+      "继续把流程散落在 worker 代码里",
+      "删除重试逻辑",
+      "只用一个巨大同步请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "复杂依赖会让手写链式 queue 变成 spaghetti。工作流系统集中表达流程、重试和状态可见性。",
+    "why_en": "Complex branching or parallel job dependencies justify a workflow orchestrator.",
+    "whenOtherWins": "单步任务或简单线性链条用 queue + worker 就足够，不必引入 orchestrator。",
+    "tags": [
+      "workflow-orchestration",
+      "dependencies",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-034",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "monitoring",
+    "q": "异步 worker 系统必须监控哪些指标？（多选）",
+    "options": [
+      "queue depth / oldest job age",
+      "worker health / heartbeat",
+      "job failure rate / retry rate / DLQ depth",
+      "只监控前端页面访问量"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "异步系统的故障常表现为队列堆积、worker 死亡、失败重试或 DLQ 增长。只看 API latency 会漏掉后台问题。",
+    "why_en": "Async systems need monitoring for backlog, worker health, failures, retries, and dead-letter queues.",
+    "tags": [
+      "monitoring",
+      "queue-depth",
+      "dlq"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-035",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-signal",
+    "scenario": "面试官说“我们每天处理 100 万张图片，每张处理 10 秒”。",
+    "q": "你应该如何主动推导？",
+    "options": [
+      "100 万/天约 12 张/秒，乘以 10 秒处理时间约需要 120 个并发 worker-seconds/s，不能放 Web server，应异步 worker pool",
+      "忽略计算，直接说单机够了",
+      "所有图片同步处理在登录服务器上",
+      "让用户等待一天"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "把规模和处理时间乘起来能暴露资源不匹配。这个推导是引入 worker pool 的强理由。",
+    "why_en": "Doing the throughput math shows image processing would saturate the web tier and should move to async workers.",
+    "whenOtherWins": "如果处理耗时只有几毫秒且流量低，同步路径可能仍可接受。",
+    "tags": [
+      "interview-signal",
+      "capacity-math",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-036",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "interview-scenarios",
+    "q": "哪些系统设计题常用 long-running tasks？（多选）",
+    "options": [
+      "YouTube 视频转码和缩略图",
+      "Instagram 图片处理和 feed fanout",
+      "Dropbox 文件扫描、索引、预览生成",
+      "只读取用户昵称"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "媒体处理、fanout、文件扫描/索引都耗时且可异步。简单读取用户昵称不需要该模式。",
+    "why_en": "Media processing, feed fanout, and file scanning are common long-running task scenarios.",
+    "tags": [
+      "interview-scenarios",
+      "youtube",
+      "instagram",
+      "dropbox"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-037",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "payment",
+    "scenario": "支付系统中，基础 card authorization 同步很快，但 fraud detection、3DS、webhook 通知和延迟结算会持续较久。",
+    "q": "如何拆分同步/异步边界？",
+    "options": [
+      "把必须立即返回的授权同步处理，把耗时校验/通知/结算放 async workers",
+      "所有支付步骤都同步卡住用户",
+      "所有支付步骤都异步，永远不返回初始状态",
+      "不记录 payment 状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "支付经常混合同步和异步：用户需要及时知道初始状态，但后续风控、webhook 和 settlement 可以后台推进。",
+    "why_en": "Payments often keep the immediate authorization synchronous while moving fraud checks, webhooks, and settlement to async workers.",
+    "whenOtherWins": "如果某一步影响是否可继续下单且必须强一致，就不能随意异步化。",
+    "tags": [
+      "payment",
+      "sync-async-boundary",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-038",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "summary",
+    "q": "补全 long-running task 的一句话模式：",
+    "text": "先{{接受并入队}}，立即返回{{job_id}}，再由{{worker pool}}异步处理，并更新{{job status}}。",
+    "why": "这是该模式的核心闭环：快速确认、后台执行、状态可查。",
+    "why_en": "The pattern is accept and enqueue, return a job ID, process in workers, and update job status.",
+    "tags": [
+      "summary",
+      "cloze",
+      "long-running-tasks"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-039",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "queue-down",
+    "q": "文章提到“如果 queue 短暂不可用，web server 仍可创建 pending job”，这个设计隐含需要什么？",
+    "options": [
+      "后续有机制把 pending jobs 补推到 queue 或由 poller 扫描 pending 状态",
+      "pending job 会自动被 worker 发现，无需任何机制",
+      "数据库不需要保存 job",
+      "用户永远不会提交任务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "如果接受请求和入队不是同一个原子动作，就要设计补偿路径。否则 pending job 可能永远不被处理。",
+    "why_en": "If job creation can succeed while queueing fails, a poller or repair path must enqueue pending jobs later.",
+    "tags": [
+      "failure-handling",
+      "queue-down",
+      "pending"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-040",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "when-not-to-use",
+    "scenario": "一个 API 查询用户 profile，耗时 30ms，用户必须立即看到结果。",
+    "q": "是否应该引入 queue + worker？",
+    "options": [
+      "不应该，同步请求更简单",
+      "必须引入 queue",
+      "必须返回 job_id",
+      "必须用 GPU worker"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "长任务模式是为“超过几秒、资源不匹配或失败恢复复杂”的工作服务。轻量同步读取不要过度设计。",
+    "why_en": "A 30-millisecond profile read should remain synchronous because queueing would add needless complexity.",
+    "whenOtherWins": "如果 profile 请求背后触发昂贵 recomputation，可把 recomputation 异步化，但读取本身仍应快返。",
+    "tags": [
+      "when-not-to-use",
+      "sync-api",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-041",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "failure-lifecycle",
+    "q": "按正确顺序排列一个失败 job 的处理生命周期：",
+    "steps": [
+      "超过最大次数后移入 DLQ，并报警/等待调查",
+      "Worker 崩溃或任务抛错",
+      "队列根据 heartbeat/visibility timeout 重新投递",
+      "Worker 重试处理，job attempt count 增加"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      3,
+      0
+    ],
+    "why": "异步失败处理要可控：先重试 transient failure，持续失败才隔离到 DLQ。",
+    "why_en": "A failed job is redelivered, retried with an attempt count, and eventually isolated in a dead letter queue.",
+    "tags": [
+      "failure-lifecycle",
+      "retry",
+      "dlq"
+    ],
+    "diagram": "flowchart TD\n  A[\"Run job\"] --> B[\"Fail\"]\n  B --> C[\"Record error\"]\n  C --> D[\"Retry with backoff\"]\n  D --> E[\"DLQ or success\"]"
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-042",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "notification",
+    "scenario": "后台任务完成后，你希望用户不用手动刷新就收到结果。",
+    "q": "可以使用哪些通知方式？",
+    "options": [
+      "Email、push notification 或 WebSocket/SSE 实时更新",
+      "只更新服务器日志",
+      "只把结果放在 worker 内存",
+      "让用户猜测完成时间"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步任务完成和用户页面不在同一个请求里，需要额外通知或状态查询机制。实时需求高时可接入 realtime updates 模式。",
+    "why_en": "Async job completion should notify users through email, push, or realtime updates, or be visible through status polling.",
+    "whenOtherWins": "低优先级任务可只提供状态页和邮件，不必实时推送。",
+    "tags": [
+      "notification",
+      "realtime-updates",
+      "fit"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-043",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "interview-depth",
+    "q": "面试里主动提出该模式时，应准备回答哪些 deep dive？（多选）",
+    "options": [
+      "worker 崩溃如何重试",
+      "poison message 如何进 DLQ",
+      "重复点击如何用 idempotency key 去重",
+      "queue 堆积如何 backpressure/autoscale"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "提出 async workers 后，常见追问就是失败、重复、积压和混合任务。提前准备这些会显得设计成熟。",
+    "why_en": "The common deep dives are crash retry, poison messages, idempotency, and backpressure.",
+    "tags": [
+      "interview-depth",
+      "failure-handling",
+      "backpressure"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-044",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "long-running-vs-workflow",
+    "q": "Long-running task queue 和 workflow orchestrator 的边界是什么？",
+    "options": [
+      "单步或简单线性异步任务用 queue + worker；复杂分支、并行和补偿用 workflow system",
+      "所有异步任务都必须上 Temporal",
+      "queue 不能处理任何任务",
+      "workflow system 只能处理同步请求"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "不要为了一个单步任务引入工作流引擎；也不要把复杂状态机硬塞进 workers 互相排队的 spaghetti。",
+    "why_en": "Use queues for simple async work and workflow systems for complex branching, retries, and compensation.",
+    "tags": [
+      "workflow",
+      "queue",
+      "contrast"
+    ]
+  },
+  {
+    "id": "sd-patterns-long-running-tasks-045",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-answer",
+    "q": "按正确顺序排列面试中引入 long-running tasks 的表达：",
+    "steps": [
+      "说明用户体验：返回 job_id，支持状态查询和完成通知",
+      "指出该操作会超过同步请求可接受时长或资源不适合 Web tier",
+      "提出 queue + worker pool，Web server 快速入队",
+      "补充失败处理：retry、DLQ、idempotency、backpressure"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3
+    ],
+    "why": "先证明为什么需要异步，再给架构和用户体验，最后主动处理生产 failure modes。",
+    "why_en": "A strong interview answer motivates async processing, proposes queue workers, explains UX, and covers failure modes.",
+    "tags": [
+      "interview-answer",
+      "decision-chain",
+      "summary"
+    ]
+  }
+]

@@ -1,0 +1,1502 @@
+[
+  {
+    "id": "lld-concurrency-coordination-001",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "definition",
+    "q": "并发协调问题关注的核心是什么？",
+    "options": [
+      "线程如何通信、等待和交接工作",
+      "如何让每个字段都 public",
+      "如何选择继承层级",
+      "如何复制数据库到多区域"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "协调不是主要防止某个字段写坏，而是让生产者、消费者或独立执行路径按正确节奏配合。等待、唤醒、反压是关键词。",
+    "why_en": "Coordination is about how threads communicate, wait, wake, and hand off work safely.",
+    "tags": [
+      "coordination",
+      "handoff",
+      "threads"
+    ],
+    "optionExplanations": [
+      "协调的核心正是线程间如何通信、等待和交接工作，这是生产消费者模式的基础。",
+      "让字段 public 是对象设计问题，不是并发协调的重点。",
+      "继承层级属于 OOP 设计，与协调机制无关。",
+      "数据库复制是分布式系统问题，不是线程级并发协调的范畴。"
+    ],
+    "optionExplanations_en": [
+      "Coordination is exactly about how threads communicate, wait, and hand off work safely.",
+      "Making fields public is an object design concern, not concurrency coordination.",
+      "Inheritance hierarchy is an OOP design choice, not a coordination mechanism.",
+      "Database replication is a distributed system concern, not thread-level coordination."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-002",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "async-processing",
+    "scenario": "注册请求需要发欢迎邮件，发邮件要 500ms，但用户不需要等邮件真的发完才看到成功。",
+    "q": "最适合的设计方向是什么？",
+    "options": [
+      "请求线程内同步发送邮件",
+      "把邮件任务入队，后台 worker 异步处理",
+      "让数据库连接池变大",
+      "把 Email 类做成 Singleton 就结束"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "这是“请求路径不该做慢工作”的典型协调场景。API 线程生产任务，后台消费者慢慢处理。",
+    "why_en": "A background queue decouples the request path from slow email sending, letting workers process the task asynchronously.",
+    "whenOtherWins": "如果邮件发送结果必须决定本次请求是否成功，就不能简单异步返回，需要同步处理或补偿流程。",
+    "tags": [
+      "async-processing",
+      "producer-consumer",
+      "email"
+    ],
+    "optionExplanations": [
+      "同步发邮件让用户等待，不符合题意中的需求。",
+      "把邮件任务异步入队，API 快速返回，Worker 在后台处理，这正是生产者消费者模式。",
+      "数据库连接池大小与邮件发送延迟无关。",
+      "Email Singleton 只是对象创建方式，不解决发送延迟问题。"
+    ],
+    "optionExplanations_en": [
+      "Synchronous mail sending blocks the user, which conflicts with the requirement.",
+      "Enqueueing the email task lets the API return quickly while workers process it asynchronously.",
+      "Increasing the connection pool does not address the email sending latency.",
+      "Making Email a Singleton is a creation pattern, not a solution to sending delay."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-003",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "busy-waiting",
+    "q": "worker 在空队列上 `while True` 不断检查的主要后果是什么？",
+    "options": [
+      "空闲时也持续消耗 CPU",
+      "任务会自动批处理",
+      "队列容量会变大",
+      "所有任务都会按优先级排序"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "忙等让线程没有工作也占用核心。worker 多时，系统可能把 CPU 都花在检查“没有任务”上。",
+    "why_en": "Busy-waiting burns CPU while doing no useful work, especially when many workers spin on an empty queue.",
+    "tags": [
+      "busy-waiting",
+      "cpu",
+      "anti-pattern"
+    ],
+    "diagram": "flowchart TD\n  W[\"worker\"] --> C{\"queue empty?\"}\n  C -- yes --> W\n  C -- no --> T[\"take task\"]\n  W --> CPU[\"CPU burned while idle\"]",
+    "optionExplanations": [
+      "忙等让线程不断检查队列但无任务处理，持续消耗 CPU 核心，特别在多 worker 时问题严重。",
+      "任务不会因为忙等而自动批处理。",
+      "队列容量与忙等无关。",
+      "任务优先级排序是队列实现问题，不是忙等的结果。"
+    ],
+    "optionExplanations_en": [
+      "Busy-waiting burns CPU cycles checking for work that is not there, especially with many idle workers.",
+      "Busy-waiting does not automatically batch-process tasks.",
+      "Queue capacity is not affected by busy-waiting.",
+      "Task prioritization is a queue implementation feature, not a result of busy-waiting."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-004",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "sleep-polling",
+    "q": "sleep 轮询相比忙等改善了什么，又引入了什么？",
+    "options": [
+      "减少 CPU 浪费，但增加任务到达后的等待延迟",
+      "消除所有队列容量问题",
+      "让任务处理变成原子操作",
+      "保证每个任务 1ms 内处理"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "睡眠时间短会浪费 CPU，睡眠时间长会让刚到的任务等下一轮。它是在浪费和延迟之间折中，不是根本解。",
+    "why_en": "Sleep polling reduces CPU waste but adds latency because a task may arrive just after a worker goes to sleep.",
+    "tags": [
+      "sleep-polling",
+      "latency",
+      "anti-pattern"
+    ],
+    "table": {
+      "headers": [
+        "Approach",
+        "Improves",
+        "Still costs"
+      ],
+      "rows": [
+        [
+          "busy wait",
+          "lowest latency",
+          "wastes CPU"
+        ],
+        [
+          "sleep polling",
+          "less CPU",
+          "adds delay and tuning"
+        ],
+        [
+          "wait/notify",
+          "blocks until signal",
+          "needs lock and condition"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "Sleep 轮询用睡眠减少 CPU 浪费，但引入了任务延迟——任务刚到达时可能线程刚睡眠。",
+      "Sleep 轮询不能消除队列容量问题。",
+      "Sleep 轮询不让任务成为原子操作。",
+      "Sleep 轮询无法保证 1ms 内处理。"
+    ],
+    "optionExplanations_en": [
+      "Sleep polling reduces CPU waste but adds latency when tasks arrive just after the worker sleeps.",
+      "Sleep polling does not eliminate queue capacity issues.",
+      "Sleep polling does not make task processing atomic.",
+      "Sleep polling cannot guarantee one-millisecond processing."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-005",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "backpressure",
+    "q": "生产者远快于消费者且队列无界时，最危险的结果是什么？",
+    "options": [
+      "队列无限增长直到内存耗尽",
+      "消费者自动变快",
+      "任务自动丢弃且无影响",
+      "系统永远只慢不崩"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每个排队任务都是堆上的对象。无界队列在突发流量下会把内存吃光，导致整个服务不可用。",
+    "why_en": "An unbounded queue can grow until it exhausts memory when producers outpace consumers.",
+    "tags": [
+      "backpressure",
+      "unbounded-queue",
+      "oom"
+    ],
+    "optionExplanations": [
+      "无界队列在生产快于消费时会持续增长，最终耗尽堆内存导致 OOM 和服务不可用。",
+      "消费者不会因为队列积压而自动变快。",
+      "任务不会自动丢弃，它们堆积在内存中。",
+      "系统会逐渐变慢然后崩溃，不是永远只慢。"
+    ],
+    "optionExplanations_en": [
+      "An unbounded queue keeps growing when producers outpace consumers until it exhausts memory.",
+      "Consumers do not automatically speed up due to queue backlog.",
+      "Tasks do not automatically drop; they accumulate in memory.",
+      "The system will slow down and eventually crash, not stay slow forever."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-006",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "problem-requirements",
+    "q": "协调机制通常要同时解决哪些事？（多选）",
+    "options": [
+      "空时消费者高效等待",
+      "满时给生产者反压",
+      "并发访问队列本身不损坏数据",
+      "让所有业务状态不需要建模"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "协调工具本身要线程安全，还要处理两端速度不匹配。它不会替你消除所有业务模型。",
+    "why_en": "A coordination mechanism needs efficient waiting, backpressure, and thread-safe access to the handoff structure.",
+    "tags": [
+      "requirements",
+      "backpressure",
+      "thread-safety"
+    ],
+    "diagram": "flowchart TD\n  A[Producer] --> B{queue full?}\n  B -->|no| C[enqueue]\n  B -->|yes| D[block/drop/reject]\n  C --> E[Worker takes]\n  E --> F[process]",
+    "optionExplanations": [
+      "消费者需要高效等待空队列，否则就是忙等浪费 CPU，这是协调的基本要求。",
+      "满时生产者反压，防止无界积压和 OOM，这是容量保护的关键。",
+      "队列自身要线程安全，否则并发访问会损坏数据结构。",
+      "协调工具不会替你消除业务状态建模需求。"
+    ],
+    "optionExplanations_en": [
+      "Consumers must efficiently wait on empty queues to avoid burning CPU, a core coordination requirement.",
+      "Backpressure when full prevents unbounded buildup and OOM, essential for capacity protection.",
+      "Queue internals must be thread-safe to prevent concurrent access from corrupting the structure.",
+      "A coordination mechanism does not eliminate the need to model your business state."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-007",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "coordination-styles",
+    "q": "共享状态协调和消息传递协调的核心区别是什么？",
+    "options": [
+      "共享状态让线程共同访问结构；消息传递让组件拥有私有状态并通过消息交互",
+      "共享状态只能单线程，消息传递只能数据库",
+      "两者都要求全局锁住所有代码",
+      "消息传递必须没有任何队列"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "阻塞队列是共享结构，生产者消费者都访问它。Actor 则把状态封在各自实体里，外部只能发消息。",
+    "why_en": "Shared-state coordination uses common data structures, while message passing keeps state owned by components and communicates through messages.",
+    "tags": [
+      "shared-state",
+      "message-passing",
+      "actors"
+    ],
+    "optionExplanations": [
+      "共享状态让线程共同访问一个结构如阻塞队列；消息传递让各个 actor 拥有私有状态并只通过消息通信。",
+      "共享状态可以多线程，消息传递不限于数据库。",
+      "不是所有并发协调都需要全局锁。",
+      "消息传递的实现通常包含队列或邮箱。"
+    ],
+    "optionExplanations_en": [
+      "Shared-state coordination uses common data structures; message passing keeps state owned by actors and uses messages.",
+      "Shared state works with multiple threads; message passing is not limited to databases.",
+      "Not all concurrent coordination requires a global lock.",
+      "Message passing typically includes a queue or mailbox in its implementation."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-008",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "condition-variables",
+    "q": "条件变量为什么要和锁一起使用？",
+    "options": [
+      "条件检查和 wait/notify 都需要在同一个受保护状态上协调",
+      "条件变量会自动创建数据库事务",
+      "锁只用于让代码更慢",
+      "没有锁就不能创建对象"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "等待的是某个共享条件，例如队列非空或非满。锁保证检查条件、睡眠、修改条件、通知之间的状态一致。",
+    "why_en": "A condition variable is tied to a lock because the condition being waited on is shared state that must be checked and changed consistently.",
+    "tags": [
+      "condition-variable",
+      "lock",
+      "wait-notify"
+    ],
+    "diagram": "sequenceDiagram\n  participant C as Consumer\n  participant L as Lock\n  participant P as Producer\n  C->>L: lock and check\n  C->>L: wait releases lock\n  P->>L: lock, add item\n  P->>C: notify\n  C->>L: re-lock and recheck",
+    "optionExplanations": [
+      "条件检查和 wait/notify 都涉及共享状态的读写，必须在锁保护下进行以保证一致性。",
+      "条件变量不创建数据库事务。",
+      "锁不是为了让代码变慢，而是为了保护共享状态。",
+      "条件变量和锁的需要与对象创建无关。"
+    ],
+    "optionExplanations_en": [
+      "Condition checking and wait-notify both involve reading and writing shared state, which must be protected by a lock.",
+      "Condition variables do not create database transactions.",
+      "Locks are not meant to slow code; they protect shared state.",
+      "Conditions and locks have nothing to do with object creation."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-009",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "condition-variables",
+    "scenario": "消费者要等待 ready 变成 true；被唤醒后可能还有其他线程抢先改变了条件。",
+    "q": "为什么这里必须用 while 而不是 if？",
+    "codeSample": "with condition:\n    while not ready:\n        condition.wait()\n    do_work()",
+    "lang": "python",
+    "options": [
+      "唤醒后必须重新检查条件，防止虚假唤醒或条件被别人消费",
+      "while 会让线程忙等不睡眠",
+      "if 在 Python 中不能配合 wait",
+      "do_work 必须执行多次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "wait 返回只代表“被叫醒了”，不代表条件仍成立。while 重新验证共享状态，是条件变量的标准写法。",
+    "why_en": "The loop rechecks the condition after wakeup because notifications and spurious wakeups do not guarantee the condition still holds.",
+    "whenOtherWins": "如果使用高级 BlockingQueue，队列内部已经封装了这段 while/wait 逻辑。",
+    "tags": [
+      "condition-variable",
+      "while-loop",
+      "spurious-wakeup"
+    ],
+    "diagram": "flowchart TD\n  A[\"wait returns\"] --> B{\"condition true?\"}\n  B -- no --> C[\"wait again\"]\n  C --> A\n  B -- yes --> D[\"continue safely\"]",
+    "optionExplanations": [
+      "while 重新检查条件是标准做法，防止虚假唤醒或其他线程消费了条件后当前线程继续错误执行。",
+      "while 不会让线程忙等不睡眠——条件不满足时 wait() 仍会睡眠。",
+      "if 在 Python 中可以配合 wait()，但只检查一次，容易踩虚假唤醒坑。",
+      "do_work 正常情况只执行一次，while 不决定执行次数。"
+    ],
+    "optionExplanations_en": [
+      "The while loop rechecks the condition after waking to prevent spurious wakeups or other threads consuming the condition.",
+      "While does not prevent the thread from sleeping; wait() still sleeps when the condition is false.",
+      "If works with wait() in Python but only checks once, risking spurious wakeup bugs.",
+      "Do_work executes once normally; the while loop does not determine execution count."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-010",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "condition-variables",
+    "q": "在同一个条件变量上同时有生产者和消费者等待时，notify_one 的问题是什么？",
+    "options": [
+      "可能唤醒了不能前进的那类线程",
+      "一定会唤醒所有线程",
+      "会删除队列里的任务",
+      "会跳过锁检查"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "比如消费者释放空间后，真正该醒的是生产者；如果随机叫醒另一个消费者，它发现仍没任务又睡回去。",
+    "why_en": "Notify-one can wake the wrong kind of waiter when producers and consumers share one condition variable.",
+    "tags": [
+      "notify",
+      "condition-variable",
+      "wakeup"
+    ],
+    "optionExplanations": [
+      "notify_one 会随机唤醒一个等待线程，如果唤醒了无关的线程类型，它发现条件不满足就重新睡眠，浪费唤醒。",
+      "notify_one 只唤醒一个线程，不是所有线程。",
+      "notify 不删除队列中的任务。",
+      "notify 不涉及锁检查跳过。"
+    ],
+    "optionExplanations_en": [
+      "Notify-one wakes an arbitrary waiter; if it wakes the wrong type, it goes back to sleep, wasting the notification.",
+      "Notify-one wakes exactly one thread, not all of them.",
+      "Notification does not delete tasks from the queue.",
+      "Notification does not bypass lock checking."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-011",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "condition-variables",
+    "scenario": "有界队列同时需要等待“非空”和“非满”，并且希望避免 notify_all 唤醒大量无关线程。",
+    "q": "更精确的实现通常怎么做？",
+    "options": [
+      "使用两个条件变量：not_empty 给消费者，not_full 给生产者",
+      "只用一个全局布尔变量",
+      "让所有线程 sleep 100ms",
+      "禁用生产者等待"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "分开条件变量能把通知发给真正能继续的一类线程。它减少无谓唤醒和锁竞争。",
+    "why_en": "Separate not-empty and not-full conditions wake the right side of a bounded queue and avoid unnecessary wakeups.",
+    "whenOtherWins": "面试中通常不需要手写它，直接使用语言自带 BlockingQueue 更简洁。",
+    "tags": [
+      "bounded-queue",
+      "condition-variable",
+      "not-empty"
+    ],
+    "optionExplanations": [
+      "分开 not_empty 和 not_full 条件变量能精准唤醒真正能继续的线程，减少无谓唤醒和竞争。",
+      "单个布尔变量不能实现等待机制。",
+      "Sleep 100ms 是低效的轮询方式，不如条件变量。",
+      "禁用生产者等待会导致溢出或任务丢失。"
+    ],
+    "optionExplanations_en": [
+      "Separate conditions let producers and consumers wake the right type, avoiding spurious wakeups.",
+      "A single boolean cannot implement efficient waiting.",
+      "Sleeping 100ms is inefficient polling compared to conditions.",
+      "Disabling producer waits risks overflow or task loss."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-012",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "blocking-queue",
+    "scenario": "你要实现后台任务调度器，多个 API handler submit，多个 worker get，空和满都要自动阻塞。",
+    "q": "默认应选哪种结构？",
+    "options": [
+      "普通列表加手写锁",
+      "有界 BlockingQueue / queue.Queue(maxsize)",
+      "每个任务一个新线程且不设上限",
+      "读写锁保护一个 int"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "阻塞队列已经把锁、条件变量、线程安全和阻塞语义封装好。面试里直接用它比手写 wait/notify 更稳。",
+    "why_en": "A bounded blocking queue is the default because it packages the synchronization and blocking behavior needed for producer-consumer handoff.",
+    "whenOtherWins": "如果每个实体有独立状态和生命周期，Actor 可能更能表达所有权。",
+    "tags": [
+      "blocking-queue",
+      "task-scheduler",
+      "producer-consumer"
+    ],
+    "diagram": "flowchart LR\n  P1[\"producer\"] --> Q[(bounded queue)]\n  P2[\"producer\"] --> Q\n  Q --> W1[\"worker\"]\n  Q --> W2[\"worker\"]\n  Q --> B[\"backpressure when full\"]",
+    "optionExplanations": [
+      "普通列表加手写锁容易出错，需要手写复杂的 wait/notify 逻辑。",
+      "有界 BlockingQueue 已经封装锁、条件变量和阻塞语义，直接用最稳定。",
+      "每个任务新线程且无上限会导致线程爆炸和资源耗尽。",
+      "读写锁保护一个 int 无法实现队列的入队出队和阻塞机制。"
+    ],
+    "optionExplanations_en": [
+      "A manual list with locks is error-prone and requires complex wait-notify logic.",
+      "A bounded BlockingQueue packages the synchronization and blocking behavior we need.",
+      "Creating an unbounded thread per task risks thread explosion and resource exhaustion.",
+      "A read-write lock on an int cannot implement queue enqueue-dequeue and blocking."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-013",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "blocking-queue",
+    "scenario": "任务调度器要让 submit 在队列满时停住，worker 在队列空时停住。",
+    "q": "下面代码中 `put` 和 `get` 的并发含义是什么？",
+    "codeSample": "self._queue = queue.Queue(maxsize=1000)\n\ndef submit_task(task):\n    self._queue.put(task)\n\ndef worker_loop():\n    while True:\n        task = self._queue.get()\n        task()",
+    "lang": "python",
+    "options": [
+      "put 满时阻塞，get 空时阻塞，队列内部负责同步",
+      "put 会丢弃旧任务，get 忙等",
+      "maxsize 只影响日志",
+      "每个 task 都自动运行在新进程"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这正是生产者消费者的基本形状。队列是同步边界，worker 不需要自己轮询。",
+    "why_en": "The queue blocks producers when full and consumers when empty while handling synchronization internally.",
+    "whenOtherWins": "请求路径不能长时间阻塞时，改用带 timeout 的 put/offer，并在满时返回错误。",
+    "tags": [
+      "python",
+      "queue",
+      "task-scheduler"
+    ],
+    "optionExplanations": [
+      "put 在队列满时阻塞生产者，get 在空时阻塞消费者，这是阻塞队列的标准协调语义。",
+      "put 不会丢弃旧任务，get 不会忙等，这正是阻塞队列相比忙等的优势。",
+      "maxsize 直接影响队列行为，不仅仅是日志。",
+      "任务在当前线程或 worker 线程内执行，不自动新建进程。"
+    ],
+    "optionExplanations_en": [
+      "Put blocks when full and get blocks when empty; the queue handles synchronization.",
+      "Put does not drop tasks and get does not busy-wait; that is the advantage of blocking.",
+      "Maxsize directly controls queue behavior, not just logging.",
+      "Tasks run in the worker thread, not in a new process."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-014",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "number",
+    "sub": "capacity-planning",
+    "q": "worker 每秒能处理 100 个任务，希望最多积压约 10 秒处理量，队列容量的粗略起点是多少？",
+    "options": [
+      "10",
+      "100",
+      "1,000",
+      "100,000"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "容量可以从“可承受积压时长 × 消费速率”估。100 个/秒 × 10 秒 = 1,000 个任务缓冲。真实突发还要看到达速率和持续时间；如果到达速率只比消费高一点，新增 backlog 会小于这个粗估。",
+    "why_en": "A simple buffer estimate is tolerated backlog time times worker throughput, so 10 seconds at 100 tasks per second is about 1,000 tasks; real burst sizing also depends on arrival rate and duration.",
+    "tags": [
+      "capacity",
+      "number",
+      "backpressure"
+    ],
+    "optionExplanations": [
+      "10 个/秒太小，只能缓冲 0.1 秒的突发。",
+      "100 个/秒太小，缓冲 1 秒。",
+      "1,000 个可以缓冲 10 秒钟的 100 个/秒处理量，符合题目需求。",
+      "100,000 个过度设计且浪费内存。"
+    ],
+    "optionExplanations_en": [
+      "Ten is too small, buffering only 0.1 seconds.",
+      "One hundred is too small, buffering only one second.",
+      "One thousand buffers ten seconds of backlog at one hundred tasks per second.",
+      "One hundred thousand is overkill and wastes memory."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-015",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fit",
+    "sub": "full-queue-policy",
+    "q": "队列满时，哪些处理策略是合理的？（多选）",
+    "options": [
+      "内部流水线可阻塞生产者",
+      "请求路径可带超时后返回 503",
+      "可丢弃并记录无关紧要的分析事件",
+      "永远使用无界队列避免思考"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "满队列策略取决于业务：能等就阻塞，不能等就限时失败，允许损失就丢弃。无界队列只是把问题推到 OOM。",
+    "why_en": "Full-queue behavior should match the workload: block, timeout and reject, or drop lossy work instead of using an unbounded queue.",
+    "tags": [
+      "backpressure",
+      "full-queue",
+      "policy"
+    ],
+    "optionExplanations": [
+      "内部流水线可以选择阻塞生产者，给下游反压，这是合理的设计。",
+      "请求路径超时失败比永久挂起更好，给用户可预知的延迟。",
+      "分析事件允许丢失，满时丢弃比拖垮主业务更合理。",
+      "无界队列只是把问题推到 OOM，这不是合理策略。"
+    ],
+    "optionExplanations_en": [
+      "An internal pipeline can block producers to provide backpressure, a valid strategy.",
+      "Request-path timeout and rejection is better than hanging indefinitely.",
+      "Analytics events are lossy, so dropping at capacity is better than blocking the main request.",
+      "Using an unbounded queue just pushes the problem to memory exhaustion."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-016",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "full-queue-policy",
+    "scenario": "HTTP 请求线程想入队购买请求，但不能无限等；如果 100ms 内没有队列空间，应让用户稍后重试。",
+    "q": "应使用哪类队列操作？",
+    "options": [
+      "put/offer 带 timeout，失败后返回 503 或类似错误",
+      "take 永久阻塞",
+      "无界 put",
+      "busy-wait 直到成功"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "请求路径需要可控延迟。带超时的入队既提供反压，又避免线程无限挂住。",
+    "why_en": "A timeout-based enqueue gives backpressure while keeping the request path from blocking indefinitely.",
+    "whenOtherWins": "纯内部批处理管线没有用户等待时，阻塞生产者可能更简单。",
+    "tags": [
+      "timeout",
+      "request-path",
+      "backpressure"
+    ],
+    "optionExplanations": [
+      "超时的 put/offer 既提供反压，又避免请求线程无限等待，符合 HTTP 请求的特点。",
+      "take 永久阻塞会让请求线程卡住，违反 HTTP 超时要求。",
+      "无界 put 无法实现 100ms 的时间限制。",
+      "忙等会浪费 CPU 且仍然可能超时。"
+    ],
+    "optionExplanations_en": [
+      "Timeout-based enqueue provides backpressure while preventing indefinite request blocking.",
+      "Permanent take blocking would hang the request thread, violating timeout requirements.",
+      "Unbounded put cannot enforce the one-hundred millisecond deadline.",
+      "Busy-waiting wastes CPU and still risks timeout."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-017",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "interruption",
+    "q": "阻塞队列的 put/take 被中断时，最糟糕的处理是什么？",
+    "options": [
+      "吞掉 InterruptedException/中断信号后继续运行",
+      "向上传播异常",
+      "恢复中断状态",
+      "退出 worker 循环"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "中断通常是上层要求线程停止。吞掉它会让关闭流程失效，线程继续卡在后台。",
+    "why_en": "Swallowing interruption loses the shutdown signal and can leave blocked workers running when they should stop.",
+    "tags": [
+      "interruption",
+      "shutdown",
+      "blocking-queue"
+    ],
+    "optionExplanations": [
+      "吞掉中断信号会导致 worker 无法优雅关闭，框架关闭请求被忽视，线程卡在队列。",
+      "向上传播异常让上层有机会正确处理关闭逻辑。",
+      "恢复中断状态让其他代码知道线程被中断过。",
+      "退出 worker 循环是正确的关闭行为。"
+    ],
+    "optionExplanations_en": [
+      "Swallowing the interrupt loses the shutdown signal and leaves workers blocked.",
+      "Propagating the exception lets the caller handle shutdown properly.",
+      "Restoring the interrupt flag informs other code that the thread was interrupted.",
+      "Exiting the worker loop is the correct shutdown behavior."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-018",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "shutdown",
+    "q": "worker 永久阻塞在 take() 时，哪些优雅关闭方式合理？（多选）",
+    "options": [
+      "interrupt worker，让 take 抛中断异常",
+      "poll(timeout) 周期性检查 shutdown flag",
+      "给每个 worker 放一个 poison pill sentinel",
+      "直接让线程忙等空队列"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "三种方式都能让阻塞中的 worker 有机会醒来并退出。忙等不是优雅关闭策略。",
+    "why_en": "Interrupts, timeout polling, and poison pills are common ways to wake blocked workers for graceful shutdown.",
+    "tags": [
+      "shutdown",
+      "poison-pill",
+      "worker"
+    ],
+    "table": {
+      "headers": [
+        "Shutdown tool",
+        "How it wakes worker",
+        "Watch out"
+      ],
+      "rows": [
+        [
+          "poison pill",
+          "task-like sentinel",
+          "one per worker"
+        ],
+        [
+          "interrupt",
+          "breaks blocking take",
+          "restore or handle flag"
+        ],
+        [
+          "timeout loop",
+          "periodic check",
+          "higher wakeup overhead"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "中断打断 take() 的阻塞，worker 可以捕获异常并退出，这是标准 Java/Python 关闭方式。",
+      "Poll 带 timeout 周期检查 shutdown flag，虽然开销高但也可行。",
+      "毒丸 poison pill 是同一队列路径上的 sentinel，每个 worker 消费一个后退出。",
+      "忙等浪费 CPU，不是优雅关闭方式。"
+    ],
+    "optionExplanations_en": [
+      "Interrupting breaks the take() blocking so workers can catch the exception and exit.",
+      "Poll with timeout checks a shutdown flag periodically, though less efficient.",
+      "Poison pills are sentinels in the same queue, one per worker to signal exit.",
+      "Busy-waiting wastes CPU and is not graceful."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-019",
+    "topic": "low-level-design",
+    "format": "chain",
+    "atomType": "fit",
+    "sub": "poison-pill",
+    "q": "把 poison pill 关闭 worker 的步骤排好：",
+    "steps": [
+      "每个 worker 从队列取任务并检查是否是 sentinel",
+      "请求关闭时，向队列放入与 worker 数量相同的 sentinel",
+      "普通任务继续按原逻辑处理",
+      "worker 取到 sentinel 后退出循环"
+    ],
+    "answerOrder": [
+      2,
+      1,
+      0,
+      3
+    ],
+    "why": "毒丸模式依赖 sentinel 走同一条队列路径。每个 worker 都需要一个退出信号，否则可能有 worker 永久等待。",
+    "why_en": "Poison-pill shutdown sends one sentinel per worker through the same queue so each worker can consume a stop signal.",
+    "tags": [
+      "poison-pill",
+      "shutdown",
+      "chain"
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-020",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "actors",
+    "q": "Actor 模型的三个核心特征是什么？",
+    "options": [
+      "邮箱、一次处理一条消息、可以给其他 actor 发消息",
+      "全局共享字典、全局锁、全局计数器",
+      "同步调用栈、继承树、静态工厂",
+      "数据库表、索引、事务日志"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Actor 通过邮箱接收消息，内部顺序处理，因此 actor 自己的状态不会被多个线程同时访问。",
+    "why_en": "An actor has a mailbox, processes one message at a time, and communicates by sending messages to other actors.",
+    "tags": [
+      "actors",
+      "message-passing",
+      "mailbox"
+    ],
+    "table": {
+      "headers": [
+        "Model",
+        "State owner",
+        "Communication"
+      ],
+      "rows": [
+        [
+          "Queue workers",
+          "shared service or DB",
+          "tasks in queue"
+        ],
+        [
+          "Actor",
+          "one actor owns state",
+          "messages"
+        ],
+        [
+          "Condition variable",
+          "shared object",
+          "wait and notify"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "Actor 通过邮箱接收消息，一次只处理一条，内部状态顺序化，避免多线程竞争。",
+      "Actor 不使用全局共享字典。",
+      "Actor 是异步消息模型，不涉及同步调用栈和继承树。",
+      "Actor 与数据库无直接关系。"
+    ],
+    "optionExplanations_en": [
+      "An actor has a mailbox, processes one message at a time, so its state is never accessed by multiple threads.",
+      "Actors do not use global shared dictionaries.",
+      "Actors are asynchronous; they do not rely on synchronous call stacks or inheritance.",
+      "Actors have no direct relationship to database tables or transactions."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-021",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "actors",
+    "q": "Actor 与“共享阻塞队列 + 多 worker”在状态所有权上的差别是？",
+    "options": [
+      "Actor 拥有自己的状态并顺序处理消息；多 worker 可能还需锁保护共享业务状态",
+      "Actor 必须共享所有字段",
+      "阻塞队列不能用于线程安全",
+      "两者都禁止异步处理"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "阻塞队列只解决任务交接，不自动保护任务处理时访问的共享业务对象。Actor 把状态绑定到单个消息处理者。",
+    "why_en": "Actors own and serialize access to their state, whereas queue workers may still need locks around shared business data.",
+    "tags": [
+      "actors",
+      "blocking-queue",
+      "ownership"
+    ],
+    "optionExplanations": [
+      "Actor 拥有自己的状态并顺序处理消息，因此不需要内部锁；多 worker 可能共享业务对象，仍需锁。",
+      "Actor 不必共享所有字段。",
+      "阻塞队列是并发安全的工具，但不保护使用者的业务对象。",
+      "两者都支持异步处理。"
+    ],
+    "optionExplanations_en": [
+      "Actors own their state and process sequentially, so they need no internal locks; workers may share business objects that still need locks.",
+      "Actors do not share all fields.",
+      "A blocking queue is thread-safe but does not protect the caller's business data.",
+      "Both support asynchronous processing."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-022",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "actors",
+    "scenario": "聊天系统、游戏房间或交易 order book 有许多独立实体，每个实体有自己的状态，偶尔互相通信。",
+    "q": "除了阻塞队列，哪种模型值得提？",
+    "options": [
+      "Actor 模型",
+      "Singleton for every entity",
+      "全局静态 map 任意线程可写",
+      "只用 Builder 模式"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Actor 适合大量独立、有状态、事件驱动的实体。每个实体顺序处理自己的消息，减少内部锁。",
+    "why_en": "Actors fit many independent stateful entities because each one processes its own messages sequentially.",
+    "whenOtherWins": "如果问题只是“后台处理这些任务”，一个有界阻塞队列和 worker pool 更简单。",
+    "tags": [
+      "actors",
+      "chat",
+      "game-server"
+    ],
+    "optionExplanations": [
+      "每个实体独立状态和邮箱，Actor 模型特别适合这类场景，减少内部锁竞争。",
+      "为每个实体创建 Singleton 既麻烦又容易出错。",
+      "全局 map 任意线程可写会导致并发问题。",
+      "Builder 模式只是对象创建方式，解决不了多实体协调问题。"
+    ],
+    "optionExplanations_en": [
+      "Actors fit well when each entity has independent state and events; they reduce internal lock contention.",
+      "Creating a Singleton for each entity is cumbersome and error-prone.",
+      "A global map writable by any thread invites concurrency bugs.",
+      "Builder pattern is a creation pattern and does not solve entity coordination."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-023",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "consequence",
+    "sub": "actors",
+    "q": "Actor 模型会带来哪些新问题？（多选）",
+    "options": [
+      "邮箱可能溢出",
+      "不同发送者到同一 actor 的全局顺序不一定可控",
+      "异步消息链更难调试",
+      "actor 内部必须手写每个字段锁"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "Actor 消除了很多共享状态锁，但不是免费午餐。邮箱容量、消息顺序、追踪和 request-response 都要设计。",
+    "why_en": "Actors trade lock races for concerns like mailbox overflow, message ordering, tracing, and asynchronous request-response patterns.",
+    "tags": [
+      "actors",
+      "tradeoff",
+      "debugging"
+    ],
+    "optionExplanations": [
+      "邮箱无界时可能在突发消息下内存耗尽，这是 Actor 系统需要考虑的。",
+      "多个发送者到同一 actor 的消息全局顺序不一定一致，取决于网络和线程调度。",
+      "异步消息链需要追踪 request ID、回复地址等，比同步调用复杂。",
+      "actor 内部状态顺序化，不需要每个字段单独加锁。"
+    ],
+    "optionExplanations_en": [
+      "Unbounded mailboxes can exhaust memory under message bursts.",
+      "Global message order from multiple senders to one actor is not guaranteed without explicit ordering.",
+      "Asynchronous message chains need request IDs and reply addresses, harder to debug than sync calls.",
+      "Actor state is serialized; fields do not need individual locks."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-024",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "async-processing",
+    "scenario": "图片上传后需要压缩、生成缩略图并上传存储；这些操作耗时几秒，但上传接口应快速返回。",
+    "q": "识别到的并发模式是什么？",
+    "options": [
+      "生产者消费者异步处理",
+      "读写锁优化读取",
+      "CAS 更新单个计数器",
+      "装饰器叠加功能"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "API handler 生产处理任务，后台 worker 消费任务。核心是把慢流程从请求路径移走。",
+    "why_en": "This is producer-consumer async processing because the API enqueues slow image work for background workers.",
+    "whenOtherWins": "如果接口必须等缩略图 URL 才能返回，就需要同步处理或返回 pending 状态并让客户端轮询。",
+    "tags": [
+      "image-processing",
+      "async-processing",
+      "queue"
+    ],
+    "optionExplanations": [
+      "API 入队任务，后台 worker 处理压缩和上传，这正是生产者消费者异步处理模式。",
+      "读写锁优化读取，但这里主要是处理延迟问题。",
+      "CAS 更新计数器是原子操作，无法解决处理耗时问题。",
+      "装饰器只是设计模式，不能异步化处理。"
+    ],
+    "optionExplanations_en": [
+      "The API enqueues image work and workers compress and upload, which is producer-consumer async processing.",
+      "Read-write locks optimize reads but do not address processing delay.",
+      "CAS on a counter is atomic but does not defer slow processing.",
+      "Decorator is a pattern and cannot make work asynchronous."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-025",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "bursty-traffic",
+    "scenario": "平时 100 rps，演唱会开票瞬间 10,000 rps，worker 按稳定速率处理购买请求。",
+    "q": "队列在这里的主要价值是什么？",
+    "options": [
+      "吸收突发，把尖峰平滑成 worker 可承受的处理速率",
+      "保证不会有任何排队延迟",
+      "替代所有库存锁",
+      "让数据库无限扩容"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "队列是缓冲层，让短时间尖峰不直接打到下游。容量必须有界，满时要反压或拒绝。",
+    "why_en": "A bounded queue buffers bursty traffic and smooths it into the sustained processing rate of workers.",
+    "whenOtherWins": "如果任务必须立即完成且不能排队，就需要同步容量保护、限流或直接拒绝。",
+    "tags": [
+      "bursty-traffic",
+      "buffering",
+      "ticketing"
+    ],
+    "optionExplanations": [
+      "队列缓冲突发请求，让 worker 按稳定速率处理，避免尖峰直接打到系统。",
+      "队列不能消除排队延迟，只是把延迟变得可控。",
+      "队列不替代库存锁或同步机制。",
+      "队列不能让数据库自动扩容。"
+    ],
+    "optionExplanations_en": [
+      "A queue buffers burst traffic and lets workers process at a steady rate, protecting downstream systems.",
+      "A queue does not eliminate queuing delays; it makes them manageable.",
+      "A queue does not replace inventory locks or synchronization.",
+      "A queue does not auto-scale the database."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-026",
+    "topic": "low-level-design",
+    "format": "code",
+    "atomType": "fit",
+    "sub": "bursty-traffic",
+    "scenario": "购票 API 需要在队列暂时满时快速失败，而不是把请求线程永久挂住。",
+    "q": "这段 `timeout=0.1` 的作用是什么？",
+    "codeSample": "try:\n    purchase_queue.put(request, timeout=0.1)\nexcept queue.Full:\n    raise ServiceUnavailableException('Too many requests')",
+    "lang": "python",
+    "options": [
+      "最多等 100ms 入队，失败则显式返回过载错误",
+      "让任务正好 100ms 后执行",
+      "让队列变成无界",
+      "让 worker 数量变成 0.1"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "请求线程需要受控等待。短超时给瞬时空位一个机会，同时避免用户请求无限卡住。",
+    "why_en": "The short enqueue timeout gives brief backpressure but fails fast with an overload error if the queue stays full.",
+    "whenOtherWins": "内部离线管线可以选择长期阻塞生产者，而不是向用户返回错误。",
+    "tags": [
+      "timeout",
+      "bursty-traffic",
+      "backpressure"
+    ],
+    "optionExplanations": [
+      "超时 0.1 秒给瞬时空位一个机会，但快速失败并返回过载错误，保护请求线程不无限等。",
+      "100ms 不是任务执行时间，而是入队等待时间。",
+      "短超时不会让队列变无界。",
+      "超时时间与 worker 数量无关。"
+    ],
+    "optionExplanations_en": [
+      "The one-hundred millisecond timeout tries briefly then fails fast with overload, protecting the request thread.",
+      "100ms is enqueue wait time, not task execution time.",
+      "A short timeout does not make the queue unbounded.",
+      "Timeout duration does not determine worker count."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-027",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "examples",
+    "q": "哪些场景通常适合“入队 + worker 异步处理”？（多选）",
+    "options": [
+      "报表生成需要 10 分钟",
+      "支付后发送收据和创建运单涉及慢外部服务",
+      "用户点击事件写分析库可稍后处理",
+      "一次内存里的余额加法必须立刻原子完成"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "前三个都能把慢或可重试的工作从请求路径拆出去。余额更新是正确性问题，不能靠排队随意延后除非整体架构就是单线程处理它。",
+    "why_en": "Long reports, slow fulfillment, and analytics events are natural queue-backed background workloads.",
+    "tags": [
+      "examples",
+      "background-work",
+      "queue"
+    ],
+    "optionExplanations": [
+      "10 分钟报表生成是典型的可延后工作，用户不必等。",
+      "支付后的外部服务调用通常可异步，即使最后需要重试或人工处理。",
+      "分析事件可丢失，完全适合离线异步处理。",
+      "余额加法是正确性问题，必须同步原子完成，不能排队随意延后。"
+    ],
+    "optionExplanations_en": [
+      "Report generation in 10 minutes is deferrable; users should not wait.",
+      "Post-payment external services can be async even if retry or manual reconciliation is needed.",
+      "Analytics events are lossy and fit asynchronous background processing.",
+      "Balance updates are correctness-critical and must be synchronous and atomic."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-028",
+    "topic": "low-level-design",
+    "format": "chain",
+    "atomType": "fit",
+    "sub": "queue-design",
+    "q": "把设计有界后台队列的步骤排好：",
+    "steps": [
+      "决定满队列策略：阻塞、超时拒绝或丢弃",
+      "识别哪些工作可以离开请求路径",
+      "按突发量和消费速率估算容量",
+      "让 worker 从队列阻塞获取并处理任务"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3
+    ],
+    "why": "先确认任务可异步，再设计容量和反压。worker 的阻塞消费是实现细节，但要说明它避免忙等。",
+    "why_en": "Design the async queue by identifying deferrable work, sizing the buffer, choosing backpressure behavior, and running blocking consumers.",
+    "tags": [
+      "queue-design",
+      "chain",
+      "backpressure"
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-029",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "blocking-queue",
+    "q": "补全阻塞队列的默认面试表述：",
+    "text": "生产者调用 {{put}} 入队，消费者调用 {{take/get}} 出队；队列为空时消费者睡眠，队列满时生产者被{{反压}}。",
+    "why": "这句话覆盖了协调题最重要的三个点：交接、等待和容量保护。",
+    "why_en": "The standard blocking-queue answer is put by producers, take by consumers, and bounded backpressure when the queue is full.",
+    "tags": [
+      "blocking-queue",
+      "cloze",
+      "producer-consumer"
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-030",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "contrast",
+    "sub": "blocking-vs-actors",
+    "q": "“处理这些任务”与“协调很多有状态实体”分别更偏向什么？",
+    "options": [
+      "前者阻塞队列，后者 Actor",
+      "前者 Singleton，后者 Builder",
+      "前者读写锁，后者原子计数器",
+      "两者都必须手写 condition variable"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "简单任务流水线用队列最直接；有状态实体之间互发事件时，Actor 的所有权模型更清楚。",
+    "why_en": "Use a blocking queue for a simple task pipeline and consider actors for many communicating stateful entities.",
+    "tags": [
+      "actors",
+      "blocking-queue",
+      "fit"
+    ],
+    "optionExplanations": [
+      "简单任务流水线用阻塞队列最直接；有状态实体互发消息时 Actor 所有权更清楚。",
+      "Singleton 和 Builder 是对象创建模式，不是协调方案。",
+      "读写锁和原子计数器是低级同步原语，不是高级协调范式。",
+      "不是所有协调都需要手写条件变量。"
+    ],
+    "optionExplanations_en": [
+      "A blocking queue is simplest for a task pipeline; actors clarify ownership when stateful entities exchange messages.",
+      "Singleton and Builder are creation patterns, not coordination strategies.",
+      "Read-write locks and atomic counters are low-level synchronization, not high-level coordination.",
+      "Not all coordination requires manual condition variables."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-031",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "retry-failure",
+    "q": "把慢外部服务调用放进后台 worker 后，失败处理通常还要补什么？",
+    "options": [
+      "重试、死信或状态标记，而不是假设永远成功",
+      "删除所有日志",
+      "把队列改成无界",
+      "让用户请求永久等待"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "异步处理让用户请求先返回，但后台任务仍可能失败。生产系统需要可观察的失败状态、重试或补偿。",
+    "why_en": "Asynchronous work still needs retry, dead-letter, or status handling because the background task can fail after the request returns.",
+    "tags": [
+      "async-processing",
+      "failure-handling",
+      "retry"
+    ],
+    "optionExplanations": [
+      "异步处理让用户先返回，但后台任务仍可失败，需要重试、死信队列或补偿流程。",
+      "删除日志会隐藏问题。",
+      "无界队列不解决失败处理问题。",
+      "让请求永久等待违反异步初衷。"
+    ],
+    "optionExplanations_en": [
+      "Async work still needs retry, dead-letter, or compensation because the background task can fail after returning.",
+      "Deleting logs hides problems.",
+      "An unbounded queue does not address failure handling.",
+      "Permanent request waiting defeats the purpose of async."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-032",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "analytics",
+    "scenario": "分析事件量突增时，丢少量事件可以接受，但不能拖垮主请求。",
+    "q": "队列满时更合理的策略是什么？",
+    "options": [
+      "非阻塞 offer 失败则丢弃并记录指标",
+      "永久阻塞用户请求",
+      "创建无限内存缓冲",
+      "暂停整个服务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "分析事件是典型 lossy 工作负载。满时丢弃比让主业务请求超时更符合优先级。",
+    "why_en": "For lossy analytics events, dropping and logging when the queue is full is often better than blocking the main request path.",
+    "whenOtherWins": "订单、支付等不可丢任务应超时返回错误或持久化后异步处理，不能静默丢弃。",
+    "tags": [
+      "analytics",
+      "lossy",
+      "full-queue"
+    ],
+    "optionExplanations": [
+      "非阻塞 offer 满时丢弃，结合指标记录，既避免拖垮主请求，又保持可观察性。",
+      "永久阻塞会让主请求超时，违反优先级。",
+      "无限内存缓冲无法工作。",
+      "暂停整个服务影响其他功能。"
+    ],
+    "optionExplanations_en": [
+      "Non-blocking offer with drop and logging avoids blocking the main request while keeping observability.",
+      "Permanent blocking times out the main request, violating priorities.",
+      "Unlimited memory buffering is impossible.",
+      "Pausing the service impacts all functions."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-033",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "condition-variables",
+    "scenario": "面试官要求你解释 BlockingQueue 底层大概怎么做到空时等待、满时等待。",
+    "q": "你应该提到哪组原语？",
+    "options": [
+      "锁 + 条件变量",
+      "继承 + 工厂",
+      "CDN + 缓存",
+      "只用随机数"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "队列内部通常用锁保护缓冲区，用条件变量让生产者/消费者在非满/非空条件上睡眠和唤醒；有些实现也会用 semaphore + mutex 组合表达容量和元素计数。",
+    "why_en": "A blocking queue is often built from a lock plus not-empty and not-full conditions; some implementations use semaphores plus a mutex for capacity and item counts.",
+    "whenOtherWins": "实际面试实现中优先使用标准库队列，只有被要求手写时才下探到这些原语。",
+    "tags": [
+      "condition-variable",
+      "blocking-queue",
+      "internals"
+    ],
+    "table": {
+      "headers": [
+        "Need",
+        "Primitive",
+        "Reason"
+      ],
+      "rows": [
+        [
+          "wait for condition",
+          "condition variable",
+          "sleep without spinning"
+        ],
+        [
+          "move tasks",
+          "blocking queue",
+          "coordination plus buffer"
+        ],
+        [
+          "own state",
+          "actor mailbox",
+          "serialize messages per owner"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "锁和条件变量是 BlockingQueue 的标准底层实现，生产端和消费端各有条件变量。",
+      "继承和工厂与队列实现无关。",
+      "CDN 和缓存是网络层概念。",
+      "随机数不能实现同步。"
+    ],
+    "optionExplanations_en": [
+      "A lock plus not-empty and not-full conditions are the standard implementation primitives for blocking queues.",
+      "Inheritance and factories are not related to queue implementation.",
+      "CDN and caching are network layer concepts.",
+      "Random numbers cannot implement synchronization."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-034",
+    "topic": "low-level-design",
+    "format": "multi",
+    "atomType": "fact",
+    "sub": "bursty-traffic",
+    "q": "关于队列吸收突发流量，哪些说法正确？（多选）",
+    "options": [
+      "worker 可以按可持续速率处理",
+      "队列容量必须按可接受延迟和内存权衡",
+      "队列满时需要明确反压策略",
+      "队列能无限提高下游数据库吞吐"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "队列只是平滑尖峰，不会让下游变快。容量越大，越能缓冲，也越占内存并增加等待。",
+    "why_en": "A queue smooths bursts but does not increase downstream throughput, so capacity and backpressure still need explicit design.",
+    "tags": [
+      "bursty-traffic",
+      "capacity",
+      "backpressure"
+    ],
+    "optionExplanations": [
+      "队列只是缓冲，worker 仍按可持续速率处理任务，这是队列的主要价值。",
+      "容量和延迟、内存使用必须权衡，不能无限扩大。",
+      "满队列需要明确的反压策略，如阻塞、拒绝或丢弃。",
+      "队列不能提高下游绝对吞吐，只能平滑突发。"
+    ],
+    "optionExplanations_en": [
+      "Workers still process at a sustainable rate; the queue just buffers.",
+      "Capacity must balance latency and memory; it cannot be infinite.",
+      "Full queues need explicit backpressure: block, reject, or drop.",
+      "Queues do not increase downstream throughput, only smooth bursts."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-035",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "actors",
+    "q": "补全 Actor 模型的所有权表达：",
+    "text": "Actor 内部一次只处理{{一条消息}}，因此它自己的状态不会被多个线程同时访问；并发边界集中在{{邮箱}}。",
+    "why": "Actor 把锁从业务逻辑里移到消息入口处。邮箱仍要线程安全，但 actor 内部状态顺序化。",
+    "why_en": "Actors serialize their own state by processing one message at a time, with concurrency concentrated at the mailbox.",
+    "tags": [
+      "actors",
+      "ownership",
+      "mailbox"
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-036",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "request-response",
+    "scenario": "Actor 系统中，调用方发送消息后还需要等待结果。",
+    "q": "这会比普通同步调用多出什么设计点？",
+    "options": [
+      "需要 ask/callback/回复地址等 request-response 模式",
+      "不需要任何错误处理",
+      "必须把 actor 改成全局变量",
+      "必须让所有消息乱序"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Actor 默认是异步消息。要等待回应，就要设计回复消息、future、callback 或框架提供的 ask 模式。",
+    "why_en": "Request-response over actors requires an explicit reply mechanism such as ask, futures, callbacks, or a response address.",
+    "whenOtherWins": "简单同步调用链没有独立状态或异步需求时，普通方法调用更容易理解。",
+    "tags": [
+      "actors",
+      "request-response",
+      "async"
+    ],
+    "optionExplanations": [
+      "Actor 的异步消息需要 ask/callback/reply 机制来实现 request-response，这是额外的设计点。",
+      "异步处理仍然需要错误处理。",
+      "actor 应该是自包含的对象，不是全局变量。",
+      "消息顺序通常是有保证的，至少在单个发送者到接收者的路径上。"
+    ],
+    "optionExplanations_en": [
+      "Asynchronous actors need ask, callbacks, or explicit reply addresses for request-response patterns.",
+      "Async still needs error handling.",
+      "Actors should be self-contained, not global variables.",
+      "Message order is usually preserved at least on single sender-receiver paths."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-037",
+    "topic": "low-level-design",
+    "format": "chain",
+    "atomType": "fit",
+    "sub": "async-email",
+    "q": "把注册后异步发邮件的执行顺序排好：",
+    "steps": [
+      "后台 worker 从队列取 EmailTask 并调用邮件服务",
+      "API 保存用户的必要状态",
+      "API 构造 EmailTask 放入有界队列",
+      "API 向用户返回成功，不等待邮件发送完成"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      3,
+      0
+    ],
+    "why": "请求路径只做必须的同步工作和入队。慢邮件发送由 worker 在请求结束后处理。",
+    "why_en": "The API saves required state, enqueues the email task, returns to the user, and lets workers send the email later.",
+    "tags": [
+      "async-email",
+      "chain",
+      "queue"
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-038",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "unbounded-queue",
+    "q": "为什么 `new LinkedBlockingQueue<>()` 不传容量会被面试官追问？",
+    "options": [
+      "它默认无界，生产者过快时可能 OOM",
+      "它无法保存对象",
+      "它只能单线程使用",
+      "它会自动丢弃所有任务"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "无界队列看似避免阻塞，实际是在高峰时把压力换成内存风险。面试里应主动给容量。",
+    "why_en": "An unbounded blocking queue hides overload until it becomes memory exhaustion, so interview answers should specify capacity.",
+    "tags": [
+      "unbounded-queue",
+      "java",
+      "oom"
+    ],
+    "optionExplanations": [
+      "无界队列默认无容量限制，在高流量下可能无限增长直到 OOM，这是面试官要问的风险。",
+      "LinkedBlockingQueue 可以保存对象。",
+      "LinkedBlockingQueue 支持多线程使用。",
+      "LinkedBlockingQueue 不会自动丢弃任务。"
+    ],
+    "optionExplanations_en": [
+      "An unbounded queue has no capacity limit and can grow unbounded, risking OOM under high load.",
+      "LinkedBlockingQueue can store objects.",
+      "LinkedBlockingQueue supports multi-threaded access.",
+      "LinkedBlockingQueue does not automatically discard tasks."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-039",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "decision-tree",
+    "scenario": "题目中出现“工作需要稍后处理、消费者空时等待、生产者满时变慢”。",
+    "q": "你应优先说出的方案关键词是什么？",
+    "options": [
+      "有界阻塞队列 + worker pool",
+      "读写锁 + public 字段",
+      "Builder + Singleton",
+      "无锁更新所有对象"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这些信号几乎直接指向生产者消费者协调。bounded 是防 OOM，worker pool 是消费端。",
+    "why_en": "Those cues point directly to a bounded blocking queue with workers as the producer-consumer coordination pattern.",
+    "whenOtherWins": "如果任务不是简单流水线，而是一堆互相通信的有状态实体，再考虑 Actor。",
+    "tags": [
+      "decision-tree",
+      "worker-pool",
+      "coordination"
+    ],
+    "optionExplanations": [
+      "这些信号直接指向有界阻塞队列和 worker pool，是生产者消费者协调的标准方案。",
+      "读写锁和 public 字段解决的是完全不同的问题。",
+      "Builder 和 Singleton 是对象创建方式。",
+      "无锁更新不提供反压或阻塞语义。"
+    ],
+    "optionExplanations_en": [
+      "Those cues directly point to bounded blocking queues and worker pools, the standard producer-consumer solution.",
+      "Read-write locks and public fields address different problems.",
+      "Builder and Singleton are creation patterns.",
+      "Lock-free updates do not provide backpressure or blocking semantics."
+    ]
+  },
+  {
+    "id": "lld-concurrency-coordination-040",
+    "topic": "low-level-design",
+    "format": "cloze",
+    "atomType": "fact",
+    "sub": "summary",
+    "q": "补全协调总结：",
+    "text": "协调题的主线是：生产者产生工作，消费者处理工作，中间用{{有界阻塞队列}}或{{Actor 邮箱}}安全交接，并通过容量限制提供{{反压}}。",
+    "why": "这句话覆盖了文章结论的两种范式：共享队列和消息传递。",
+    "why_en": "Coordination is producers, consumers, and a bounded handoff mechanism such as a blocking queue or actor mailbox.",
+    "tags": [
+      "summary",
+      "coordination",
+      "backpressure"
+    ]
+  }
+]

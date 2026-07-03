@@ -1,0 +1,2073 @@
+[
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "requirements",
+    "q": "分布式 Rate Limiter 的核心功能需求包括哪些？（多选）",
+    "options": [
+      "长期保存所有限流日志用于复杂分析",
+      "按 user ID、IP 或 API key 识别 client",
+      "基于可配置规则限制 HTTP 请求",
+      "超限时返回 HTTP 429 并带有有用 headers"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "限流器要按身份识别 client、按可配置规则限速、超限返回带 headers 的 429；复杂查询和长期日志分析都不在范围内。",
+    "why_en": "The rate limiter must identify clients, enforce configurable request rules, and return a helpful 429 when a client exceeds its quota.",
+    "tags": [
+      "rate-limiter",
+      "requirements",
+      "scope"
+    ],
+    "options_en": [
+      "Persist all rate-limit logs long term for analytics",
+      "Identify clients by user ID, IP, or API key",
+      "Enforce configurable rules on HTTP requests",
+      "Return HTTP 429 with useful headers when exceeded"
+    ],
+    "optionMeanings": [
+      "超出范围：不是本设计目标",
+      "按身份区分不同请求来源",
+      "限速规则可配置，不写死",
+      "超限时给出可操作的响应"
+    ],
+    "optionMeanings_en": [
+      "Out of scope for this design",
+      "Distinguishes traffic sources by identity",
+      "Limit rules are configurable, not hard-coded",
+      "Gives clients an actionable rejection response"
+    ],
+    "termDefinitions": [
+      {
+        "term": "API key",
+        "meaning": "开发者调用 API 时使用的密钥标识，用来区分调用方。",
+        "meaningEn": "An API key is a credential that identifies which developer or app is calling the API."
+      },
+      {
+        "term": "HTTP 429",
+        "meaning": "Too Many Requests 的标准状态码，用于超限拒绝。",
+        "meaningEn": "HTTP 429 is the standard status code for Too Many Requests."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-002",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "requirements",
+    "q": "本题的核心非功能需求有哪些？（多选）",
+    "options": [
+      "每次检查引入的额外延迟小于约 10ms",
+      "跨所有节点提供强一致限流保证",
+      "高可用，允许节点间限流状态短暂最终一致",
+      "支撑约 1M requests/sec 和 100M DAU"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "限流检查必须快且可用：延迟目标小于 10ms，允许最终一致，同时要撑住约 1M requests/sec、100M DAU 的量级；强一致的跨节点保证不在范围内。",
+    "why_en": "The limiter must add under 10ms of latency, stay highly available with eventual consistency, and handle roughly one million requests per second across 100 million daily users.",
+    "tags": [
+      "rate-limiter",
+      "requirements",
+      "nfr"
+    ],
+    "options_en": [
+      "Extra latency per check under about 10ms",
+      "Strongly consistent limits across every node",
+      "High availability with brief cross-node eventual consistency",
+      "Support roughly 1M requests/sec and 100M DAU"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-003",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale",
+    "scenario": "面试官确认设计目标：约 1M requests/sec 的流量，覆盖 100M 日活用户的社交平台 API。",
+    "q": "这个规模对限流器的实现方式排除了什么？",
+    "options": [
+      "单机本地计数或单个 Redis 实例保存全部限流状态",
+      "把限流放在 API Gateway 边缘层做",
+      "使用 Token Bucket 算法",
+      "允许限流状态跨节点最终一致"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "1M rps/100M DAU 排除的是单点状态：无论是单机 in-process 计数还是单个 Redis 实例，都撑不住这个吞吐和多实例场景，必须做成分布式分片。",
+    "why_en": "At roughly one million requests per second, a single in-process counter or single Redis instance cannot hold all the state, so the design must shard.",
+    "tags": [
+      "rate-limiter",
+      "numbers",
+      "scale"
+    ],
+    "options_en": [
+      "A single in-process counter or single Redis instance holding all state",
+      "Placing the limiter at the API Gateway edge layer",
+      "Using the Token Bucket algorithm",
+      "Letting rate-limit state be eventually consistent across nodes"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-004",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "entities",
+    "q": "补全限流器的三个核心实体：",
+    "text": "核心实体是 {{Rules}}（限流策略）、{{Clients}}（被限制的用户/IP/API key）、{{Requests}}（携带 endpoint、身份、timestamp 的待判断请求）。",
+    "why": "Request 到来后先识别 Client，再查适用 Rules，最后用当前 usage 做 allow/deny 判断，这个交互支撑后续算法和配置讨论。",
+    "why_en": "The core entities are rules, clients, and requests, which together determine whether an incoming call should be allowed.",
+    "tags": [
+      "rate-limiter",
+      "entities",
+      "modeling"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Rules",
+        "meaning": "限流策略，定义在什么维度、什么时间窗口内允许多少请求。",
+        "meaningEn": "Rules define how many requests are allowed for a given scope and time window."
+      },
+      {
+        "term": "Clients",
+        "meaning": "被限流的对象，比如某个用户、IP 或 API key。",
+        "meaningEn": "Clients are the entities being rate limited, such as a user, IP, or API key."
+      },
+      {
+        "term": "Requests",
+        "meaning": "携带身份、endpoint、时间戳等信息、等待被判断放行与否的请求。",
+        "meaningEn": "Requests are incoming calls carrying identity, endpoint, and timestamp information to be evaluated."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-005",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interface",
+    "scenario": "应用或网关需要调用限流组件，既要知道是否通过，也要能生成响应 headers。",
+    "q": "最合适的限流接口返回形态是什么？",
+    "options": [
+      "getAllTrafficLogs(startTime, endTime) -> Log[]",
+      "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
+      "setUserPassword(userId, newPassword) -> boolean",
+      "renderTimeline(userId, page, pageSize) -> Post[]"
+    ],
+    "answer": [
+      1
+    ],
+    "codeSample": "isRequestAllowed(clientId, ruleId) -> {\n  passes: boolean,\n  remaining: number,\n  resetTime: timestamp\n}",
+    "lang": "typescript",
+    "why": "passes 决定是否放行，remaining 和 resetTime 直接对应响应 headers；接口保持小而明确即可。",
+    "why_en": "The limiter should return the allow decision plus remaining quota and reset time so callers can build rate-limit headers.",
+    "whenOtherWins": "只有离线分析系统才需要批量日志查询接口；在线限流路径必须保持极简低延迟。",
+    "tradeoff": "极简判断接口 vs 支持复杂查询/分析",
+    "tags": [
+      "rate-limiter",
+      "api",
+      "headers"
+    ],
+    "options_en": [
+      "getAllTrafficLogs(startTime, endTime) -> Log[]",
+      "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
+      "setUserPassword(userId, newPassword) -> boolean",
+      "renderTimeline(userId, page, pageSize) -> Post[]"
+    ],
+    "optionMeanings": [
+      "只读的批量日志查询接口",
+      "判断+剩余额度+重置时间的最小返回",
+      "跟限流无关的账户操作",
+      "跟限流无关的内容渲染"
+    ],
+    "optionScenarioImpacts": [
+      "无法告诉调用方是否放行",
+      "直接映射到 429 响应 headers",
+      "不回答 allow/deny 判断",
+      "跟限流频率完全无关"
+    ],
+    "optionDirectness": [
+      "不直接：属于离线分析场景",
+      "最直接：覆盖判断加 headers 所需字段",
+      "不直接：这是身份管理操作",
+      "不直接：这是内容展示逻辑"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-006",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "placement",
+    "scenario": "每个应用服务器在本地内存里维护计数，无网络调用，速度极快；但请求经负载均衡分散到多台服务器。",
+    "q": "这种 in-process rate limiter 的主要问题是什么？",
+    "options": [
+      "它一定比 Redis 慢",
+      "它无法识别请求里的 IP",
+      "每台服务器只看到本机流量，无法精确执行全局限额",
+      "它会自动产生跨实例强一致"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "5 台服务器各自计数时，每台都可能觉得没超限，但全局请求量早已超标；in-process 只适合单实例或能接受近似误差的场景。",
+    "why_en": "An in-process limiter looks fast, but each server only sees its own traffic, so a client can multiply its real limit by the number of servers.",
+    "whenOtherWins": "单应用实例、小流量服务，或能接受按服务器数近似放大限额时，in-process 依然简单有效。",
+    "tradeoff": "本地零网络跳的速度 vs 跨实例的全局精确限额",
+    "tags": [
+      "rate-limiter",
+      "placement",
+      "in-process"
+    ],
+    "options_en": [
+      "It is always slower than Redis",
+      "It cannot read the IP address from a request",
+      "Each server only sees its own traffic, so global limits become approximate",
+      "It automatically gives strong cross-instance consistency"
+    ],
+    "table": {
+      "headers": [
+        "Placement",
+        "Latency",
+        "Accuracy",
+        "Context"
+      ],
+      "rows": [
+        [
+          "In-process",
+          "none (local)",
+          "per-node only",
+          "local only"
+        ],
+        [
+          "Dedicated svc",
+          "+1 network hop",
+          "global exact",
+          "rich app data"
+        ],
+        [
+          "API Gateway",
+          "inline (Redis)",
+          "global exact",
+          "HTTP request only"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "in-process rate limiter",
+        "meaning": "限流状态保存在应用进程内存里，不跨实例共享。",
+        "meaningEn": "An in-process rate limiter keeps counters in local memory that is not shared across instances."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "placement",
+    "scenario": "应用需要传入 subscription tier、账户状态、endpoint 等丰富上下文，并希望限流逻辑独立部署。",
+    "q": "哪种部署形态最灵活？",
+    "options": [
+      "每个客户端本地各自限流",
+      "只用 CDN 缓存",
+      "把限流写进数据库触发器",
+      "专用 Rate Limiting Service"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "专用服务能维护全局精确状态，还能吃到应用层丰富上下文（订阅等级、账号状态）做复杂规则；代价是多一次网络往返和一个新的故障点。",
+    "why_en": "A dedicated rate-limiting service gives global precision and rich application context, at the cost of an extra network hop and a new failure point.",
+    "whenOtherWins": "只需要边缘 HTTP 级限流时，API Gateway 集成更常见，且少一次到限流服务的调用。",
+    "tradeoff": "丰富业务上下文与全局精确 vs 额外网络跳和故障点",
+    "tags": [
+      "rate-limiter",
+      "placement",
+      "service"
+    ],
+    "diagram": "flowchart LR\nClient[Client] --> Gateway[API Gateway]\nGateway --> Limiter[Rate Limiter]\nLimiter --> Redis[(Redis)]\nGateway --> App[Backend API]",
+    "options_en": [
+      "Each client rate-limits itself locally",
+      "Rely on CDN caching alone",
+      "Implement limiting inside a database trigger",
+      "A dedicated rate-limiting service"
+    ],
+    "table": {
+      "headers": [
+        "Placement",
+        "Latency",
+        "Accuracy",
+        "Context"
+      ],
+      "rows": [
+        [
+          "In-process",
+          "none (local)",
+          "per-node only",
+          "local only"
+        ],
+        [
+          "Dedicated svc",
+          "+1 network hop",
+          "global exact",
+          "rich app data"
+        ],
+        [
+          "API Gateway",
+          "inline (Redis)",
+          "global exact",
+          "HTTP request only"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "placement",
+    "scenario": "目标是保护后端服务，让被拒请求尽早挡在入口；限流依据主要来自 HTTP header、路径、IP 和 JWT。",
+    "q": "该设计最终选择的限流部署位置是什么？",
+    "options": [
+      "API Gateway 边缘层直接拒绝",
+      "每个业务 handler 内部单独判断",
+      "用户本地客户端",
+      "离线数据仓库"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "网关限流能在请求进入应用前直接返回 429，是生产系统最常见的做法；限制是只能看到 HTTP 请求本身的信息，深层业务上下文要编码进 JWT 等载体。",
+    "why_en": "Gateway-level rate limiting rejects abusive traffic before it reaches backend services, though it only sees what is visible in the HTTP request itself.",
+    "whenOtherWins": "如果规则依赖大量应用内部状态（比如实时账户余额），专用服务或应用内检查会更合适。",
+    "tradeoff": "边缘早拒绝、零额外跳 vs 只看到请求本身、看不到深层业务状态",
+    "tags": [
+      "rate-limiter",
+      "placement",
+      "gateway"
+    ],
+    "options_en": [
+      "The API Gateway rejects at the edge",
+      "Each business handler checks individually",
+      "The user's local client",
+      "An offline data warehouse"
+    ],
+    "table": {
+      "headers": [
+        "Placement",
+        "Latency",
+        "Accuracy",
+        "Context"
+      ],
+      "rows": [
+        [
+          "In-process",
+          "none (local)",
+          "per-node only",
+          "local only"
+        ],
+        [
+          "Dedicated svc",
+          "+1 network hop",
+          "global exact",
+          "rich app data"
+        ],
+        [
+          "API Gateway",
+          "inline (Redis)",
+          "global exact",
+          "HTTP request only"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "JWT",
+        "meaning": "一种把身份声明编码进 token 的格式，网关可以直接读取而不用查库。",
+        "meaningEn": "A JWT encodes identity claims into a token that a gateway can read without a database call."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-009",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "identity",
+    "q": "API Gateway 可用于识别 client 的常见标识有哪些？（多选）",
+    "options": [
+      "JWT / Authorization header 中的 userId",
+      "X-Forwarded-For 中的 IP address",
+      "查数据库拿用户订阅等级（每次请求都额外查一次）",
+      "X-API-Key 中的 API key"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "网关主要靠请求本身可见的信息识别 client；额外查库这类网络调用会拖慢每个请求，除非把结果提前编码进 JWT claim 带到边缘。",
+    "why_en": "A gateway limiter typically identifies clients from information already in the request, such as a JWT claim, forwarded IP, or API key header, instead of an extra database call.",
+    "tags": [
+      "rate-limiter",
+      "identity",
+      "gateway"
+    ],
+    "options_en": [
+      "The userId inside a JWT / Authorization header",
+      "The IP address inside X-Forwarded-For",
+      "Query a database for subscription tier on every request",
+      "The API key inside X-API-Key"
+    ],
+    "optionMeanings": [
+      "JWT 里携带的登录用户标识",
+      "转发链路上的客户端 IP",
+      "每次请求都额外查一次库",
+      "开发者专属的调用密钥"
+    ],
+    "optionMeanings_en": [
+      "The logged-in user id carried inside a JWT",
+      "The client IP forwarded through the proxy chain",
+      "An extra database lookup on every single request",
+      "A per-developer credential for calling the API"
+    ],
+    "termDefinitions": [
+      {
+        "term": "JWT",
+        "meaning": "把身份信息编码进 token 的格式，常放在 Authorization header。",
+        "meaningEn": "A JWT is a token format that encodes identity claims, usually sent in the Authorization header."
+      },
+      {
+        "term": "X-Forwarded-For",
+        "meaning": "记录请求经过的代理链路上真实客户端 IP 的 HTTP header。",
+        "meaningEn": "X-Forwarded-For is an HTTP header that carries the original client IP through a chain of proxies."
+      },
+      {
+        "term": "API key",
+        "meaning": "开发者调用 API 时使用的密钥标识。",
+        "meaningEn": "An API key is a credential that identifies which developer or app is calling the API."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-010",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "rules",
+    "q": "真实系统通常会叠加哪些限流规则？（多选）",
+    "options": [
+      "per-user limit",
+      "per-IP limit",
+      "global API capacity limit",
+      "endpoint-specific limit"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "真实系统很少只有一个全局数字：per-user、per-IP、全局容量、endpoint 级规则会同时生效，命中最严格的一条就拒绝。",
+    "why_en": "Production systems layer per-user, per-IP, global, and endpoint-specific limits, and enforce whichever rule is hit first.",
+    "tags": [
+      "rate-limiter",
+      "rules",
+      "multi-rule"
+    ],
+    "options_en": [
+      "A per-user limit",
+      "A per-IP limit",
+      "A global API capacity limit",
+      "An endpoint-specific limit"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "identity",
+    "scenario": "多个真实用户可能共享同一个出口 IP（公司网络、公共 WiFi），但都已登录拿到各自账号。",
+    "q": "User ID 限流相比 IP 限流的主要优势是什么？",
+    "options": [
+      "IP 限流更精确，因为公网 IP 从不重复分配",
+      "已登录场景更公平：不会把共享 IP 下的多个用户误判成一个",
+      "User ID 限流不需要用户先登录鉴权",
+      "两者对完全匿名流量的效果完全一样"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "IP 天然适合匿名流量，但 NAT、公共 WiFi 会把很多真实用户并成一个 IP；已登录场景优先按 userId 分配限额更公平。",
+    "why_en": "User-ID limits are fairer for logged-in traffic because IP limits can lump many real users behind the same NAT or public network into one bucket.",
+    "tradeoff": "已登录场景的公平性 vs 匿名流量下的可用性",
+    "tags": [
+      "rate-limiter",
+      "identity",
+      "contrast"
+    ],
+    "options_en": [
+      "IP limiting is more precise because public IPs are never reused",
+      "It is fairer for logged-in users because a shared IP will not be mistaken for one user",
+      "User-ID limiting does not require the user to log in first",
+      "Both behave identically for fully anonymous traffic"
+    ],
+    "table": {
+      "headers": [
+        "Key",
+        "Fairness",
+        "Auth need"
+      ],
+      "rows": [
+        [
+          "User ID",
+          "per-account",
+          "requires login"
+        ],
+        [
+          "IP",
+          "per-network",
+          "no login needed"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "NAT",
+        "meaning": "多个设备共用同一个公网 IP 出口的网络地址转换机制。",
+        "meaningEn": "NAT lets many devices share one public IP address when talking to the internet."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-012",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "q": "Fixed Window Counter 的主要缺陷是什么？",
+    "options": [
+      "必须为每个请求单独存 timestamp",
+      "完全无法实现请求计数",
+      "窗口边界处可能双倍突发（两个相邻窗口各打满一次）",
+      "永远不能返回 reset time"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "固定窗口简单省内存，但窗口切换瞬间没有平滑：用户可以在旧窗口尾部和新窗口头部各打满一次，短时间内拿到两倍配额。",
+    "why_en": "Fixed windows are simple, but a client can burst up to twice its limit right across a window boundary.",
+    "tradeoff": "实现极简、只存一个计数器 vs 窗口边界处的突发失控",
+    "tags": [
+      "rate-limiter",
+      "algorithm",
+      "fixed-window"
+    ],
+    "options_en": [
+      "It must store a separate timestamp for every request",
+      "It cannot implement request counting at all",
+      "Two adjacent windows can each be maxed out, doubling the effective burst",
+      "It can never return a reset time"
+    ],
+    "table": {
+      "headers": [
+        "Algorithm",
+        "Accuracy",
+        "State",
+        "Burst"
+      ],
+      "rows": [
+        [
+          "Fixed Window",
+          "edge bursts",
+          "1 counter",
+          "no"
+        ],
+        [
+          "Sliding Log",
+          "exact",
+          "N timestamps",
+          "no"
+        ],
+        [
+          "Sliding Counter",
+          "approx",
+          "2 counters",
+          "smoothed"
+        ],
+        [
+          "Token Bucket",
+          "good",
+          "tokens+time",
+          "yes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-013",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "q": "Sliding Window Log 的优点和代价是什么？",
+    "options": [
+      "只需两个整数，但很不准确",
+      "支持突发流量，但不限制长期速率",
+      "完全不需要存储任何状态",
+      "精确统计滑动窗口请求，但要存大量 timestamp"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "日志法记录每次请求时间，能精确回答过去 N 分钟发生了多少次，没有固定窗口的边界问题；代价是每个热点 client 要存、清理大量 timestamp。",
+    "why_en": "Sliding window logs are exact because they track every request timestamp, but that precision costs memory and cleanup work per client.",
+    "tradeoff": "精确无边界效应 vs 每个 client 的存储与扫描开销",
+    "tags": [
+      "rate-limiter",
+      "algorithm",
+      "sliding-log"
+    ],
+    "options_en": [
+      "Only needs two integers, but is very inaccurate",
+      "Allows bursts, but does not cap sustained rate",
+      "Needs no stored state at all",
+      "Exact per-request count, but stores many timestamps"
+    ],
+    "table": {
+      "headers": [
+        "Algorithm",
+        "Accuracy",
+        "State",
+        "Burst"
+      ],
+      "rows": [
+        [
+          "Fixed Window",
+          "edge bursts",
+          "1 counter",
+          "no"
+        ],
+        [
+          "Sliding Log",
+          "exact",
+          "N timestamps",
+          "no"
+        ],
+        [
+          "Sliding Counter",
+          "approx",
+          "2 counters",
+          "smoothed"
+        ],
+        [
+          "Token Bucket",
+          "good",
+          "tokens+time",
+          "yes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-014",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "q": "Sliding Window Counter 如何在成本和准确性之间折中？",
+    "options": [
+      "维护当前窗口和上一窗口两个计数器，按时间进度加权估算",
+      "保存所有请求的精确 timestamp",
+      "完全忽略上一窗口的数据",
+      "让 Redis 每秒重启清空状态"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "它用当前窗口和上一窗口两个计数器，按当前窗口已过去的比例加权估算真实滑动窗口值，比固定窗口准，比日志省内存。",
+    "why_en": "Sliding window counters approximate a true sliding window by weighting the previous and current window counters.",
+    "tradeoff": "内存只要两个计数器 vs 假设流量在窗口内均匀分布的近似误差",
+    "tags": [
+      "rate-limiter",
+      "algorithm",
+      "sliding-counter"
+    ],
+    "options_en": [
+      "Keep current and previous window counters, weighted by elapsed time",
+      "Store the exact timestamp of every request",
+      "Ignore the previous window entirely",
+      "Restart Redis every second to clear state"
+    ],
+    "table": {
+      "headers": [
+        "Algorithm",
+        "Accuracy",
+        "State",
+        "Burst"
+      ],
+      "rows": [
+        [
+          "Fixed Window",
+          "edge bursts",
+          "1 counter",
+          "no"
+        ],
+        [
+          "Sliding Log",
+          "exact",
+          "N timestamps",
+          "no"
+        ],
+        [
+          "Sliding Counter",
+          "approx",
+          "2 counters",
+          "smoothed"
+        ],
+        [
+          "Token Bucket",
+          "good",
+          "tokens+time",
+          "yes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "scenario": "API 流量天然 bursty，需要允许短暂突发，但也要限制长期平均速率，并且每个 client 状态要很小。",
+    "q": "该设计最终选择哪种限流算法？",
+    "options": [
+      "完整 Sliding Window Log",
+      "Token Bucket",
+      "全局互斥锁",
+      "只用 fixed window"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Token Bucket 用 bucket capacity 控制突发、refill rate 控制长期速率，每个 client 只需两个字段，省内存又贴合 bursty 流量。",
+    "why_en": "Token Bucket balances burst tolerance and sustained-rate control while needing only two small fields per client.",
+    "whenOtherWins": "如果必须精确限制任意滚动窗口内的请求数，Sliding Window Log 更准；规模很小时 Fixed Window 也够用。",
+    "tradeoff": "突发容忍加小状态 vs 任意滚动窗口的精确计数",
+    "tags": [
+      "rate-limiter",
+      "algorithm",
+      "token-bucket"
+    ],
+    "options_en": [
+      "A full Sliding Window Log",
+      "Token Bucket",
+      "A global mutex lock",
+      "Fixed window only"
+    ],
+    "table": {
+      "headers": [
+        "Algorithm",
+        "Accuracy",
+        "State",
+        "Burst"
+      ],
+      "rows": [
+        [
+          "Fixed Window",
+          "edge bursts",
+          "1 counter",
+          "no"
+        ],
+        [
+          "Sliding Log",
+          "exact",
+          "N timestamps",
+          "no"
+        ],
+        [
+          "Sliding Counter",
+          "approx",
+          "2 counters",
+          "smoothed"
+        ],
+        [
+          "Token Bucket",
+          "good",
+          "tokens+time",
+          "yes"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-016",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "token-bucket",
+    "q": "补全 Token Bucket 的两个核心参数：",
+    "text": "Token Bucket 用 {{bucket capacity}} 控制最大突发，用 {{refill rate}} 控制长期平均请求速率；每次请求消耗一个 token。",
+    "why": "capacity 回答“最多能一口气打多少”，refill rate 回答“长期平均允许多少”；这比单纯请求数窗口更贴近 bursty 的 API 流量。",
+    "why_en": "Token Bucket uses bucket capacity for burst size and refill rate for sustained request rate.",
+    "tags": [
+      "rate-limiter",
+      "token-bucket",
+      "parameters"
+    ],
+    "termDefinitions": [
+      {
+        "term": "bucket capacity",
+        "meaning": "token bucket 能装下的最大 token 数，决定允许的突发上限。",
+        "meaningEn": "Bucket capacity is the maximum number of tokens a bucket can hold, which caps how large a burst can be."
+      },
+      {
+        "term": "refill rate",
+        "meaning": "token 补充进 bucket 的速率，决定长期平均允许速率。",
+        "meaningEn": "Refill rate is how fast tokens are added back to the bucket, setting the long-term sustained rate."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-017",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "token-bucket",
+    "q": "把 Token Bucket 的单次检查流程排成正确顺序：",
+    "steps": [
+      "按 elapsed time 和 refill rate 补充 token，最多到 capacity",
+      "读取 client bucket 的 tokens 和 last_refill",
+      "如果 token >= 1，扣一个并允许请求",
+      "写回 tokens、last_refill，并设置 inactivity TTL",
+      "如果 token 不足，拒绝请求"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3,
+      4
+    ],
+    "acceptAltOrders": [
+      [
+        1,
+        0,
+        2,
+        4,
+        3
+      ]
+    ],
+    "why": "核心是 read-modify-write：先补充，再根据当前 token 决策，并持久化新状态。拒绝路径是否写回时间戳取决于实现，但原子边界不能拆开。",
+    "why_en": "A token-bucket check reads state, refills tokens, decides allow or deny, and writes the updated state atomically.",
+    "tags": [
+      "rate-limiter",
+      "token-bucket",
+      "flow"
+    ],
+    "diagram": "flowchart TD\nReq[Request] --> Load[Load bucket]\nLoad --> Refill[Refill by elapsed time]\nRefill --> Enough{Token available}\nEnough -->|yes| Allow[Allow and decrement]\nEnough -->|no| Deny[Return 429]"
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "state-store",
+    "scenario": "多个 API Gateway 实例都要看到同一个用户的 token bucket 状态，且每次检查必须很快。",
+    "q": "共享状态最合适放在哪里？",
+    "options": [
+      "每个 gateway 的本地 map",
+      "离线数据仓库",
+      "Redis 这类内存 KV store",
+      "客户端 cookie"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Redis 提供低延迟的跨实例共享状态、TTL 自动清理和原子脚本；只放本地会回到各 gateway 分裂计数的老问题。",
+    "why_en": "Redis works as shared state because it is fast, supports TTL cleanup, and can run atomic update scripts across every gateway instance.",
+    "whenOtherWins": "单实例服务可以只用本地内存；需要长期审计分析时，应异步写日志系统，而不是挤占在线限流路径。",
+    "tradeoff": "跨实例共享一致 vs 本地内存更低的单跳延迟",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "state"
+    ],
+    "options_en": [
+      "A local map inside each gateway",
+      "An offline data warehouse",
+      "An in-memory KV store such as Redis",
+      "A client-side cookie"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-019",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "redis",
+    "scenario": "gateway 要读取某用户 bucket 的 token 数和最后 refill 时间，这两个字段存放在 Redis hash 中。",
+    "q": "哪条 Redis 命令最贴合这个读取？",
+    "options": [
+      "KEYS alice:bucket:*",
+      "BLPOP alice:bucket 0",
+      "PUBLISH alice:bucket check",
+      "HMGET alice:bucket tokens last_refill"
+    ],
+    "answer": [
+      3
+    ],
+    "codeSample": "HMGET alice:bucket tokens last_refill\nHSET alice:bucket tokens <new_token_count>\nHSET alice:bucket last_refill <current_timestamp>\nEXPIRE alice:bucket 3600",
+    "lang": "redis",
+    "why": "bucket 状态是一个小 hash，HMGET 能一次读出 tokens 和 last_refill 两个字段；生产实现还要把整段判断放进原子脚本。",
+    "why_en": "HMGET reads multiple fields of a Redis hash in one call, which fits reading a client's tokens and last-refill time together.",
+    "whenOtherWins": "如果状态只是一个数字，INCR/DECR 可能就够；Token Bucket 需要 tokens 和 last_refill 两个字段。",
+    "tradeoff": "定向读两个字段 vs 扫描/阻塞/广播类命令的开销",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "code"
+    ],
+    "options_en": [
+      "KEYS alice:bucket:*",
+      "BLPOP alice:bucket 0",
+      "PUBLISH alice:bucket check",
+      "HMGET alice:bucket tokens last_refill"
+    ],
+    "optionMeanings": [
+      "列出所有 key（生产环境危险）",
+      "阻塞式弹出队列元素",
+      "发布消息给订阅者",
+      "一次读多个 hash 字段"
+    ],
+    "optionDirectness": [
+      "不直接：这是运维排查命令",
+      "不直接：这是队列命令",
+      "不直接：这是发布订阅命令",
+      "最直接：正好对应 tokens+last_refill"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-020",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "atomicity",
+    "q": "为什么 HMGET 后再 MULTI/HSET/EXEC 仍可能有竞态？",
+    "options": [
+      "读操作在事务外，两个 gateway 可能都读到旧值并放行",
+      "MULTI/EXEC 从不真正执行写入",
+      "Redis hash 里存不了时间戳",
+      "EXPIRE 会把所有用户一起删掉"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "MULTI/EXEC 只保证写入这一步原子，但读取 HMGET 发生在事务外；两个 gateway 同时读到同一个旧值时，可能都判断可放行，导致超发。",
+    "why_en": "Wrapping only the write in MULTI/EXEC is not enough, because two gateways can read the same stale token count before either one writes back.",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "atomicity"
+    ],
+    "options_en": [
+      "The read happens outside the transaction, so two gateways can both read a stale value and allow",
+      "MULTI/EXEC never actually performs the write",
+      "A Redis hash cannot store a timestamp",
+      "EXPIRE deletes every user's data at once"
+    ],
+    "termDefinitions": [
+      {
+        "term": "MULTI/EXEC",
+        "meaning": "Redis 把多条命令打包成一个原子事务执行的机制。",
+        "meaningEn": "MULTI/EXEC groups several Redis commands into one atomic transaction."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-021",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "atomicity",
+    "scenario": "需要让读取 bucket、计算 refill、扣 token、写回状态在 Redis 里成为一个不可 interleave 的操作。",
+    "q": "应该使用什么机制？",
+    "options": [
+      "客户端 sleep 10ms",
+      "Redis Lua script",
+      "两个独立 HTTP 请求",
+      "只依赖 EXPIRE"
+    ],
+    "answer": [
+      1
+    ],
+    "codeSample": "-- EVAL rate_limit.lua alice:bucket now refill capacity\nlocal tokens = redis.call('HGET', KEYS[1], 'tokens')\n-- calculate refill, decide allow, HSET new fields atomically\nreturn {allowed, remaining, resetTime}",
+    "lang": "redis",
+    "why": "Lua 脚本在 Redis 内部一次性原子执行，能把读取、计算、写回整段逻辑锁进一个不可 interleave 的操作，正是解决计数竞态的关键。",
+    "why_en": "A Redis Lua script runs the whole read-calculate-write sequence as one atomic step inside Redis, closing the race window.",
+    "whenOtherWins": "简单固定窗口可以用 INCR+EXPIRE 这类单命令模式；Token Bucket 的计算更适合放进脚本。",
+    "tradeoff": "整段 read-modify-write 原子 vs 多命令往返的竞态风险",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "lua"
+    ],
+    "diagram": "flowchart LR\nGateway[Gateway] --> Lua[Redis Lua script]\nLua --> Read[Read tokens]\nLua --> Update[Refill and decrement]\nLua --> Result[Allow or deny]",
+    "options_en": [
+      "The client sleeps 10ms",
+      "A Redis Lua script",
+      "Two independent HTTP requests",
+      "Rely only on EXPIRE"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Lua script",
+        "meaning": "Redis 支持在服务端原子执行的小脚本，可以把多步逻辑合并成一次调用。",
+        "meaningEn": "A Lua script lets Redis execute multiple steps atomically on the server in a single call."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-022",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "redis",
+    "q": "Redis 适合限流状态的原因有哪些？（多选）",
+    "options": [
+      "简单操作亚毫秒级",
+      "EXPIRE 可清理不活跃 bucket",
+      "支持复制/高可用",
+      "Lua 等机制支持原子操作"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "限流状态小、热、生命周期短：Redis 的亚毫秒操作、EXPIRE 自动清理、复制/HA 和 Lua 原子脚本都贴合这个场景。",
+    "why_en": "Redis fits rate-limit state because it is fast, supports TTL cleanup, can be replicated for availability, and can run atomic scripts.",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "state"
+    ],
+    "options_en": [
+      "Simple operations run in sub-millisecond time",
+      "EXPIRE cleans up inactive buckets",
+      "It supports replication for high availability",
+      "Mechanisms like Lua support atomic operations"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "exceeded",
+    "scenario": "用户已经超出限制；这是交互式 API，请求排队会消耗资源并让响应时间不可预测。",
+    "q": "超限请求应该如何处理？",
+    "options": [
+      "排队到窗口重置后再处理",
+      "静默丢弃无响应",
+      "fail fast，立即返回 HTTP 429",
+      "把请求写入长期数据库等待人工处理"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "交互式 API 超限时立刻返回更可控：客户端能照 headers 退避重试。排队会占内存、诱发重复重试，还让响应时间变得不可预测。",
+    "why_en": "Interactive APIs should fail fast with a 429 instead of queuing, because queued requests waste memory and make latency unpredictable.",
+    "whenOtherWins": "批处理或后台作业能接受排队等待；用户正在等待响应的交互式 API 通常不适合。",
+    "tradeoff": "立即失败、延迟可预测 vs 排队等待、更友好但更不可控",
+    "tags": [
+      "rate-limiter",
+      "429",
+      "fail-fast"
+    ],
+    "options_en": [
+      "Queue the request until the window resets",
+      "Silently drop it with no response",
+      "Fail fast and return HTTP 429 immediately",
+      "Write it to a long-term database for manual review"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-024",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "headers",
+    "q": "HTTP 429 响应中常见的有用 headers 有哪些？（多选）",
+    "options": [
+      "X-RateLimit-Limit",
+      "X-RateLimit-Remaining",
+      "X-RateLimit-Reset",
+      "Retry-After"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "这些 header 把限额、剩余额度、重置时间和建议等待时间都告诉客户端，好的客户端据此退避，而不是继续硬打 API。",
+    "why_en": "Rate-limit headers tell the client the ceiling, remaining quota, reset time, and how long to wait before retrying.",
+    "tags": [
+      "rate-limiter",
+      "headers",
+      "429"
+    ],
+    "options_en": [
+      "X-RateLimit-Limit",
+      "X-RateLimit-Remaining",
+      "X-RateLimit-Reset",
+      "Retry-After"
+    ],
+    "table": {
+      "headers": [
+        "Header",
+        "Meaning"
+      ],
+      "rows": [
+        [
+          "Limit",
+          "总配额"
+        ],
+        [
+          "Remaining",
+          "剩余次数"
+        ],
+        [
+          "Reset",
+          "重置时间戳"
+        ],
+        [
+          "Retry-After",
+          "建议等待秒数"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-025",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "headers",
+    "scenario": "请求被拒绝，客户端需要明确知道为什么失败以及何时重试。",
+    "q": "哪种响应最符合规范和用户体验？",
+    "options": [
+      "返回 HTTP 200 成功状态，只在 body 里说明 error",
+      "返回 HTTP 500 服务器错误，且不附带任何 header",
+      "不返回任何响应，让客户端连接持续挂起",
+      "HTTP 429 + X-RateLimit-* + Retry-After"
+    ],
+    "answer": [
+      3
+    ],
+    "codeSample": "HTTP/1.1 429 Too Many Requests\nX-RateLimit-Limit: 100\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1640995200\nRetry-After: 60",
+    "lang": "http",
+    "why": "429 是 Too Many Requests 的标准状态码，配合限额/剩余/重置 headers 能让客户端正确退避；不要用 200 或 500 掩盖限流语义。",
+    "why_en": "A proper 429 response with rate-limit headers lets well-behaved clients understand the rejection and back off correctly.",
+    "whenOtherWins": "内部批处理协议可以用自定义错误码；面向公众的 HTTP API 应该遵守标准 429 语义。",
+    "tradeoff": "遵守 HTTP 语义方便客户端退避 vs 伪装成 200/500 让客户端困惑",
+    "tags": [
+      "rate-limiter",
+      "http",
+      "headers"
+    ],
+    "options_en": [
+      "Return HTTP 200 success and put the error only in the body",
+      "Return HTTP 500 with no headers at all",
+      "Send no response and leave the connection hanging",
+      "HTTP 429 with X-RateLimit-* and Retry-After"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-026",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "redis-scale",
+    "scenario": "单个 Redis 实例的典型操作吞吐约 100k-200k ops/sec，而一次限流检查至少要读一次、写一次。",
+    "q": "这对能否用一个 Redis 实例支撑 1M requests/sec 的限流检查意味着什么？",
+    "options": [
+      "不够：实际检查吞吐远低于 1M/sec，必须分片到多个实例",
+      "足够：单实例可以直接扛住 1M/sec",
+      "应该放弃 Redis，改成查询主数据库计数",
+      "应该把 refill rate 设为 0 来减轻压力"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "一次检查至少 1 读 1 写，单实例约 100k-200k ops/sec 换算下来大概只能撑 50k-100k 次检查/sec，离 1M 差一个数量级，必须分片。",
+    "why_en": "Because each check needs a read and a write, a single Redis instance realistically handles tens of thousands of checks per second, not a million, so sharding is required.",
+    "tags": [
+      "rate-limiter",
+      "numbers",
+      "redis"
+    ],
+    "options_en": [
+      "Not enough: real check throughput is far below 1M/sec, so it must be sharded",
+      "Enough: a single instance can directly handle 1M/sec",
+      "Abandon Redis and count against the primary database instead",
+      "Set the refill rate to zero to reduce load"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "redis-sharding",
+    "scenario": "目标是 1M RPS，单 Redis 实例成为瓶颈；同一 client 的请求必须始终命中同一份 bucket 状态。",
+    "q": "Redis 状态应该如何扩展？",
+    "options": [
+      "随机挑一个 Redis 实例写入状态",
+      "按 client identifier 一致性哈希到固定 shard",
+      "把同一份 bucket 复制到所有 shard 后随便读写",
+      "每个请求都广播给全部 Redis 实例"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "按 client identifier 一致性哈希，保证同一 client 永远落在同一 shard，同时把负载摊开；Redis Cluster 可用 hash slot 自动路由。",
+    "why_en": "Sharding by client identifier keeps each client's rate-limit state on one Redis shard while spreading different clients' load across shards.",
+    "whenOtherWins": "如果规则是全局总 QPS 而不是按 client，需要单独的全局或分层计数机制。",
+    "tradeoff": "同一 client 状态集中在一个 shard vs 全局总量类规则难以直接分片",
+    "tags": [
+      "rate-limiter",
+      "redis-sharding",
+      "scaling"
+    ],
+    "options_en": [
+      "Write to a randomly chosen Redis instance",
+      "Consistent-hash the client identifier onto a fixed shard",
+      "Copy the same bucket to every shard and read/write any of them",
+      "Broadcast every request to all Redis instances"
+    ],
+    "termDefinitions": [
+      {
+        "term": "consistent hashing",
+        "meaning": "一种让 key 稳定映射到某个节点、且扩缩容时只影响少量 key 的哈希方式。",
+        "meaningEn": "Consistent hashing maps each key to a stable node so that adding or removing nodes only reshuffles a small fraction of keys."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-028",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "redis-cluster",
+    "q": "补全 Redis Cluster 的分片机制：",
+    "text": "Redis Cluster 把 keyspace 切成 {{16384}} 个 hash slots，并把这些 slots 分配到多个 Redis nodes。",
+    "why": "使用 Redis Cluster 时，gateway 不必自己维护一致性哈希细节，客户端/集群会根据 key 的 slot 自动路由到正确的节点。",
+    "why_en": "Redis Cluster shards keys across 16,384 hash slots distributed over multiple nodes.",
+    "tags": [
+      "rate-limiter",
+      "redis-cluster",
+      "sharding"
+    ],
+    "termDefinitions": [
+      {
+        "term": "hash slot",
+        "meaning": "Redis Cluster 用来分配 key 归属节点的一个编号区间。",
+        "meaningEn": "A hash slot is a numbered bucket Redis Cluster uses to decide which node owns a key."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-029",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "redis-scale",
+    "scenario": "每个 Redis shard 约能处理 100k checks/sec；目标总吞吐是 1M checks/sec。",
+    "q": "要达到这个目标吞吐，Redis 状态应该怎么部署？",
+    "options": [
+      "继续用单实例，靠升级硬件解决",
+      "关闭一部分限流规则来降低压力",
+      "按 client key 分片到约 10 个实例",
+      "把所有数据复制到每个节点本地判断"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "1M / 100k ≈ 10，量级上需要十几个 shard 而不是一个大实例；真实生产还要再加副本和余量。",
+    "why_en": "One million divided by about 100k checks per shard is roughly ten shards, plus replicas and headroom in production.",
+    "tags": [
+      "rate-limiter",
+      "numbers",
+      "redis-sharding"
+    ],
+    "options_en": [
+      "Keep a single instance and just upgrade hardware",
+      "Turn off some rate-limit rules to reduce load",
+      "Shard state by client key across about ten instances",
+      "Copy all data to every node and decide locally"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-030",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "redis-sharding",
+    "q": "把分片限流检查流程排成正确顺序：",
+    "steps": [
+      "gateway 提取 userId/IP/API key 作为 identifier",
+      "Redis shard 内原子执行 Token Bucket 判断",
+      "对 identifier 做 consistent hash 或计算 Redis slot",
+      "根据结果返回 passes/remaining/resetTime",
+      "把请求路由到负责该 identifier 的 Redis shard"
+    ],
+    "answerOrder": [
+      0,
+      2,
+      4,
+      1,
+      3
+    ],
+    "why": "identifier 是分片键，必须稳定映射到同一 shard。到达 shard 后，算法本身和单实例 Token Bucket 基本一样。",
+    "why_en": "The gateway extracts a stable identifier, routes it to the owning Redis shard, and runs the token-bucket decision there atomically.",
+    "tags": [
+      "rate-limiter",
+      "redis-sharding",
+      "flow"
+    ],
+    "diagram": "flowchart LR\nReq[Request key] --> Hash[Hash key]\nHash --> Shard[Redis shard]\nShard --> Lua[Atomic check]\nLua --> Decision[Allow or 429]"
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-031",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "q": "fail-closed 的含义是什么？",
+    "options": [
+      "限流器故障时改为放行所有请求",
+      "只对已付费的用户执行限流",
+      "把超限请求排队等 Redis 恢复",
+      "无法判断时拒绝请求，保护后端但牺牲可用性"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "fail-closed 保守：判断不了就拒绝，保护后端但会牺牲可用性——健康的请求也可能被挡在门外。",
+    "why_en": "Fail-closed rejects requests it cannot verify, protecting backends at the cost of rejecting some healthy traffic too.",
+    "tradeoff": "保护后端优先 vs 可用性优先",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "fail-closed"
+    ],
+    "options_en": [
+      "Switch to allowing all requests when the limiter fails",
+      "Only rate-limit paying customers",
+      "Queue over-limit requests until Redis recovers",
+      "Reject requests it cannot verify, protecting the backend at the cost of availability"
+    ],
+    "table": {
+      "headers": [
+        "Mode",
+        "Uptime",
+        "Risk"
+      ],
+      "rows": [
+        [
+          "Fail-open",
+          "high",
+          "cascade risk"
+        ],
+        [
+          "Fail-closed",
+          "lower",
+          "blocks users"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-032",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "q": "fail-open 的主要风险是什么？",
+    "options": [
+      "Redis 不可用时流量直通后端，高峰可能引发级联故障",
+      "它会把所有健康请求也一起拒绝掉",
+      "它反而让限流判断更加精确",
+      "它要求每个客户端自己实现 Lua 脚本"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "fail-open 保住了可用性，但暂时失去限流保护；如果 Redis 正是因为流量或攻击才出问题，放开闸门可能直接压垮后端。",
+    "why_en": "Fail-open keeps the API available but removes protection at the exact moment traffic or an attack may already be overwhelming the backend.",
+    "tradeoff": "可用性优先 vs 失去保护窗口",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "fail-open"
+    ],
+    "options_en": [
+      "When Redis is unavailable, all traffic passes straight through and can cascade during a spike",
+      "It rejects every healthy request as well",
+      "It makes rate-limit decisions more precise",
+      "It requires every client to implement Lua itself"
+    ],
+    "table": {
+      "headers": [
+        "Mode",
+        "Uptime",
+        "Risk"
+      ],
+      "rows": [
+        [
+          "Fail-open",
+          "high",
+          "cascade risk"
+        ],
+        [
+          "Fail-closed",
+          "lower",
+          "blocks users"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "scenario": "社交平台在 viral 事件中流量突增；如果 Redis 限流层故障，后端数据库和应用也可能已经接近容量上限。",
+    "q": "该设计为这个场景选择哪种失败模式？",
+    "options": [
+      "fail-open",
+      "fail-closed",
+      "无限排队",
+      "客户端自觉限流即可"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "fail-closed 会降低可用性，但能防止失去限流后把下游全打垮；社交平台高峰期，短暂拒绝好过级联崩溃。",
+    "why_en": "For a social platform under viral load, fail-closed is chosen so a Redis outage does not turn into a full backend collapse.",
+    "whenOtherWins": "如果后端余量很大、限流只是软配额，fail-open 能提升可用性；金融或高安全场景通常也更偏 fail-closed。",
+    "tradeoff": "短暂拒绝换后端安全 vs 保可用性但可能级联崩溃",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "availability"
+    ],
+    "options_en": [
+      "Fail-open",
+      "Fail-closed",
+      "Queue requests indefinitely",
+      "Rely on client-side limiting alone"
+    ],
+    "table": {
+      "headers": [
+        "Mode",
+        "Uptime",
+        "Risk"
+      ],
+      "rows": [
+        [
+          "Fail-open",
+          "high",
+          "cascade risk"
+        ],
+        [
+          "Fail-closed",
+          "lower",
+          "blocks users"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-034",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "redis-ha",
+    "scenario": "Redis 已按 client 分片，但任一 shard 挂掉会影响其负责的一批用户；希望自动恢复写能力。",
+    "q": "标准高可用方案是什么？",
+    "options": [
+      "只用单 master，完全不配副本",
+      "把 bucket 状态写进浏览器本地存储",
+      "每个 shard 配副本，故障时自动提升",
+      "每次故障都靠人工手动切换 Redis"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "master-replica 复制加自动 failover 是标准做法，Redis Cluster 能自动探测故障并提升副本；代价是成本和短暂复制延迟。",
+    "why_en": "Standard Redis high availability uses master-replica replication with automatic promotion on failure, at the cost of extra infrastructure and brief replication lag.",
+    "whenOtherWins": "极小系统能接受单实例故障；跨地域强隔离需求可能要每区域独立集群加更复杂策略。",
+    "tradeoff": "自动故障恢复 vs 额外副本成本和复制延迟",
+    "tags": [
+      "rate-limiter",
+      "redis",
+      "high-availability"
+    ],
+    "options_en": [
+      "Use a single master with no replicas at all",
+      "Write bucket state into the browser's local storage",
+      "Give every shard a replica and auto-promote it on failure",
+      "Fail over by hand every single time"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-035",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "observability",
+    "q": "限流系统应监控哪些指标？（多选）",
+    "options": [
+      "Redis CPU、内存、网络连通性",
+      "限流检查成功率和延迟",
+      "进入 fail-open/fail-closed 降级模式的事件",
+      "每个用户的头像颜色"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "限流器挡在请求入口，必须能快速发现 Redis 异常、决策延迟升高或降级模式被触发；跟限流健康无关的指标不该混进来。",
+    "why_en": "Rate-limiter observability should cover Redis health, check latency and success rate, and transitions into fail-open or fail-closed.",
+    "tags": [
+      "rate-limiter",
+      "observability",
+      "operations"
+    ],
+    "options_en": [
+      "Redis CPU, memory, and network connectivity",
+      "Rate-limit check success rate and latency",
+      "Events entering fail-open or fail-closed degraded mode",
+      "Every user's avatar color"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-036",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "latency",
+    "scenario": "每次限流检查都要访问 Redis；如果 gateway 每次都新建 TCP 连接，额外握手会让请求延迟不可接受。",
+    "q": "最重要的低延迟优化是什么？",
+    "options": [
+      "每请求打开新连接以避免复用",
+      "把限流检查改成离线批处理",
+      "删除所有 headers",
+      "连接池 / 持久 Redis 连接"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "连接池复用已建立的 TCP 连接，省掉每次 20-50ms 级别的握手开销；Redis 操作本身很快，连接管理常常才是主要延迟来源。",
+    "why_en": "Connection pooling reuses established TCP connections and avoids repeated handshake overhead on the hot path.",
+    "whenOtherWins": "很低频的管理接口可以用简单短连接；核心请求路径必须复用连接。",
+    "tradeoff": "复用连接省握手延迟 vs 每次新建连接的简单但慢",
+    "tags": [
+      "rate-limiter",
+      "latency",
+      "connection-pooling"
+    ],
+    "options_en": [
+      "Open a fresh connection per request to avoid reuse",
+      "Turn rate-limit checks into an offline batch job",
+      "Strip out all response headers",
+      "Connection pooling with persistent Redis connections"
+    ],
+    "termDefinitions": [
+      {
+        "term": "connection pooling",
+        "meaning": "复用一组已建立的连接，而不是每次请求都重新握手。",
+        "meaningEn": "Connection pooling reuses a set of already-open connections instead of opening a new one per request."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-037",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "multi-region",
+    "scenario": "用户分布全球；东京用户如果每次限流都访问弗吉尼亚 Redis，会多出明显网络延迟。",
+    "q": "最大的地理延迟优化是什么？",
+    "options": [
+      "多区域部署 Gateway 和 Redis，就近完成限流",
+      "把所有流量强制回源到单一区域",
+      "只增加 HTTP 429 的 body 字段",
+      "直接关闭 TLS 加密传输"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "限流状态放到离用户近的区域能省掉跨洋 RTT；代价是跨区域一致性更复杂，但限流通常可以接受区域间最终一致。",
+    "why_en": "Deploying gateways and Redis regionally keeps rate-limit checks close to users and avoids cross-continent round trips.",
+    "whenOtherWins": "如果必须全局强一致限额，需要单一权威区域或分层协调，但会牺牲延迟。",
+    "tags": [
+      "rate-limiter",
+      "multi-region",
+      "latency"
+    ],
+    "options_en": [
+      "Deploy gateways and Redis regionally, so checks stay local",
+      "Force all traffic back to a single origin region",
+      "Just add another field to the 429 response body",
+      "Simply turn off TLS encryption"
+    ],
+    "optionMeanings": [
+      "把限流部署分散到用户附近的区域",
+      "所有请求都跨区域回中心处理",
+      "只改响应体格式，不改延迟路径",
+      "去掉传输层加密，不影响网络距离"
+    ],
+    "optionMeanings_en": [
+      "Spreads the limiter deployment near users",
+      "Every request still crosses regions to a central point",
+      "Only changes response format, not the latency path",
+      "Removes transport encryption, unrelated to network distance"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-038",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "latency",
+    "q": "除连接池和地理部署外，文章提到哪些可选优化？（多选）",
+    "options": [
+      "每次请求都查询中央配置数据库",
+      "Redis pipelining 或 Lua scripts 减少往返",
+      "同用户突发请求的 request batching",
+      "本地缓存限流状态但要小心 stale"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "pipelining/Lua 减少往返，batching 摊薄热点请求，本地缓存要小心 stale；但每次查中央配置库会直接拖垮延迟目标，不该走这条路。",
+    "why_en": "Pipelining, Lua scripts, careful batching, and cautious local caching can cut latency, while querying a central config database on every request would not.",
+    "tags": [
+      "rate-limiter",
+      "latency",
+      "optimizations"
+    ],
+    "options_en": [
+      "Querying a central config database on every request",
+      "Redis pipelining or Lua scripts to cut round trips",
+      "Batching a burst of requests from the same user",
+      "Local caching of rate-limit state, done carefully to avoid staleness"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-039",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "hot-keys",
+    "q": "Rate Limiter 中的 hot key 通常意味着什么？",
+    "options": [
+      "某篇帖子被非常多不同用户同时读取",
+      "单个 client 请求量极高，压垮所在 shard",
+      "某张数据库表的 schema 设计得不好",
+      "所有用户的请求量都完全均匀"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "限流状态按 client key 分片，所以 hot key 就是某一个 client 自己的请求量极大；可能是滥用攻击，也可能是合法高流量客户或 NAT 聚合。",
+    "why_en": "A rate-limiter hot key is one client identifier sending enough traffic to overload the single shard that owns it.",
+    "tags": [
+      "rate-limiter",
+      "hot-keys",
+      "redis"
+    ],
+    "options_en": [
+      "One post is being read by many different users",
+      "One client sends extreme traffic and overloads its shard",
+      "A database table has a poorly designed schema",
+      "Every user's request volume is perfectly even"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-040",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-keys",
+    "q": "对合法高流量 client，文章建议哪些处理方式？（多选）",
+    "options": [
+      "鼓励 client-side rate limiting 平滑流量",
+      "立刻永久封禁所有高流量 client",
+      "提供 batch API 减少检查次数",
+      "premium tiers 或 dedicated infrastructure"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "合法高流量要引导承载，不是一刀切封禁：客户端限流平滑流量，批处理减少检查次数，付费/专用资源隔离压力。",
+    "why_en": "Legitimate high-volume clients are handled with client-side limiting, batch APIs, or premium and dedicated infrastructure rather than blanket bans.",
+    "tags": [
+      "rate-limiter",
+      "hot-keys",
+      "legitimate-traffic"
+    ],
+    "options_en": [
+      "Encourage client-side rate limiting to smooth traffic",
+      "Permanently ban every high-volume client immediately",
+      "Offer a batch API to cut the number of checks",
+      "Offer premium tiers or dedicated infrastructure"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-041",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "abuse",
+    "q": "对滥用或攻击流量，哪些策略合理？（多选）",
+    "options": [
+      "持续触发限流后临时加入 blocklist",
+      "使用 Cloudflare/AWS Shield 等 DDoS 防护在更前面挡流量",
+      "完全依赖客户端自觉",
+      "降低 IP-based 规则对 NAT 的误伤并更多依赖 authenticated user limit"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "恶意流量不能指望客户端自觉，应尽早用 blocklist 和上游 DDoS 防护挡住；共享 IP 也可能是合法 NAT，IP 规则要谨慎、多依赖已登录用户限额。",
+    "why_en": "Abusive traffic needs blocklists and upstream DDoS protection, while IP-based rules must stay cautious about shared NATs.",
+    "tags": [
+      "rate-limiter",
+      "abuse",
+      "ddos"
+    ],
+    "options_en": [
+      "Temporarily blocklist a client after it repeatedly hits limits",
+      "Use upstream DDoS protection such as Cloudflare or AWS Shield",
+      "Rely entirely on client good behavior",
+      "Ease IP-based rules for NAT and lean more on authenticated user limits"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-042",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "client-side",
+    "q": "client-side rate limiting 在本设计中的定位是什么？",
+    "options": [
+      "完全替代服务端限流",
+      "只用于数据库内部",
+      "有价值的补充，可平滑好公民流量，但不能作为安全边界",
+      "会让 HTTP 429 不再需要"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "客户端限流能减少误伤和基础设施压力，但恶意客户端不会自觉遵守；服务端限流仍是保护系统必须有的边界。",
+    "why_en": "Client-side limiting is a useful complement for well-behaved clients, but it cannot replace server-side enforcement.",
+    "tradeoff": "降低基础设施压力 vs 无法充当安全边界",
+    "tags": [
+      "rate-limiter",
+      "client-side",
+      "security"
+    ],
+    "options_en": [
+      "A full replacement for server-side rate limiting",
+      "Something only used inside the database",
+      "A valuable complement that smooths well-behaved traffic, but not a security boundary",
+      "Something that makes HTTP 429 unnecessary"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "dynamic-config",
+    "scenario": "限流规则偶尔调整，例如产品发布时临时提高 limit；允许几十秒内逐步生效，想保持实现简单。",
+    "q": "最常见的动态配置方案是什么？",
+    "options": [
+      "每个请求都触发重新部署 gateway",
+      "把规则直接写进客户端代码里",
+      "只靠人工 SSH 登录改内存",
+      "配置库存规则，gateway 定期 polling 并缓存"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "配置服务/数据库存规则，gateway 周期性 polling 并本地缓存，实现简单、够用；代价是变更到全网生效有延迟，比如最多 30 秒。",
+    "why_en": "Polling a configuration store and caching results locally is simple and good enough when rule changes can take up to about 30 seconds to propagate.",
+    "whenOtherWins": "安全事件或高频交易等需要秒级强推配置时，push-based 方案更合适。",
+    "tradeoff": "实现简单 vs 变更生效有延迟",
+    "tags": [
+      "rate-limiter",
+      "config",
+      "polling"
+    ],
+    "diagram": "flowchart LR\nAdmin[Admin config] --> Store[Config store]\nStore --> Watch[Watch or poll]\nWatch --> Gateway[Gateway cache]\nGateway --> Checks[Limiter checks]",
+    "options_en": [
+      "Redeploy the gateway on every single request",
+      "Hard-code the rules directly into client code",
+      "Only change memory by hand over SSH",
+      "Store rules in a config store; gateways poll and cache them"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "dynamic-config",
+    "scenario": "安全事件中需要几秒内把新 limit 推到所有 gateway，不能等下一轮 30 秒 polling。",
+    "q": "应考虑哪种配置分发？",
+    "options": [
+      "用 ZooKeeper/Pub-Sub 做 push 配置通知",
+      "每天定时人工重启所有 gateway 才生效",
+      "把规则直接写死在部署镜像里",
+      "只手动更新其中一台 gateway"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "push-based 配置能立刻通知所有连接的 gateway，适合紧急规则变更；代价是要处理连接故障、部分更新和 fallback，复杂度更高。",
+    "why_en": "Push-based configuration notifies every connected gateway immediately, which suits urgent changes but adds connection and partial-failure handling complexity.",
+    "whenOtherWins": "普通业务规则调整用 polling 更简单；push 只在对传播延迟敏感时才值得付出复杂度。",
+    "tradeoff": "秒级生效 vs 连接管理和部分失败的复杂度",
+    "tags": [
+      "rate-limiter",
+      "config",
+      "zookeeper"
+    ],
+    "options_en": [
+      "Push-based notification via ZooKeeper or Pub/Sub",
+      "Restart every gateway by hand on a daily schedule",
+      "Bake the rules directly into the deployment image",
+      "Manually update just one single gateway"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZooKeeper",
+        "meaning": "一个分布式协调服务，能在配置变化时主动推送通知给所有连接的客户端。",
+        "meaningEn": "ZooKeeper is a distributed coordination service that can push configuration changes to all connected clients immediately."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-045",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把“选择 API Gateway + Redis Token Bucket”的决策链排成正确顺序：",
+    "steps": [
+      "用 Token Bucket 兼顾 burst 和 sustained rate",
+      "需求：每个请求前低延迟判断并保护后端",
+      "把限流放在 API Gateway，先于业务服务拒绝",
+      "用 Redis 共享各 gateway 的 bucket 状态",
+      "用 Lua 保证 read-calculate-update 原子"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3,
+      4
+    ],
+    "why": "先确定入口保护位置，再选算法，然后补共享状态和原子性；这条链覆盖了功能、延迟和正确性三层。",
+    "why_en": "The gateway-plus-Redis decision starts with edge protection, chooses Token Bucket, and adds shared atomic state.",
+    "tags": [
+      "rate-limiter",
+      "decision-chain",
+      "architecture"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-046",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把“扩展到 1M RPS”的决策链排成正确顺序：",
+    "steps": [
+      "每个 shard 做 master-replica 和 failover",
+      "用 Redis Cluster / consistent hashing 按 client key 分片",
+      "需求：单 Redis 实例只能处理约 50k-100k checks/sec",
+      "在 gateway 侧复用连接并尽量区域内访问",
+      "约十个 shard 才能达到 1M checks/sec 量级"
+    ],
+    "answerOrder": [
+      2,
+      1,
+      4,
+      0,
+      3
+    ],
+    "why": "先由单实例瓶颈推出分片，再估算 shard 数，之后补高可用和低延迟；顺序体现容量、可用性、延迟三层约束。",
+    "why_en": "Scaling to one million checks requires Redis sharding by client key, enough shards, replica failover, and low-latency connections.",
+    "tags": [
+      "rate-limiter",
+      "decision-chain",
+      "scaling"
+    ],
+    "diagram": "flowchart LR\nScale[1M checks per sec] --> Shard[Redis Cluster]\nShard --> Pool[Connection pools]\nPool --> Local[Regional deploy]\nLocal --> Metrics[Monitor hot keys]"
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-047",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "level-expectations",
+    "q": "中级候选人在这题里至少应讲清楚什么？",
+    "options": [
+      "从零手写一遍完整 ZooKeeper 实现",
+      "选对部署位置、讲清一种算法、知道要分片 Redis",
+      "背出 Lua 虚拟机的内部源码",
+      "只讨论前端错误提示文案"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "中级重点是高层设计和核心组件理解：放在哪里、怎么算、状态放哪、怎么返回 429；分布式细节可以留到追问再展开。",
+    "why_en": "A mid-level answer should place the limiter sensibly, explain one algorithm like Token Bucket, and recognize that Redis state needs sharding.",
+    "tags": [
+      "rate-limiter",
+      "interview-level",
+      "mid"
+    ],
+    "options_en": [
+      "Implement a full ZooKeeper from scratch",
+      "Place the limiter well, explain one algorithm, and know Redis needs sharding",
+      "Recite the internal source of the Lua VM",
+      "Only discuss frontend error copy"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-048",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "level-expectations",
+    "q": "Senior 候选人的期望深度是什么？",
+    "options": [
+      "只死记硬背固定窗口的定义",
+      "假装系统完全没有故障模式",
+      "主动比较算法取舍，并提出原子性、分片、故障等问题",
+      "把限流丢给客户端就当结束"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Senior 需要主动识别分布式限流的常见坑：原子 read-modify-write、Redis 可用性、延迟优化和热点问题，只会一个算法不够。",
+    "why_en": "Senior candidates should proactively discuss algorithm trade-offs, atomic Redis updates, sharding, failure modes, latency, and hot keys.",
+    "tags": [
+      "rate-limiter",
+      "interview-level",
+      "senior"
+    ],
+    "options_en": [
+      "Only recite the definition of a fixed window",
+      "Pretend the system has no failure modes",
+      "Proactively compare algorithm trade-offs and raise atomicity, sharding, and failure questions",
+      "Hand rate limiting to the client and stop there"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-049",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "level-expectations",
+    "q": "Staff+ 答案通常应体现什么？",
+    "options": [
+      "只是多罗列几种算法的名字而已",
+      "完全回避任何权衡取舍的讨论",
+      "假设所有客户端天生值得信任",
+      "强调生产深度：多区域、可观测性、真实容量"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "Staff+ 重点是生产经验和边界条件，能把限流系统放进真实平台运维中思考，而不是更长的术语列表。",
+    "why_en": "Staff-level answers emphasize production operations, multi-region behavior, observability, and real capacity judgment from experience.",
+    "tags": [
+      "rate-limiter",
+      "interview-level",
+      "staff"
+    ],
+    "options_en": [
+      "Just list a few more algorithm names",
+      "Avoid any discussion of trade-offs entirely",
+      "Assume every client is inherently trustworthy",
+      "Emphasize production depth: multi-region, observability, real capacity"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-050",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "final-design",
+    "q": "最终 rate limiter 设计的关键组成包括哪些？（多选）",
+    "options": [
+      "API Gateway 执行限流并返回 429 headers",
+      "Redis Cluster 分片存 token bucket 状态",
+      "Lua 原子执行 bucket 更新",
+      "每个请求长期写入分析数据库后再决定是否放行"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "最终主路径要短：gateway 提取标识、命中对应 Redis shard、脚本原子判断，超限就快速返回 429；长期分析不该阻塞在线决策。",
+    "why_en": "The final design keeps the hot path short: extract identity, hit the right Redis shard, decide atomically, and return 429 fast when over the limit.",
+    "tags": [
+      "rate-limiter",
+      "final-design",
+      "summary"
+    ],
+    "diagram": "flowchart LR\nClient[Client] --> GW[API Gateway]\nGW -->|extract id| Router[Shard Router]\nRouter --> R1[(Redis Shard A)]\nRouter --> R2[(Redis Shard B)]\nRouter --> R3[(Redis Shard C)]\nR1 --> Rep1[Replica]\nGW -->|allow| App[Backend API]\nGW -->|429 headers| Client",
+    "options_en": [
+      "The API Gateway enforces limits and returns 429 headers",
+      "Redis Cluster shards store token-bucket state",
+      "Lua executes bucket updates atomically",
+      "Every request is written to an analytics database before deciding"
+    ]
+  }
+]

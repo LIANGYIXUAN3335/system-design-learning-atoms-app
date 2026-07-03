@@ -1,0 +1,2229 @@
+[
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-001",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "requirements",
+    "scenario": "面试官要求设计一个 Datadog/Prometheus 式监控平台，正在圈定 v1 的功能边界。",
+    "q": "监控平台的核心功能需求包括哪些？（多选，只选真正在范围内的）",
+    "options": [
+      "从服务/机器摄取 CPU、内存、延迟、自定义计数器等指标",
+      "支持 dashboard 查询、过滤、聚合和时间范围展示",
+      "支持阈值和时间窗口的 alert rule，触发后发通知",
+      "提供日志聚合与全文检索"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "ingest、查询、告警、通知是 v1 范围；日志聚合与全文搜索被明确划到范围外，是另一个系统的问题。",
+    "why_en": "The v1 scope is metric ingestion, querying, alerting, and notification, while log aggregation and full-text search are explicitly out of scope.",
+    "tags": [
+      "metrics-monitoring",
+      "requirements",
+      "scope"
+    ],
+    "options_en": [
+      "Ingest CPU, memory, latency, and custom counters from services.",
+      "Query and visualize metrics on dashboards with filters and time ranges.",
+      "Support threshold and time-window alert rules that trigger notifications.",
+      "Provide log aggregation and full-text search."
+    ],
+    "optionMeanings": [
+      "摄取管道：收集服务/机器发出的指标点。",
+      "查询层：dashboard 按时间范围过滤聚合。",
+      "告警层：阈值+时间窗口触发通知。",
+      "日志系统：全文检索日志内容，不是指标。"
+    ],
+    "optionDirectness": [
+      "在范围内；这是数据流的起点。",
+      "在范围内；这是用户消费指标的方式。",
+      "在范围内；这是主动发现问题的机制。",
+      "不在范围；文章明确把日志聚合划为独立系统。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-002",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "nfr",
+    "scenario": "目标是能撑起 500k 服务器、5M metrics/s 摄取的监控平台，同时兼顾查询延迟和告警可靠性。",
+    "q": "监控平台的关键非功能需求有哪些？（多选）",
+    "options": [
+      "支持 500k 服务器、峰值 5M metrics/s 摄取",
+      "Dashboard 要强一致，任何旧数据都不可接受",
+      "Dashboard 跨天或跨周查询需在秒级返回",
+      "告警从指标发出到触发低于约 1 分钟"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "摄取规模、查询延迟和告警时限是硬指标；dashboard 可接受最终一致，强一致不是本题要求。",
+    "why_en": "Ingestion scale, query latency, and alert latency are hard requirements, while dashboards are allowed to be eventually consistent rather than strongly consistent.",
+    "tags": [
+      "metrics-monitoring",
+      "nfr",
+      "scale"
+    ],
+    "options_en": [
+      "Support 500k servers and a peak ingestion of 5M metrics per second.",
+      "Dashboards must be strongly consistent and never show stale data.",
+      "Dashboard queries spanning days or weeks should return within seconds.",
+      "Alerts should fire in under about one minute from metric emission."
+    ],
+    "optionMeanings": [
+      "定义摄取吞吐目标。",
+      "要求 dashboard 强一致。",
+      "定义查询延迟目标。",
+      "定义告警时限目标。"
+    ],
+    "optionDirectness": [
+      "在范围内；决定写路径架构。",
+      "不在范围；文章明确说 dashboard 可最终一致。",
+      "在范围内；决定查询/缓存设计。",
+      "在范围内；决定告警评估方式。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-003",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-math",
+    "scenario": "监控平台要覆盖 500k 台服务器，每台每 10 秒上报约 100 个指标点，峰值可达约 5M metrics/s。",
+    "q": "这个摄取量级最支持哪条设计判断？",
+    "options": [
+      "必须走批量、缓冲和写优化存储，而不是逐点直连中心库",
+      "5M metrics/s 属于普通 CRUD 量级，单机关系库足够",
+      "这个量级下可以让每次上报都同步等数据库写完成",
+      "峰值只在活动期出现，可以按日均值做容量规划"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "5M/s 远超单机 CRUD 能承受的量级，意味着摄取路径必须批量、缓冲、写优化，而不是同步直写。",
+    "why_en": "At about five million metrics per second, the ingestion path needs batching, buffering, and write-optimized storage instead of synchronous direct writes.",
+    "tags": [
+      "metrics-monitoring",
+      "numbers",
+      "ingestion"
+    ],
+    "options_en": [
+      "It must use batching, buffering, and write-optimized storage instead of direct point writes.",
+      "5M metrics/s is ordinary CRUD scale; a single relational database is enough.",
+      "At this scale, every report can synchronously wait for the database write.",
+      "The peak only happens during events, so capacity can be planned around the daily average."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-004",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-math",
+    "scenario": "每个 metric data point 约 100-200 bytes，峰值 5M metrics/s，原始写入量约 1GB/s。",
+    "q": "这个字节量级最支持哪条设计判断？",
+    "options": [
+      "1GB/s 在网络和存储层可以忽略，用什么线格式都一样",
+      "线格式和存储都要考虑压缩与批量；JSON 逐点发送在此量级下不现实",
+      "每个 point 应带上完整历史记录以减少请求数",
+      "字节量级只影响磁盘成本，不影响协议选择"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "1GB/s 级别的写入量决定了线格式要能压缩批量传输，落地存储也要走列式压缩，纯 JSON 逐点发送撑不住。",
+    "why_en": "At roughly one gigabyte per second, the wire format needs batching and compression, so sending raw JSON point by point will not hold up.",
+    "tags": [
+      "metrics-monitoring",
+      "numbers",
+      "throughput"
+    ],
+    "options_en": [
+      "1GB/s is negligible for networking and storage, so any wire format works the same.",
+      "Both the wire format and storage need compression and batching; sending raw JSON per point will not scale.",
+      "Each point should carry its full history to reduce the number of requests.",
+      "The byte volume only affects disk cost, not protocol choice."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "alerting",
+    "q": "为什么“告警 1 分钟内触发”在监控系统里通常是合理目标？",
+    "options": [
+      "1 分钟只是行业惯例数字，没有技术原因",
+      "更快触发在技术上不可能，指标采集本身就要 1 分钟",
+      "通知渠道限制了告警最快只能 1 分钟发一次",
+      "很多告警基于滑动窗口或趋势，需要累积到足够数据才能判断"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "生产告警常看一段时间的均值、p99 或持续违反，而不是单个瞬时点，所以需要先累积窗口内数据。",
+    "why_en": "Many production alerts look at a moving average, p99, or a sustained breach rather than a single instant, so they need enough accumulated data first.",
+    "tags": [
+      "metrics-monitoring",
+      "alerting",
+      "windows"
+    ],
+    "options_en": [
+      "One minute is just a convention with no technical reason.",
+      "Faster firing is technically impossible because collection itself takes a minute.",
+      "Notification channels limit alerts to once per minute.",
+      "Many alerts evaluate moving windows or trends, so they need enough accumulated data first."
+    ],
+    "optionMeanings": [
+      "认为这只是约定俗成的数字。",
+      "把限制归到采集频率本身。",
+      "把限制归到通知渠道能力。",
+      "把限制归到窗口/趋势判断需要数据累积。"
+    ],
+    "optionDirectness": [
+      "不直接；1 分钟背后有窗口评估的技术原因。",
+      "不直接；采集本身可以做到秒级。",
+      "不直接；通知渠道能立即发送单条消息。",
+      "最直接；窗口类告警天然需要攒够数据。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "entities",
+    "q": "监控平台的核心实体包括哪些？（多选）",
+    "options": [
+      "Trace：分布式追踪里的 span 集合",
+      "Label：指标上的 key-value 维度",
+      "Series：同一 metric name + labels 的时间序列",
+      "Alert Rule 和 Dashboard：告警条件与展示面板"
+    ],
+    "answer": [
+      1,
+      2,
+      3
+    ],
+    "why": "Label/Series/Alert Rule/Dashboard 是本设计的数据与配置实体；分布式追踪的 span/trace 属于另一个系统。",
+    "why_en": "Labels, series, alert rules, and dashboards are the core data and configuration entities, while distributed tracing spans belong to a separate system.",
+    "tags": [
+      "metrics-monitoring",
+      "entities",
+      "time-series"
+    ],
+    "options_en": [
+      "Trace: the set of spans a distributed request passes through.",
+      "Label: a key-value dimension used to slice and filter a metric.",
+      "Series: the time-ordered sequence for one metric name and label set.",
+      "Alert Rule and Dashboard: the condition that fires notifications and the panels that visualize data."
+    ],
+    "optionMeanings": [
+      "分布式追踪里请求经过的调用片段。",
+      "key-value 维度，用来切分和过滤指标。",
+      "同一 metric name + labels 随时间的点序列。",
+      "触发通知的条件配置 + 可视化面板。"
+    ],
+    "optionDirectness": [
+      "不在范围；分布式追踪是本设计明确排除的功能。",
+      "在范围内；是指标的切片维度。",
+      "在范围内；是存储和查询的基本单位。",
+      "在范围内；是用户配置和消费告警的入口。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Trace",
+        "meaning": "分布式追踪里一次请求经过的完整调用链。",
+        "meaningEn": "A trace is the full call chain a distributed request passes through."
+      },
+      {
+        "term": "span",
+        "meaning": "trace 中的一段调用记录。",
+        "meaningEn": "A span is one recorded operation within a trace."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-007",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "labels-series",
+    "scenario": "cpu_usage{host=\"server-1\"}=0.75 是某一时刻的一次测量；同一 host 这些点连成的完整时间轴是另一个层级的东西。",
+    "q": "Metric 和 Series 的关键区别是什么？",
+    "options": [
+      "Metric 只用于告警，Series 只用于通知展示",
+      "Metric 是某一时刻的单点测量值，Series 是它随时间累积的完整序列",
+      "两者是同一个概念，只是名字不同而已",
+      "Metric 存用户身份信息，Series 存访问日志内容"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Metric 是某个时间点的一次测量；Series 是同一 metric name + labels 组合下，这些测量随时间串成的完整序列。",
+    "why_en": "A metric is one measurement at a point in time, while a series is the full time-ordered sequence of measurements for one metric-and-label combination.",
+    "tradeoff": "单点测量值 vs 随时间的完整序列",
+    "tags": [
+      "metrics-monitoring",
+      "series",
+      "labels"
+    ],
+    "options_en": [
+      "Metric is only for alerting, and series is only for notification display.",
+      "A metric is one measurement at a point in time; a series is the full time-ordered sequence for one metric-and-label combination.",
+      "The two terms are identical, just different names.",
+      "Metric stores user identity data, and series stores access logs."
+    ],
+    "optionMeanings": [
+      "把两者按用途（告警/通知）区分，而非按数据形状。",
+      "按数据形状区分：单点值 vs 时间序列。",
+      "认为两个术语可以互换。",
+      "把两者当成完全不同的数据类别。"
+    ],
+    "optionDirectness": [
+      "不直接；两者都能同时用于告警和查询。",
+      "最直接；这是数据形状上的定义区别。",
+      "不直接；两者描述的粒度不同。",
+      "不直接；两者都是指标相关概念，不是用户/日志数据。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Series",
+        "meaning": "同一 metric name + labels 随时间的点序列。",
+        "meaningEn": "A series is the time-ordered sequence of points for one metric name and label combination."
+      },
+      {
+        "term": "Label",
+        "meaning": "附加在指标上的 key-value 维度。",
+        "meaningEn": "A label is a key-value dimension attached to a metric."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-008",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "q": "补全 cardinality explosion 的定义：",
+    "text": "每个唯一的 {{metric name + label values}} 组合都会形成一个 {{series}}；标签值组合失控时，series 数会爆炸。",
+    "why": "series 数量决定索引、内存跟踪、写入吞吐和聚合查询成本，是监控系统的核心风险。",
+    "why_en": "Cardinality explosion happens because each unique metric-name and label-value combination creates a separate series.",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "series"
+    ],
+    "termDefinitions": [
+      {
+        "term": "cardinality / 基数",
+        "meaning": "一个 metric 下唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique series under one metric."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-009",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "data-flow",
+    "q": "把 metrics 平台的端到端数据流排好序：",
+    "steps": [
+      "用户通过 dashboard 查询并聚合指标",
+      "服务产生指标点并发送给平台",
+      "Alert rules 周期性或流式评估指标",
+      "平台摄取、校验并写入时间序列存储",
+      "触发后 Notification Service 发出通知"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2,
+      4
+    ],
+    "why": "主数据流从产生和存储开始，再被 dashboard 和 alert 两条读路径消费，最后进入通知。",
+    "why_en": "Metrics are generated, ingested and stored, queried by dashboards, evaluated by alerts, and finally delivered as notifications.",
+    "tags": [
+      "metrics-monitoring",
+      "data-flow",
+      "pipeline"
+    ],
+    "diagram": "flowchart LR\nAgent[Agent] --> Ingest[Ingestion]\nIngest --> Kafka[Kafka]\nKafka --> Writer[TSDB writer]\nWriter --> TSDB[(TSDB)]\nTSDB --> Query[Query API]\nTSDB --> Alert[Alert evaluator]"
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-010",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "api",
+    "scenario": "Agent/服务要高吞吐发送指标，网络协议示例用 JSON 表达，但真实系统可换 protobuf。",
+    "q": "摄取 API 的形态应是什么？",
+    "options": [
+      "GET /metrics/one-by-one 每个点一个请求",
+      "POST /metrics/ingest 批量提交 metrics 数组",
+      "DELETE /dashboards/all",
+      "POST /alerts/notifyOnly"
+    ],
+    "answer": [
+      1
+    ],
+    "codeSample": "POST /metrics/ingest\n{\n  \"metrics\": [\n    {\"name\": \"cpu_usage\", \"labels\": {\"host\": \"server-1\"}, \"value\": 0.75, \"timestamp\": 1640000000}\n  ]\n}",
+    "lang": "http",
+    "why": "高吞吐指标必须批量提交，减少每点一次请求的开销；线格式可从 JSON 换成 protobuf。",
+    "why_en": "Metric ingestion should batch many points into one POST request instead of one request per point, since JSON can later be swapped for a binary format like protobuf.",
+    "whenOtherWins": "如果只是小型内部工具，简单 JSON HTTP 批量接口已经足够。",
+    "tradeoff": "批量吞吐 vs 单点请求的实现简单性",
+    "tags": [
+      "metrics-monitoring",
+      "api",
+      "ingestion"
+    ],
+    "options_en": [
+      "GET /metrics/one-by-one, one request per data point.",
+      "POST /metrics/ingest with a batched array of metrics.",
+      "DELETE /dashboards/all.",
+      "POST /alerts/notifyOnly."
+    ],
+    "optionMeanings": [
+      "每个数据点单独发一次 GET 请求。",
+      "一次 POST 提交一批指标数组。",
+      "删除所有 dashboard 的接口。",
+      "只发通知、不摄取指标的接口。"
+    ],
+    "optionDirectness": [
+      "不直接；5M/s 下逐点请求开销爆炸。",
+      "最直接；批量摄取匹配高吞吐场景。",
+      "不直接；这是删除操作，不是摄取。",
+      "不直接；这是通知接口，不摄取数据。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "protobuf",
+        "meaning": "一种二进制序列化格式，比 JSON 更紧凑、编解码更快。",
+        "meaningEn": "Protobuf is a binary serialization format that is more compact and faster to encode than JSON."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-011",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "api",
+    "scenario": "Dashboard 需要按 PromQL-like DSL 查询某个时间范围内的聚合指标。",
+    "q": "查询 API 最贴近哪种形态？",
+    "options": [
+      "POST /metrics/ingest，用于写入而非查询",
+      "GET /alerts/sendNow，用于手动触发通知",
+      "GET /metrics/query，按 DSL 表达过滤/聚合/时间范围",
+      "DELETE /series，用于删除整条 series"
+    ],
+    "answer": [
+      2
+    ],
+    "codeSample": "GET /metrics/query?query=avg(cpu_usage{region=\"us-east\"})&start=A&end=B&step=60\n-> { \"timestamps\": [...], \"values\": [...] }",
+    "lang": "http",
+    "why": "查询接口要能表达 metric 选择、label 过滤、聚合函数、时间范围和采样步长这五要素。",
+    "why_en": "A metrics query API needs to express metric selection, label filters, aggregation, time range, and step size.",
+    "whenOtherWins": "如果只服务固定 dashboard，可以用预定义 query id 简化客户端请求。",
+    "tradeoff": "表达力（过滤/聚合/时间范围） vs 查询语法复杂度",
+    "tags": [
+      "metrics-monitoring",
+      "api",
+      "query"
+    ],
+    "options_en": [
+      "POST /metrics/ingest, used for writing, not querying.",
+      "GET /alerts/sendNow, used to manually trigger a notification.",
+      "GET /metrics/query, expressing filters, aggregation, and time range via the DSL.",
+      "DELETE /series, used to delete an entire series."
+    ],
+    "optionMeanings": [
+      "写入接口，不是查询。",
+      "触发告警发送的接口。",
+      "PromQL 风格的读查询，带过滤/聚合/时间范围。",
+      "删除 series 的管理接口。"
+    ],
+    "optionDirectness": [
+      "不直接；这是摄取路径，不是查询。",
+      "不直接；这是通知触发，不是数据查询。",
+      "最直接；覆盖 metric、过滤、聚合、时间范围、步长。",
+      "不直接；这是删除操作。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "PromQL",
+        "meaning": "Prometheus 的查询语言，本设计的 DSL 参考对象。",
+        "meaningEn": "PromQL is Prometheus's query language and the model for this design's query DSL."
+      },
+      {
+        "term": "DSL",
+        "meaning": "领域特定查询语言，用来描述要取的指标和聚合方式。",
+        "meaningEn": "A DSL is a domain-specific query language used to describe which metrics to fetch and how to aggregate them."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-012",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "api",
+    "scenario": "用户要定义 p99 latency 超阈值并持续 5 分钟才通知的规则。",
+    "q": "告警规则 API 应包含哪些核心字段？",
+    "options": [
+      "只保留一个邮件标题字符串字段",
+      "只保留一个 dashboard 展示颜色字段",
+      "只保留一个主机登录密码字段",
+      "含 name、query、for、notifications"
+    ],
+    "answer": [
+      3
+    ],
+    "codeSample": "POST /alerts/rules\n{\n  \"name\": \"High CPU Alert\",\n  \"query\": \"avg(cpu_usage{region='us-east'}) > 0.9\",\n  \"for\": \"5m\",\n  \"notifications\": [\"slack:#oncall\", \"pagerduty:team-infra\"]\n}",
+    "lang": "http",
+    "why": "Alert Rule 本质是查询条件、阈值、持续窗口和通知目标的组合，缺一个就无法完整定义一条规则。",
+    "why_en": "An alert rule combines a metric query, a threshold, a duration, and notification targets.",
+    "whenOtherWins": "如果规则由代码配置管理，API 也可以变成配置同步入口。",
+    "tradeoff": "规则表达完整性 vs 配置字段的简洁性",
+    "tags": [
+      "metrics-monitoring",
+      "api",
+      "alerting"
+    ],
+    "options_en": [
+      "Only an email subject-line string field.",
+      "Only a dashboard display-color field.",
+      "Only a host login-password field.",
+      "It has name, query, for, notifications."
+    ],
+    "optionMeanings": [
+      "只保留邮件标题字符串。",
+      "只保留展示用的颜色配置。",
+      "混入了不该出现在规则里的敏感字段。",
+      "查询、阈值、持续时间、通知渠道四要素齐全。"
+    ],
+    "optionDirectness": [
+      "不直接；标题不能定义告警条件。",
+      "不直接；颜色是展示层，不是判断逻辑。",
+      "不直接；密码不属于告警规则。",
+      "最直接；这四个字段能完整表达一条规则。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-013",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "ingestion",
+    "q": "让所有服务器直接 POST 到 ingestion service，再由它直接写数据库，在 5M metrics/s 下会怎样？",
+    "options": [
+      "会自动获得无限吞吐，不受硬件限制",
+      "两端都会被写入洪峰压垮，因为没有缓冲和背压",
+      "告警延迟会立刻降到 0，不再有窗口等待",
+      "cardinality 爆炸问题会自动消失"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "直接写没有缓冲、背压或重放能力，数据库会成为下游瓶颈，洪峰下两端都会被压垮。",
+    "why_en": "Writing directly from servers to a database with no buffer offers no backpressure or replay, so both the ingestion service and the database get overwhelmed by write spikes.",
+    "tags": [
+      "metrics-monitoring",
+      "ingestion",
+      "bottleneck"
+    ],
+    "options_en": [
+      "It automatically gains unlimited throughput regardless of hardware.",
+      "Both ends get overwhelmed by the write spike because there is no buffer or backpressure.",
+      "Alert latency immediately drops to zero, with no more window waiting.",
+      "The cardinality explosion problem disappears automatically."
+    ],
+    "optionMeanings": [
+      "认为省掉中间层能让吞吐无限提升。",
+      "点出直连写入没有缓冲和背压。",
+      "认为架构变化会自动改善告警延迟。",
+      "认为省略中间层能顺带解决基数问题。"
+    ],
+    "optionDirectness": [
+      "不直接；没有中间层反而更快触顶。",
+      "最直接；这是缺缓冲/背压的直接后果。",
+      "不直接；告警延迟和这层架构无关。",
+      "不直接；cardinality 是标签设计问题，与此无关。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "背压 / backpressure",
+        "meaning": "下游处理不过来时让上游放慢或缓冲，而不是直接丢数据。",
+        "meaningEn": "Backpressure lets downstream slowness throttle or buffer upstream writers instead of dropping data outright."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-014",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "ingestion",
+    "q": "只在负载均衡器后面增加更多 ingestion service 实例，为什么还不够？",
+    "options": [
+      "会让负载均衡器无法分流请求",
+      "会导致所有实例都禁止批量发送",
+      "只扩展了入口，所有实例仍冲击同一个数据库",
+      "会让 Kafka 被直接删除"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "横向扩容只解决入口的并发数，没有解决数据库的持久缓冲、消费者失败和重放问题。",
+    "why_en": "Adding more ingestion instances only scales the entry point; every instance still writes to the same downstream database, so the bottleneck just moves, not disappears.",
+    "tags": [
+      "metrics-monitoring",
+      "ingestion",
+      "scaling"
+    ],
+    "options_en": [
+      "It would make the load balancer unable to distribute requests.",
+      "It would forbid every instance from batching sends.",
+      "It only scales the entry point; every instance still hits the same database.",
+      "It would delete Kafka outright."
+    ],
+    "optionMeanings": [
+      "误判负载均衡器本身的分流能力。",
+      "认为实例数会影响是否能批量。",
+      "指出瓶颈只是被推到了下游数据库。",
+      "认为扩容会破坏 Kafka（此时还没引入 Kafka）。"
+    ],
+    "optionDirectness": [
+      "不直接；负载均衡器分流没问题。",
+      "不直接；batching 和实例数无关。",
+      "最直接；这正是横向扩容入口的局限。",
+      "不直接；这一步还没有 Kafka 可删。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "kafka",
+    "scenario": "摄取流量有突刺，存储消费者可能变慢或重启，但不希望马上丢失指标。",
+    "q": "ingestion service 和存储之间应加入什么？",
+    "options": [
+      "只用浏览器 localStorage 缓存",
+      "Kafka topic，按 series 分区",
+      "只跑一个单机 cron 定时任务",
+      "接一个用于媒体分发的图片 CDN"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Kafka 提供持久缓冲、背压吸收和分区并行消费，把摄取和存储解耦，避免存储抖动直接冲击上游。",
+    "why_en": "Kafka decouples ingestion from storage with durable buffering, backpressure handling, and partitioned parallel consumption.",
+    "whenOtherWins": "如果规模很小且允许丢点，直接写存储可以更简单。",
+    "tradeoff": "持久缓冲与背压 vs 直连存储的实现简单性",
+    "tags": [
+      "metrics-monitoring",
+      "kafka",
+      "ingestion"
+    ],
+    "diagram": "flowchart LR\nAgents[Agents] --> LB[Load balancer]\nLB --> Ingest[Ingestion fleet]\nIngest --> Kafka[Kafka buffer]\nKafka --> Writers[TSDB writers]\nWriters --> TSDB[(TSDB)]",
+    "options_en": [
+      "Only browser localStorage caching.",
+      "A Kafka topic partitioned by series.",
+      "Only a single-machine cron job.",
+      "An image CDN meant for media distribution."
+    ],
+    "optionMeanings": [
+      "浏览器端存储，服务器间不共享。",
+      "持久化消息队列，按 series 分区。",
+      "单机定时任务，没有持久缓冲能力。",
+      "面向静态媒体分发的网络，不是消息缓冲。"
+    ],
+    "optionDirectness": [
+      "不直接；这是客户端存储，不适用后端管道。",
+      "最直接；提供持久缓冲和背压。",
+      "不直接；cron 没有持久化和并行消费能力。",
+      "不直接；CDN 解决地理延迟，不是写入缓冲。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Kafka",
+        "meaning": "分布式持久化消息队列，用于缓冲和解耦摄取与存储。",
+        "meaningEn": "Kafka is a distributed durable message queue used to buffer and decouple ingestion from storage."
+      },
+      {
+        "term": "分区 / partition",
+        "meaning": "把一个 topic 切成多份，允许并行消费。",
+        "meaningEn": "A partition splits a topic into pieces so consumers can process it in parallel."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "agents",
+    "scenario": "500k 服务器每 10 秒产生大量指标，不想让中心 ingestion 层承接 5M 个单点请求。",
+    "q": "边缘侧应该部署什么？",
+    "options": [
+      "让每个业务进程各自建数据库连接",
+      "装一个面向用户的浏览器插件",
+      "让人工定期手工上传 CSV 文件",
+      "本地 agent，采集+缓冲+批量上报"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "Agent 把采集、局部缓冲和批量发送下沉到机器侧，能把中心请求数降一个数量级。",
+    "why_en": "Local agents collect, buffer, and batch metrics at the edge, cutting the number of requests hitting the central ingestion service by roughly one order of magnitude.",
+    "whenOtherWins": "如果只监控少量服务，直接 SDK push 也可能足够。",
+    "tradeoff": "边缘批量降低中心压力 vs 500k 台机器的部署运维成本",
+    "tags": [
+      "metrics-monitoring",
+      "agents",
+      "batching"
+    ],
+    "options_en": [
+      "Let every business process open its own database connection.",
+      "Install a browser extension aimed at end users.",
+      "Have someone manually upload CSV files on a schedule.",
+      "A local agent that collects, buffers, and batches uploads."
+    ],
+    "optionMeanings": [
+      "让每个业务进程各自直连数据库。",
+      "把采集逻辑放进用户浏览器。",
+      "人工批处理上传文件。",
+      "机器侧后台进程，本地采集+缓冲+批量上报。"
+    ],
+    "optionDirectness": [
+      "不直接；这会让连接数和摄取压力更分散但更混乱。",
+      "不直接；服务器指标和浏览器无关。",
+      "不直接；手工方式无法支撑实时监控。",
+      "最直接；这是 Datadog/Prometheus 采用的标准模式。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Agent / collector",
+        "meaning": "跑在每台机器上的后台进程，负责本地采集和批量上报指标。",
+        "meaningEn": "An agent or collector is a background process on each machine that collects and batches metrics locally before shipping them."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "kafka",
+    "q": "Kafka 缓冲的一个重要代价是什么？",
+    "options": [
+      "所有数据会因此变成强一致查询",
+      "运维复杂度会自动降到 0",
+      "恢复后要追赶 backlog，容量不足会长期落后",
+      "消费者从此不能并行处理"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "如果系统停摆 5 分钟，恢复后要处理这 5 分钟的积压；平时容量越接近满载，追赶所需时间越长。",
+    "why_en": "If the system is down for five minutes, it comes back to a five-minute backlog, and the closer capacity runs to full during normal times, the longer it takes to catch up.",
+    "tags": [
+      "metrics-monitoring",
+      "kafka",
+      "backpressure"
+    ],
+    "options_en": [
+      "All data would suddenly become strongly consistent to query.",
+      "Operational complexity automatically drops to zero.",
+      "After recovery it must catch up on a backlog, and tight capacity means staying behind long-term.",
+      "Consumers can no longer process in parallel."
+    ],
+    "optionMeanings": [
+      "误以为消息队列会带来强一致性。",
+      "误以为引入 Kafka 就不再有运维成本。",
+      "点出停机恢复后的积压追赶问题。",
+      "误以为分区消费不能并行。"
+    ],
+    "optionDirectness": [
+      "不直接；Kafka 缓冲不等于强一致。",
+      "不直接；Kafka 本身也要运维（broker、分区、复制）。",
+      "最直接；这是缓冲队列的经典代价。",
+      "不直接；Kafka 恰恰是靠分区并行消费。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "backlog / 积压",
+        "meaning": "停机期间没被消费的消息堆积，恢复后需要额外时间处理完。",
+        "meaningEn": "A backlog is the pile-up of unconsumed messages during downtime that must be processed after recovery."
+      }
+    ],
+    "scenario": "Kafka 作为持久缓冲挡在摄取和存储之间，系统曾经短暂停摆过一段时间。"
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "storage",
+    "scenario": "存储要承接 5M metrics/s、按时间范围扫描、压缩、保留策略和长期 rollup。",
+    "q": "比普通 Postgres 更适合的主存储是什么？",
+    "options": [
+      "继续用没有分区的单表 Postgres",
+      "专用时间序列数据库（TSDB）",
+      "把对象存储直接当查询引擎用",
+      "用 Redis 永久保存全部原始点"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "时间序列数据库针对 append-only 写入、时间分区、列式压缩和内置 rollup 做了优化，正好匹配这类工作负载。",
+    "why_en": "A time-series database is optimized for append-only writes, time-based partitioning, compression, and rollups, which fits this workload.",
+    "whenOtherWins": "小团队几百台机器、短保留周期时，Postgres 或 TimescaleDB 的简单方案可能足够。",
+    "tradeoff": "专用时序优化（写入/压缩/rollup） vs 通用关系库的灵活查询",
+    "tags": [
+      "metrics-monitoring",
+      "time-series-db",
+      "storage"
+    ],
+    "options_en": [
+      "Keep using a single unpartitioned Postgres table.",
+      "A dedicated time-series database (TSDB).",
+      "Use object storage directly as the query engine.",
+      "Keep all raw points in Redis permanently."
+    ],
+    "optionMeanings": [
+      "关系库单表存储，没有时间分区。",
+      "专门为时间序列写入/压缩/rollup 优化的数据库。",
+      "把对象存储直接当查询引擎用。",
+      "把内存缓存当永久存储用。"
+    ],
+    "optionDirectness": [
+      "不直接；单表无分区在这个写入量下会退化。",
+      "最直接；专为这类工作负载设计。",
+      "不直接；对象存储不适合低延迟聚合查询。",
+      "不直接；Redis 不是为海量持久时序数据设计的。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "time-series database / TSDB",
+        "meaning": "针对时间序列数据优化的数据库，擅长追加写入、时间分区和压缩。",
+        "meaningEn": "A time-series database is optimized for time-stamped data, with strong support for append-only writes, time partitioning, and compression."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-019",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "postgres",
+    "scenario": "小规模监控系统尝试把每个 metric point 作为一行存在 Postgres，并把 PromQL-like 查询翻译成 SQL。",
+    "q": "这种方案在本设计规模下的问题是什么？",
+    "options": [
+      "SQL 语法本身无法表达任何时间范围",
+      "Postgres 完全不能存储 JSON 类型的 labels",
+      "Dashboard 场景其实不需要任何查询",
+      "写入量、长扫描和 retention 清理会压垮它"
+    ],
+    "answer": [
+      3
+    ],
+    "codeSample": "SELECT time_bucket('1 minute', timestamp) AS bucket, AVG(value)\nFROM metrics\nWHERE metric_name = 'cpu_usage' AND labels @> '{\"region\":\"us-east\"}'\n  AND timestamp BETWEEN $start AND $end\nGROUP BY bucket;",
+    "lang": "sql",
+    "why": "这条 SQL 在小规模能跑，但 5M writes/s 的写入、长期扫描和按 retention 做 DELETE 会让 Postgres 迅速退化。",
+    "why_en": "This query works at small scale, but the write rate, long-range scans, and retention deletes make Postgres unsuitable at this scale.",
+    "whenOtherWins": "如果只有几百台机器和短期数据，关系库加分区可能是可接受的起点。",
+    "tradeoff": "关系库的查询灵活性 vs 专用时序库在这个写入量下的可持续性",
+    "tags": [
+      "metrics-monitoring",
+      "postgres",
+      "storage"
+    ],
+    "options_en": [
+      "SQL syntax itself cannot express any time range.",
+      "Postgres cannot store JSON-typed labels at all.",
+      "Dashboards actually need no querying at all.",
+      "The write rate, long scans, and retention cleanup would overwhelm it."
+    ],
+    "optionMeanings": [
+      "认为 SQL 语法本身表达不了时间范围。",
+      "认为 Postgres 不支持 JSON 类型。",
+      "认为 dashboard 根本不需要查询存储。",
+      "点出高写入、长扫描、DELETE 和跨分片聚合的真实瓶颈。"
+    ],
+    "optionDirectness": [
+      "不直接；SQL BETWEEN 完全能表达时间范围。",
+      "不直接；Postgres 的 JSONB 支持良好。",
+      "不直接；dashboard 显然需要查询。",
+      "最直接；这些正是 Postgres 在这个规模下的真实瓶颈。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "write amplification / 写放大",
+        "meaning": "一次逻辑写入引发数据库内部多次实际写入，DELETE 类操作常见。",
+        "meaningEn": "Write amplification is when one logical write causes multiple physical writes inside the database, common with retention deletes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-020",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "time-series-db",
+    "q": "时间序列数据库适合 metrics 的原因有哪些？（多选，选出真正成立的）",
+    "options": [
+      "append-only 写入优化",
+      "天生擅长跨表强 JOIN 查询",
+      "按时间分区，旧数据可整块丢弃",
+      "列式/时间序列压缩"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "append-only、时间分区、压缩是 TSDB 匹配指标写入模式的核心特性；强 JOIN 从来不是 TSDB 的强项。",
+    "why_en": "Append-only writes, time partitioning, and compression are what make time-series databases fit metrics, while complex joins are not their strength.",
+    "tags": [
+      "metrics-monitoring",
+      "time-series-db",
+      "storage"
+    ],
+    "options_en": [
+      "Optimized for append-only writes.",
+      "It is naturally good at complex cross-table JOINs.",
+      "Time-based partitioning lets old chunks be dropped wholesale.",
+      "Columnar/time-series compression."
+    ],
+    "optionMeanings": [
+      "数据几乎只追加，不做随机更新。",
+      "把 TSDB 当关系库一样做多表强 JOIN。",
+      "按时间分块存储，旧块可整体丢弃。",
+      "同列时间戳/数值放在一起压缩率高。"
+    ],
+    "optionDirectness": [
+      "成立；这是 TSDB 写入优化的基础。",
+      "不成立；TSDB 普遍不擅长复杂 JOIN，这不是它的卖点。",
+      "成立；这是过期数据清理的关键设计。",
+      "成立；这是存储成本大幅下降的原因。"
+    ],
+    "table": {
+      "headers": [
+        "Trait",
+        "Benefit"
+      ],
+      "rows": [
+        [
+          "Append-only",
+          "fast writes"
+        ],
+        [
+          "Time partition",
+          "drop old chunks"
+        ],
+        [
+          "Compression",
+          "smaller storage"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-021",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "retention",
+    "q": "补全文章中的保留/rollup 策略示例：",
+    "text": "可保留 {{10 秒 raw}} 数据约 15 天，{{1 分钟 rollup}} 约 90 天，{{1 小时 rollup}} 约 1 年。",
+    "why": "越老的数据分辨率越低越合算：用更少的点换更快的长范围查询和更低的存储成本。",
+    "why_en": "Older data is kept at lower resolution because fewer points make long-range queries faster and storage cheaper.",
+    "tags": [
+      "metrics-monitoring",
+      "retention",
+      "rollups"
+    ],
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "把高分辨率原始点预先聚合成低分辨率数据，用于长范围查询。",
+        "meaningEn": "A rollup pre-aggregates high-resolution raw points into lower-resolution data for fast long-range queries."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "query-service",
+    "scenario": "Dashboard 查询是突发、用户驱动、可能很贵；写入是持续、稳定、高吞吐。",
+    "q": "为什么要把 Query Service 放在 TSDB 前面并和写路径分离？",
+    "options": [
+      "Query Service 能替代所有存储",
+      "写路径不能访问 Kafka",
+      "读写特征不同，可独立扩容、缓存和翻译 DSL",
+      "Dashboard 只能访问客户端缓存"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "查询是突发、用户驱动、可能很贵；写入是持续、稳定、高吞吐；分离后各自能独立扩容、加缓存、做 DSL 翻译。",
+    "why_en": "Reads are bursty and user-driven while writes are constant and high-throughput, so separating them lets each path scale, cache, and translate queries independently.",
+    "whenOtherWins": "小系统可以让 API Server 直接查 TSDB，但规模上读写拆分更清晰。",
+    "tradeoff": "读写路径独立扩容与缓存 vs 单一服务的实现简单性",
+    "tags": [
+      "metrics-monitoring",
+      "query-service",
+      "read-path"
+    ],
+    "options_en": [
+      "The query service can replace all storage.",
+      "The write path cannot access Kafka.",
+      "Reads and writes have different characteristics, so each can scale, cache, and translate its DSL independently.",
+      "Dashboards can only read from client-side cache."
+    ],
+    "optionMeanings": [
+      "误以为 Query Service 能取代 TSDB。",
+      "把写路径和 Kafka 的关系搞反。",
+      "指出读写特征不同带来的独立扩容需求。",
+      "误以为查询只能靠客户端缓存。"
+    ],
+    "optionDirectness": [
+      "不成立；这层只是缓存/翻译层，不是存储本体。",
+      "不直接；写路径正是经过 Kafka 进入存储的。",
+      "最直接；这正是拆分读写路径的理由。",
+      "不成立；缓存完全可以做在服务端查询层。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "TSDB",
+        "meaning": "专门存储和查询时间序列数据的数据库。",
+        "meaningEn": "A TSDB is a database specialized for storing and querying time-stamped data."
+      },
+      {
+        "term": "DSL",
+        "meaning": "领域特定查询语言，本设计用它描述查询和聚合。",
+        "meaningEn": "A DSL is a domain-specific language, used here to describe queries and aggregations."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "alerting",
+    "scenario": "需求只是 1 分钟内触发告警，且 dashboard 查询能力已经存在。",
+    "q": "首版 Alert Evaluator 最简单合理的方案是什么？",
+    "options": [
+      "立刻给所有规则接入流处理框架",
+      "周期性轮询 rules，查 Query Service 评估",
+      "让 Slack 自己承担查询职责",
+      "只在用户打开 dashboard 时才评估"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "alerts-as-scheduled-queries 简单、可解释，1 分钟延迟需求下轮询已经够用，这也是 Prometheus Alertmanager 的做法。",
+    "why_en": "Scheduled polling queries are simple and debuggable, and they are sufficient when a one-minute alert latency is acceptable, which is how Prometheus's alerting works.",
+    "whenOtherWins": "如果告警必须秒级响应或基于流式窗口，Flink 等 stream processing 更合适。",
+    "tradeoff": "轮询的简单可解释 vs 流处理的更低延迟",
+    "tags": [
+      "metrics-monitoring",
+      "alerting",
+      "polling"
+    ],
+    "diagram": "flowchart LR\nRule[Alert rule] --> Scheduler[Evaluator loop]\nScheduler --> Query[Query Service]\nQuery --> TSDB[(TSDB)]\nScheduler --> State[Alert state]\nState --> Notify[Notification]",
+    "options_en": [
+      "Immediately wire every rule into a stream-processing framework.",
+      "Periodically poll the rules and evaluate them via the Query Service.",
+      "Let Slack take on the query responsibility itself.",
+      "Only evaluate rules when a user opens the dashboard."
+    ],
+    "optionMeanings": [
+      "首版就为全部规则引入流处理框架。",
+      "定期轮询规则并查询已有存储评估。",
+      "让通知渠道自己承担查询职责。",
+      "把评估和用户打开页面绑在一起。"
+    ],
+    "optionDirectness": [
+      "不直接；1 分钟延迟不需要流处理，是过度设计。",
+      "最直接；复用已有查询能力，简单可解释。",
+      "不直接；Slack 不该承担存储查询职责。",
+      "不直接；没人开 dashboard 时告警就不会触发，不可靠。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "TSDB",
+        "meaning": "存储指标数据的时间序列数据库，评估器要查询它。",
+        "meaningEn": "The TSDB is the time-series database that the alert evaluator queries."
+      },
+      {
+        "term": "Alertmanager",
+        "meaning": "Prometheus 生态里负责轮询评估告警规则的组件。",
+        "meaningEn": "Alertmanager is the Prometheus component that periodically evaluates alert rules."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "notifications",
+    "scenario": "Alert Evaluator 发现规则违反，需要通知 Slack/PagerDuty，但外部 API 可能失败且需要去重分组。",
+    "q": "应该在中间增加什么组件？",
+    "options": [
+      "让 evaluator 直接同步调用所有外部 API",
+      "让 TSDB 直接负责发短信",
+      "加一层 Notification Service",
+      "靠客户端浏览器推送来通知"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Notification Service 负责分组、去重、静默、升级和重试，把不可靠的外部 API 调用和告警评估逻辑解耦。",
+    "why_en": "A notification service handles grouping, deduplication, silencing, escalation, and retries, decoupling flaky external APIs from alert evaluation.",
+    "whenOtherWins": "小型内部工具可以先直接调用 Slack，但要清楚这是可靠性弱点。",
+    "tradeoff": "解耦通知可靠性与评估逻辑 vs 直接调用的实现简单性",
+    "tags": [
+      "metrics-monitoring",
+      "notifications",
+      "alertmanager"
+    ],
+    "options_en": [
+      "Let the evaluator call every external API synchronously.",
+      "Have the TSDB itself send text messages.",
+      "Add a notification service layer.",
+      "Rely on client-side browser push to notify."
+    ],
+    "optionMeanings": [
+      "让评估逻辑直接承担外部调用的不可靠性。",
+      "把通知职责错放到存储层。",
+      "专门的通知中间层，负责分组/去重/重试。",
+      "依赖用户浏览器在线才能收到通知。"
+    ],
+    "optionDirectness": [
+      "不直接；外部 API 抖动会直接拖垮或丢失评估结果。",
+      "不直接；TSDB 不该做通知发送。",
+      "最直接；这是文章采用的标准分层。",
+      "不直接；on-call 工程师不一定开着浏览器。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-025",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "dedup",
+    "q": "补全告警去重状态机：",
+    "text": "Notification Service 跟踪 alert 是 {{firing}} 还是 {{resolved}}，只在状态从正常变 firing 或从 firing 变 resolved 时通知。",
+    "why": "如果 CPU 一直高，每分钟重复发送同一页会造成告警风暴；状态转换通知能抑制重复。",
+    "why_en": "Tracking firing versus resolved state prevents repeated notifications for the same ongoing incident.",
+    "tags": [
+      "metrics-monitoring",
+      "notifications",
+      "dedup"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-026",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "notifications",
+    "q": "Notification Service 通常负责哪些能力？（多选）",
+    "options": [
+      "按 cluster/service 等 label 分组",
+      "去重正在触发的相同告警",
+      "维护 silencing/maintenance window",
+      "在没有人值班时自动关闭所有告警"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "分组、去重、静默是 Notification Service 的核心职责；自动关闭所有告警会制造盲区，不是文章描述的能力。",
+    "why_en": "Grouping, deduplication, and silencing are the notification service's real responsibilities, while auto-disabling all alerts when no one is on call would create blind spots.",
+    "tags": [
+      "metrics-monitoring",
+      "notifications",
+      "alert-fatigue"
+    ],
+    "options_en": [
+      "Group alerts by labels such as cluster or service.",
+      "Deduplicate an alert that is already firing.",
+      "Maintain silencing or maintenance windows.",
+      "Automatically disable all alerts when nobody is on call."
+    ],
+    "optionMeanings": [
+      "按标签把相关告警合并成一条通知。",
+      "同一个告警持续触发时只通知一次状态变化。",
+      "维护期内主动静音某些告警。",
+      "无人值班就自动停用全部告警。"
+    ],
+    "optionDirectness": [
+      "成立；这是抑制告警风暴的核心手段。",
+      "成立；这是 firing/resolved 状态机的目的。",
+      "成立；这是维护窗口的标准能力。",
+      "不成立；这会让系统在无人时彻底失明，文章没有描述这种设计。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "rollups",
+    "scenario": "用户查询 30 天 CPU 趋势，只需要小时级趋势，不需要 10 秒级原始点。",
+    "q": "Query Engine 应该优先读取什么？",
+    "options": [
+      "所有 10 秒 raw 点",
+      "1 小时 rollup",
+      "Alert Rule 表",
+      "Notification retry queue"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "查询范围是 30 天、只要小时级趋势，用 1 小时 rollup 能把每条 series 的点数从数十万降到几百级。",
+    "why_en": "For a thirty-day query that only needs hourly trends, reading the one-hour rollup cuts points per series from hundreds of thousands down to a few hundred.",
+    "whenOtherWins": "如果用户放大到最近几分钟排障，需要切回 raw 或更高分辨率数据。",
+    "tradeoff": "低分辨率换查询速度 vs 需要放大到细节时的精度损失",
+    "tags": [
+      "metrics-monitoring",
+      "rollups",
+      "query"
+    ],
+    "options_en": [
+      "All raw ten-second points.",
+      "The one-hour rollup.",
+      "The alert rule table.",
+      "The notification retry queue."
+    ],
+    "optionMeanings": [
+      "读全部原始高分辨率点。",
+      "读预先聚合好的小时级数据。",
+      "配置数据，不是时间序列数值。",
+      "等待重试的通知任务队列。"
+    ],
+    "optionDirectness": [
+      "不直接；30 天的原始点数量级过大，查询会很慢。",
+      "最直接；分辨率匹配需求，点数少两个数量级。",
+      "不成立；查的是规则配置表，跟这次面板无关。",
+      "不成立；这是消息投递状态，帮不上这次查询。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "预先按更大时间粒度聚合好的指标数据。",
+        "meaningEn": "A rollup is metric data pre-aggregated at a coarser time granularity."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-028",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "query-scale",
+    "scenario": "Dashboard 面板要在原始 10 秒粒度下扫 30 天数据；单 series 约 25.9 万点，1000 个 pod 的面板就要扫 2.59 亿行，约 25GB。",
+    "q": "这个规模最支持哪条设计判断？",
+    "options": [
+      "全量原始点扫描不会影响查询延迟，只影响存储成本",
+      "全量原始点扫描会让面板查询退化到分钟级，必须靠 rollup 或缓存降点数",
+      "2.59 亿行对时间序列数据库来说可以直接一次性全表扫描",
+      "点数越多，索引会自动保证查询保持亚秒级"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "扫描 2.59 亿行、约 25GB 数据，即使有索引也要顺序扫描聚合，响应时间会到分钟级，必须靠 rollup 或缓存降低实际扫描点数。",
+    "why_en": "Scanning roughly 259 million rows and 25GB even with good indexes means sequential aggregation that takes minutes, so rollups or caching are needed to cut the actual points scanned.",
+    "tags": [
+      "metrics-monitoring",
+      "numbers",
+      "query-scale"
+    ],
+    "options_en": [
+      "Full raw-resolution scans do not affect query latency, only storage cost.",
+      "Full raw-resolution scans degrade panel queries to minutes, so rollups or caching must cut the points scanned.",
+      "259 million rows can be scanned in one full table pass for a time-series database.",
+      "More points automatically keep the query at sub-second latency thanks to indexing."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-029",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "rollups",
+    "q": "为什么不能只存平均值 rollup 后再查询 p99 latency？",
+    "options": [
+      "平均值会自动包含 p99",
+      "p99 不需要任何数据",
+      "TSDB 不能保存数字",
+      "平均值丢掉分布信息，无法恢复百分位"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "百分位需要完整分布信息；只存 avg 之后，10 秒窗口内的分布形状已经丢失，rollup 要存 histogram 或 sketch。",
+    "why_en": "Percentiles need the full distribution, so once only the average is stored the shape of that window is gone; rollups need histograms or sketches instead.",
+    "tags": [
+      "metrics-monitoring",
+      "rollups",
+      "percentiles"
+    ],
+    "options_en": [
+      "The average automatically includes p99.",
+      "p99 needs no data at all.",
+      "The time-series database cannot store numbers.",
+      "An average discards distribution information, so percentiles cannot be recovered from it."
+    ],
+    "optionMeanings": [
+      "误以为均值能推出百分位。",
+      "认为百分位计算不需要数据支撑。",
+      "误判 TSDB 存储数字的能力。",
+      "点出均值丢失分布信息的本质问题。"
+    ],
+    "optionDirectness": [
+      "不直接；均值和 p99 是完全不同的统计量。",
+      "不直接；任何百分位计算都需要样本。",
+      "不直接；TSDB 完全能存数字，问题在聚合方式。",
+      "最直接；这是均值 rollup 的根本局限。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "sketch",
+        "meaning": "一种近似统计结构（如 t-digest），能在有限空间内估算分位数。",
+        "meaningEn": "A sketch is an approximate data structure, such as a t-digest, that can estimate percentiles within limited memory."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "query-cache",
+    "scenario": "Dashboard 查询大量重叠时间范围，例如相隔 10 秒刷新一次 30 天图表。",
+    "q": "最佳低延迟读优化是什么？",
+    "options": [
+      "每次都全量扫描 raw 数据",
+      "禁用 dashboard",
+      "查询拆分：新近数据查库，历史数据读缓存/预计算结果",
+      "把告警规则删掉"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "相邻查询覆盖几乎相同的历史区间，把新近数据和历史数据拆开查、历史部分走缓存/预计算，能让多数面板亚秒返回。",
+    "why_en": "Adjacent dashboard queries cover almost the same historical range, so splitting fresh data from cached or precomputed historical data lets most panels return in under a second.",
+    "whenOtherWins": "如果查询完全即席且很少重复，rollup 比结果缓存更关键。",
+    "tradeoff": "缓存/预计算换低延迟 vs 额外的失效和内存管理成本",
+    "tags": [
+      "metrics-monitoring",
+      "query-cache",
+      "dashboard"
+    ],
+    "options_en": [
+      "Fully scan raw data on every query.",
+      "Disable the dashboard.",
+      "Split the query: read fresh data from the database and historical data from cache or precomputed results.",
+      "Delete the alert rules."
+    ],
+    "optionMeanings": [
+      "每次查询都重新扫描全部原始数据。",
+      "干脆停用 dashboard 功能。",
+      "新近数据查库、历史数据走缓存或预计算。",
+      "删掉告警配置，与查询延迟无关。"
+    ],
+    "optionDirectness": [
+      "不直接；这正是导致查询慢的做法。",
+      "不直接；这不是优化，是放弃功能。",
+      "最直接；利用查询间的时间重叠降低延迟。",
+      "不直接；告警规则和 dashboard 读延迟无关。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-031",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "query-cache",
+    "q": "Dashboard 查询结果缓存最棘手的问题是什么？",
+    "options": [
+      "缓存这种结构完全存不下数组",
+      "加缓存反而会让查询变慢",
+      "缓存命中会自动生成新的告警",
+      "修正历史数据要失效缓存，还要控制内存"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "历史数据修正会让旧缓存变脏，必须主动失效受影响的 key；热门 dashboard 太多时缓存内存也要有上限和监控。",
+    "why_en": "Backfills or corrections to historical data make cached results stale, so affected keys must be invalidated, and cache memory needs monitoring as popular dashboards accumulate.",
+    "tags": [
+      "metrics-monitoring",
+      "query-cache",
+      "invalidation"
+    ],
+    "options_en": [
+      "Caching as a structure cannot hold arrays at all.",
+      "Adding a cache actually makes queries slower.",
+      "A cache hit automatically generates a new alert.",
+      "Correcting historical data must invalidate cache and control memory."
+    ],
+    "optionMeanings": [
+      "误判缓存的数据结构能力。",
+      "把缓存的作用完全说反。",
+      "误以为缓存和告警系统有直接联动。",
+      "点出失效和内存管理两个真实难点。"
+    ],
+    "optionDirectness": [
+      "不直接；缓存可以保存任意结构，包括数组。",
+      "不直接；缓存的目的正是让查询更快。",
+      "不直接；缓存和告警触发是两套机制。",
+      "最直接；这是查询结果缓存最棘手的两个问题。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-032",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "alerting",
+    "scenario": "10,000 条 alert rule 若每 15 秒轮询评估一次，产生约 670 次查询/秒，直接打在 TSDB 上。",
+    "q": "这个查询量级最支持哪条设计判断？",
+    "options": [
+      "670 QPS 对 TSDB 来说可以忽略不计，可以把轮询间隔继续调短",
+      "轮询频率提高会让 alert 查询与 dashboard/写入争抢 TSDB 资源，是切到流式评估的理由之一",
+      "查询量级只取决于 dashboard，不受 alert rule 数量影响",
+      "更高频轮询能让告警变成强一致"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "670 QPS 会叠加在 dashboard 查询和写入负载之上，轮询间隔越短这个竞争越明显，这正是考虑切换到 Flink 流式评估的动机之一。",
+    "why_en": "670 queries per second stacks on top of dashboard queries and ingestion writes, and shortening the polling interval only makes that contention worse, which is part of the motivation for stream-based evaluation.",
+    "tags": [
+      "metrics-monitoring",
+      "numbers",
+      "alerting"
+    ],
+    "options_en": [
+      "670 QPS is negligible for the TSDB, so the polling interval can keep shrinking.",
+      "Higher polling frequency makes alert queries compete with dashboard queries and writes for TSDB resources, part of why streaming evaluation is worth considering.",
+      "The query volume depends only on dashboards, not on the number of alert rules.",
+      "Faster polling makes alerting strongly consistent."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-033",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "stream-alerting",
+    "scenario": "部分关键告警必须秒级触发，不想等下一轮数据库轮询；指标已经经过 Kafka。",
+    "q": "更适合的告警评估方案是什么？",
+    "options": [
+      "把轮询间隔拉长到 1 小时",
+      "加 Flink 做 Kafka 的第二个流式消费者",
+      "让 Notification Service 改去扫数据库",
+      "把告警判断逻辑下放给客户端"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "指标已经流经 Kafka，让 Flink 作为第二消费者维护窗口状态、流式评估，能把延迟从轮询周期降到秒级。",
+    "why_en": "Since metrics already flow through Kafka, adding Flink as a second consumer to maintain windowed state and evaluate rules as data arrives cuts latency from a polling interval down to seconds.",
+    "whenOtherWins": "大多数普通告警用 30-60 秒轮询已足够，流处理只值得用于关键低延迟规则。",
+    "tradeoff": "流式评估的秒级延迟 vs 轮询的实现和运维简单性",
+    "tags": [
+      "metrics-monitoring",
+      "flink",
+      "alerting"
+    ],
+    "diagram": "flowchart LR\nKafka[Metric stream] --> Flink[Stream evaluator]\nRules[Rule config] --> Flink\nFlink --> State[Dedup state]\nState --> Notify[Notification queue]",
+    "options_en": [
+      "Stretch the polling interval out to one hour.",
+      "Add Flink as a second streaming consumer of Kafka.",
+      "Have the notification service scan the database instead.",
+      "Push the alert-judgment logic down to the client."
+    ],
+    "optionMeanings": [
+      "把轮询间隔调得更长，延迟更差。",
+      "流处理消费 Kafka，维护窗口状态实时评估。",
+      "把查询职责错放到通知层。",
+      "把告警判断逻辑下放到客户端。"
+    ],
+    "optionDirectness": [
+      "不直接；这和降低延迟的目标相反。",
+      "最直接；直接对着已有的 Kafka 流做窗口评估。",
+      "不直接；Notification Service 不该承担评估职责。",
+      "不直接；客户端不该也无法独立判断服务端告警。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Flink",
+        "meaning": "流处理框架，能维护窗口状态并对到达的数据实时计算。",
+        "meaningEn": "Flink is a stream-processing framework that can maintain windowed state and compute over data as it arrives."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "指标已经写入的持久消息队列，Flink 可作为它的第二个消费者。",
+        "meaningEn": "Kafka is the durable message queue metrics already flow through, and Flink can read it as a second consumer."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-034",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "stream-alerting",
+    "q": "用 Flink 做流式告警后，新增的主要复杂度是什么？",
+    "options": [
+      "告警从此不再需要任何状态",
+      "Kafka 从此不能被多个消费者读取",
+      "规则要编译成算子，还要处理好状态恢复",
+      "TSDB 从此必须被删除"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "流式窗口评估依赖内存状态，规则要编译成算子，节点失败、规则变更都要靠 checkpoint 正确恢复，比轮询复杂得多。",
+    "why_en": "Stream alerting depends on in-memory window state, so rules must compile into operators and checkpointing must correctly handle node failures and rule updates, adding real complexity compared to polling.",
+    "tags": [
+      "metrics-monitoring",
+      "flink",
+      "complexity"
+    ],
+    "options_en": [
+      "Alerting no longer needs any state at all.",
+      "Kafka can no longer be read by multiple consumers.",
+      "Rules must compile into operators, and state recovery must be handled well.",
+      "The TSDB must now be deleted."
+    ],
+    "optionMeanings": [
+      "误以为流式评估不需要状态。",
+      "误判 Kafka 的多消费者能力。",
+      "点出规则编译和状态恢复的真实复杂度。",
+      "误以为引入 Flink 会取代 TSDB。"
+    ],
+    "optionDirectness": [
+      "不直接；恰恰相反，流式评估更依赖状态。",
+      "不直接；Kafka 本就支持多个独立消费者组。",
+      "最直接；这是流式告警真正新增的运维负担。",
+      "不直接；TSDB 仍然服务 dashboard 查询，不会被删除。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "checkpoint",
+        "meaning": "流处理定期把内存状态存下来，节点失败后能从上次快照恢复。",
+        "meaningEn": "A checkpoint periodically persists in-memory state so a failed node can resume from the last snapshot."
+      }
+    ],
+    "scenario": "已经引入 Flink 做流式告警评估，规则要在内存里维护窗口状态。"
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-035",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "high-availability",
+    "q": "这种单实例架构的最大问题是什么？",
+    "options": [
+      "组件数量太多，没法部署",
+      "每一段都是单点，故障会丢指标或通知",
+      "查询会因此自动变快",
+      "cardinality 会被自动限制"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "单实例、单 broker、单节点意味着任意一段故障都会让指标丢失、告警停摆或通知失败，而监控系统恰恰最不能在事故时失明。",
+    "why_en": "A single instance at every stage means any one failure can drop metrics, stop alerting, or lose notifications, which is exactly when a monitoring system cannot afford to go blind.",
+    "tags": [
+      "metrics-monitoring",
+      "ha",
+      "failure"
+    ],
+    "options_en": [
+      "There are simply too many components to deploy.",
+      "Every stage is a single point, so a failure drops metrics or notifications.",
+      "Queries automatically become faster as a result.",
+      "Cardinality gets automatically constrained."
+    ],
+    "optionMeanings": [
+      "把问题错误归结为组件数量本身。",
+      "点出每一段都是单点故障。",
+      "认为单实例架构反而更快。",
+      "误以为单实例架构限制了 cardinality。"
+    ],
+    "optionDirectness": [
+      "不直接；问题不是组件多，而是没有冗余。",
+      "最直接；这正是单点架构的核心风险。",
+      "不直接；查询速度和冗余程度无关。",
+      "不直接；cardinality 控制是独立的策略层，与单/多实例无关。"
+    ],
+    "scenario": "整条链路目前只有一份 ingestion、一个 Kafka broker、一个 TSDB 节点和一个 alert service。"
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-036",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "high-availability",
+    "q": "提高监控系统 HA 的合理手段包括哪些？（多选）",
+    "options": [
+      "多个 ingestion instances behind load balancer",
+      "把所有组件收进同一个可用区，减少跨区网络延迟",
+      "Kafka replicated partitions 和 ISR",
+      "TSDB 多节点复制/多节点写入"
+    ],
+    "answer": [
+      0,
+      2,
+      3
+    ],
+    "why": "冗余实例、复制分区和多节点存储让单点失败可以被顶住；把所有组件塞进同一可用区反而会让整个区故障时全灭。",
+    "why_en": "Redundant instances, replicated partitions, and multi-node storage survive single failures, while packing everything into one availability zone would make a zone outage take down everything at once.",
+    "tags": [
+      "metrics-monitoring",
+      "ha",
+      "redundancy"
+    ],
+    "options_en": [
+      "Multiple ingestion instances behind a load balancer.",
+      "Pack every component into one availability zone to cut network latency.",
+      "Kafka with replicated partitions and an in-sync replica set.",
+      "Multi-node replication or multi-node writes for the TSDB."
+    ],
+    "optionMeanings": [
+      "入口层多实例+负载均衡。",
+      "为了减少延迟牺牲跨区容错。",
+      "Kafka 分区复制并维护同步副本集合。",
+      "存储层多节点复制/写入。"
+    ],
+    "optionDirectness": [
+      "成立；这是入口层的标准冗余手段。",
+      "不成立；这会制造新的单点（整个可用区）。",
+      "成立；这是 Kafka 层的标准容错手段。",
+      "成立；这是存储层的标准容错手段。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ISR",
+        "meaning": "Kafka 的同步副本集合，只有跟上 leader 进度的副本才在其中。",
+        "meaningEn": "ISR stands for in-sync replicas, the set of Kafka replicas that are caught up with the partition leader."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-037",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "resumability",
+    "q": "把“让监控系统每步可恢复”的设计要点排好序：",
+    "steps": [
+      "Alert events 先写入 Kafka 或持久队列，再调用外部通知",
+      "Agent 本地缓冲并在网络/ingestion 故障时重试",
+      "写入设计成幂等，避免重试产生重复点",
+      "Kafka 跨可用区复制，broker 丢失不丢数据",
+      "Alert/Flink 状态 checkpoint，处理器崩溃后可继续"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      2,
+      4,
+      0
+    ],
+    "why": "可恢复设计的核心是每一段都有缓冲、复制、幂等或 checkpoint，避免 in-flight 数据消失。",
+    "why_en": "Resumability means each stage has buffering, replication, idempotency, or checkpoints so in-flight metrics and alerts survive failures.",
+    "tradeoff": "每段都有缓冲/复制/幂等/checkpoint 的可靠性 vs 更高的实现和运维复杂度",
+    "tags": [
+      "metrics-monitoring",
+      "ha",
+      "resumability"
+    ],
+    "diagram": "flowchart TD\nIngest[Replicated ingest] --> Kafka[Replicated Kafka]\nKafka --> TSDB[Replicated TSDB]\nTSDB --> Alert[Restartable alerting]\nAlert --> Notify[Durable notifications]"
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-038",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "idempotency",
+    "q": "metrics 写入为什么要尽量幂等？",
+    "options": [
+      "会让所有查询都变成实时",
+      "可以直接替代 Kafka 的作用",
+      "重试时不应产生重复数据点或告警",
+      "会把已有的 labels 删掉"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "高可用系统一定会重试；幂等 key 通常来自 series id + timestamp，让重复的写入或告警效果安全、不重复。",
+    "why_en": "Highly available systems will inevitably retry, so idempotent writes, typically keyed by series id and timestamp, make repeated attempts safe instead of creating duplicate points or duplicate alerts.",
+    "tags": [
+      "metrics-monitoring",
+      "idempotency",
+      "ha"
+    ],
+    "options_en": [
+      "It would make every query real-time.",
+      "It could directly replace what Kafka does.",
+      "Retries should not create duplicate metric points or alerts.",
+      "It would delete existing labels."
+    ],
+    "optionMeanings": [
+      "把幂等和实时性混为一谈。",
+      "把幂等当成 Kafka 的替代品。",
+      "点出幂等要解决的具体问题：重试不应重复。",
+      "把幂等和删除标签混为一谈。"
+    ],
+    "optionDirectness": [
+      "不直接；幂等和查询实时性是两回事。",
+      "不直接；幂等是写入语义，不能替代消息队列。",
+      "最直接；这正是幂等写入要解决的问题。",
+      "不直接；幂等不涉及删除任何标签。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "幂等 / idempotent",
+        "meaning": "同一操作重复执行多次，效果和执行一次相同。",
+        "meaningEn": "An idempotent operation produces the same effect whether it runs once or is retried multiple times."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-039",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "meta-monitoring",
+    "q": "为什么不能只用同一个监控系统监控它自己？",
+    "options": [
+      "监控系统没法产生关于自己的指标",
+      "告警规则技术上不能引用自身",
+      "Dashboard 没法展示任何内部指标",
+      "自己故障时会连可见性一起丢，需要独立信号"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "监控平台失效时正是最需要知道的时候；只靠它监控自己会在同一次故障里连可见性一起丢掉，所以需要独立的健康检查或外部信号。",
+    "why_en": "The moment the monitoring platform itself fails is exactly when you most need to know, so relying only on itself loses visibility at the same time it is needed, which is why an independent watchdog or external signal matters.",
+    "tags": [
+      "metrics-monitoring",
+      "meta-monitoring",
+      "ha"
+    ],
+    "options_en": [
+      "The monitoring system cannot produce metrics about itself.",
+      "Alert rules technically cannot reference the system itself.",
+      "The dashboard cannot display any internal metrics.",
+      "When it fails, visibility disappears with it, so an independent signal is needed."
+    ],
+    "optionMeanings": [
+      "误以为监控系统不能自我产生指标。",
+      "误以为告警规则技术上不能自引用。",
+      "误以为 dashboard 无法展示内部健康指标。",
+      "点出同失效域导致的可见性盲区。"
+    ],
+    "optionDirectness": [
+      "不直接；监控系统完全可以产生关于自己的指标。",
+      "不直接；规则引用自身在技术上没有障碍。",
+      "不直接；dashboard 可以展示内部指标，只是同失效域仍会一起挂。",
+      "最直接；这是文中强调的自监控悖论。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "watchdog",
+        "meaning": "独立于主系统之外、专门检查其健康状态的看门狗进程。",
+        "meaningEn": "A watchdog is a process independent of the main system whose only job is to check that the main system is healthy."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-040",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "scenario": "http_requests{host, region, endpoint, status_code, method} 在 1000 hosts、5 regions、200 endpoints、10 status、5 methods 下，标签组合理论上限约 5000 万。",
+    "q": "这个组合量级最支持哪条设计判断？",
+    "options": [
+      "5000 万种组合不会真的出现，可以不设上限",
+      "只要加内存，TSDB 就能无限吸收 series",
+      "必须在写入路径做 cardinality 控制，否则 series 会失控",
+      "组合数只影响查询，不影响写入路径"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "标签组合的理论上限增长极快，即使实际出现的远少于理论值，也必须在写入路径就做 label allowlist 和 series cap，否则会失控。",
+    "why_en": "The theoretical label combination count grows extremely fast, so even though far fewer actually appear, cardinality controls such as label allowlists and per-metric series caps must sit on the ingestion path or growth becomes unbounded.",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "numbers"
+    ],
+    "options_en": [
+      "Fifty million combinations will never really occur, so no cap is needed.",
+      "Just adding memory lets the TSDB absorb series without limit.",
+      "Cardinality controls must sit on the write path, or series count goes out of control.",
+      "The combination count only affects queries, not the write path."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-041",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "scenario": "摄取层需要阻止某个 metric 因新增高基数 label 或无限 label value 把 TSDB 打爆。",
+    "q": "应加入哪两个控制组件？",
+    "options": [
+      "接入 CDN 和对象存储做缓存分发",
+      "在客户端浏览器加 localStorage 缓存",
+      "Policy Store 定规则，Redis 数新 series",
+      "只是多开几个 dashboard 面板"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "Policy Store 定义每个 metric 的允许 label 和上限；Redis 在写入时快速判断新 series 是否超限。",
+    "why_en": "A policy store defines each metric's allowed labels and series cap, while a Redis-based cardinality tracker checks on ingestion whether a point belongs to a new series that would exceed the cap.",
+    "whenOtherWins": "如果是小系统且 metric schema 完全受控，人工 review label 可能已经足够。",
+    "tradeoff": "集中策略+实时计数的控制力 vs 引入 Redis 查询的额外延迟",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "policy"
+    ],
+    "table": {
+      "headers": [
+        "Control",
+        "Stops",
+        "Action"
+      ],
+      "rows": [
+        [
+          "Policy allowlist",
+          "bad labels",
+          "reject label"
+        ],
+        [
+          "Series cap (Redis)",
+          "cardinality blowup",
+          "drop new series"
+        ],
+        [
+          "Sampling",
+          "excess volume",
+          "downsample"
+        ]
+      ]
+    },
+    "options_en": [
+      "Add a CDN and object storage for caching and distribution.",
+      "Add client-side localStorage caching in the browser.",
+      "A policy store defines rules, and Redis counts new series.",
+      "Just create a few more dashboard panels."
+    ],
+    "optionMeanings": [
+      "面向静态内容分发，不解决基数问题。",
+      "客户端存储方案，管不到服务端 series 计数。",
+      "策略配置 + 服务端快速计数器组合。",
+      "只是增加可视化面板数量。"
+    ],
+    "optionDirectness": [
+      "不直接；CDN 解决地理延迟，不是基数控制。",
+      "不直接；浏览器端状态影响不到摄取层判断。",
+      "最直接；两者分别负责规则和实时判断。",
+      "不直接；更多 dashboard 不会限制 series 增长。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Cardinality / 基数",
+        "meaning": "一个 metric 下唯一 series 的数量。",
+        "meaningEn": "Cardinality is the number of unique series under one metric."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-042",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "q": "把 cardinality enforcement 的步骤排好序：",
+    "steps": [
+      "如果是新 series，检查是否超过该 metric 的 series cap",
+      "指标点到达 ingestion service",
+      "去掉不在 allowlist 中的 label key",
+      "对剩余 label 组合求 hash 得到 series id",
+      "未超 cap 则发布到 Kafka，超 cap 则丢弃并计数"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      3,
+      0,
+      4
+    ],
+    "why": "先规范 labels，再识别 series，最后按 policy 决定接收或丢弃。",
+    "why_en": "Cardinality enforcement normalizes labels, identifies the series, checks limits, and then accepts or drops the point.",
+    "tradeoff": "在写路径实时拦截超限 series vs 增加摄取延迟和实现复杂度",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "pipeline"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-043",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "q": "某个 metric 超过 series cap 后，系统应该做什么？",
+    "options": [
+      "继续无限写入，直到 TSDB 崩溃",
+      "丢弃新 series 的点，计数并通知团队",
+      "把所有旧指标都删除",
+      "把所有 dashboard 都关掉"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "超过 cap 后保护系统比保留每个点更重要：丢弃新 series 的点、计数到 dropped_metrics，并通知团队处理。",
+    "why_en": "Once the cap is exceeded, protecting the system matters more than keeping every point, so the system drops points from the new series, increments a dropped-metrics counter, and notifies the owning team.",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "dropped-metrics"
+    ],
+    "options_en": [
+      "Keep writing without limits until the TSDB crashes.",
+      "Drop points from the new series, count them, and notify the team.",
+      "Delete all old metrics.",
+      "Turn off every dashboard."
+    ],
+    "optionMeanings": [
+      "放任写入直到系统崩溃。",
+      "丢弃超限 series、计数并告警团队。",
+      "误判为要清空历史数据。",
+      "误判为要停用查询功能。"
+    ],
+    "optionDirectness": [
+      "不直接；这会让整个 TSDB 被拖垮，波及其他团队。",
+      "最直接；这是文章描述的 cap 触发行为。",
+      "不直接；旧指标不该因为新 series 超限被删除。",
+      "不直接；dashboard 和写入层的 cap 保护无关。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cardinality",
+    "scenario": "每个指标点都去 Redis 做 set membership check，在 5M/s 下延迟和成本都很高。",
+    "q": "可以怎么降低 Redis 往返？",
+    "options": [
+      "改成每个点同步查一次 Postgres",
+      "把所有 label 全部删掉",
+      "批量或用本地 Bloom filter 先过滤",
+      "把 cardinality 检查挪到 dashboard 端"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "批量做 set membership check，或用本地 Bloom filter 先过滤掉明显已见过的 series，能显著减少打到 Redis 的请求数，同时保留集中 cap 判断。",
+    "why_en": "Batching the membership checks, or using a local Bloom filter to pre-filter series that have clearly been seen before, cuts the number of Redis round trips while still keeping centralized cap enforcement.",
+    "whenOtherWins": "如果摄取量很低，直接 Redis 查询更简单且准确。",
+    "tradeoff": "本地近似过滤降低 Redis 往返 vs 假阳性带来的少量误判",
+    "tags": [
+      "metrics-monitoring",
+      "cardinality",
+      "optimization"
+    ],
+    "options_en": [
+      "Switch to synchronously querying Postgres for every point.",
+      "Delete all labels entirely.",
+      "Batch checks, or pre-filter with a local Bloom filter.",
+      "Move the cardinality check to the dashboard side."
+    ],
+    "optionMeanings": [
+      "把高频检查转移到另一个数据库，没有减少往返。",
+      "用删除功能来规避基数问题，牺牲可观测性。",
+      "本地近似过滤 + 批量，减少远程调用次数。",
+      "把该在写路径做的检查挪到读路径。"
+    ],
+    "optionDirectness": [
+      "不直接；Postgres 同步查询同样有延迟，且不比 Redis 更快。",
+      "不直接；删掉 label 会丢失切片能力，不是优化往返次数。",
+      "最直接；本地过滤能挡掉大部分不必要的远程调用。",
+      "不直接；cardinality 必须在写入时挡住，dashboard 端太晚了。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Bloom filter",
+        "meaning": "一种概率型数据结构，能快速判断一个元素肯定不存在或可能存在。",
+        "meaningEn": "A Bloom filter is a probabilistic data structure that can quickly say an element is definitely absent or possibly present."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "notifications",
+    "scenario": "Slack 或 PagerDuty API 临时失败，但告警已经触发，系统不应丢这次通知。",
+    "q": "Notification path 应该如何保证可靠性？",
+    "options": [
+      "先落盘 alert event，再重试外部发送",
+      "同步调用外部 API，失败就直接丢弃",
+      "等用户自己刷新 dashboard 去发现",
+      "干脆把告警功能关掉"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "先把 alert event 写入持久队列再发送，能把外部渠道的临时故障变成延迟重试，而不是直接丢掉这次告警。",
+    "why_en": "Persisting the alert event before attempting external delivery turns a provider outage into a delayed retry instead of a lost page.",
+    "whenOtherWins": "非关键 FYI 通知可以降低重试等级，但 on-call page 应可靠投递。",
+    "tradeoff": "持久化重试的可靠性 vs 额外的队列和状态管理成本",
+    "tags": [
+      "metrics-monitoring",
+      "notifications",
+      "retries"
+    ],
+    "diagram": "flowchart LR\nAlert[Alert fires] --> Queue[Notification queue]\nQueue --> Sender[Sender workers]\nSender --> Channel[Email or Pager]\nSender --> Retry[Retry with backoff]",
+    "options_en": [
+      "Persist the alert event first, then retry external delivery.",
+      "Call the external API synchronously and drop it on failure.",
+      "Wait for the user to refresh the dashboard and discover it.",
+      "Just turn alerting off entirely."
+    ],
+    "optionMeanings": [
+      "先落盘再重试外部发送。",
+      "外部调用失败就直接放弃通知。",
+      "把发现问题的责任推给用户主动刷新。",
+      "干脆停用告警功能。"
+    ],
+    "optionDirectness": [
+      "最直接；持久化后失败只是延迟，不是丢失。",
+      "不直接；这正是会丢失关键通知的做法。",
+      "不直接；被动等用户发现违背了告警的意义。",
+      "不直接；这会让整条告警链路失效。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-046",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "consistency",
+    "q": "Dashboard 查询和 alert evaluation 在一致性要求上有什么区别？",
+    "options": [
+      "Dashboard 要强一致，alert 可以随便丢",
+      "两者都完全不需要任何存储",
+      "两者都只能从浏览器缓存里读数据",
+      "Dashboard 可最终一致，alert 要可靠低延迟"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "用户看图能接受短暂延迟，属于最终一致；但告警漏发或长时间延迟会直接拖慢事故响应，必须可靠且低延迟。",
+    "why_en": "Users can tolerate a dashboard being slightly stale, so it can be eventually consistent, but a missed or delayed alert directly slows incident response, so alerting must be reliable and low-latency.",
+    "tradeoff": "Dashboard 的最终一致性 vs Alert 的可靠低延迟",
+    "tags": [
+      "metrics-monitoring",
+      "consistency",
+      "alerting"
+    ],
+    "options_en": [
+      "Dashboards must be strongly consistent, and alerts can be dropped freely.",
+      "Neither one needs any storage at all.",
+      "Both can only read data from browser cache.",
+      "Dashboards can be eventually consistent, while alerts must be reliable and low-latency."
+    ],
+    "optionMeanings": [
+      "把两者的一致性要求完全说反。",
+      "误判两者都不需要持久化存储。",
+      "误判两者的数据来源都是浏览器缓存。",
+      "按各自的实际要求区分一致性和可靠性。"
+    ],
+    "optionDirectness": [
+      "不直接；文章明确说 dashboard 可以最终一致。",
+      "不直接；两者都要依赖持久化的时间序列存储。",
+      "不直接；两者的权威数据都来自后端存储，不是浏览器缓存。",
+      "最直接；这正是文章对两条路径的一致性要求。"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-047",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "late-data",
+    "q": "指标晚到或乱序时，系统需要优雅处理，否则会怎样？",
+    "options": [
+      "所有数据反而会自动更准确",
+      "Kafka 从此没法存储消息",
+      "Dashboard 或告警窗口可能判断出错",
+      "标签数量会因此变少"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "网络延迟和 agent 本地缓冲会让指标晚到或乱序；如果查询和告警窗口不允许一定迟到或做修正，图表会缺点、告警窗口判断也会出错。",
+    "why_en": "Network delays and agent-side buffering can make metrics arrive late or out of order, so unless queries and alert windows tolerate some lateness or apply corrections, dashboards can show gaps and alert windows can misjudge.",
+    "tags": [
+      "metrics-monitoring",
+      "late-data",
+      "windows"
+    ],
+    "options_en": [
+      "All data would somehow become more accurate.",
+      "Kafka can no longer store messages.",
+      "Dashboards or alert windows can misjudge as a result.",
+      "The number of labels decreases because of it."
+    ],
+    "optionMeanings": [
+      "误以为晚到数据会让结果更准确。",
+      "误判 Kafka 存储消息的能力。",
+      "点出晚到/乱序对查询和告警窗口的真实影响。",
+      "误判晚到和标签数量的关系。"
+    ],
+    "optionDirectness": [
+      "不直接；晚到只会让数据不完整，不会变得更准确。",
+      "不直接；Kafka 完全能持久化存储消息。",
+      "最直接；这是晚到/乱序数据的真实后果。",
+      "不直接；标签数量和数据到达时间无关。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "乱序 / out-of-order",
+        "meaning": "指标到达系统的顺序和它们实际产生的时间顺序不一致。",
+        "meaningEn": "Out-of-order data means metrics arrive at the system in a different sequence than the order in which they were actually generated."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-048",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "partitioning",
+    "q": "补全 metrics 分区策略：",
+    "text": "Kafka topic 和 TSDB shard 通常可按 {{metric name}} 或 {{metric name + labels 的 hash}} 分区，以便同一 series 的点被稳定路由。",
+    "why": "稳定分区让同一 series 的写入、压缩和窗口处理更容易并行且保持局部性。",
+    "why_en": "Partitioning by metric name or series hash keeps related points together while enabling parallel ingestion and processing.",
+    "tags": [
+      "metrics-monitoring",
+      "partitioning",
+      "kafka"
+    ],
+    "table": {
+      "headers": [
+        "Key",
+        "Benefit",
+        "Risk"
+      ],
+      "rows": [
+        [
+          "metric name",
+          "query locality",
+          "hot names"
+        ],
+        [
+          "time bucket",
+          "retention",
+          "wide fanout"
+        ],
+        [
+          "tenant",
+          "isolation",
+          "skewed tenants"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-049",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "storage",
+    "q": "补全 time-series storage 的写入特征：",
+    "text": "Metrics 数据通常是 {{append-only}}、按时间写入、几乎不更新，因此适合 LSM 或 append-only 存储、时间分区和压缩。",
+    "why": "这个特征是 TSDB 能比通用数据库更适合指标存储的根本原因之一。",
+    "why_en": "Metrics are mostly append-only and time-ordered, which makes specialized time-series storage efficient.",
+    "tags": [
+      "metrics-monitoring",
+      "storage",
+      "time-series-db"
+    ],
+    "termDefinitions": [
+      {
+        "term": "LSM tree",
+        "meaning": "一种写优化的存储结构，先写内存再顺序刷盘合并。",
+        "meaningEn": "An LSM tree is a write-optimized storage structure that buffers writes in memory before flushing sorted files to disk."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-metrics-monitoring-050",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "final-design",
+    "q": "把 Metrics Monitoring 最终方案的核心决策链排好序：",
+    "steps": [
+      "Query Service 用 rollups、缓存和查询拆分服务 dashboard",
+      "Agent 本地采集、缓冲和批量发送指标",
+      "Notification Service 对 alert event 做去重、分组、静默和重试",
+      "Ingestion Service 校验、控制 cardinality，并写入 Kafka",
+      "消费者写入 TSDB；Alert Evaluator 轮询或 Flink 流式评估规则"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      4,
+      0,
+      2
+    ],
+    "why": "最终架构把高吞吐写入、专用时序存储、低延迟查询、可靠告警和通知管理拆成清晰链路。",
+    "why_en": "The final architecture separates edge batching, ingestion control, Kafka buffering, time-series storage, query optimization, alerting, and notification management.",
+    "tradeoff": "分层解耦（agent/kafka/tsdb/query/alert/notify）带来的可扩展性 vs 组件数量增加的运维复杂度",
+    "tags": [
+      "metrics-monitoring",
+      "final-design",
+      "decision-chain"
+    ],
+    "diagram": "flowchart LR\nA[Agents] --> I[Ingestion]\nI --> C[Cardinality Controls]\nC --> K[Kafka]\nK --> W[Storage Consumers]\nW --> T[(TSDB)]\nT --> Q[Query Service]\nT --> E[Alert Evaluator]\nK --> F[Flink Alerts]\nE --> N[Notification Service]\nF --> N\nQ --> D[Dashboards]\nN --> P[PagerDuty/Slack]"
+  }
+]

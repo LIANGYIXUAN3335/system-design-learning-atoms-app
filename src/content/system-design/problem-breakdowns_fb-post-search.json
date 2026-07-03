@@ -1,0 +1,3128 @@
+[
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "problem-setup",
+    "q": "面试官禁止使用 Elasticsearch / Postgres 全文索引后，设计上你被迫要亲手做的核心工作是？",
+    "options": [
+      "亲手设计数据布局与倒排索引",
+      "改用 NoSQL 自带的搜索功能",
+      "放弃关键词搜索改做前缀匹配",
+      "把过滤逻辑全放到客户端本地"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "没有现成全文索引可依赖，你必须自己决定数据如何布局、如何构建倒排索引、如何扩展——这正是这类题要考的底层功。",
+    "why_en": "With no off-the-shelf full-text index available, you must design the data layout, build the inverted index, and scale it yourself.",
+    "tags": [
+      "interview-method",
+      "search",
+      "fundamentals"
+    ],
+    "options_en": [
+      "Hand-build the data layout and an inverted index yourself.",
+      "Rely on a NoSQL database's built-in search.",
+      "Drop keyword search and only do prefix matching.",
+      "Push all filtering to the client side."
+    ],
+    "termDefinitions": [
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      },
+      {
+        "term": "Elasticsearch",
+        "meaning": "开箱即用的分布式搜索引擎，内部本身就用倒排索引。",
+        "meaningEn": "Elasticsearch is an off-the-shelf search engine built on inverted indexes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-002",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "functional-requirements",
+    "q": "为 FB 帖子搜索定义需求时，哪些属于核心功能需求？（多选）",
+    "options": [
+      "用户能创建和点赞帖子",
+      "用户能按关键词搜索帖子",
+      "搜索结果能按时间或点赞数排序",
+      "搜索结果按用户兴趣做个性化排序"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "核心需求只有三条：创建/点赞、关键词搜索、按时间或赞数排序；个性化被明确划出范围，这个决定让后面的缓存设计大为简化。",
+    "why_en": "The core requirements are creating and liking posts, keyword search, and sorting by recency or like count, while personalization is explicitly out of scope.",
+    "tags": [
+      "requirements",
+      "scope"
+    ],
+    "options_en": [
+      "Users can create and like posts.",
+      "Users can search posts by keyword.",
+      "Results can be sorted by recency or like count.",
+      "Results are personalized to each user's interests."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-003",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "functional-requirements",
+    "q": "FB 帖子搜索里，下列哪些被划为范围外（out of scope）？（多选）",
+    "options": [
+      "模糊匹配（搜 bird 命中 ostrich）",
+      "隐私规则与过滤",
+      "新帖 1 分钟内可被搜索",
+      "搜索页对新帖做实时推送更新"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "模糊匹配、个性化、隐私、复杂相关性排序、多媒体、实时更新都在范围外；「新帖 1 分钟内可搜」恰恰是核心非功能需求，不是范围外。",
+    "why_en": "Fuzzy matching, privacy filters, and realtime result updates are out of scope, whereas making new posts searchable within a minute is a core requirement.",
+    "tags": [
+      "requirements",
+      "scope"
+    ],
+    "options_en": [
+      "Fuzzy matching (searching bird also matches ostrich).",
+      "Privacy rules and filtering.",
+      "New posts searchable within one minute.",
+      "Realtime push updates to the search page."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "scoping",
+    "scenario": "明确需求阶段，你在考虑是否把「搜索结果个性化」留在范围内，这个决定将影响后续架构的复杂度。",
+    "q": "把个性化划出范围，对系统设计最大的红利是什么？",
+    "options": [
+      "数据库可以少建一个索引",
+      "不再需要 API 网关",
+      "相同查询人人同结果，查询级缓存极其有效",
+      "写入路径可以完全省掉"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "没有个性化意味着搜索结果只取决于查询本身、人人相同，结果可以进缓存和 CDN 被海量复用；所以值得当面问「个性化是不是硬需求」。",
+    "why_en": "Dropping personalization means identical queries return identical results for everyone, which makes query-level caching and CDN reuse dramatically more effective.",
+    "whenOtherWins": "如果产品硬性要求千人千面的搜索结果，查询级缓存基本失效，只能退到缓存更底层的索引数据、在线上做个性化重排。",
+    "tags": [
+      "requirements",
+      "caching",
+      "personalization"
+    ],
+    "options_en": [
+      "The database needs one fewer index.",
+      "You no longer need an API gateway.",
+      "Identical queries return identical results, so query-level caching becomes extremely effective.",
+      "The write path can be dropped entirely."
+    ],
+    "tradeoff": "无个性化换来缓存高复用 vs 千人千面的相关性",
+    "termDefinitions": [
+      {
+        "term": "API 网关",
+        "meaning": "读路径最前端的入口，负责鉴权、限流后转发给后端服务。",
+        "meaningEn": "An API gateway authenticates and rate-limits requests before forwarding them."
+      },
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-005",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "non-functional-requirements",
+    "q": "补全核心非功能需求中的数字：",
+    "text": "中位搜索延迟应低于 {{500ms}}；新帖必须在 {{1分钟}} 内可被搜索；老帖和冷门帖也必须可被发现，只是允许更慢。",
+    "why": "这三条 NFR 直接驱动设计：500ms 逼出内存索引与缓存，1 分钟给了缓存 TTL 的上限，「老帖可以慢」预示了冷热分层存储。",
+    "why_en": "Median queries must return in under five hundred milliseconds, new posts must be searchable within a minute, and old posts may be served more slowly.",
+    "tags": [
+      "nfr",
+      "numbers",
+      "sla"
+    ],
+    "scenario": "梳理非功能需求（NFR），要把延迟、可见性、可发现性写成硬指标。",
+    "termDefinitions": [
+      {
+        "term": "非功能需求 (NFR)",
+        "meaning": "延迟、吞吐、可用性这类衡量系统「好不好」的指标。",
+        "meaningEn": "Non-functional requirements cover latency, throughput, and availability."
+      },
+      {
+        "term": "SLA",
+        "meaning": "对外承诺的服务指标，如「新帖 1 分钟内可搜」。",
+        "meaningEn": "An SLA is a promised service level, e.g. new posts searchable within a minute."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-006",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hot-cold-data",
+    "q": "「老帖、冷门帖也要可搜索，但允许更慢」这条需求在为哪个设计决策埋伏笔？",
+    "options": [
+      "放弃高可用目标",
+      "冷热分层：热数据进内存、冷数据下沉廉价存储",
+      "换一台更大的单机数据库",
+      "把所有索引都搬进 CDN"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "大数据量系统天然有热/冷数据之分：热数据高频访问要内存级速度，冷数据低频访问可放磁盘、远端库甚至磁带；这条 NFR 正是后面「冷索引下沉 S3」的伏笔。",
+    "why_en": "Allowing old or unpopular posts to be slower foreshadows a hot-cold split where hot data lives in memory and cold data moves to cheaper, slower storage.",
+    "tags": [
+      "nfr",
+      "hot-cold",
+      "storage"
+    ],
+    "options_en": [
+      "Abandon the high-availability goal.",
+      "A hot-cold split: hot data in memory, cold data on cheaper storage.",
+      "Switch to a single bigger database machine.",
+      "Move all indexes into the CDN."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      },
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-007",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-estimation",
+    "q": "补全写入侧的规模估算（10 亿用户，每天按约 10 万秒取整）：",
+    "text": "每人每天 1 帖 → 约 {{10k}} posts/秒；每人每天 10 个赞 → 约 {{100k}} likes/秒；点赞写入量是发帖的 {{10}} 倍。",
+    "why": "用 1B ÷ 100k 秒的快捷除法得出发帖 10k/s、点赞 100k/s；点赞比发帖多一个数量级，这个观察直接决定了后面必须重点优化点赞写入。",
+    "why_en": "A billion users produce roughly ten thousand posts and one hundred thousand likes per second, so likes outnumber post creations ten to one.",
+    "tags": [
+      "estimation",
+      "numbers",
+      "writes"
+    ],
+    "scenario": "规模估算：10 亿用户，每天约 10 万秒，估算写入侧的量级。"
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-008",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-estimation",
+    "q": "由这个读规模，读路径最该具备的能力是？",
+    "options": [
+      "读会突发到 10 倍，重复查询要能被缓存/CDN 吸收",
+      "读量极小，单台机器就足以承载全部流量",
+      "读远大于写，就该牺牲写路径来保读",
+      "读流量根本无法估算，直接跳过这步"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "搜索读约 10k/s 但可能突发 10 倍；因为无个性化、查询重复度高，读路径靠结果缓存和 CDN 吸收峰值，而不是一味加索引机器。",
+    "why_en": "Search reads run about ten thousand per second but can spike tenfold, so the read path leans on result caching and a CDN to absorb bursts.",
+    "tags": [
+      "estimation",
+      "numbers",
+      "reads"
+    ],
+    "scenario": "10 亿用户、每人每天约 1 次搜索，读流量还可能突发到平时的 10 倍以上。",
+    "options_en": [
+      "Reads can spike 10x, so repeated queries must be absorbable by a cache/CDN.",
+      "Read volume is tiny; a single machine can carry all traffic.",
+      "Reads dominate writes, so sacrifice the write path to protect reads.",
+      "Read traffic can't be estimated, so skip this step."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "scale-estimation",
+    "q": "对比估算结果（写约 110k/s vs 搜索 10k/s），关于系统性质最重要的结论是？",
+    "options": [
+      "系统读多写少，应重点优化读路径",
+      "系统写多读少——别被「搜索」二字骗成读为主",
+      "读写均衡，无需特别优化",
+      "数据量不大，单机即可承载"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "这题最容易犯的错是被「搜索系统」带偏、假设读是大头；估算揭示写入（尤其点赞）远超读，写路径才是主要瓶颈。",
+    "why_en": "The estimates reveal a write-heavy system, overturning the common assumption that a search problem must be read-heavy.",
+    "tags": [
+      "estimation",
+      "write-heavy",
+      "insight"
+    ],
+    "options_en": [
+      "The system is read-heavy; optimize the read path.",
+      "The system is write-heavy—don't let the word 'search' fool you into assuming reads dominate.",
+      "Reads and writes are balanced; no special optimization.",
+      "The data is small; one machine suffices."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-010",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-estimation",
+    "q": "这个存储量级对搜索系统提出的设计要求是？",
+    "options": [
+      "内存放不下 3.6PB，索引要设上限、冷数据下沉便宜存储",
+      "数据量不大，一台大内存机器即可",
+      "把全部帖子原文都塞进 Redis 加速",
+      "存储不是问题，无需特别处理"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "3.6 万亿帖 × 1kb ≈ 3.6PB，全量放内存/单机不可行；这直接催生后面给索引设上限、把冷门关键词下沉 blob 存储的设计。",
+    "why_en": "Ten years of a billion posts a day is about 3.6 petabytes, far too much to keep in memory, which forces index caps and cold blob storage.",
+    "tags": [
+      "estimation",
+      "numbers",
+      "storage"
+    ],
+    "scenario": "FB 运营 10 年、每天约 10 亿帖、每帖元数据约 1kb，原始存储估算约 3.6 PB。",
+    "options_en": [
+      "3.6 PB won't fit in memory, so indexes must be capped and cold data pushed to cheap storage.",
+      "The data is small; one big-memory machine is enough.",
+      "Stuff every post's full text into Redis for speed.",
+      "Storage isn't a concern; no special handling needed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-012",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "core-entities",
+    "q": "FB 帖子搜索的核心实体（User/Post/Like）里，哪些说法正确？（多选）",
+    "options": [
+      "User——发帖的主体",
+      "Post——被搜索的对象，有内容、作者，隐含点赞数",
+      "Like——我们主要关心它的计数而非每条记录",
+      "Comment——搜索的主要目标"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "实体刻意简单：User、Post、Like 三个，且对 Like 只关心 count；实体简单就不必恋战，快速推进到 API 和设计。",
+    "why_en": "The entities are just User, Post, and Like, and for likes we mostly care about the count rather than individual records.",
+    "tags": [
+      "entities",
+      "data-model"
+    ],
+    "table": {
+      "headers": [
+        "实体",
+        "要点"
+      ],
+      "rows": [
+        [
+          "User",
+          "发帖者"
+        ],
+        [
+          "Post",
+          "被搜索对象"
+        ],
+        [
+          "Like",
+          "只关心计数"
+        ]
+      ]
+    },
+    "options_en": [
+      "User — the author who creates posts.",
+      "Post — the searchable object with content, author, and an implicit like count.",
+      "Like — we mostly care about its count, not each record.",
+      "Comment — the primary search target."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "api-design",
+    "q": "FB 帖子搜索的 API 应该是什么形状？",
+    "options": [
+      "单一搜索端点，写入直连数据库",
+      "全部收敛为一个 GraphQL 端点",
+      "搜索复用写入端点",
+      "写路径（发帖/点赞）+ 查询路径（搜索）两条腿"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "API 分两条腿：写入端点接帖子与点赞、搜索端点服务查询；并向面试官说明真实系统中写入多半来自事件总线，独立端点只是为了讲解清晰。",
+    "why_en": "The system exposes a write path for posts and likes plus a search query path, and in production the writes would likely arrive via an event stream like Kafka.",
+    "tags": [
+      "api",
+      "kafka",
+      "design"
+    ],
+    "options_en": [
+      "A single search endpoint, with writes going straight to the database.",
+      "Everything collapsed into one GraphQL endpoint.",
+      "Search reuses the write endpoint.",
+      "A write path (create post / like) plus a query path (search) — two legs."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志/流平台，可分区并行、缓冲突发、持久化事件。",
+        "meaningEn": "Kafka is a distributed log that partitions load and buffers event bursts."
+      },
+      {
+        "term": "GraphQL",
+        "meaning": "让客户端按需声明字段的单端点查询语言。",
+        "meaningEn": "GraphQL is a single-endpoint query language where clients request exact fields."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-014",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "high-level-design",
+    "q": "设计只聚焦「搜索」时，对上游 Post Service / Like Service 的正确处理方式是？",
+    "options": [
+      "假设它们已存在且正常工作，只从它们接收事件",
+      "必须从零开始重新设计这两个服务",
+      "把它们合并进搜索服务统一实现",
+      "忽略它们，让客户端直连索引"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "搜索只是整个社交产品的一部分，合理做法是假设上游发帖/点赞服务存在并工作正常，我们的摄取层从它们接事件；把边界说清楚能省下宝贵时间。",
+    "why_en": "Since we are only designing search, we assume the upstream post and like services already exist and feed our ingestion pipeline.",
+    "tags": [
+      "scope",
+      "services",
+      "design"
+    ],
+    "options_en": [
+      "Assume they already exist and work; just consume their events.",
+      "Design both services from scratch.",
+      "Merge them into the search service.",
+      "Ignore them and let clients hit the index directly."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-016",
+    "format": "code",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "naive-search",
+    "q": "用这条 SQL 直接在 PB 级帖子表上做关键词搜索，最根本的问题是？",
+    "codeSample": "-- naive keyword search\nSELECT * FROM posts\nWHERE content LIKE '%taylor%';",
+    "lang": "sql",
+    "options": [
+      "语法不合法，无法执行",
+      "没有索引，查询时要逐帖全表扫描，PB 级下太慢",
+      "返回的结果不正确",
+      "LIKE 不支持中文内容"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "前置通配符的 LIKE 无法走索引，每次查询都要在查询时刻扫描每一帖；结果正确但在万亿帖、PB 级数据上是灾难——数据组织必须匹配请求模式。",
+    "why_en": "A leading-wildcard LIKE cannot use an index, so every query scans every post at query time, which is hopeless at petabyte scale.",
+    "tags": [
+      "naive-search",
+      "sql",
+      "full-scan"
+    ],
+    "options_en": [
+      "The syntax is invalid and won't run.",
+      "No index is usable, so every query scans all posts — hopeless at petabyte scale.",
+      "The returned results are incorrect.",
+      "LIKE doesn't support non-English text."
+    ],
+    "termDefinitions": [
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "naive-search",
+    "q": "对全表扫描方案做分片/复制（M 个节点各扫 N/M 帖），结论是？",
+    "options": [
+      "分片能彻底解决扫描慢的问题",
+      "只要节点数 M 足够大就能达标",
+      "只是边际改善：每节点仍要扫海量，依旧太慢，死路",
+      "分片反而会让结果不正确"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "分片把扫描量从 N 降到 N/M，但面对万亿级帖子这只是把「不可能」变成「依然不可能」；正确出路是改变数据组织方式，而不是堆机器硬扫。",
+    "why_en": "Sharding the naive scan only cuts each node's work to N over M posts, which is still far too slow and a dead end.",
+    "tags": [
+      "sharding",
+      "full-scan",
+      "dead-end"
+    ],
+    "options_en": [
+      "Sharding fully solves the slow-scan problem.",
+      "It's fine as long as the node count M is large enough.",
+      "Only a marginal gain: each node still scans a huge amount — still too slow, a dead end.",
+      "Sharding makes the results incorrect."
+    ],
+    "termDefinitions": [
+      {
+        "term": "分片 (sharding)",
+        "meaning": "按某个键把数据拆到多台机器，分摊写入和存储压力。",
+        "meaningEn": "Sharding splits data across machines by a key to spread load."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "inverted-index",
+    "scenario": "万亿级帖子，要求按关键词找出所有包含该词的帖子，查询延迟中位数 <500ms，且不允许使用现成搜索引擎。",
+    "q": "应该采用的核心数据结构是？",
+    "options": [
+      "倒排索引：关键词 → 包含它的帖子 ID 列表",
+      "对 content 列建 B-tree 索引",
+      "分片后的并行全表扫描",
+      "用布隆过滤器直接返回结果"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "倒排索引把工作移到写入时：发帖时拆词并把帖子 ID 挂到每个词的列表下，查询就变成一次按 key 取列表的快速查找，这是关键词搜索的教科书解法。",
+    "why_en": "An inverted index maps each keyword to the list of posts containing it, turning search into a fast key lookup instead of a scan.",
+    "whenOtherWins": "若查询是前缀或范围查询，B-tree 类索引才有用武之地；若允许用 Elasticsearch，直接用它内置的倒排索引省去自建成本。",
+    "diagram": "flowchart LR\n    P[\"新帖: I saw Taylor\"] --> T[\"拆词 tokenization\"]\n    T --> A[\"key: i ← post9\"]\n    T --> B[\"key: saw ← post9\"]\n    T --> C[\"key: taylor ← post9\"]\n    Q[\"搜索 taylor\"] -. 直接取列表 .-> C",
+    "tags": [
+      "inverted-index",
+      "indexing",
+      "search"
+    ],
+    "options_en": [
+      "An inverted index: keyword → list of post IDs containing it.",
+      "A B-tree index on the content column.",
+      "Parallel full-table scan after sharding.",
+      "Use a Bloom filter to return results directly."
+    ],
+    "tradeoff": "写时预组织(倒排索引) vs 查询时扫描/过滤",
+    "termDefinitions": [
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      },
+      {
+        "term": "B-tree 索引",
+        "meaning": "数据库常用的按值排序索引，擅长前缀和范围查询。",
+        "meaningEn": "A B-tree index sorts values for fast prefix and range lookups."
+      },
+      {
+        "term": "布隆过滤器",
+        "meaning": "用位数组做概率性成员判断，只能答「可能存在/一定不存在」。",
+        "meaningEn": "A Bloom filter probabilistically tests set membership with no false negatives."
+      },
+      {
+        "term": "Elasticsearch",
+        "meaning": "开箱即用的分布式搜索引擎，内部本身就用倒排索引。",
+        "meaningEn": "Elasticsearch is an off-the-shelf search engine built on inverted indexes."
+      }
+    ],
+    "optionMeanings": [
+      "把每个词映射到含它的帖子列表",
+      "按值排序的通用磁盘索引",
+      "把扫描量摊到多个节点",
+      "用位数组做概率存在判断"
+    ],
+    "optionScenarioImpacts": [
+      "查询变成一次按 key 取列表，最快",
+      "前缀/范围快，但整词命中仍要扫",
+      "N/M 仍是海量，撞不到 500ms",
+      "只能判断可能存在，给不出帖子列表"
+    ],
+    "optionMeanings_en": [
+      "Maps each keyword to the list of posts containing it.",
+      "A general value-sorted disk index.",
+      "Spreads the scan across nodes.",
+      "Probabilistic membership via a bit array."
+    ],
+    "optionScenarioImpacts_en": [
+      "Search becomes one key lookup — fastest.",
+      "Great for prefix/range, but whole-word match still scans.",
+      "N/M is still huge, misses 500ms.",
+      "Only says maybe-present; returns no post list."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-019",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "inverted-index",
+    "q": "补全倒排索引的写入流程：",
+    "text": "帖子创建后，Ingestion 服务把内容拆解成一个个可匹配的关键词，这个过程叫 {{tokenization}}；随后把该帖的 {{post ID}} 追加到每个关键词对应的列表里。",
+    "why": "倒排索引的构建就是「拆词 + 挂 ID」：一帖可能含 10-1000 个词，意味着一次发帖触发多个 key 的写入，这也是后面写扩展问题的根源。",
+    "why_en": "Ingestion tokenizes each post into keywords and appends the post ID to every keyword's list in the index.",
+    "tags": [
+      "tokenization",
+      "ingestion",
+      "inverted-index"
+    ],
+    "diagram": "graph LR\n    Post[New post] --> Tokenize[Tokenize text]\n    Tokenize --> Terms[Terms]\n    Terms --> Index[Update inverted index]\n    Index --> Redis[(Redis lists or sets)]\n    Post --> Store[(Post store)]",
+    "termDefinitions": [
+      {
+        "term": "tokenization",
+        "meaning": "把帖子内容拆解成一个个可匹配关键词的过程，中文叫分词。",
+        "meaningEn": "Tokenization breaks a post into individual searchable keywords."
+      },
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "index-storage",
+    "scenario": "倒排索引位于中位 <500ms 的核心查询路径上，需要极快的读取，同时你接受用替代方案弥补持久性短板。",
+    "q": "这个倒排索引应该放在什么存储里？",
+    "options": [
+      "磁盘上的 MySQL 表——最耐久但读取偏慢",
+      "本地文件——最简单但单机无法扩展",
+      "Redis 内存——查询极快，MemoryDB 补持久",
+      "S3 对象存储——最便宜但延迟太高"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "索引放 Redis 内存里查询飞快，满足亚 500ms 的核心诉求；内存的持久性短板是可解的——换 MemoryDB 等持久化兼容方案或留到深挖处理。",
+    "why_en": "The index lives in Redis for blazing-fast in-memory lookups, with durability concerns addressed by a persistent alternative like MemoryDB.",
+    "whenOtherWins": "若索引重建代价不可接受、持久性是硬约束，一开始就选 MemoryDB 或磁盘型存储；冷门关键词后面也会下沉到便宜的 blob 存储。",
+    "tags": [
+      "redis",
+      "in-memory",
+      "durability"
+    ],
+    "options_en": [
+      "A MySQL table on disk — most durable but slow to read.",
+      "Local files — simplest but a single box that can't scale.",
+      "Redis in memory — blazing-fast reads, with MemoryDB covering durability.",
+      "S3 object storage — cheapest but latency is too high."
+    ],
+    "tradeoff": "内存读取速度 vs 持久性/成本",
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      },
+      {
+        "term": "MemoryDB",
+        "meaning": "兼容 Redis 接口但带持久化的内存数据库，可弥补纯内存的易失性。",
+        "meaningEn": "MemoryDB is a durable, Redis-compatible in-memory database."
+      },
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      }
+    ],
+    "optionMeanings": [
+      "关系库，数据落磁盘",
+      "进程本地的文件读写",
+      "内存 key-value 存储",
+      "按对象存取的廉价云存储"
+    ],
+    "optionScenarioImpacts": [
+      "耐久但磁盘读扛不住 500ms",
+      "单机、无法水平扩展索引",
+      "满足亚 500ms，持久性另解",
+      "便宜但延迟高，适合冷数据"
+    ],
+    "optionMeanings_en": [
+      "Relational DB with data on disk.",
+      "Process-local file I/O.",
+      "In-memory key-value store.",
+      "Cheap object storage."
+    ],
+    "optionScenarioImpacts_en": [
+      "Durable, but disk reads miss 500ms.",
+      "Single box, no horizontal index scaling.",
+      "Meets sub-500ms; durability solved elsewhere.",
+      "Cheap but high latency; fits cold data."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-021",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "inverted-index",
+    "q": "Redis 倒排索引方案从第一天起就自带哪些挑战？（多选）",
+    "options": [
+      "常见关键词的 post ID 列表会变得非常大",
+      "一帖含 10-1000 个关键词，每次发帖要写很多个 key",
+      "Redis 完全无法水平扩展",
+      "内存存储天生有持久性顾虑"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "三大隐患：热词列表巨大（后面用截断+冷存储解决）、发帖写放大（用 Kafka+分片解决）、内存持久性（用 MemoryDB 解决）；Redis 本身完全可以通过分片水平扩展。",
+    "why_en": "Common keywords produce huge ID lists, each post fans out into many key writes, and in-memory storage raises durability concerns.",
+    "tags": [
+      "inverted-index",
+      "write-amplification",
+      "challenges"
+    ],
+    "options_en": [
+      "Post-ID lists for common keywords grow very large.",
+      "A post has 10-1000 keywords, so each post writes many keys.",
+      "Redis can't scale horizontally at all.",
+      "In-memory storage inherently raises durability concerns."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      },
+      {
+        "term": "写放大",
+        "meaning": "一次逻辑写在底层被放大成多次物理写。",
+        "meaningEn": "Write amplification turns one logical write into many physical writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-022",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把「选择倒排索引」的完整决策链排成正确顺序：",
+    "steps": [
+      "代价：每帖拆出几十上百个词、每个词都要写 key；热词的 postId 列表巨大",
+      "需求：万亿帖中按关键词亚秒级找到所有匹配帖子",
+      "缓解写放大：Kafka 缓冲写入 + 索引按关键词分片",
+      "决定性质：查询时全量扫描必死，必须在写入时按查询模式预组织数据",
+      "选型：Redis 内存倒排索引（关键词 → postId 列表）",
+      "缓解大列表：截断到 1k-10k 条 + 冷词下沉 blob 存储"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      4,
+      0,
+      2,
+      5
+    ],
+    "acceptAltOrders": [
+      [
+        1,
+        3,
+        4,
+        0,
+        5,
+        2
+      ]
+    ],
+    "why": "完整链条 = 需求 → 决定性质（写时预组织）→ 选型（Redis 倒排索引）→ 代价（写放大、大列表）→ 两条缓解各自对应一个代价；两个缓解之间先说哪个都成立。",
+    "why_en": "The chain runs from the sub-second keyword search requirement, through organizing data at write time, to a Redis inverted index whose write amplification and huge lists are mitigated by buffering, sharding, capping, and cold storage.",
+    "tags": [
+      "decision-chain",
+      "inverted-index"
+    ],
+    "diagram": "graph TD\n    Scan[Full table scan too slow] --> Inverted[Use inverted index]\n    Inverted --> Redis[Fast posting lists]\n    Redis --> Challenges[Memory and ranking challenges]\n    Challenges --> Tiering[Hot Redis plus cold storage]",
+    "tradeoff": "写时预组织 vs 查询时扫描",
+    "termDefinitions": [
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志/流平台，可分区并行、缓冲突发、持久化事件。",
+        "meaningEn": "Kafka is a distributed log that partitions load and buffers event bursts."
+      },
+      {
+        "term": "分片 (sharding)",
+        "meaning": "按某个键把数据拆到多台机器，分摊写入和存储压力。",
+        "meaningEn": "Sharding splits data across machines by a key to spread load."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-023",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "sorting",
+    "q": "「请求时排序」（取出关键词全部 postId → 逐个查时间戳 → 内存排序）有哪些致命问题？（多选）",
+    "options": [
+      "热词可能有千万级 postId，索引返回的载荷可达数百 MB",
+      "每个 postId 都要一次查找，累计上千万次查询",
+      "请求时排序百万级条目，平添不必要的延迟",
+      "排序结果一定是错误的"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "三重打击：网络传输巨量 ID、海量逐条查找、请求时全量排序，500ms 的 SLA 完全无望；结果本身是对的，但代价不可接受。",
+    "why_en": "Request-time sorting suffers from hundreds of megabytes of IDs, tens of millions of lookups, and expensive in-memory sorts on every query.",
+    "tags": [
+      "sorting",
+      "naive",
+      "latency"
+    ],
+    "options_en": [
+      "Popular keywords can have tens of millions of post IDs, payloads up to hundreds of MB.",
+      "Each post ID needs a lookup — tens of millions of them.",
+      "Sorting millions of items at request time adds needless latency.",
+      "The sorted result is guaranteed to be wrong."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "sorting",
+    "scenario": "搜索结果必须支持「按最新」和「按点赞数」两种排序，且查询时不能做大规模排序运算。",
+    "q": "怎么同时支持按时间和按赞数排序，又不在查询时做大排序？",
+    "options": [
+      "每次查询后在搜索服务里排序",
+      "只支持按时间排序，砍掉按赞排序",
+      "把排序交给客户端处理",
+      "每个关键词维护两份预排序索引：按时间、按赞数"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "用空间换时间：每个关键词同时维护按时间和按赞数两份预排序索引，查询直接取已排序的头部；代价是索引存储翻倍，但换来查询性能的巨大提升。",
+    "why_en": "Each keyword gets two pre-sorted indexes, one by creation time and one by like count, so queries read already-ordered results.",
+    "whenOtherWins": "若数据量小或查询稀少，请求时排序能省下一半索引存储；简单系统未必需要预排序双索引。",
+    "tags": [
+      "sorting",
+      "dual-index",
+      "tradeoff"
+    ],
+    "options_en": [
+      "Sort in the search service after each query.",
+      "Support only recency sorting and drop like-count sorting.",
+      "Offload sorting to the client.",
+      "Keep two pre-sorted indexes per keyword: one by time, one by like count."
+    ],
+    "tradeoff": "索引存储翻倍 vs 查询时零排序",
+    "termDefinitions": [
+      {
+        "term": "sorted set",
+        "meaning": "Redis 的有序集合，按 score 维持排序，插入和按名次查询都很快。",
+        "meaningEn": "A Redis sorted set keeps members ordered by a numeric score."
+      },
+      {
+        "term": "Redis list",
+        "meaning": "Redis 的普通列表，只在两端追加/读取，天然保留插入顺序。",
+        "meaningEn": "A Redis list preserves insertion order with cheap appends at the ends."
+      }
+    ],
+    "optionMeanings": [
+      "取全部再实时排序",
+      "放弃一种排序维度",
+      "让前端自己排",
+      "写时就把结果排好"
+    ],
+    "optionScenarioImpacts": [
+      "热词百万条，排序拖垮延迟",
+      "不满足按赞排序的需求",
+      "客户端算力/数据都不够",
+      "查询直接取头部，最快"
+    ],
+    "optionMeanings_en": [
+      "Fetch all, then sort live.",
+      "Drop one sort dimension.",
+      "Let the frontend sort.",
+      "Pre-sort at write time."
+    ],
+    "optionScenarioImpacts_en": [
+      "Millions of items sink latency.",
+      "Fails the sort-by-likes need.",
+      "Client lacks the compute/data.",
+      "Query reads the head — fastest."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-025",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "creation-index",
+    "scenario": "creation index 只会不断追加新帖，查询永远只取最新的若干条，需要为每个关键词选一个 Redis 结构。",
+    "q": "哪组命令符合 creation index 的正确用法？",
+    "codeSample": "# 发帖时间索引：按到达顺序追加\nRPUSH kw:taylor:by_time post123\n# 查询：只取列表尾部最新 10 条\nLRANGE kw:taylor:by_time -10 -1",
+    "lang": "redis",
+    "options": [
+      "RPUSH 追加写入；LRANGE 取列表尾部最新 N 条",
+      "ZADD 按时间戳写入；ZRANGE 取全量再过滤",
+      "SET 每次覆盖写入最新一条",
+      "SADD 写入集合；SMEMBERS 全量取出"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "发帖天然按时间到达，用普通 Redis list 尾部追加即可免费保持时间序；查询只读尾部最新元素，写入和读取都很便宜。",
+    "why_en": "Posts arrive in time order, so a plain Redis list with tail appends and tail reads keeps the creation index sorted for free.",
+    "whenOtherWins": "需要按会变化的分数（点赞数）排序时 list 无能为力，必须换 sorted set 按 score 动态维序。",
+    "tags": [
+      "redis",
+      "list",
+      "creation-index"
+    ],
+    "options_en": [
+      "RPUSH to append; LRANGE to read the newest N from the tail.",
+      "ZADD keyed by timestamp; ZRANGE to read all then filter.",
+      "SET to overwrite with the latest one each time.",
+      "SADD into a set; SMEMBERS to read everything."
+    ],
+    "tradeoff": "追加即有序的 list vs 需按分数维序的 sorted set",
+    "termDefinitions": [
+      {
+        "term": "RPUSH / LRANGE",
+        "meaning": "RPUSH 向列表尾部追加，LRANGE 按区间读取列表元素。",
+        "meaningEn": "RPUSH appends to a list tail and LRANGE reads a range of elements."
+      },
+      {
+        "term": "Redis list",
+        "meaning": "Redis 的普通列表，只在两端追加/读取，天然保留插入顺序。",
+        "meaningEn": "A Redis list preserves insertion order with cheap appends at the ends."
+      },
+      {
+        "term": "sorted set",
+        "meaning": "Redis 的有序集合，按 score 维持排序，插入和按名次查询都很快。",
+        "meaningEn": "A Redis sorted set keeps members ordered by a numeric score."
+      }
+    ],
+    "optionMeanings": [
+      "尾部追加+尾部读取的列表",
+      "按分数排序的有序集合",
+      "单值覆盖写",
+      "无序集合"
+    ],
+    "optionScenarioImpacts": [
+      "时间序按到达顺序，最省",
+      "赞数才需要 score，此处多余",
+      "只能存一条，丢历史",
+      "无序，取不出「最新 N 条」"
+    ],
+    "optionMeanings_en": [
+      "A list with tail append and tail read.",
+      "A score-sorted set.",
+      "Single-value overwrite.",
+      "An unordered set."
+    ],
+    "optionScenarioImpacts_en": [
+      "Arrival order is free ordering — cheapest.",
+      "Scores are for likes, not needed here.",
+      "Keeps only one, loses history.",
+      "Unordered; can't take the newest N."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-026",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "likes-index",
+    "scenario": "likes index 需要按「会不断变化的点赞数」维持排序，要像优先队列一样支持按分数插入与按名次查询。",
+    "q": "哪组命令符合 likes index 的正确用法？",
+    "codeSample": "# 点赞事件：给帖子的 score 加 1\nZINCRBY kw:taylor:by_likes 1 post123\n# 查询：取点赞最高的前 10\nZREVRANGE kw:taylor:by_likes 0 9",
+    "lang": "redis",
+    "options": [
+      "RPUSH 追加到普通列表的尾部",
+      "LPUSH 插到普通列表的头部",
+      "GET 直接读取一个字符串键",
+      "ZINCRBY 加分；ZREVRANGE 取最高前 N"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "Redis sorted set 按 score 维持有序，插入/更新/按名次查询的复杂度与优先队列相当，天然适合「按点赞数排序」的索引。",
+    "why_en": "A Redis sorted set keeps posts ordered by like-count score, supporting priority-queue-like insertion and ranked queries.",
+    "whenOtherWins": "若排序键是不可变的到达时间，普通 list 追加更省内存也更简单。",
+    "tags": [
+      "redis",
+      "sorted-set",
+      "likes-index"
+    ],
+    "options_en": [
+      "RPUSH to append to the tail of a plain list.",
+      "LPUSH to prepend to the head of a plain list.",
+      "GET to read a single string key.",
+      "ZINCRBY to bump the score; ZREVRANGE to read the top-N."
+    ],
+    "tradeoff": "可变分数维序(sorted set) vs 固定顺序(list)",
+    "termDefinitions": [
+      {
+        "term": "ZINCRBY / ZREVRANGE",
+        "meaning": "ZINCRBY 给有序集合成员的分数加值，ZREVRANGE 取分数最高的前 N 个。",
+        "meaningEn": "ZINCRBY increases a member score and ZREVRANGE reads the highest-scoring N."
+      },
+      {
+        "term": "sorted set",
+        "meaning": "Redis 的有序集合，按 score 维持排序，插入和按名次查询都很快。",
+        "meaningEn": "A Redis sorted set keeps members ordered by a numeric score."
+      },
+      {
+        "term": "Redis list",
+        "meaning": "Redis 的普通列表，只在两端追加/读取，天然保留插入顺序。",
+        "meaningEn": "A Redis list preserves insertion order with cheap appends at the ends."
+      }
+    ],
+    "optionMeanings": [
+      "尾部追加的普通列表",
+      "头部插入的普通列表",
+      "读单个字符串",
+      "有序集合改分数并按名次取"
+    ],
+    "optionScenarioImpacts": [
+      "list 无法按变化的赞数维序",
+      "同上，方向不同而已",
+      "存不了排名结构",
+      "赞数一变就重排，天然胜任"
+    ],
+    "optionMeanings_en": [
+      "A plain list appended at the tail.",
+      "A plain list prepended at the head.",
+      "Reads one string.",
+      "A sorted set: change score, read by rank."
+    ],
+    "optionScenarioImpacts_en": [
+      "A list can't reorder by changing likes.",
+      "Same problem, other direction.",
+      "Can't hold a ranked structure.",
+      "Reorders on every like — the natural fit."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-027",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "sorting",
+    "q": "双索引方案下，发帖和点赞分别触发什么索引操作？",
+    "options": [
+      "发帖只写 creation；点赞只新增 likes 条目",
+      "发帖和点赞都触发全量重建索引",
+      "发帖写两份索引(每词)；点赞更新 likes 的 score",
+      "发帖和点赞都只修改 likes index"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "新帖要在它的每个关键词下同时进两份索引（时间序列表 + 赞数 sorted set）；点赞只需给 likes index 对应 score 加一，但高频点赞会带来巨大更新压力。",
+    "why_en": "A new post is added to both indexes for every keyword it contains, while each like updates the post's score in the likes index.",
+    "tags": [
+      "dual-index",
+      "write-path",
+      "likes"
+    ],
+    "table": {
+      "headers": [
+        "事件",
+        "索引动作"
+      ],
+      "rows": [
+        [
+          "发帖",
+          "每词写入两份索引"
+        ],
+        [
+          "点赞",
+          "更新 likes 的 score"
+        ],
+        [
+          "删除/隐私",
+          "移除或标记隐藏"
+        ]
+      ]
+    },
+    "options_en": [
+      "A post writes only creation; a like just adds a likes entry.",
+      "Both a post and a like trigger a full index rebuild.",
+      "A post writes both indexes (per keyword); a like updates that post's score in likes.",
+      "Both posts and likes only modify the likes index."
+    ],
+    "termDefinitions": [
+      {
+        "term": "sorted set",
+        "meaning": "Redis 的有序集合，按 score 维持排序，插入和按名次查询都很快。",
+        "meaningEn": "A Redis sorted set keeps members ordered by a numeric score."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-028",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "sorting",
+    "q": "双索引方案的两个代价是？",
+    "options": [
+      "存储翻倍 + 高频点赞带来海量 score 更新",
+      "查询变慢且返回结果不正确",
+      "索引无法分片也无法缓存",
+      "只支持英文并有内存泄漏"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每个关键词存两份索引，存储直接翻倍——为查询性能付的合理学费；更麻烦的是 100k/s 的点赞每个都要更新多个 sorted set，写压力成为必须解决的深挖点。",
+    "why_en": "The dual indexes double storage and, worse, the heavy stream of likes forces constant score updates that stress the system.",
+    "tags": [
+      "dual-index",
+      "storage-cost",
+      "write-pressure"
+    ],
+    "options_en": [
+      "Storage doubles, and heavy likes cause a flood of score updates.",
+      "Queries get slower and results become incorrect.",
+      "The index can neither be sharded nor cached.",
+      "It only supports English and leaks memory."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "search-cache",
+    "scenario": "系统无个性化（同一查询人人结果相同），新帖可见性 SLA 为 1 分钟，搜索读流量 10k/s 且可能突发 10 倍。",
+    "q": "应对读流量的第一个显而易见的工具是？",
+    "options": [
+      "给每个用户建独立索引",
+      "升级更大内存的 Redis 机器",
+      "限流拒绝超额请求",
+      "结果缓存：先查缓存，未命中再搜索并回填"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "判断缓存是否合适的两个信号在这全中：能容忍陈旧（1 分钟 SLA）+ 大量重复请求（无个性化），于是在搜索服务旁加分布式结果缓存。",
+    "why_en": "With duplicate queries and a one-minute staleness budget, a distributed result cache in front of the search path is the obvious first tool.",
+    "whenOtherWins": "若结果因人而异（个性化）或必须秒级新鲜，查询级缓存的命中率和正确性都会崩，只能缓存更底层的数据。",
+    "tags": [
+      "caching",
+      "scaling-reads",
+      "search-cache"
+    ],
+    "options_en": [
+      "Build a separate index per user.",
+      "Upgrade to a Redis box with more memory.",
+      "Rate-limit and reject excess requests.",
+      "Result cache: check the cache first, only search and backfill on a miss."
+    ],
+    "tradeoff": "容忍 1 分钟陈旧换高命中缓存 vs 每次实时搜索",
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "meaning": "缓存条目的存活时间，到期后必须重新获取或重建。",
+        "meaningEn": "TTL is how long a cached entry lives before it must be refetched."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      }
+    ],
+    "optionMeanings": [
+      "按人存索引",
+      "纵向扩容单机",
+      "主动拒绝流量",
+      "缓存查询结果供复用"
+    ],
+    "optionScenarioImpacts": [
+      "无个性化，人人同结果，白建",
+      "单机撑不住 10 倍突发",
+      "降低可用性，不解决重复读",
+      "重复查询直接命中，最省"
+    ],
+    "optionMeanings_en": [
+      "Per-user indexes.",
+      "Scale one box vertically.",
+      "Actively reject traffic.",
+      "Cache query results for reuse."
+    ],
+    "optionScenarioImpacts_en": [
+      "No personalization — same for all, wasteful.",
+      "One box can't take a 10x burst.",
+      "Hurts availability, ignores duplicates.",
+      "Duplicate queries hit directly — cheapest."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-030",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "search-cache",
+    "q": "搜索结果缓存的 TTL 应该设为多少，为什么？",
+    "options": [
+      "小于 1 分钟——贴着新帖可见 SLA",
+      "24 小时——把命中率做到最高",
+      "1 秒——尽量保证结果最新鲜",
+      "永不过期——运维上最省事"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "TTL 由业务 SLA 反推：新帖必须 1 分钟内可见，缓存最长只能存活不到 1 分钟，这样即使命中旧缓存也不会违反可见性承诺。",
+    "why_en": "Setting the cache TTL below one minute guarantees cached results never violate the one-minute searchability SLA for new posts.",
+    "tags": [
+      "ttl",
+      "sla",
+      "caching"
+    ],
+    "scenario": "系统无个性化、同查询人人同结果，且新帖必须在 1 分钟内可被搜到。",
+    "options_en": [
+      "Under one minute — hugging the new-post visibility SLA.",
+      "24 hours — to maximize the hit rate.",
+      "1 second — to keep results as fresh as possible.",
+      "Never expire — least operational effort."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "meaning": "缓存条目的存活时间，到期后必须重新获取或重建。",
+        "meaningEn": "TTL is how long a cached entry lives before it must be refetched."
+      },
+      {
+        "term": "SLA",
+        "meaning": "对外承诺的服务指标，如「新帖 1 分钟内可搜」。",
+        "meaningEn": "An SLA is a promised service level, e.g. new posts searchable within a minute."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-031",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cdn",
+    "scenario": "全球用户都在搜索相同的热门查询，希望命中时几十毫秒返回，最好请求还没进你的机房就被消化掉。",
+    "q": "在 Redis 结果缓存之外还能加什么？",
+    "options": [
+      "再多加几台搜索服务实例扩容",
+      "CDN 边缘缓存：就近节点缓存 /search 响应",
+      "让客户端不停地轮询并重试",
+      "给数据库多加几个只读副本"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "CDN 本质是一片地理分布的 HTTP 缓存：配好源站和 DNS，命中时用户在本地边缘节点几十毫秒拿到结果，未命中才回源走完整链路。",
+    "why_en": "Adding cache-control headers lets a CDN's geographically local edge nodes serve repeated searches in tens of milliseconds without touching your servers.",
+    "whenOtherWins": "结果个性化或需要鉴权后才可见时，边缘共享缓存不适用，只能靠服务旁的私有缓存。",
+    "tags": [
+      "cdn",
+      "edge-cache",
+      "latency"
+    ],
+    "options_en": [
+      "Just add a few more search-service instances.",
+      "CDN edge cache: geographically local nodes cache the /search response.",
+      "Have clients keep polling and retrying.",
+      "Add several read replicas to the database."
+    ],
+    "tradeoff": "边缘就近命中 vs 每次回源走全链路",
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      },
+      {
+        "term": "cache-control",
+        "meaning": "HTTP 响应头，告诉缓存该不该存、能存多久（如 max-age）。",
+        "meaningEn": "The cache-control header tells caches whether and how long to store a response."
+      }
+    ],
+    "optionMeanings": [
+      "横向扩容源站服务",
+      "地理分布的 HTTP 边缘缓存",
+      "客户端反复请求",
+      "给库加只读副本"
+    ],
+    "optionScenarioImpacts": [
+      "请求仍进机房，慢且贵",
+      "热门查询在边缘几十毫秒返回",
+      "加重服务器负担",
+      "解决库读，不解决地理延迟"
+    ],
+    "optionMeanings_en": [
+      "Scale origin services out.",
+      "Geo-distributed HTTP edge cache.",
+      "Clients hammer the server.",
+      "Read replicas on the DB."
+    ],
+    "optionScenarioImpacts_en": [
+      "Requests still enter the DC — slow, costly.",
+      "Hot queries return in tens of ms at the edge.",
+      "Adds server load.",
+      "Solves DB reads, not geo latency."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-032",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cdn",
+    "scenario": "想让 CDN 缓存 /search 的响应以吸收重复查询，同时不能违反新帖 1 分钟可见的 SLA。",
+    "q": "下面哪个响应头设置是正确做法？",
+    "codeSample": "GET /search?q=taylor+swift&sort=likes\n\nHTTP/1.1 200 OK\nCache-Control: public, max-age=59\nContent-Type: application/json\n\n{ \"results\": [\"...\"] }",
+    "lang": "http",
+    "options": [
+      "Cache-Control: no-store",
+      "Cache-Control: private, max-age=3600",
+      "Cache-Control: public, max-age=59",
+      "Expires: never"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "public 允许共享缓存（CDN）存储，max-age=59 让缓存寿命 <1 分钟、贴着 SLA 上限拿最高命中率；no-store 直接放弃缓存，3600 秒则违反 SLA。",
+    "why_en": "Marking the response public with a max-age just under sixty seconds lets the CDN cache aggressively while still honoring the one-minute freshness SLA.",
+    "whenOtherWins": "若响应包含用户私有数据应改用 private 或 no-store，宁可牺牲命中率也不能把私有结果发给别人。",
+    "tags": [
+      "cdn",
+      "cache-control",
+      "http"
+    ],
+    "options_en": [
+      "Set Cache-Control: no-store.",
+      "Set Cache-Control: private, max-age=3600.",
+      "Set Cache-Control: public, max-age=59.",
+      "Set Expires: never."
+    ],
+    "tradeoff": "public 高命中(共享缓存) vs private/no-store 保私密但少缓存",
+    "termDefinitions": [
+      {
+        "term": "cache-control",
+        "meaning": "HTTP 响应头，告诉缓存该不该存、能存多久（如 max-age）。",
+        "meaningEn": "The cache-control header tells caches whether and how long to store a response."
+      },
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      },
+      {
+        "term": "SLA",
+        "meaning": "对外承诺的服务指标，如「新帖 1 分钟内可搜」。",
+        "meaningEn": "An SLA is a promised service level, e.g. new posts searchable within a minute."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-033",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "cdn",
+    "q": "CDN 边缘命中 vs 完整回源链路（网关 → 搜索服务 → 结果缓存 → 返回）的延迟量级对比是？",
+    "options": [
+      "两者都在几毫秒级",
+      "边缘命中反而更慢",
+      "两者都超过 1 秒",
+      "边缘命中几十毫秒，完整链路要几百毫秒"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "边缘节点物理上离用户近，命中时几十毫秒返回；老老实实穿过 API 网关、搜索服务、结果缓存再回来则要几百毫秒——一个数量级的差距。",
+    "why_en": "A CDN edge hit returns in tens of milliseconds versus the hundreds of milliseconds needed to traverse the full gateway, service, and cache path.",
+    "tags": [
+      "cdn",
+      "numbers",
+      "latency"
+    ],
+    "scenario": "一次搜索要么命中地理就近的 CDN 边缘，要么回源穿过网关→搜索服务→结果缓存再返回。",
+    "options_en": [
+      "Both are in the low-millisecond range.",
+      "An edge hit is actually slower.",
+      "Both exceed one second.",
+      "An edge hit is tens of ms; the full path is hundreds of ms."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "meaning": "地理分布的 HTTP 缓存网络，命中时在离用户最近的边缘节点返回。",
+        "meaningEn": "A CDN is a network of edge HTTP caches that serve users from nearby locations."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-034",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "phrase-search",
+    "q": "把「交集法」回答 Taylor Swift 短语查询的步骤排成正确顺序：",
+    "steps": [
+      "拉取候选帖原文，验证确实包含连续短语 Taylor Swift，而不是 Taylor made a swift exit 这种散装匹配",
+      "分别取出 Taylor 和 Swift 两个关键词的 postId 列表",
+      "把通过验证的帖子按排序要求返回",
+      "求两个列表的交集，得到同时含两个词的 postId"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2
+    ],
+    "why": "交集法四步：取各词列表 → 求交 → 原文验证短语连续性（过滤「碰巧都含这两个词」的假阳性）→ 返回；不改索引结构，是侵入最小的多词方案。",
+    "why_en": "Fetch each keyword's post list, intersect them, verify the actual phrase appears contiguously in the post text, and return the survivors in order.",
+    "tags": [
+      "phrase-query",
+      "intersection",
+      "search"
+    ],
+    "diagram": "graph LR\n    Query[Taylor Swift] --> T1[term taylor]\n    Query --> T2[term swift]\n    T1 --> Intersect[Intersect postIds]\n    T2 --> Intersect\n    Intersect --> Verify[Fetch text and verify phrase]\n    Verify --> Rank[Rank results]",
+    "tradeoff": "不改索引(交集法) vs 改索引(bigram)",
+    "termDefinitions": [
+      {
+        "term": "假阳性",
+        "meaning": "看似匹配、实则不满足条件的结果，这里指含两词但非连续短语。",
+        "meaningEn": "A false positive looks like a match but is not one, e.g. both words present but not adjacent."
+      },
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-035",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "phrase-search",
+    "q": "交集法处理短语查询的最大痛点是？",
+    "options": [
+      "无法返回正确结果",
+      "Redis 不支持集合运算",
+      "热词集合极大，传输与求交贵，难赶 500ms",
+      "只能支持两个词的查询"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "两个热词各有百万级 postId 时，光传输和求交就可能吃掉整个延迟预算；更糟的是若两词常同帖出现但不构成短语，过滤环节的计算全部白费。",
+    "why_en": "Popular keywords yield huge ID sets that are expensive to transfer and intersect within the latency budget, and overlapping but nonadjacent words force wasteful filtering.",
+    "tags": [
+      "phrase-query",
+      "intersection",
+      "latency"
+    ],
+    "options_en": [
+      "It can't return correct results.",
+      "Redis doesn't support set operations.",
+      "Popular keywords have huge sets — transfer and intersection are costly, hard within 500ms.",
+      "It only supports two-word queries."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-036",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "bigram",
+    "scenario": "Taylor Swift 这类高频短语查询要避开昂贵的交集运算，希望一次索引查找直接命中。",
+    "q": "应该怎么改进索引？",
+    "options": [
+      "索引 bigram/shingle：相邻词对当 key",
+      "把一整句话整体作为一个索引 key",
+      "改用正则表达式在查询时扫全表",
+      "缩短每个索引列表的最大长度"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "把每对相邻词也编入索引后，短语查询直接查 Taylor Swift 这个 key 拿 postId，无需求交集；这就是 Lucene 里 shingle 的思路。",
+    "why_en": "Indexing bigrams or shingles lets a phrase query hit the Taylor Swift key directly instead of intersecting two huge single-word lists.",
+    "whenOtherWins": "索引体积敏感、或短语查询占比很低时，交集法不增加任何索引膨胀，更划算。",
+    "tags": [
+      "bigram",
+      "shingle",
+      "phrase-query"
+    ],
+    "diagram": "graph LR\n    Text[taylor swift concert] --> B1[taylor_swift]\n    Text --> B2[swift_concert]\n    B1 --> Index[Bigram index]\n    B2 --> Index\n    Query[phrase query] --> Index",
+    "options_en": [
+      "Index bigrams/shingles: adjacent word pairs as keys.",
+      "Use a whole sentence as a single index key.",
+      "Switch to regex scanning at query time.",
+      "Shorten each index list to a maximum length."
+    ],
+    "tradeoff": "索引膨胀(bigram) vs 查询时求交",
+    "termDefinitions": [
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      }
+    ],
+    "optionMeanings": [
+      "相邻词对当索引 key",
+      "整句当一个 key",
+      "查询时正则扫全表",
+      "截断列表长度"
+    ],
+    "optionScenarioImpacts": [
+      "短语一次命中，免求交",
+      "几乎无复用，命中率极低",
+      "又回到全表扫描老路",
+      "不解决短语，只省存储"
+    ],
+    "optionMeanings_en": [
+      "Adjacent word pairs as keys.",
+      "The whole sentence as one key.",
+      "Regex-scan at query time.",
+      "Cap list length."
+    ],
+    "optionScenarioImpacts_en": [
+      "One hit for a phrase, no intersect.",
+      "Almost no reuse, tiny hit rate.",
+      "Back to full scans.",
+      "Doesn't solve phrases, only saves space."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-037",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "bigram",
+    "q": "补全 bigram 切分示例：",
+    "text": "句子 I saw Taylor Swift at the concert 会切出 I saw、saw Taylor、{{Taylor Swift}}、Swift at 等相邻词对；这种 token 在 Lucene 术语里叫 {{shingles}}。",
+    "why": "bigram 数量与句长呈线性，但每个 bigram 比单词稀有得多；短语查询因此可以直接命中，而不必求交集。",
+    "why_en": "The sentence yields adjacent word pairs like saw Taylor and Taylor Swift, which Lucene calls shingles.",
+    "tags": [
+      "bigram",
+      "shingle",
+      "tokenization"
+    ],
+    "termDefinitions": [
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      },
+      {
+        "term": "tokenization",
+        "meaning": "把帖子内容拆解成一个个可匹配关键词的过程，中文叫分词。",
+        "meaningEn": "Tokenization breaks a post into individual searchable keywords."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-038",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "bigram",
+    "q": "引入 bigram 索引的主要代价是？",
+    "options": [
+      "短语查询反而变得更慢",
+      "索引键爆炸：词对稀疏，key 可能涨一个数量级",
+      "bigram 无法与单词索引共存",
+      "点赞分数从此无法再更新"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "每句的 bigram 数量线性增长，但像 Swift at 这种词对在别的帖子里几乎不复现，key 空间因此暴涨一个数量级，存储成本急剧上升。",
+    "why_en": "Bigrams are far more unique than single words, so the index can balloon from ten million keys to over a hundred million.",
+    "tags": [
+      "bigram",
+      "index-size",
+      "cost"
+    ],
+    "options_en": [
+      "Phrase queries actually get slower.",
+      "Key explosion: bigrams are sparse, so keys can grow by an order of magnitude.",
+      "Bigrams can't coexist with single-word indexes.",
+      "Like scores can no longer be updated."
+    ],
+    "termDefinitions": [
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-039",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "bigram",
+    "scenario": "bigram 索引膨胀太贵，你想只为「真的会被搜到」的短语付出索引成本。",
+    "q": "合理的折衷方案是？",
+    "options": [
+      "彻底放弃短语查询",
+      "把所有 bigram 都直接存 S3",
+      "只给高频 bigram 建索引，其余回退交集法",
+      "每天全量重建一次索引"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "用概率计数结构（如 count-min sketch）廉价地找出高频 bigram、只为它们建索引；冷门短语回退交集法，兼顾成本与常见查询的速度。",
+    "why_en": "Index only the popular bigrams identified with a probabilistic counter like count-min sketch, and fall back to intersection for the rare ones.",
+    "whenOtherWins": "若存储预算充足且短语查询延迟至上，全量 bigram 索引更简单，也没有回退路径带来的复杂度。",
+    "tags": [
+      "count-min-sketch",
+      "bigram",
+      "tradeoff"
+    ],
+    "options_en": [
+      "Abandon phrase queries entirely.",
+      "Dump all bigrams straight into S3.",
+      "Index only popular bigrams; fall back to intersection for the rest.",
+      "Fully rebuild the whole index daily."
+    ],
+    "tradeoff": "索引膨胀 vs 命中率——只为高频短语付索引成本",
+    "termDefinitions": [
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      },
+      {
+        "term": "count-min sketch",
+        "meaning": "概率计数结构，用很小的内存估算元素出现频率。",
+        "meaningEn": "A count-min sketch estimates item frequencies in small, fixed memory."
+      }
+    ],
+    "optionMeanings": [
+      "不支持短语",
+      "冷存所有词对",
+      "热词对建索引+冷回退",
+      "周期性重建"
+    ],
+    "optionScenarioImpacts": [
+      "丢功能，不可接受",
+      "冷存延迟高，热短语也慢",
+      "常见短语快、罕见可用",
+      "重建期数据陈旧且昂贵"
+    ],
+    "optionMeanings_en": [
+      "No phrase support.",
+      "Cold-store all pairs.",
+      "Index hot pairs, fall back for cold.",
+      "Periodic rebuild."
+    ],
+    "optionScenarioImpacts_en": [
+      "Loses the feature — unacceptable.",
+      "Blob latency; hot phrases slow too.",
+      "Common phrases fast, rare ones still work.",
+      "Stale and costly during rebuild."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-040",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "write-scaling",
+    "q": "为什么说发帖在索引侧存在「写放大」？",
+    "options": [
+      "每帖都要同步写主库和备库",
+      "Redis 会自动复制三份数据",
+      "每帖都要重建全量索引",
+      "每帖拆成 10-100+ 个词，每词一次索引写"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "倒排索引把一次发帖放大成「每个关键词一次写」，双索引下还要乘 2；10k 帖/秒的创建流量在索引层就成了百万级写/秒的压力源。",
+    "why_en": "Tokenization fans a single hundred-word post out into a hundred or more index writes, massively amplifying the write load.",
+    "tags": [
+      "write-amplification",
+      "ingestion",
+      "tokenization"
+    ],
+    "options_en": [
+      "Every post must be written synchronously to primary and replica.",
+      "Redis automatically replicates data three times.",
+      "Every post rebuilds the whole index.",
+      "Each post splits into 10-100+ keywords, one index write each."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tokenization",
+        "meaning": "把帖子内容拆解成一个个可匹配关键词的过程，中文叫分词。",
+        "meaningEn": "Tokenization breaks a post into individual searchable keywords."
+      },
+      {
+        "term": "写放大",
+        "meaning": "一次逻辑写在底层被放大成多次物理写。",
+        "meaningEn": "Write amplification turns one logical write into many physical writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-041",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "ingestion",
+    "q": "发帖洪峰打爆 ingestion 服务的最坏后果是？",
+    "options": [
+      "事件被丢失，那些帖子将永远搜不到",
+      "查询延迟会稍微变慢一点",
+      "搜索结果缓存命中率下降",
+      "CDN 边缘缓存被清空失效"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ingestion 是帖子进入索引的唯一通道，过载丢事件意味着帖子永远不可搜——直接违反「所有帖子可发现」的核心 NFR，所以必须加缓冲。",
+    "why_en": "An overwhelmed ingestion service can drop post or like events, leaving those posts permanently unsearchable.",
+    "tags": [
+      "ingestion",
+      "data-loss",
+      "reliability"
+    ],
+    "options_en": [
+      "Events are dropped, and those posts become permanently unsearchable.",
+      "Query latency gets slightly worse.",
+      "The search result cache hit rate drops.",
+      "The CDN edge cache gets invalidated."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-042",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "ingestion",
+    "scenario": "发帖 10k/s 且有突发流量，ingestion 需要扩容、削峰，并把负载分摊到多个实例上。",
+    "q": "标准解法是？",
+    "options": [
+      "让客户端不断重试直到成功",
+      "给每台 ingestion 配更大内存",
+      "用关系型数据库当队列",
+      "用 Kafka 日志/流：分区摊负载 + 缓冲突发"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "Kafka 一石三鸟：分区把负载分摊到多实例、日志天然缓冲突发流量、事件持久化避免丢失；这是写扩展的标准工具。",
+    "why_en": "A Kafka log fans requests out across partitioned ingestion instances while buffering bursts so no events are lost.",
+    "whenOtherWins": "流量小且无突发时，直接同步调用 ingestion 更简单，省去引入消息系统的运维成本。",
+    "diagram": "flowchart LR\n    PS[Post Service] --> K[\"Kafka 日志<br/>分区 + 缓冲突发\"]\n    LS[Like Service] --> K\n    K --> I1[\"Ingestion 实例 1\"]\n    K --> IN[\"Ingestion 实例 N\"]\n    I1 --> R[\"Redis 索引<br/>按 keyword 分片\"]\n    IN --> R",
+    "tags": [
+      "kafka",
+      "scaling-writes",
+      "ingestion"
+    ],
+    "options_en": [
+      "Have clients keep retrying until they succeed.",
+      "Give each ingestion box more memory.",
+      "Use a relational database as the queue.",
+      "Use a Kafka log/stream: partition to spread load and buffer bursts."
+    ],
+    "tradeoff": "引入消息系统的运维成本 vs 削峰/分区/不丢事件",
+    "termDefinitions": [
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志/流平台，可分区并行、缓冲突发、持久化事件。",
+        "meaningEn": "Kafka is a distributed log that partitions load and buffers event bursts."
+      },
+      {
+        "term": "分片 (sharding)",
+        "meaning": "按某个键把数据拆到多台机器，分摊写入和存储压力。",
+        "meaningEn": "Sharding splits data across machines by a key to spread load."
+      }
+    ],
+    "optionMeanings": [
+      "客户端侧重试",
+      "单机纵向扩容",
+      "拿 RDB 当消息队列",
+      "分区日志流"
+    ],
+    "optionScenarioImpacts": [
+      "洪峰下只会雪上加霜",
+      "单机仍是瓶颈",
+      "RDB 吞吐撑不住",
+      "分区+缓冲，标准写扩展"
+    ],
+    "optionMeanings_en": [
+      "Retry on the client.",
+      "Scale one box vertically.",
+      "Use an RDB as a queue.",
+      "A partitioned log stream."
+    ],
+    "optionScenarioImpacts_en": [
+      "Makes a flood worse.",
+      "One box stays the bottleneck.",
+      "RDB throughput can't keep up.",
+      "Partition plus buffer — standard write scaling."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-043",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "index-sharding",
+    "scenario": "索引写入量巨大，单个 Redis 实例吃不下所有关键词的写入与存储。",
+    "q": "索引层的扩展方式是？",
+    "options": [
+      "直接换用一台内存更大的单机",
+      "让每个实例都保存全量索引副本",
+      "按 keyword 分片到多个 Redis 实例",
+      "把索引整体搬回关系型数据库"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "按关键词分片后，每个 Redis 实例只负责一部分词的索引，写入和存储都水平摊开；查询按词路由到对应分片即可。",
+    "why_en": "Sharding the inverted index by keyword spreads writes and storage across many Redis instances, with each query routed to its keyword's shard.",
+    "whenOtherWins": "全量复制适合读扩展而非写扩展；若单个超热关键词本身超过一个节点的承载，还需要对该 key 再做拆分或复制。",
+    "tags": [
+      "sharding",
+      "redis",
+      "scaling-writes"
+    ],
+    "table": {
+      "headers": [
+        "Scale axis",
+        "Approach"
+      ],
+      "rows": [
+        [
+          "Terms",
+          "Shard by term hash"
+        ],
+        [
+          "Posting list length",
+          "Split hot terms"
+        ],
+        [
+          "Read replicas",
+          "Serve popular queries"
+        ],
+        [
+          "Ingestion",
+          "Queue and worker pools"
+        ]
+      ]
+    },
+    "options_en": [
+      "Just switch to a single box with more memory.",
+      "Have every instance keep a full copy of the index.",
+      "Shard by keyword across multiple Redis instances.",
+      "Move the index entirely back to a relational database."
+    ],
+    "tradeoff": "按词分片摊写 vs 全量复制只摊读",
+    "termDefinitions": [
+      {
+        "term": "分片 (sharding)",
+        "meaning": "按某个键把数据拆到多台机器，分摊写入和存储压力。",
+        "meaningEn": "Sharding splits data across machines by a key to spread load."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-044",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "write-scaling",
+    "q": "在「写入频率」这个维度上，点赞和发帖的关系是？",
+    "options": [
+      "点赞约是发帖的 10 倍，点赞更新才是大象",
+      "发帖是点赞的 10 倍",
+      "两者数量级相当",
+      "点赞量小到可以忽略"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每人每天 10 赞 vs 1 帖，点赞写入量高一个数量级；而且每个赞都要更新多个关键词的 sorted set score，是写路径优化的头号目标。",
+    "why_en": "Likes arrive ten times more often than posts and each one touches many index keys, making like ingestion the elephant in the room.",
+    "tags": [
+      "likes",
+      "write-heavy",
+      "contrast"
+    ],
+    "options_en": [
+      "Likes run about 10x posts, so like updates are the elephant in the room.",
+      "Posts are 10x likes.",
+      "They're the same order of magnitude.",
+      "Likes are negligibly small."
+    ],
+    "tradeoff": "点赞高频(100k/s) vs 发帖低频(10k/s)——写优化重心在点赞"
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-045",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "like-batching",
+    "scenario": "爆款帖 30 秒内涌入 500 个赞，每个赞都要单独更新它所有关键词的索引，写入量不可接受。",
+    "q": "第一步优化是？",
+    "options": [
+      "随机丢弃掉其中一部分点赞事件",
+      "把点赞改成每天只结算一次总数",
+      "加 batcher：30 秒窗口聚合同帖点赞",
+      "直接砍掉按点赞数排序的功能"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "batcher 在 30 秒窗口内把同一帖的赞合并成一次增量更新，爆款帖从 500 次写变 1 次；聚合结果回写 Kafka 保持管道统一。",
+    "why_en": "A batcher aggregates likes per post over a thirty-second window and emits one summed update, collapsing five hundred writes into one.",
+    "whenOtherWins": "对点赞稀疏均匀的普通帖（每分钟 1 赞），窗口内只有 1 个事件、无从合并，batcher 反而白添延迟和组件。",
+    "tags": [
+      "batching",
+      "likes",
+      "scaling-writes"
+    ],
+    "options_en": [
+      "Randomly drop some of the incoming like events.",
+      "Change likes to settle just once a day.",
+      "Add a batcher: aggregate a post's likes over a 30-second window.",
+      "Just cut the sort-by-like-count feature."
+    ],
+    "tradeoff": "多写 30 秒延迟换爆款帖的写入合并 vs 每赞即写",
+    "termDefinitions": [
+      {
+        "term": "batcher 服务",
+        "meaning": "在固定时间窗口内聚合同一帖的点赞，再一次性写回。",
+        "meaningEn": "A batcher aggregates the likes for one post over a time window into a single write."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志/流平台，可分区并行、缓冲突发、持久化事件。",
+        "meaningEn": "Kafka is a distributed log that partitions load and buffers event bursts."
+      }
+    ],
+    "optionMeanings": [
+      "丢事件",
+      "日结算",
+      "窗口聚合",
+      "砍功能"
+    ],
+    "optionScenarioImpacts": [
+      "丢数据，赞数不准",
+      "1 分钟可见 SLA 全崩",
+      "爆款 500→1 次写",
+      "不满足按赞排序需求"
+    ],
+    "optionMeanings_en": [
+      "Drop events.",
+      "Settle daily.",
+      "Window aggregation.",
+      "Cut the feature."
+    ],
+    "optionScenarioImpacts_en": [
+      "Loses data, wrong counts.",
+      "Breaks the one-minute SLA.",
+      "Viral 500 to 1 write.",
+      "Fails the sort-by-likes need."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-046",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "like-batching",
+    "q": "batcher 方案的关键局限是？",
+    "options": [
+      "会永久丢失点赞总数",
+      "消息系统不支持二次写入",
+      "排序会彻底错乱",
+      "多数帖不爆款：均匀点赞窗口内无可合并，总量没降"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "合并只对「窗口内多次点赞同一帖」有效；一天 1440 赞若均匀分布，批处理照样要写 1440 次——整体写入量由长尾普通帖决定，而它们恰恰无从批起。",
+    "why_en": "Since most posts are not viral, evenly spaced likes offer nothing to batch, so overall write volume barely drops while overhead grows.",
+    "tags": [
+      "batching",
+      "limitation",
+      "long-tail"
+    ],
+    "options_en": [
+      "It permanently loses the total like count.",
+      "The messaging system doesn't support writing twice.",
+      "Sorting gets completely scrambled.",
+      "Most posts aren't viral: evenly spaced likes can't be batched, so total volume barely drops."
+    ],
+    "termDefinitions": [
+      {
+        "term": "batcher 服务",
+        "meaning": "在固定时间窗口内聚合同一帖的点赞，再一次性写回。",
+        "meaningEn": "A batcher aggregates the likes for one post over a time window into a single write."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志/流平台，可分区并行、缓冲突发、持久化事件。",
+        "meaningEn": "Kafka is a distributed log that partitions load and buffers event bursts."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-047",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "milestone-updates",
+    "scenario": "想让点赞的索引写入量随点赞数指数级下降，且可以接受索引里的计数不精确。",
+    "q": "更好的方案是？",
+    "options": [
+      "固定每 100 个赞写一次",
+      "完全不再更新 likes index",
+      "只统计每帖前 1000 个赞",
+      "只在跨越 2 的幂里程碑时更新，1000 赞≈10 次写"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "按 2 的幂打点，写入次数从与点赞数成正比降到对数级——1000 赞只要约 10 次写；对所有帖子生效，不依赖「是否爆款」。",
+    "why_en": "Updating the index only when likes cross powers of two cuts writes exponentially, so a thousand likes cost about ten index updates.",
+    "whenOtherWins": "若产品要求索引里的数字直接精确展示给用户，里程碑打点不可用，只能回到全量或批量更新。",
+    "tags": [
+      "milestone",
+      "likes",
+      "write-reduction"
+    ],
+    "options_en": [
+      "Write once per fixed 100 likes.",
+      "Stop updating the likes index entirely.",
+      "Only count the first 1000 likes per post.",
+      "Update only when likes cross powers of two — 1000 likes about 10 writes."
+    ],
+    "tradeoff": "索引计数精确性 vs 写入次数(对数级)",
+    "termDefinitions": [
+      {
+        "term": "里程碑更新",
+        "meaning": "只在计数跨过阈值（如 2 的幂）时才写索引，把写入降为对数级。",
+        "meaningEn": "Milestone updates only write when a count crosses thresholds like powers of two."
+      }
+    ],
+    "optionMeanings": [
+      "等间隔阈值写",
+      "不再维护赞索引",
+      "截断计数",
+      "按 2 的幂打点"
+    ],
+    "optionScenarioImpacts": [
+      "爆款仍写很多次",
+      "按赞排序失效",
+      "超 1000 赞排序失真",
+      "写入降到对数级，普适"
+    ],
+    "optionMeanings_en": [
+      "Fixed-interval writes.",
+      "Stop maintaining the likes index.",
+      "Truncate the count.",
+      "Mark at powers of two."
+    ],
+    "optionScenarioImpacts_en": [
+      "Viral posts still write a lot.",
+      "Sort-by-likes breaks.",
+      "Ordering distorts past 1000.",
+      "Writes drop to logarithmic — universal."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-048",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "milestone-updates",
+    "q": "里程碑更新给索引带来的本质变化是？",
+    "options": [
+      "索引从此彻底不可用",
+      "结果排序变得完全随机",
+      "赞数天生陈旧，但排序近似正确",
+      "只有新发布的帖会受影响"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "计数只在跨里程碑时更新，所以永远滞后真实值；但相对大小关系基本保持、排序「近似正确」——这正是可以用第二阶段精排修复的那类误差。",
+    "why_en": "The indexed like counts become inherently stale, yet the ordering stays approximately correct since a post with ten thousand likes still ranks far above one with a single like.",
+    "tags": [
+      "staleness",
+      "approximate",
+      "ordering"
+    ],
+    "options_en": [
+      "The index becomes completely unusable.",
+      "Result ordering becomes fully random.",
+      "Counts are inherently stale, but ordering stays approximately correct.",
+      "Only newly published posts are affected."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-049",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "two-stage",
+    "scenario": "likes index 里的计数是近似值，但返回给用户的排序和数字必须基于最新数据。",
+    "q": "查询时怎么补救？",
+    "options": [
+      "直接用近似值返回给用户",
+      "取 2N 候选，用实时赞数重排，返回前 N",
+      "每次查询前重建索引",
+      "给近似值乘一个修正系数"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "近似索引负责「把对的帖子捞进候选集」（多取一倍留冗余），实时计数负责精排；存储是近似的，最终结果却是精确的。",
+    "why_en": "Fetch twice as many candidates from the approximate index, look up fresh like counts from the like service, re-sort, and return the top N.",
+    "whenOtherWins": "若近似排序对产品已经够用（不展示精确数字），跳过重排少一次服务调用，延迟更低。",
+    "diagram": "sequenceDiagram\n    participant S as Search Service\n    participant I as 近似 Likes Index\n    participant L as Like Service\n    S->>I: 取 top 2N 候选\n    I-->>S: 近似排序的 postIds\n    S->>L: 批量查实时赞数\n    L-->>S: 新鲜计数\n    Note over S: 按实时计数重排，返回前 N 条",
+    "tags": [
+      "two-stage",
+      "re-ranking",
+      "likes"
+    ],
+    "options_en": [
+      "Return the approximate values directly.",
+      "Fetch 2N candidates, re-rank with fresh like counts, and return the top N.",
+      "Rebuild the index before every query.",
+      "Multiply the approximate value by a correction factor."
+    ],
+    "tradeoff": "多一次 Like Service 调用 vs 最终结果精确",
+    "termDefinitions": [
+      {
+        "term": "两阶段架构",
+        "meaning": "先用便宜的近似层召回候选，再用昂贵的精确层重排。",
+        "meaningEn": "A two-stage architecture retrieves cheaply then re-ranks precisely."
+      },
+      {
+        "term": "Like Service",
+        "meaning": "维护每个帖子实时、精确点赞数的上游服务。",
+        "meaningEn": "The Like Service holds the live, exact like count for each post."
+      }
+    ],
+    "optionMeanings": [
+      "信任近似值",
+      "过量取候选后精排",
+      "实时重建",
+      "经验系数修正"
+    ],
+    "optionScenarioImpacts": [
+      "数字和排序都不新鲜",
+      "近似召回+精确精排，达标",
+      "重建成本不可接受",
+      "系数修不了陈旧误差"
+    ],
+    "optionMeanings_en": [
+      "Trust the approximation.",
+      "Over-fetch candidates, then re-rank.",
+      "Rebuild live.",
+      "Fudge-factor correction."
+    ],
+    "optionScenarioImpacts_en": [
+      "Counts and order are stale.",
+      "Approx recall plus exact rerank — passes.",
+      "Rebuild cost is unacceptable.",
+      "A factor can't fix staleness."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-050",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "two-stage",
+    "q": "「近似的便宜候选层 + 昂贵的精确重排层」这种两阶段架构，常见于哪些领域？",
+    "options": [
+      "支付清算系统",
+      "DNS 域名解析",
+      "信息检索与推荐系统",
+      "数据库事务引擎"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "检索/推荐系统普遍先用便宜的近似服务捞候选，再用昂贵的模型或新鲜数据精排；本题的近似 likes index + 实时重排正是这个模式的实例。",
+    "why_en": "The two-stage pattern of a cheap approximate retrieval layer backed by an expensive precise re-ranker is ubiquitous in information retrieval and recommender systems.",
+    "tags": [
+      "two-stage",
+      "pattern",
+      "information-retrieval"
+    ],
+    "options_en": [
+      "A payment settlement system.",
+      "DNS name resolution.",
+      "Information retrieval and recommender systems.",
+      "A database transaction engine."
+    ],
+    "termDefinitions": [
+      {
+        "term": "两阶段架构",
+        "meaning": "先用便宜的近似层召回候选，再用昂贵的精确层重排。",
+        "meaningEn": "A two-stage architecture retrieves cheaply then re-ranks precisely."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-051",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "milestone-updates",
+    "q": "采用里程碑近似计数后，把索引里的字段改名为 logLikes / approxLikes 的目的是？",
+    "options": [
+      "改名昭示语义已变，别把近似值当精确数用",
+      "为了节省存储空间",
+      "为了兼容旧版本 API",
+      "为了提升查询速度"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "近似化改变了字段语义，最大的工程风险是后来者误信这个数字；用命名把「这是近似值」编码进接口，是廉价而有效的防误用手段。",
+    "why_en": "Renaming the field to approxLikes signals its changed semantics so developers never mistake the stale approximate count for a precise one.",
+    "tags": [
+      "naming",
+      "semantics",
+      "engineering"
+    ],
+    "options_en": [
+      "The rename signals the changed semantics so no one treats the approximate value as exact.",
+      "To save storage space.",
+      "To stay compatible with the old API version.",
+      "To speed up queries."
+    ],
+    "termDefinitions": [
+      {
+        "term": "里程碑更新",
+        "meaning": "只在计数跨过阈值（如 2 的幂）时才写索引，把写入降为对数级。",
+        "meaningEn": "Milestone updates only write when a count crosses thresholds like powers of two."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-052",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "decision-chain",
+    "q": "把点赞写入优化的演进逻辑排成正确顺序：",
+    "steps": [
+      "发现局限：多数帖子点赞稀疏均匀，batcher 无从合并、反添开销",
+      "问题：100k likes/秒，每个赞都要更新多个索引 key，写入压力最大",
+      "升级方案：只在跨越 2 的幂里程碑时写索引，写入量指数级下降",
+      "第一次尝试：batcher 按 30 秒窗口聚合同帖点赞",
+      "兜底：查询时取 2N 候选、用实时计数重排，最终结果依然精确"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2,
+      4
+    ],
+    "why": "这条演进链是本题最精彩的深挖：从批处理（只救爆款）到里程碑打点（普适、指数省写），再用两阶段精排把近似误差在查询时修复。",
+    "why_en": "The like-write optimization evolves from windowed batching, which only helps viral posts, to milestone-based updates with a two-stage re-rank restoring precision at query time.",
+    "tags": [
+      "decision-chain",
+      "likes",
+      "scaling-writes"
+    ],
+    "diagram": "graph TD\n    Direct[Update every like] --> Hot[Hot posts overload index]\n    Hot --> Batch[Batch like updates]\n    Batch --> Milestone[Milestone score changes]\n    Milestone --> Rerank[Precise rerank at query time]",
+    "tradeoff": "批处理只救爆款 vs 里程碑普适降写",
+    "termDefinitions": [
+      {
+        "term": "batcher 服务",
+        "meaning": "在固定时间窗口内聚合同一帖的点赞，再一次性写回。",
+        "meaningEn": "A batcher aggregates the likes for one post over a time window into a single write."
+      },
+      {
+        "term": "里程碑更新",
+        "meaning": "只在计数跨过阈值（如 2 的幂）时才写索引，把写入降为对数级。",
+        "meaningEn": "Milestone updates only write when a count crosses thresholds like powers of two."
+      },
+      {
+        "term": "两阶段架构",
+        "meaning": "先用便宜的近似层召回候选，再用昂贵的精确层重排。",
+        "meaningEn": "A two-stage architecture retrieves cheaply then re-ranks precisely."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "storage-optimization",
+    "scenario": "关键词 Mark 的倒排列表有 1000 万个 postId，但用户几乎只看排序最前的一小撮结果。",
+    "q": "最直接的存储优化是？",
+    "options": [
+      "压缩 postId 的编码格式",
+      "采购更便宜的内存",
+      "直接删除这个关键词",
+      "给每个索引设上限(1k-10k)，砍掉长尾"
+    ],
+    "answer": [
+      3
+    ],
+    "why": "检索场景里用户只消费头部结果，每个索引留 1k-10k 条已覆盖真实需求；截断把索引存储压缩掉几个数量级，是性价比最高的一刀。",
+    "why_en": "Capping each keyword's index at a few thousand entries discards the never-viewed tail and cuts storage by orders of magnitude.",
+    "whenOtherWins": "若「所有帖子可发现」必须严格兑现，被截断的长尾要有另一条可达路径（如冷存储或离线扫描），不能一删了之。",
+    "tags": [
+      "storage",
+      "index-cap",
+      "truncation"
+    ],
+    "options_en": [
+      "Compress the post-ID encoding.",
+      "Buy cheaper memory.",
+      "Just delete this keyword.",
+      "Cap each index at 1k-10k entries, dropping the long tail."
+    ],
+    "tradeoff": "截断长尾省存储 vs 长尾可发现性",
+    "termDefinitions": [
+      {
+        "term": "倒排索引",
+        "meaning": "把每个关键词映射到「包含它的帖子 ID 列表」的字典结构。",
+        "meaningEn": "An inverted index maps each keyword to the list of post IDs that contain it."
+      }
+    ],
+    "optionMeanings": [
+      "改 ID 编码",
+      "换硬件",
+      "删词",
+      "限长截断"
+    ],
+    "optionScenarioImpacts": [
+      "省一点，杯水车薪",
+      "治标不治本",
+      "丢掉整个词不可接受",
+      "头部覆盖需求，降数个量级"
+    ],
+    "optionMeanings_en": [
+      "Re-encode IDs.",
+      "Swap hardware.",
+      "Delete the term.",
+      "Cap the length."
+    ],
+    "optionScenarioImpacts_en": [
+      "Tiny savings, a drop in the bucket.",
+      "Treats the symptom only.",
+      "Losing a whole term is unacceptable.",
+      "Head covers demand; cuts orders of magnitude."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-054",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cold-storage",
+    "scenario": "搜索分析显示大多数关键词一个月内很少甚至从未被搜索，但它们的索引仍占着昂贵的 Redis 内存。",
+    "q": "合理的处理方式是？",
+    "options": [
+      "直接删掉冷门关键词的整份索引",
+      "把全部关键词索引都统一搬去 S3",
+      "冷门词索引下沉 S3，查询 Redis 优先",
+      "给冷门关键词也保留一份内存副本"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "按访问分析做冷热分层：冷词索引下沉到便宜的 blob 存储，Redis 只留热词；查询路径 Redis 优先、blob 兜底，冷查询慢一点——恰好被 NFR 允许。",
+    "why_en": "A batch job demotes rarely searched keyword indexes from Redis to cheap blob storage, and queries fall back to the blob with a small latency penalty on a miss.",
+    "whenOtherWins": "若所有关键词都要求同样的低延迟（没有「冷查询可以慢」的豁免），就无法下沉，只能靠截断和压缩控制内存成本。",
+    "diagram": "flowchart TD\n    Q[\"关键词查询\"] --> R{\"Redis 命中?\"}\n    R -- \"是: 热词\" --> F[\"毫秒级返回\"]\n    R -- \"否: 冷词\" --> B[\"S3/R2 冷索引\"]\n    B --> S[\"稍慢返回 (NFR 允许)\"]\n    J[\"月度批任务: 按搜索分析\"] -. 冷词下沉 .-> B",
+    "tags": [
+      "cold-storage",
+      "blob",
+      "hot-cold"
+    ],
+    "options_en": [
+      "Just delete cold keywords' whole index.",
+      "Move all keyword indexes to S3 uniformly.",
+      "Demote cold keyword indexes to S3; query Redis first, fall back to blob.",
+      "Keep an in-memory copy for cold keywords too."
+    ],
+    "tradeoff": "冷词下沉省内存 vs 命中 blob 的延迟惩罚",
+    "termDefinitions": [
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      }
+    ],
+    "optionMeanings": [
+      "删冷词",
+      "全量下沉",
+      "冷下沉+热优先",
+      "冷词也留内存"
+    ],
+    "optionScenarioImpacts": [
+      "违反全量可发现",
+      "热词也变慢",
+      "内存只留热词，冷慢一点",
+      "没省下内存"
+    ],
+    "optionMeanings_en": [
+      "Delete cold terms.",
+      "Demote everything.",
+      "Demote cold, keep hot in front.",
+      "Keep cold in memory too."
+    ],
+    "optionScenarioImpacts_en": [
+      "Breaks full discoverability.",
+      "Even hot terms slow down.",
+      "Memory holds only hot; cold is a bit slower.",
+      "Saves no memory."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-055",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cold-storage",
+    "q": "冷索引下沉 S3 之所以成立，靠的是哪条前面埋好的需求？",
+    "options": [
+      "「老帖冷帖可发现但允许更慢」这条 NFR",
+      "系统必须高可用",
+      "新帖 1 分钟内可搜",
+      "中位延迟低于 500ms"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "需求阶段特意写下「冷数据可以慢」，深挖阶段它兑现为冷存储的设计许可——好的需求定义会为后面的权衡预留空间。",
+    "why_en": "The requirement that old or unpopular posts may be served more slowly is exactly what licenses the blob-storage latency penalty for cold keywords.",
+    "tags": [
+      "nfr",
+      "cold-storage",
+      "requirements"
+    ],
+    "options_en": [
+      "The NFR that old/cold posts stay discoverable but may be slower.",
+      "The system must be highly available.",
+      "New posts searchable within one minute.",
+      "Median latency under 500ms."
+    ],
+    "termDefinitions": [
+      {
+        "term": "非功能需求 (NFR)",
+        "meaning": "延迟、吞吐、可用性这类衡量系统「好不好」的指标。",
+        "meaningEn": "Non-functional requirements cover latency, throughput, and availability."
+      },
+      {
+        "term": "SLA",
+        "meaning": "对外承诺的服务指标，如「新帖 1 分钟内可搜」。",
+        "meaningEn": "An SLA is a promised service level, e.g. new posts searchable within a minute."
+      },
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-056",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "storage-optimization",
+    "q": "补全存储优化的关键数字：",
+    "text": "原始估算 3.6 万亿帖 × 1kb ≈ {{3.6 PB}}；把每个关键词的索引截断到 {{1k-10k}} 条，可把索引存储降低数个数量级。",
+    "why": "先用估算暴露 3.6PB 的不可持续，再用截断 + 冷存储两板斧把它砍回可控范围；数字是这条论证链的骨架。",
+    "why_en": "The raw three point six petabyte estimate is tamed by capping each keyword index at one to ten thousand entries plus cold storage for rare keywords.",
+    "tags": [
+      "numbers",
+      "storage",
+      "index-cap"
+    ],
+    "scenario": "把 3.6PB 的原始估算压回可控范围的存储优化。",
+    "termDefinitions": [
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-057",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "api-gateway",
+    "q": "读路径最前端的 API 网关承担什么职责？",
+    "options": [
+      "分词与构建索引",
+      "存储搜索结果",
+      "鉴权 + 限流，再转发给搜索服务",
+      "更新帖子的点赞计数"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "网关是读路径的门卫：认证 + 限流之后转发给可水平扩展的无状态搜索服务；索引查询等重活在后面的服务层完成。",
+    "why_en": "The API gateway handles authentication and rate limiting before passing requests to the horizontally scaled search service.",
+    "tags": [
+      "api-gateway",
+      "read-path",
+      "architecture"
+    ],
+    "diagram": "graph LR\n    Client --> Gateway[API Gateway]\n    Gateway --> Cache[(Result cache)]\n    Cache -->|hit| Client\n    Cache -->|miss| Search[Search Service]\n    Search --> Index[(Inverted index)]",
+    "options_en": [
+      "Tokenizing and building the index.",
+      "Storing search results.",
+      "Authentication and rate limiting, then forwarding to the search service.",
+      "Updating posts' like counts."
+    ],
+    "termDefinitions": [
+      {
+        "term": "API 网关",
+        "meaning": "读路径最前端的入口，负责鉴权、限流后转发给后端服务。",
+        "meaningEn": "An API gateway authenticates and rate-limits requests before forwarding them."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-062",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "sorting",
+    "q": "creation index 用 Redis list 而 likes index 用 sorted set，本质区别在哪个维度？",
+    "options": [
+      "list 的内存开销更大",
+      "排序键是否可变：时间到达即定序，赞数持续变要维序",
+      "sorted set 不支持范围查询",
+      "list 不能存储字符串"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "时间序是「天然到达顺序」，list 追加零成本维持；赞数是会变的分数，必须用 sorted set 在每次更新后仍保持有序。",
+    "why_en": "Creation order is fixed at arrival so a list suffices, while like counts keep changing and need a sorted set to maintain order by score.",
+    "tags": [
+      "redis",
+      "contrast",
+      "data-structures"
+    ],
+    "options_en": [
+      "A list uses more memory.",
+      "Whether the sort key is mutable: arrival time is fixed on append, while like counts keep changing.",
+      "A sorted set doesn't support range queries.",
+      "A list can't store strings."
+    ],
+    "tradeoff": "固定顺序(list 追加) vs 可变分数(sorted set 维序)",
+    "table": {
+      "headers": [
+        "结构",
+        "排序键",
+        "维护方式"
+      ],
+      "rows": [
+        [
+          "list",
+          "到达时间(不变)",
+          "尾部追加"
+        ],
+        [
+          "sorted set",
+          "赞数(会变)",
+          "按 score 维序"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "Redis list",
+        "meaning": "Redis 的普通列表，只在两端追加/读取，天然保留插入顺序。",
+        "meaningEn": "A Redis list preserves insertion order with cheap appends at the ends."
+      },
+      {
+        "term": "sorted set",
+        "meaning": "Redis 的有序集合，按 score 维持排序，插入和按名次查询都很快。",
+        "meaningEn": "A Redis sorted set keeps members ordered by a numeric score."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-063",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "storage-optimization",
+    "q": "本题控制索引存储的手段有哪些？（多选）",
+    "options": [
+      "每个关键词的索引截断到 1k-10k 条",
+      "按搜索分析把冷门关键词索引迁到 S3/R2 blob 存储",
+      "查询路径 Redis 优先、blob 兜底",
+      "把全部索引都换成 bigram 索引"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "存储三板斧：截断长尾、冷词下沉 blob、读路径热冷两级兜底；bigram 恰恰是增加存储的功能性投资，不是省存储的手段。",
+    "why_en": "Storage is tamed by capping each index, demoting cold keywords to blob storage, and querying Redis first with a blob fallback.",
+    "tags": [
+      "storage",
+      "cold-storage",
+      "index-cap"
+    ],
+    "options_en": [
+      "Cap each keyword's index at 1k-10k entries.",
+      "Demote cold keyword indexes to S3/R2 blob storage per search analytics.",
+      "Query Redis first with a blob fallback.",
+      "Convert all indexes to bigram indexes."
+    ],
+    "termDefinitions": [
+      {
+        "term": "blob 存储 (S3/R2)",
+        "meaning": "按对象存取的廉价云存储，容量大但延迟高于内存。",
+        "meaningEn": "Blob storage like S3 or R2 stores objects cheaply at higher latency than memory."
+      },
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-064",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "write-scaling",
+    "q": "这对索引写入负载意味着什么？",
+    "options": [
+      "一次发帖被放大成几十上百次索引写，双索引再翻倍",
+      "写入与发帖 1:1，没有放大",
+      "关键词在查询时才生成，发帖不写索引",
+      "Redis 会自动展开，只写一次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "帖子按词拆解通常落在 10-1000 个关键词，一次发帖被放大成几十上百次索引写；双索引还要再乘 2，这是写压力的根源。",
+    "why_en": "A post tokenizes into roughly 10 to 1000 keywords, so a single post fans out into dozens to hundreds of index writes, doubled again by the dual indexes.",
+    "tags": [
+      "numbers",
+      "tokenization",
+      "write-amplification"
+    ],
+    "scenario": "一个 100 词的帖子发布后，Ingestion 要为它拆出的每个关键词写索引。",
+    "options_en": [
+      "One post fans out into tens-to-hundreds of index writes — doubled by dual indexes.",
+      "Writes match posts 1:1, with no amplification.",
+      "Keywords are generated at query time; posting writes nothing.",
+      "Redis expands it automatically with a single write."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tokenization",
+        "meaning": "把帖子内容拆解成一个个可匹配关键词的过程，中文叫分词。",
+        "meaningEn": "Tokenization breaks a post into individual searchable keywords."
+      },
+      {
+        "term": "写放大",
+        "meaning": "一次逻辑写在底层被放大成多次物理写。",
+        "meaningEn": "Write amplification turns one logical write into many physical writes."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-065",
+    "format": "cloze",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "two-stage",
+    "q": "补全两阶段查询的推理：",
+    "text": "因为索引里的赞数是{{近似}}的，查询时先取 {{2N}} 个候选，再用 Like Service 的{{实时}}计数重排——存储是近似的，最终结果却是精确的。",
+    "why": "这条推理概括两阶段的精髓：近似候选 + 实时精排；多取一倍候选是为近似误差留出冗余。",
+    "why_en": "Because indexed counts are approximate, we over-fetch twice the needed candidates and re-rank them with fresh counts from the like service.",
+    "tags": [
+      "two-stage",
+      "re-ranking",
+      "reasoning"
+    ],
+    "table": {
+      "headers": [
+        "阶段",
+        "目标"
+      ],
+      "rows": [
+        [
+          "候选召回",
+          "近似 term 匹配(便宜)"
+        ],
+        [
+          "水合",
+          "取元数据/原文"
+        ],
+        [
+          "精确校验",
+          "校验短语/过滤"
+        ],
+        [
+          "重排",
+          "用新鲜赞数+时间"
+        ]
+      ]
+    },
+    "tradeoff": "近似候选(便宜) vs 精确重排(新鲜)",
+    "termDefinitions": [
+      {
+        "term": "两阶段架构",
+        "meaning": "先用便宜的近似层召回候选，再用昂贵的精确层重排。",
+        "meaningEn": "A two-stage architecture retrieves cheaply then re-ranks precisely."
+      },
+      {
+        "term": "Like Service",
+        "meaning": "维护每个帖子实时、精确点赞数的上游服务。",
+        "meaningEn": "The Like Service holds the live, exact like count for each post."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-066",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "ingestion",
+    "q": "Ingestion 服务在写路径上的完整职责是？",
+    "options": [
+      "收事件 → 拆词 → postId 写两份索引",
+      "负责读路径的鉴权与限流",
+      "缓存最热门的搜索结果",
+      "为每条新帖生成全局唯一 ID"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ingestion 是索引的唯一写入方：拆词、写双索引、处理点赞 score 更新；它的吞吐与可靠性决定「新帖 1 分钟可搜」能否兑现。",
+    "why_en": "The ingestion service consumes post and like events, tokenizes content, and writes the post ID into both indexes for every keyword.",
+    "tags": [
+      "ingestion",
+      "write-path",
+      "tokenization"
+    ],
+    "options_en": [
+      "Consume events, tokenize, and write the post ID into both indexes for every keyword.",
+      "Handle authentication and rate limiting on the read path.",
+      "Cache the most popular search results.",
+      "Generate a globally unique ID for each new post."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tokenization",
+        "meaning": "把帖子内容拆解成一个个可匹配关键词的过程，中文叫分词。",
+        "meaningEn": "Tokenization breaks a post into individual searchable keywords."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-067",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "like-batching",
+    "q": "batcher 的数字对比：30 秒窗口内 500 赞的爆款帖 vs 均匀 1 赞/分钟（一天 1440 赞）的普通帖，批处理各省下多少写入？",
+    "options": [
+      "爆款 500→1 次；普通帖 1440 次照旧",
+      "两者的写入都能降到 1 次",
+      "两者其实都得不到任何节省",
+      "普通帖反而能节省得更多"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "批处理的收益完全取决于窗口内的事件密度：爆款 500→1，普通帖每个窗口只有 1 个事件、1440 次照旧——这就是为什么还需要里程碑方案。",
+    "why_en": "Batching collapses a viral post's five hundred likes into one write but saves nothing for a post liked once per minute, which still needs all fourteen hundred forty writes.",
+    "tags": [
+      "numbers",
+      "batching",
+      "likes"
+    ],
+    "scenario": "batcher 用 30 秒窗口聚合同一帖的点赞后再写索引。",
+    "options_en": [
+      "Viral: 500 to 1 write; ordinary post: still 1440 writes.",
+      "Both of them drop to a single write.",
+      "Neither of them gets any savings at all.",
+      "The ordinary post actually saves more."
+    ],
+    "termDefinitions": [
+      {
+        "term": "batcher 服务",
+        "meaning": "在固定时间窗口内聚合同一帖的点赞，再一次性写回。",
+        "meaningEn": "A batcher aggregates the likes for one post over a time window into a single write."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-068",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "non-functional-requirements",
+    "q": "本题的核心非功能需求有哪些？（多选）",
+    "options": [
+      "中位查询 <500ms，且支撑高请求量",
+      "新帖 <1 分钟内可被搜索",
+      "所有帖子（含老帖冷帖）可被发现、系统高可用",
+      "向用户展示强一致的精确点赞计数"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "why": "五条 NFR：快（500ms）、大流量、新帖 1 分钟可见、全量可发现（冷帖可慢）、高可用；「索引内精确点赞计数」从来不是承诺——后面才敢用近似索引。",
+    "why_en": "The system must be fast, handle high volume, surface new posts within a minute, keep every post discoverable, and stay highly available.",
+    "tags": [
+      "nfr",
+      "requirements"
+    ],
+    "options_en": [
+      "Median query under 500ms while handling high volume.",
+      "New posts searchable within one minute.",
+      "Every post (including old/cold) discoverable; system highly available.",
+      "Show users a strongly consistent, exact like count."
+    ],
+    "termDefinitions": [
+      {
+        "term": "非功能需求 (NFR)",
+        "meaning": "延迟、吞吐、可用性这类衡量系统「好不好」的指标。",
+        "meaningEn": "Non-functional requirements cover latency, throughput, and availability."
+      },
+      {
+        "term": "SLA",
+        "meaning": "对外承诺的服务指标，如「新帖 1 分钟内可搜」。",
+        "meaningEn": "An SLA is a promised service level, e.g. new posts searchable within a minute."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-069",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "index-storage",
+    "q": "用纯内存 Redis 存放唯一一份倒排索引，宕机的直接风险与解决方向是？",
+    "options": [
+      "查询会变慢但索引数据不会丢",
+      "索引可能丢失，需 MemoryDB 持久化兜底",
+      "宕机只影响新发布的那些帖子",
+      "CDN 会自动兜底并恢复索引"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "内存即易失：节点宕机索引就没了，重建万亿级索引代价巨大；文章的态度是「可解」——换 MemoryDB 等持久化兼容方案或作为专门深挖。",
+    "why_en": "A crash can wipe the in-memory index, so you need a durable alternative like MemoryDB or a dedicated recovery story.",
+    "tags": [
+      "redis",
+      "durability",
+      "risk"
+    ],
+    "options_en": [
+      "Queries slow down but the index data isn't lost.",
+      "The index can be lost; use MemoryDB for durability.",
+      "A crash only affects newly published posts.",
+      "The CDN automatically recovers the index."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "常用的内存型 key-value 存储，读写在内存里完成、极快。",
+        "meaningEn": "Redis is an in-memory key-value store used for very fast reads and writes."
+      },
+      {
+        "term": "MemoryDB",
+        "meaning": "兼容 Redis 接口但带持久化的内存数据库，可弥补纯内存的易失性。",
+        "meaningEn": "MemoryDB is a durable, Redis-compatible in-memory database."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-070",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "phrase-search",
+    "q": "交集之后为什么还要「拉原文验证短语」这一步？",
+    "options": [
+      "因为交集算法本身有精度损失",
+      "为了顺便统计点赞数",
+      "两词都含≠短语连续，须回原文过滤假阳性",
+      "为了给缓存预热"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "单词级索引只知道「词出现过」，不知道相邻关系；短语语义要求连续出现，必须回原文核验，否则会返回风马牛不相及的结果。",
+    "why_en": "Posts containing both words separately, like Taylor made a swift exit, are false positives that only a phrase check against the original text can filter out.",
+    "tags": [
+      "phrase-query",
+      "false-positive",
+      "verification"
+    ],
+    "options_en": [
+      "Because intersection itself loses precision.",
+      "To count likes along the way.",
+      "Both words present does not mean a contiguous phrase, so re-check the text to filter false positives.",
+      "To warm up the cache."
+    ],
+    "termDefinitions": [
+      {
+        "term": "假阳性",
+        "meaning": "看似匹配、实则不满足条件的结果，这里指含两词但非连续短语。",
+        "meaningEn": "A false positive looks like a match but is not one, e.g. both words present but not adjacent."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-071",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "like-batching",
+    "q": "batcher 与里程碑更新在「对哪类帖子有效」这个维度上的区别是？",
+    "options": [
+      "两者都只对爆款帖有效",
+      "batcher 只救爆款；里程碑对所有帖普适",
+      "里程碑只对新帖有效",
+      "两者效果完全等价"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "batcher 的收益取决于窗口内事件密度（爆款专属）；里程碑与密度无关，任何帖子的写入次数都变成对数级，是更普适的一招。",
+    "why_en": "Batching only helps posts with dense like bursts, whereas milestone updates cut every post's writes to a logarithmic count regardless of virality.",
+    "tags": [
+      "contrast",
+      "batching",
+      "milestone"
+    ],
+    "options_en": [
+      "Both only help viral posts.",
+      "Batching only helps viral posts; milestones help every post universally.",
+      "Milestones only help new posts.",
+      "They're exactly equivalent."
+    ],
+    "tradeoff": "batcher 依赖点赞密度(爆款) vs 里程碑与密度无关(普适)",
+    "table": {
+      "headers": [
+        "方案",
+        "生效对象",
+        "写入降幅"
+      ],
+      "rows": [
+        [
+          "batcher",
+          "窗口内密集点赞的爆款",
+          "爆款大降，长尾无效"
+        ],
+        [
+          "里程碑",
+          "所有帖子",
+          "一律对数级"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "batcher 服务",
+        "meaning": "在固定时间窗口内聚合同一帖的点赞，再一次性写回。",
+        "meaningEn": "A batcher aggregates the likes for one post over a time window into a single write."
+      },
+      {
+        "term": "里程碑更新",
+        "meaning": "只在计数跨过阈值（如 2 的幂）时才写索引，把写入降为对数级。",
+        "meaningEn": "Milestone updates only write when a count crosses thresholds like powers of two."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-post-search-072",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "phrase-search",
+    "q": "交集法与 bigram 索引处理短语查询，核心权衡的维度是？",
+    "options": [
+      "正确性 vs 可用性",
+      "查询计算成本 vs 索引存储成本",
+      "一致性 vs 分区容忍性",
+      "两者没有实质区别"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "交集法零索引膨胀但每次查询付「传输 + 求交」的读成本；bigram 把成本预付在索引体积上，换取读时一击命中——读写成本搬运的经典权衡。",
+    "why_en": "Intersection pays at query time with expensive transfers and set operations, while bigrams pay upfront with a much larger index for instant phrase lookups.",
+    "tags": [
+      "contrast",
+      "phrase-query",
+      "tradeoff"
+    ],
+    "options_en": [
+      "Correctness vs availability.",
+      "Query compute cost vs index storage cost.",
+      "Consistency vs partition tolerance.",
+      "No real difference."
+    ],
+    "tradeoff": "交集法读时贵 vs bigram 存储贵",
+    "table": {
+      "headers": [
+        "方案",
+        "主要成本",
+        "何时更优"
+      ],
+      "rows": [
+        [
+          "交集法",
+          "查询时传输+求交",
+          "短语查询少、省存储"
+        ],
+        [
+          "bigram",
+          "索引膨胀(写+存)",
+          "短语查询多、要低延迟"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "bigram / shingle",
+        "meaning": "把相邻两个词组成的 token，Lucene 里叫 shingle，用于短语查询。",
+        "meaningEn": "A bigram (Lucene calls it a shingle) is a token made of two adjacent words."
+      }
+    ]
+  }
+]
