@@ -1462,8 +1462,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "failure-mode",
-    "scenario": "社交平台在 viral 事件中流量突增；如果 Redis 限流层故障，后端数据库和应用也可能已经接近容量上限。",
-    "q": "该设计为这个场景选择哪种失败模式？",
+    "scenario": "社交平台在 viral 事件中流量突增；Redis-based 限流层故障或超时，系统无法可靠读取/更新计数，而后端数据库和应用也可能已经接近容量上限。",
+    "q": "此时最直接选择哪种失败模式？",
     "options": [
       "fail-open",
       "fail-closed",
@@ -1473,10 +1473,10 @@
     "answer": [
       1
     ],
-    "why": "fail-closed 会降低可用性，但能防止失去限流后把下游全打垮；社交平台高峰期，短暂拒绝好过级联崩溃。",
-    "why_en": "For a social platform under viral load, fail-closed is chosen so a Redis outage does not turn into a full backend collapse.",
-    "whenOtherWins": "如果后端余量很大、限流只是软配额，fail-open 能提升可用性；金融或高安全场景通常也更偏 fail-closed。",
-    "tradeoff": "短暂拒绝换后端安全 vs 保可用性但可能级联崩溃",
+    "why": "fail-closed = 限流器不可用时默认拒绝或降级拦截；在后端已接近容量时，它牺牲一部分可用性来避免流量绕过限流打爆数据库。fail-open = 限流器不可用时默认放行，用户可用性更高，但可能把 Redis 故障放大成级联故障。",
+    "why_en": "Fail-closed rejects or degrades requests when the limiter is unavailable, protecting a near-capacity backend from a Redis outage becoming a cascading failure.",
+    "whenOtherWins": "如果后端余量很大、限流只是软配额或非关键保护，fail-open 更适合，因为它优先保证用户请求继续成功。",
+    "tradeoff": "下游保护/防级联故障 vs 用户可用性",
     "tags": [
       "rate-limiter",
       "failure-mode",
@@ -1488,6 +1488,59 @@
       "Queue requests indefinitely",
       "Rely on client-side limiting alone"
     ],
+    "optionMeanings": [
+      "限流器故障时默认放行请求。",
+      "限流器故障时默认拒绝、返回错误或进入保守降级。",
+      "把请求一直挂起等待限流器恢复。",
+      "把限流责任交给客户端自行遵守。"
+    ],
+    "optionScenarioImpacts": [
+      "用户成功率更高，但流量会绕过限流直接冲向已经紧张的后端。",
+      "一部分健康请求会被挡住，但后端数据库和应用不会在保护层失效后继续被放大流量压垮。",
+      "会堆积连接、线程和内存，可能把入口层也拖垮。",
+      "攻击者或异常客户端不会自觉配合，服务端失去强制保护。"
+    ],
+    "optionDirectness": [
+      "不适合本场景：后端接近容量，放行会增加级联故障风险。",
+      "最直接：保护下游优先，短暂牺牲可用性。",
+      "不直接：无限排队通常比快速失败更危险。",
+      "不直接：限流必须由服务端强制执行。"
+    ],
+    "optionMeanings_en": [
+      "Allow requests by default when the limiter fails.",
+      "Reject or degrade requests by default when the limiter fails.",
+      "Keep requests waiting until the limiter recovers.",
+      "Rely on clients to voluntarily throttle themselves."
+    ],
+    "optionScenarioImpacts_en": [
+      "Availability is higher, but traffic bypasses the failed limiter and hits an already stressed backend.",
+      "Some valid requests are blocked, but the backend is protected while the limiter is unavailable.",
+      "Connections, threads, and memory can pile up and harm the entry layer.",
+      "Attackers or buggy clients will not reliably self-throttle."
+    ],
+    "optionDirectness_en": [
+      "Not best here because the backend is already near capacity.",
+      "Most direct because downstream protection matters more than short-term availability.",
+      "Not direct because unbounded waiting is usually more dangerous than fast failure.",
+      "Not direct because rate limiting needs server-side enforcement."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fail-open",
+        "meaning": "保护组件故障时默认放行请求；在限流场景里，就是 Redis/限流器超时或不可用时仍让请求进入后端。",
+        "meaningEn": "Fail-open means allowing requests by default when the protective component fails, such as letting traffic through when Redis rate limiting times out."
+      },
+      {
+        "term": "fail-closed",
+        "meaning": "保护组件故障时默认拒绝或降级拦截请求；在限流场景里，就是无法判断配额时返回 429/503 或走保守拒绝。",
+        "meaningEn": "Fail-closed means rejecting or degrading requests by default when the protective component fails, such as returning 429 or 503 when quota cannot be checked."
+      },
+      {
+        "term": "级联故障 / cascading failure",
+        "meaning": "一个组件故障后，流量、重试或负载转移继续压垮下游组件，导致故障范围扩大。",
+        "meaningEn": "A cascading failure is when one component failure shifts load or retries onto downstream components until more of the system fails."
+      }
+    ],
     "table": {
       "headers": [
         "Mode",
@@ -1497,13 +1550,13 @@
       "rows": [
         [
           "Fail-open",
-          "high",
-          "cascade risk"
+          "higher",
+          "backend overload / cascading failure"
         ],
         [
           "Fail-closed",
           "lower",
-          "blocks users"
+          "blocks valid users but protects downstream"
         ]
       ]
     }
