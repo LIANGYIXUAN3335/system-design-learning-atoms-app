@@ -11,7 +11,11 @@ export interface Card {
   topic: string;
   sub: string;
   scenario?: string;
+  /** English version of scenario, shown as small helper text under Chinese */
+  scenario_en?: string;
   q: string;
+  /** English version of q, shown as small helper text under Chinese */
+  q_en?: string;
   /** mcq / multi / code */
   options?: string[];
   /** English versions of options, index-aligned (bilingual drill + TTS) */
@@ -20,16 +24,16 @@ export interface Card {
   optionDiagrams?: Array<string | null>;
   /** optional Chinese "what this option is" notes aligned by option index */
   optionMeanings?: string[];
+  /** optional Chinese "when this option is the better fit" notes aligned by option index */
+  optionDirectness?: string[];
   /** optional Chinese "what choosing this means in the scenario" notes aligned by option index */
   optionScenarioImpacts?: string[];
-  /** optional Chinese "why this is/is not the most direct answer" notes aligned by option index */
-  optionDirectness?: string[];
   /** optional English "what this option is" notes aligned by option index */
   optionMeanings_en?: string[];
+  /** optional English fit-context notes aligned by option index */
+  optionDirectness_en?: string[];
   /** optional English scenario-impact notes aligned by option index */
   optionScenarioImpacts_en?: string[];
-  /** optional English directness notes aligned by option index */
-  optionDirectness_en?: string[];
   /** optional Chinese explanations aligned by option index */
   optionExplanations?: string[];
   /** optional English explanations aligned by option index */
@@ -38,6 +42,8 @@ export interface Card {
   answer?: number[];
   /** cloze text with {{blank}} markers */
   text?: string;
+  /** English cloze text with {{blank}} markers aligned with text when present */
+  text_en?: string;
   /** chain: steps as authored (already shuffled), reshuffled again per render */
   steps?: string[];
   answerOrder?: number[];

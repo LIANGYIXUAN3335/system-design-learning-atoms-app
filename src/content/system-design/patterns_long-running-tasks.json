@@ -12,11 +12,30 @@
       "把所有重任务都放进 API server 同步执行",
       "只靠前端轮询，不记录任务状态"
     ],
+    "options_en": [
+      "Split the request into a fast acknowledgment phase and a background processing phase.",
+      "Keep the user's HTTP request open until the task fully finishes.",
+      "Run every heavy task synchronously inside the API server.",
+      "Rely only on frontend polling and never persist any job state."
+    ],
     "answer": [
       0
     ],
     "why": "长任务模式让 Web server 快速验证、入队并返回 job_id，耗时工作由 worker pool 异步完成。这样避免 HTTP timeout 和糟糕等待体验。",
     "why_en": "The pattern splits work into immediate acknowledgment and asynchronous background processing.",
+    "termDefinitions": [
+      {
+        "term": "HTTP",
+        "fullName": "HyperText Transfer Protocol",
+        "meaning": "浏览器/客户端与服务器之间传输请求和响应的协议。",
+        "meaningEn": "HTTP is the protocol clients use to send requests and receive responses from a server."
+      },
+      {
+        "term": "API server",
+        "meaning": "接收客户端请求、做校验和路由的服务端进程。",
+        "meaningEn": "An API server is the backend process that validates and routes client requests."
+      }
+    ],
     "tags": [
       "long-running-tasks",
       "definition",
@@ -31,16 +50,34 @@
     "sub": "sync-problem",
     "q": "为什么 45 秒 PDF 生成不适合放在同步 HTTP 请求里？",
     "options": [
-      "Web server 和 load balancer 常有 30-60 秒 timeout，且用户体验很差",
-      "PDF 不能通过网络返回",
-      "数据库不能查询报表数据",
-      "浏览器不支持下载 PDF"
+      "Web server/负载均衡通常有 30-60 秒超时，用户全程也看不到进度",
+      "生成 PDF 会一直占用数据库连接，最终耗尽连接池",
+      "Web server 只能单线程处理请求，长任务会挡住所有其他用户",
+      "大多数浏览器标签页超过 10 秒无响应就会自动断开连接"
+    ],
+    "options_en": [
+      "Web servers and load balancers commonly enforce a 30-60 second timeout, and users get no progress feedback either.",
+      "Generating the PDF holds a database connection open until the connection pool runs out.",
+      "The web server can only handle one request at a time, so a long task blocks every other user.",
+      "Most browser tabs auto-disconnect after 10 seconds of no response."
     ],
     "answer": [
       0
     ],
     "why": "长时间同步请求容易超时，用户也不知道是否正在处理，可能刷新或重复提交。异步任务能立即确认并提供状态。",
     "why_en": "A 45-second synchronous request risks timeouts and poor user feedback, so it should be handled asynchronously.",
+    "termDefinitions": [
+      {
+        "term": "timeout",
+        "meaning": "连接或请求超过设定时长没有响应就被强制中断的机制。",
+        "meaningEn": "A timeout is a limit after which an unresponsive connection or request is forcibly cut off."
+      },
+      {
+        "term": "连接池",
+        "meaning": "数据库客户端预先建立并复用的一批连接，长时间占用会导致新请求无连接可用。",
+        "meaningEn": "A connection pool is a set of pre-established database connections; holding one too long starves new requests."
+      }
+    ],
     "tags": [
       "sync-problem",
       "timeout",
@@ -60,6 +97,12 @@
       "批量邮件发送",
       "读取当前用户 profile 的一行数据库记录"
     ],
+    "options_en": [
+      "Video transcoding.",
+      "Generating a PDF or a data export.",
+      "Sending a bulk email campaign.",
+      "Reading one database row for the current user's profile."
+    ],
     "answer": [
       0,
       1,
@@ -67,6 +110,18 @@
     ],
     "why": "视频、报表、批量发送、图像处理、CSV 导入等都可能耗时数秒到数分钟。简单 profile 读取通常同步返回即可。",
     "why_en": "Video transcoding, reports, exports, and bulk emails are classic long-running task triggers.",
+    "termDefinitions": [
+      {
+        "term": "视频转码",
+        "meaning": "把视频从一种编码/分辨率转换成多种输出格式的计算密集型处理。",
+        "meaningEn": "Video transcoding converts a video into multiple encodings or resolutions and is compute-intensive."
+      },
+      {
+        "term": "profile 记录",
+        "meaning": "用户资料表里的一行数据，通常一次索引查询就能取到。",
+        "meaningEn": "A profile record is a single row in the user table, typically fetched with one indexed lookup."
+      }
+    ],
     "tags": [
       "trigger-signals",
       "examples",
@@ -87,12 +142,31 @@
       "让用户不断刷新页面但不记录状态",
       "直接拒绝所有报表请求"
     ],
+    "options_en": [
+      "Validate the request, create a job, enqueue it, and return the job ID immediately.",
+      "Hold the HTTP connection open for 2 minutes until the report is done.",
+      "Have the user keep refreshing the page without persisting any state.",
+      "Reject every report request outright."
+    ],
     "answer": [
       0
     ],
     "why": "job_id 让客户端可以查询状态或接收通知，后台 worker 处理真正耗时工作。用户请求不再被长任务阻塞。",
     "why_en": "The API should enqueue the work and immediately return a job ID for status tracking.",
     "whenOtherWins": "如果操作必须在用户继续前同步完成且只需几十毫秒，普通同步 API 更简单。",
+    "tradeoff": "立即返回 job_id 异步处理 vs 同步阻塞到任务完成",
+    "termDefinitions": [
+      {
+        "term": "job",
+        "meaning": "系统里代表一次异步任务的记录，带 id、状态和输入参数。",
+        "meaningEn": "A job is the record representing one async task, with an id, a status, and its input."
+      },
+      {
+        "term": "job_id",
+        "meaning": "队列里传递的任务唯一标识，worker 用它去数据库查完整详情。",
+        "meaningEn": "The job_id is the unique identifier passed through the queue that a worker uses to look up full job details."
+      }
+    ],
     "tags": [
       "async-flow",
       "job-id",
@@ -123,6 +197,19 @@
     ],
     "why": "Web server 只负责接受和排队，worker 负责处理和更新状态。queue 解耦两者。",
     "why_en": "The web tier creates and enqueues the job, while workers fetch, process, and update its status.",
+    "tradeoff": "Web 层快速入队返回 vs worker 层异步执行真正的耗时工作",
+    "termDefinitions": [
+      {
+        "term": "queue",
+        "meaning": "缓冲任务的消息队列，Web 层写入、worker 层按自己节奏读取。",
+        "meaningEn": "A queue is the buffer that holds jobs so workers can pull them at their own pace."
+      },
+      {
+        "term": "worker",
+        "meaning": "独立进程/容器，从 queue 取任务并执行真正耗时的工作。",
+        "meaningEn": "A worker is a separate process that pulls jobs from the queue and executes the actual work."
+      }
+    ],
     "diagram": "sequenceDiagram\n  participant C as Client\n  participant W as Web Server\n  participant DB as Job DB\n  participant Q as Queue\n  participant P as Worker\n  C->>W: submit task\n  W->>DB: create pending job\n  W->>Q: enqueue job_id\n  W-->>C: job_id\n  P->>Q: pull job_id\n  P->>DB: processing/completed",
     "tags": [
       "async-flow",
@@ -143,6 +230,12 @@
       "Job status store",
       "把所有任务存在浏览器内存"
     ],
+    "options_en": [
+      "A message queue.",
+      "A worker pool.",
+      "A job status store.",
+      "Keeping every task only in browser memory."
+    ],
     "answer": [
       0,
       1,
@@ -150,6 +243,18 @@
     ],
     "why": "queue 负责缓冲和交付，workers 负责执行，status store 让用户和系统知道任务进度、结果和失败原因。",
     "why_en": "The core components are a queue, workers, and a durable job-status store.",
+    "termDefinitions": [
+      {
+        "term": "message queue",
+        "meaning": "在生产者和消费者之间持久缓冲消息的中间件。",
+        "meaningEn": "A message queue is middleware that durably buffers messages between producers and consumers."
+      },
+      {
+        "term": "job status store",
+        "meaning": "持久化记录每个任务当前状态（pending/processing/completed/failed）的数据库。",
+        "meaningEn": "A job status store is the database that persists each job's current state."
+      }
+    ],
     "tags": [
       "components",
       "queue",
@@ -159,7 +264,7 @@
       "headers": [
         "Component",
         "Role",
-        "Failure concern"
+        "Risk"
       ],
       "rows": [
         [
@@ -188,16 +293,29 @@
     "sub": "queue-role",
     "q": "Message queue 在这个模式中的主要作用是什么？",
     "options": [
-      "在 Web server 和 worker 之间持久缓冲任务，并解耦两者扩缩容",
-      "直接生成 PDF",
-      "替代数据库中的 job status",
-      "让客户端不用发请求"
+      "在 Web server 和 worker 间持久缓冲任务并解耦扩缩容",
+      "把 PDF 内容和二进制文件直接暂存到浏览器本地",
+      "完全取代数据库，成为 job 状态的唯一存储",
+      "替客户端自动完成所有 HTTP 请求，无需前端调用"
+    ],
+    "options_en": [
+      "Durably buffer jobs between the web server and workers, decoupling their scaling.",
+      "Stash the PDF content and binary files directly in the browser's local storage.",
+      "Fully replace the database as the only place job status ever lives.",
+      "Automatically complete every HTTP request for the client, no frontend call needed."
     ],
     "answer": [
       0
     ],
     "why": "queue 接收 job_id，让 workers 按自己的速度消费。它还能提供可见的 backlog、retry 和 failure handling。",
     "why_en": "The queue durably buffers jobs between the web tier and workers, decoupling their scaling.",
+    "termDefinitions": [
+      {
+        "term": "backlog",
+        "meaning": "队列里还没被处理完的积压任务集合。",
+        "meaningEn": "A backlog is the set of jobs that have not yet been processed by a worker."
+      }
+    ],
     "tags": [
       "queue",
       "buffer",
@@ -210,13 +328,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "queue-payload",
-    "scenario": "一个任务的输入很大，包含用户参数、文件位置和配置。你要把任务送进 SQS，SQS 有消息大小限制。",
+    "scenario": "一个任务的输入很大，包含用户参数、文件位置和配置。你要把任务送进 SQS，SQS 有 1MB 消息大小限制。",
     "q": "queue message 里更应该放什么？",
     "options": [
       "只放 job_id，worker 再从数据库读取完整详情",
-      "把完整大对象塞进消息正文",
-      "把二进制文件塞进 queue",
-      "不创建 job 记录"
+      "把完整的大对象直接塞进消息正文",
+      "把上传的二进制文件本身塞进 queue",
+      "什么都不放，也不创建 job 记录"
+    ],
+    "options_en": [
+      "Put only the job_id in the message and let the worker fetch full details from the database.",
+      "Put the entire large object directly in the message body.",
+      "Put the uploaded binary file itself into the queue.",
+      "Put nothing in the message and skip creating a job record."
     ],
     "answer": [
       0
@@ -224,6 +348,22 @@
     "why": "queue message 保持小而稳定，job DB 保存完整上下文和状态。SQS 等队列有消息大小限制，且大 payload 会增加重试和传输成本。",
     "why_en": "Put a small job ID in the queue and store full job details in a durable database.",
     "whenOtherWins": "如果 job payload 很小且无需持久查询，直接放少量参数也可以，但仍要注意大小和幂等。",
+    "tradeoff": "queue message 只放 job_id vs 把完整对象塞进消息体",
+    "termDefinitions": [
+      {
+        "term": "SQS",
+        "fullName": "Amazon Simple Queue Service",
+        "meaning": "AWS 托管消息队列服务（SQS），有 1MB 单消息大小限制。",
+        "meaningEn": "SQS is AWS's managed queue service, which caps each message at 1MB."
+      },
+      {
+        "term": "payload",
+        "meaning": "消息或请求里携带的实际数据内容。",
+        "meaningEn": "A payload is the actual data content carried inside a message or request."
+      }
+    ],
+    "codeSample": "// queue message: small and stable\n{\"job_id\": \"job_8f2a1c\"}\n\n// full context lives in the job DB, not the queue\ndb.jobs[\"job_8f2a1c\"] = {\n  user_id, file_url, config\n}",
+    "lang": "json",
     "tags": [
       "queue",
       "payload",
@@ -236,12 +376,18 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "queue-options",
-    "q": "关于常见 queue 选择，哪些说法正确？（多选）",
+    "q": "关于常见 queue 技术选择，哪些说法正确？（多选）",
     "options": [
       "Redis + Bull/BullMQ 简单好用，但 memory-first，强 durability 要谨慎",
-      "SQS 运维负担低，但通常只传 job_id，且按消息计费",
+      "SQS 运维负担低，但通常只传 job_id，且按消息量计费",
       "RabbitMQ 支持复杂 routing，但自运维成本较高",
       "Kafka 适合高吞吐、可回放和已有事件流栈"
+    ],
+    "options_en": [
+      "Redis with Bull or BullMQ is easy to run, but it's memory-first so treat strong durability carefully.",
+      "SQS has low operational burden, but you typically pass only a job_id and pay per message.",
+      "RabbitMQ supports complex routing, but self-hosting it costs more to operate.",
+      "Kafka fits high throughput, replay, and teams that already run an event-streaming stack."
     ],
     "answer": [
       0,
@@ -249,8 +395,77 @@
       2,
       3
     ],
-    "why": "不同队列的核心取舍是 durability、运维、routing、重放和规模。面试里选你能解释的方案比背一个唯一答案更重要。",
+    "why": "不同队列的核心取舍是 durability、运维成本、routing 能力和吞吐规模。面试里选你能解释清楚的方案比背一个唯一答案更重要。",
     "why_en": "Queue choices trade off durability, operations, routing flexibility, replayability, and scale.",
+    "tradeoff": "durability 更强 vs 上手/运维成本更低",
+    "optionMeanings": [
+      "Redis 加任务队列库，起步简单但持久性依赖内存快照。",
+      "AWS 托管队列，免运维但消息体小、按量付费。",
+      "自建 broker，路由灵活但要管集群和升级。",
+      "分布式日志系统，能重放消息、支撑大规模事件流。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "内存优先的键值存储，配合 Bull/BullMQ 可当轻量任务队列用。",
+        "meaningEn": "Redis is an in-memory key-value store that, paired with Bull or BullMQ, can act as a lightweight job queue."
+      },
+      {
+        "term": "Bull/BullMQ",
+        "meaning": "构建在 Redis 之上的 Node.js 任务队列库，提供重试、延迟任务、优先级队列语义。",
+        "meaningEn": "Bull and BullMQ are Node.js job-queue libraries built on Redis that add retries, delayed jobs, and priority queues."
+      },
+      {
+        "term": "SQS",
+        "fullName": "Amazon Simple Queue Service",
+        "meaning": "AWS 托管消息队列服务，按消息量计费，免运维。",
+        "meaningEn": "SQS is AWS's managed queue service that charges per message and removes operational overhead."
+      },
+      {
+        "term": "RabbitMQ",
+        "meaning": "开源消息队列，支持复杂 routing，需要自己搭建和运维集群。",
+        "meaningEn": "RabbitMQ is an open-source message broker with rich routing features that you must self-host and operate."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "高吞吐、可回放的分布式日志系统，常用作事件流平台。",
+        "meaningEn": "Kafka is a high-throughput, replayable distributed log commonly used as an event-streaming backbone."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Queue",
+        "Durability",
+        "Ops effort",
+        "Fit"
+      ],
+      "rows": [
+        [
+          "Redis+BullMQ",
+          "memory-first",
+          "low",
+          "fast prototypes"
+        ],
+        [
+          "SQS",
+          "managed durable",
+          "very low",
+          "pay-per-message"
+        ],
+        [
+          "RabbitMQ",
+          "durable",
+          "high",
+          "complex routing"
+        ],
+        [
+          "Kafka",
+          "durable + replay",
+          "high",
+          "event streaming"
+        ]
+      ]
+    },
     "tags": [
       "queue-options",
       "redis",
@@ -264,13 +479,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "queue-options",
-    "scenario": "一个 startup 想快速上线报表任务，规模中等，希望自动 retry、delayed jobs、priority queues 都容易用。",
-    "q": "哪个方案常见且上手快？",
+    "scenario": "一个 startup 想快速上线报表任务，规模中等，希望自动 retry、delayed jobs、priority queues 都容易配置。",
+    "q": "哪个 queue 方案常见且上手最快？",
     "options": [
       "Redis + Bull/BullMQ",
-      "自己写 TCP 协议",
-      "只用浏览器 localStorage",
-      "把任务写进日志文件"
+      "自己实现一套 TCP 传输协议",
+      "只用浏览器 localStorage 存任务",
+      "把待办任务追加写进本地日志文件"
+    ],
+    "options_en": [
+      "Redis with Bull or BullMQ.",
+      "Implement a custom TCP transport protocol from scratch.",
+      "Store tasks only in the browser's localStorage.",
+      "Append pending tasks to a local log file."
     ],
     "answer": [
       0
@@ -278,6 +499,31 @@
     "why": "Redis + Bull/BullMQ 是很多团队的实用起点，简单、功能够用。硬崩溃下 durability 要评估，强保证可考虑 SQS/RabbitMQ。",
     "why_en": "Redis with Bull or BullMQ is a practical startup-friendly queue choice, though durability must be evaluated.",
     "whenOtherWins": "如果不能丢任何任务、希望托管高可用，SQS 或 RabbitMQ 这类更 durable 的队列更合适。",
+    "tradeoff": "Redis+BullMQ 上手快 vs SQS/RabbitMQ durability 更强",
+    "optionMeanings": [
+      "现成队列库，内建重试/延迟/优先级语义。",
+      "从零造轮子，重新发明队列早已解决的问题。",
+      "浏览器本地存储，进程刷新或关闭就可能丢失。",
+      "文件追加写，没有并发消费、确认、重试语义。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "保证字节流可靠有序传输的传输层协议，自己实现代价很高。",
+        "meaningEn": "TCP is the transport-layer protocol that guarantees reliable, ordered delivery; reimplementing it is very costly."
+      },
+      {
+        "term": "delayed jobs",
+        "meaning": "设定延迟一段时间后才可被 worker 取走执行的任务。",
+        "meaningEn": "Delayed jobs are tasks that only become available to workers after a set delay."
+      },
+      {
+        "term": "priority queue",
+        "meaning": "让高优先级任务先于低优先级任务被消费的队列语义。",
+        "meaningEn": "A priority queue lets higher-priority jobs be consumed before lower-priority ones."
+      }
+    ],
     "tags": [
       "redis",
       "bullmq",
@@ -294,16 +540,43 @@
     "q": "Worker 运行方式优先选什么？",
     "options": [
       "普通服务器或容器化 workers",
-      "只能用短时 serverless function",
-      "Web browser tab",
-      "数据库 trigger 执行所有工作"
+      "只能用 15-60 分钟执行上限的 serverless function",
+      "让代码运行在用户的 Web browser tab 里",
+      "靠数据库 trigger 执行所有耗时工作"
+    ],
+    "options_en": [
+      "Regular servers or containerized workers.",
+      "Serverless functions capped at 15 to 60 minutes of execution.",
+      "Run the code inside the user's web browser tab.",
+      "Do all the heavy work through database triggers."
     ],
     "answer": [
       0
     ],
-    "why": "长任务适合由普通进程或容器 worker 执行，环境可控、时长不受 Lambda 15-60 分钟限制。容器还能获得编排和自动扩缩容。",
+    "why": "长任务适合由普通进程或容器 worker 执行，环境可控、时长不受 serverless 执行上限限制。容器还能获得编排和自动扩缩容。",
     "why_en": "Long jobs often fit server or container workers because they avoid serverless execution limits.",
     "whenOtherWins": "如果工作短、突发、无状态且运行时间在函数限制内，serverless 可以降低运维。",
+    "tradeoff": "服务器/容器可控但要管闲置容量 vs serverless 免运维但有执行时长上限",
+    "codeSample": "# simplified worker loop on a normal server\nwhile True:\n    job = queue.pop()  # blocks until a job arrives\n    if job:\n        process_job(job)\n        mark_complete(job.id)",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "SSH",
+        "fullName": "Secure Shell",
+        "meaning": "远程登录机器、执行命令、调试问题的协议。",
+        "meaningEn": "SSH is the protocol engineers use to remotely log into a machine and run commands."
+      },
+      {
+        "term": "serverless function",
+        "meaning": "按调用触发、自动扩缩容的函数计算服务，单次执行有硬性时长上限。",
+        "meaningEn": "A serverless function is invocation-triggered compute that autoscales but has a hard cap on how long one run can last."
+      },
+      {
+        "term": "数据库 trigger",
+        "meaning": "数据库在数据变更时自动触发的存储过程，不适合承载重计算。",
+        "meaningEn": "A database trigger is a stored procedure fired automatically on data changes; it is not meant for heavy computation."
+      }
+    ],
     "tags": [
       "workers",
       "runtime",
@@ -316,12 +589,18 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "worker-runtime",
-    "q": "关于 worker 运行方式，哪些取舍正确？（多选）",
+    "q": "关于 worker 运行方式的取舍，哪些说法正确？（多选）",
     "options": [
-      "普通服务器最简单可控，但要管理机器和闲置容量",
+      "普通服务器最简单可控，但要管理机器和支付闲置容量",
       "Serverless 适合突发短任务，但有执行时长、冷启动和本地存储限制",
-      "容器 workers 在灵活性和自动扩缩容之间折中",
-      "Serverless 永远适合所有长任务"
+      "容器 workers 在灵活性和自动扩缩容之间折中，但比裸服务器复杂",
+      "Serverless 永远是所有长任务的最佳选择，没有例外"
+    ],
+    "options_en": [
+      "Plain servers are simplest and most controllable, but you manage machines and pay for idle capacity.",
+      "Serverless suits bursty short jobs, but has execution-time, cold-start, and local-storage limits.",
+      "Container workers trade flexibility for autoscaling, at the cost of more setup than bare servers.",
+      "Serverless is always the best choice for every long-running task, with no exceptions."
     ],
     "answer": [
       0,
@@ -330,6 +609,53 @@
     ],
     "why": "worker runtime 要和任务时长、资源、运维要求匹配。不要把所有异步任务都默认塞进 serverless。",
     "why_en": "Worker runtime choices trade off control, operations, execution limits, and autoscaling.",
+    "tradeoff": "环境可控/无时长上限 vs 免运维但受执行时长约束",
+    "optionMeanings": [
+      "机器由团队自己管理，长任务无时长限制。",
+      "按调用付费的函数计算，冷启动和时长有硬上限。",
+      "容器加编排器，介于服务器和 serverless 之间。",
+      "把 serverless 说成无条件通用方案，忽略执行时长限制。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "冷启动",
+        "meaning": "serverless 函数长时间未调用后，首次请求要重新初始化运行环境带来的额外延迟。",
+        "meaningEn": "A cold start is the extra latency when a serverless function must re-initialize its runtime after being idle."
+      },
+      {
+        "term": "容器",
+        "meaning": "打包应用和依赖、可被编排器统一调度和扩缩容的运行单元。",
+        "meaningEn": "A container packages an app with its dependencies as a unit that an orchestrator can schedule and autoscale."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Runtime",
+        "Control",
+        "Scaling",
+        "Limits"
+      ],
+      "rows": [
+        [
+          "Servers",
+          "full SSH access",
+          "manual",
+          "pay for idle"
+        ],
+        [
+          "Serverless",
+          "none needed",
+          "automatic",
+          "15-60min cap"
+        ],
+        [
+          "Containers",
+          "moderate",
+          "orchestrated",
+          "more setup"
+        ]
+      ]
+    },
     "tags": [
       "workers",
       "serverless",
@@ -343,12 +669,18 @@
     "topic": "system-design",
     "sub": "independent-scaling",
     "scenario": "Web 请求很轻，但视频转码需要 GPU；你不想让登录/API server 都跑在昂贵 GPU 机器上。",
-    "q": "该模式如何处理资源不匹配？",
+    "q": "Long-running task 模式如何处理这种资源不匹配？",
     "options": [
-      "Web tier 和 GPU worker pool 分开部署、独立扩缩容",
-      "所有服务都用 GPU 机器",
-      "禁止视频上传",
-      "让浏览器转码所有视频"
+      "Web tier 用普通实例，GPU worker pool 单独部署并独立扩缩容",
+      "把登录、API、转码全部塞进同一批 GPU 机器统一部署",
+      "干脆在产品里禁止用户上传任何视频文件",
+      "把转码逻辑放进用户浏览器，让本地 CPU 硬扛"
+    ],
+    "options_en": [
+      "Keep the web tier on regular instances and deploy the GPU worker pool separately, scaling each on its own.",
+      "Cram login, API, and transcoding onto the same batch of GPU machines.",
+      "Simply disallow video uploads in the product entirely.",
+      "Push transcoding logic into the user's browser and let their local CPU handle it."
     ],
     "answer": [
       0
@@ -356,6 +688,20 @@
     "why": "异步 worker pool 让不同资源画像的工作分开运行：Web server 用便宜通用实例，GPU/CPU-heavy workers 用专门机器。",
     "why_en": "Async workers let web servers and GPU-heavy processing scale on different hardware.",
     "whenOtherWins": "如果所有请求都很轻且资源需求一致，单一服务部署更简单。",
+    "tradeoff": "分开部署省成本但多一层协调 vs 统一部署简单但浪费昂贵资源",
+    "termDefinitions": [
+      {
+        "term": "GPU",
+        "fullName": "Graphics Processing Unit",
+        "meaning": "图形处理器（GPU），擅长并行计算，常用于视频转码、模型推理等重计算任务。",
+        "meaningEn": "A GPU is a processor optimized for parallel computation, commonly used for video transcoding or ML inference."
+      },
+      {
+        "term": "worker pool",
+        "meaning": "一组专门执行异步任务的进程/容器，可以按资源画像独立扩缩容。",
+        "meaningEn": "A worker pool is a set of processes dedicated to async jobs that can scale independently by resource profile."
+      }
+    ],
     "tags": [
       "independent-scaling",
       "gpu",
@@ -375,13 +721,26 @@
       "worker 崩溃不拖垮用户请求路径",
       "减少对 job status、queue depth、worker health 的监控需求"
     ],
+    "options_en": [
+      "The API returns fast, avoiding long-request timeouts.",
+      "Web servers and workers scale independently.",
+      "A worker crash does not take down the user-facing request path.",
+      "It reduces the need to monitor job status, queue depth, and worker health."
+    ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "它改善响应时间、资源利用和故障隔离，但也增加 queue、worker、状态和监控复杂度。",
+    "why": "它改善响应时间、资源利用和故障隔离，但也增加 queue、worker、状态和监控复杂度，监控需求只会更多不会更少。",
     "why_en": "The pattern improves response time, independent scaling, and fault isolation, but adds monitoring and state complexity.",
+    "termDefinitions": [
+      {
+        "term": "fault isolation",
+        "meaning": "一个组件故障不扩散、不拖垮其他组件的隔离特性。",
+        "meaningEn": "Fault isolation means one component's failure does not spread and take down other components."
+      }
+    ],
     "tags": [
       "benefits",
       "scaling",
@@ -396,10 +755,16 @@
     "sub": "tradeoffs",
     "q": "引入 async worker pool 后会新增哪些成本？（多选）",
     "options": [
-      "更多系统复杂度：queue、workers、job DB",
+      "更多系统复杂度：queue、workers、job DB 都要维护",
       "Eventual consistency：API 返回时工作还没完成",
-      "需要状态查询、重试、失败处理和监控",
-      "用户永远不能知道任务状态"
+      "需要状态查询、重试、失败处理和监控基础设施",
+      "用户从此永远无法知道任务状态"
+    ],
+    "options_en": [
+      "More system complexity: the queue, workers, and job DB all need upkeep.",
+      "Eventual consistency: the work isn't done yet when the API returns.",
+      "You now need status queries, retries, failure handling, and monitoring infrastructure.",
+      "Users can never find out the job's status at all."
     ],
     "answer": [
       0,
@@ -408,6 +773,13 @@
     ],
     "why": "异步不是免费午餐。你换来了 fast ack，但必须设计状态、通知、重试、DLQ 和 backpressure。",
     "why_en": "Async processing adds queues, workers, eventual consistency, job tracking, retries, and monitoring.",
+    "termDefinitions": [
+      {
+        "term": "eventual consistency",
+        "meaning": "系统状态不是立刻一致，但在没有新写入的情况下最终会收敛到一致。",
+        "meaningEn": "Eventual consistency means state is not immediately consistent but converges to a consistent view over time."
+      }
+    ],
     "tags": [
       "tradeoffs",
       "eventual-consistency",
@@ -421,12 +793,18 @@
     "topic": "system-design",
     "sub": "user-feedback",
     "scenario": "用户提交报表后不应该盯着 loading spinner 45 秒，但也需要知道进度和结果。",
-    "q": "产品侧应该提供什么？",
+    "q": "产品侧应该配套提供什么？",
     "options": [
-      "job status endpoint、进度页，完成后 email/push/WebSocket/SSE 通知",
-      "什么都不显示",
-      "永远让用户刷新页面",
-      "把报表结果同步塞进首次响应"
+      "提供状态查询接口，完成后邮件/推送/WebSocket 通知",
+      "完全不给任何反馈，让用户自己瞎猜进度到底到哪一步",
+      "只允许用户手动反复刷新页面来查看最新结果",
+      "在首次响应里硬塞进还没生成完的报表内容数据"
+    ],
+    "options_en": [
+      "Offer a status endpoint and notify by email, push, or WebSocket once it's done.",
+      "Give no feedback at all and let the user guess how far along it is.",
+      "Only let the user manually refresh the page over and over for the latest result.",
+      "Cram the not-yet-finished report content into the very first response."
     ],
     "answer": [
       0
@@ -434,6 +812,30 @@
     "why": "异步任务必须配套状态和通知，否则用户不知道任务是否被接收、排队、处理中或失败。",
     "why_en": "Long-running tasks need status APIs and completion notifications so users understand progress.",
     "whenOtherWins": "很短且可同步完成的操作不需要额外状态页。",
+    "tradeoff": "主动推送通知 vs 让用户自己反复刷新查询",
+    "optionMeanings": [
+      "查询接口+页面+多渠道推送，覆盖不同用户习惯。",
+      "完全没有反馈机制，用户体验最差。",
+      "只靠手动刷新，没有主动通知能力。",
+      "违背异步返回的前提，强行同步等待未完成结果。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "WebSocket",
+        "meaning": "允许服务器和浏览器保持长连接、双向实时推送消息的协议。",
+        "meaningEn": "WebSocket is a protocol that keeps a persistent, two-way connection open between server and browser for realtime pushes."
+      },
+      {
+        "term": "push notification",
+        "meaning": "系统主动推送到用户设备的通知，不需要用户主动查询。",
+        "meaningEn": "A push notification is sent proactively to a user's device without the user having to poll for it."
+      },
+      {
+        "term": "job status endpoint",
+        "meaning": "客户端用 job_id 查询任务当前状态的 API 接口。",
+        "meaningEn": "A job status endpoint is the API a client calls with a job_id to check the task's current state."
+      }
+    ],
     "tags": [
       "user-feedback",
       "status",
@@ -446,18 +848,36 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "status-model",
-    "q": "Job status 通常至少会经历哪些状态？",
+    "q": "Async job 的 status 字段通常至少会经历哪几个状态？",
     "options": [
       "pending -> processing -> completed/failed",
       "completed -> pending -> deleted",
-      "only success",
-      "only unknown"
+      "只有 success 一个状态，没有 failed 或中间态",
+      "只有 unknown 一个状态，从不区分处理阶段"
+    ],
+    "options_en": [
+      "pending, then processing, then completed or failed.",
+      "completed, then pending, then deleted.",
+      "Only a single success state, with no failed or in-between state.",
+      "Only a single unknown state that never distinguishes processing stages."
     ],
     "answer": [
       0
     ],
     "why": "pending 表示已接受但未开始，processing 表示 worker 正在执行，completed/failed 表示终态。重试和错误信息可作为额外字段。",
     "why_en": "A basic job state model is pending, processing, and then completed or failed.",
+    "termDefinitions": [
+      {
+        "term": "pending",
+        "meaning": "任务已被接受、写入数据库，但还没有 worker 开始处理的状态。",
+        "meaningEn": "Pending means the job has been accepted and stored but no worker has started it yet."
+      },
+      {
+        "term": "processing",
+        "meaning": "worker 已取到任务并正在执行的状态。",
+        "meaningEn": "Processing means a worker has picked up the job and is actively executing it."
+      }
+    ],
     "tags": [
       "status-model",
       "job-db",
@@ -471,18 +891,36 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "worker-crash",
-    "q": "如果 worker 处理中崩溃，queue 系统通常如何恢复？",
+    "q": "如果 worker 处理任务过程中崩溃，queue 系统通常如何恢复？",
     "options": [
-      "通过 heartbeat/visibility timeout 判断 worker 死亡，把 job 重新交给其他 worker",
-      "立刻丢弃 job",
-      "要求用户重新提交所有任务",
-      "Web server 同步补做任务"
+      "用 heartbeat/visibility timeout 判死亡，交别的 worker 重试",
+      "把这个任务立刻标记为永久失败，不再重试也不告警",
+      "强制要求用户把所有已提交的任务重新提交一遍",
+      "改由 Web server 同步顶上去接手，把任务跑完再返回结果"
+    ],
+    "options_en": [
+      "Detect death via heartbeat or visibility timeout, then hand it to another worker.",
+      "Immediately mark the job permanently failed, with no retry and no alert.",
+      "Force the user to resubmit every already-submitted task from scratch.",
+      "Have the web server synchronously step in, finish the job, then return the result."
     ],
     "answer": [
       0
     ],
     "why": "worker 需要持续表明自己还活着。心跳消失或 visibility timeout 到期后，任务可被重新投递。",
     "why_en": "Queues recover from worker crashes using heartbeats or visibility timeouts that allow another worker to retry the job.",
+    "termDefinitions": [
+      {
+        "term": "heartbeat",
+        "meaning": "worker 定期发给队列的存活信号，用来判断它是否还在处理任务。",
+        "meaningEn": "A heartbeat is the periodic signal a worker sends to prove it is still alive and processing."
+      },
+      {
+        "term": "visibility timeout",
+        "meaning": "消息被取走后短暂隐藏的时间窗口，超时未确认就重新可见、可被别的 worker 取走。",
+        "meaningEn": "A visibility timeout hides a message from other consumers until it's acknowledged or the timeout expires and it reappears."
+      }
+    ],
     "tags": [
       "worker-crash",
       "heartbeat",
@@ -496,18 +934,33 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "heartbeat",
-    "q": "文章给出的 heartbeat/timeout 起点通常是多少？",
+    "scenario": "系统把 worker heartbeat/visibility timeout 设成一个固定区间；间隔本身不是重点，重点是它太短或太长各会出什么问题。",
+    "q": "为什么很多系统把 heartbeat/visibility timeout 起点设在 10-30 秒，而不是 1 秒或 1 小时？",
     "options": [
-      "10-30 秒",
-      "1 毫秒",
-      "24 小时",
-      "1 年"
+      "太短把 GC pause 误判死亡增加重试；太长拖慢真正崩溃的恢复速度",
+      "10-30 秒是所有 queue 系统写死的硬编码默认值，改不了",
+      "心跳间隔必须严格等于每个任务的平均处理时长",
+      "心跳间隔只影响日志输出格式，不影响任务是否会被重新分配"
+    ],
+    "options_en": [
+      "Too short misjudges a GC pause as death and causes extra retries; too long delays recovery from a real crash.",
+      "10 to 30 seconds is a hardcoded default baked into every queue system that cannot be changed.",
+      "The heartbeat interval must exactly equal the average processing time of each task.",
+      "The heartbeat interval only affects log formatting, not whether a job gets reassigned."
     ],
     "answer": [
       0
     ],
-    "why": "10-30 秒是很多系统的合理起点：太长会拖延恢复，太短会增加噪音并可能误判 GC pause。",
-    "why_en": "A heartbeat or timeout around 10 to 30 seconds is a common starting point.",
+    "why": "10-30 秒是很多系统的合理起点：太长会拖延故障恢复，太短会增加噪音甚至把 GC pause 误判为宕机。这个区间平衡了恢复速度和误判率，是后续设置重试/告警阈值的基数。",
+    "why_en": "A heartbeat or timeout around 10 to 30 seconds balances fast crash recovery against false positives from brief pauses like garbage collection.",
+    "termDefinitions": [
+      {
+        "term": "GC pause",
+        "fullName": "Garbage Collection pause",
+        "meaning": "运行时自动回收内存造成的短暂停顿，容易被心跳机制误判为进程死亡。",
+        "meaningEn": "A GC pause is a brief runtime stall from automatic memory reclamation, which a heartbeat check can mistake for a crash."
+      }
+    ],
     "tags": [
       "heartbeat",
       "numbers",
@@ -520,18 +973,86 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "timeout-terms",
-    "q": "不同 queue 对“worker 是否还活着”的机制名称可能不同，哪项映射合理？",
+    "scenario": "不同 queue 产品给“判断 worker 是否还活着”这个同一个概念起了不同名字。",
+    "q": "以下哪一组名称到队列产品的映射是合理的？",
     "options": [
       "SQS visibility timeout、RabbitMQ heartbeat、Kafka session timeout",
       "SQS CSS selector、RabbitMQ CDN TTL、Kafka HTTP cookie",
-      "Postgres WebSocket、Redis DNS、Kafka CSS",
-      "都叫 TCP teardown"
+      "Postgres WebSocket、Redis DNS 记录、Kafka CSS 动画",
+      "三者都统一叫做 TCP teardown"
+    ],
+    "options_en": [
+      "SQS visibility timeout, RabbitMQ heartbeat, and Kafka session timeout.",
+      "SQS CSS selector, RabbitMQ CDN TTL, and Kafka HTTP cookie.",
+      "Postgres WebSocket, a Redis DNS record, and a Kafka CSS animation.",
+      "All three are simply called TCP teardown."
     ],
     "answer": [
       0
     ],
-    "why": "概念相同：如果 worker 没有及时确认还活着或提交进度，系统就认为任务可重新处理。",
+    "why": "概念相同：如果 worker 没有及时确认还活着或提交进度，系统就认为任务可重新处理，只是各队列产品叫法不同。",
     "why_en": "SQS visibility timeout, RabbitMQ heartbeat, and Kafka session timeout all help detect failed consumers.",
+    "tradeoff": "名称不同 vs 底层判活+重投递机制相同",
+    "optionMeanings": [
+      "同一个存活判定机制在三个队列产品里的真实叫法。",
+      "把前端/网络无关概念（CSS、CDN、cookie）错配给队列机制。",
+      "把不相关的网络/前端概念（WebSocket、DNS、CSS）错配给存活判定。",
+      "TCP teardown 是连接关闭，不是队列层的存活判定机制。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SQS",
+        "fullName": "Amazon Simple Queue Service",
+        "meaning": "AWS 托管消息队列，用 visibility timeout 判断消费者是否还在处理消息。",
+        "meaningEn": "SQS is AWS's managed queue service, which uses a visibility timeout to judge whether a consumer is still processing."
+      },
+      {
+        "term": "RabbitMQ",
+        "meaning": "开源消息队列，用 heartbeat 帧判断连接和消费者是否存活。",
+        "meaningEn": "RabbitMQ is an open-source broker that uses heartbeat frames to detect whether a connection or consumer is alive."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志系统，用 session timeout 判断 consumer 是否还在消费分区。",
+        "meaningEn": "Kafka is a distributed log system that uses a session timeout to judge whether a consumer is still active on a partition."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "保证可靠有序传输的传输层协议；teardown 指连接关闭过程，与任务存活判定无关。",
+        "meaningEn": "TCP is the transport-layer protocol guaranteeing reliable delivery; its teardown is connection closing, unrelated to job liveness checks."
+      },
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存到离用户近的边缘节点的分发网络，与队列判活无关。",
+        "meaningEn": "A CDN caches content on edge servers near users; it has nothing to do with queue liveness detection."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Queue",
+        "Signal",
+        "Unit"
+      ],
+      "rows": [
+        [
+          "SQS",
+          "visibility timeout",
+          "seconds"
+        ],
+        [
+          "RabbitMQ",
+          "heartbeat interval",
+          "seconds"
+        ],
+        [
+          "Kafka",
+          "session timeout",
+          "ms"
+        ]
+      ]
+    },
     "tags": [
       "heartbeat",
       "sqs",
@@ -545,18 +1066,37 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "dlq",
-    "q": "Dead Letter Queue（DLQ）解决什么问题？",
+    "q": "Dead Letter Queue（DLQ）主要解决什么问题？",
     "options": [
-      "反复失败的 poison job 无限重试，拖垮 worker",
-      "Web server 响应太快",
-      "用户不知道 job_id",
-      "数据库不能存状态"
+      "反复失败的 poison job 无限重试，拖垮整个 worker 队伍",
+      "Web server 响应速度太快导致用户来不及反应",
+      "客户端不知道自己提交的 job_id 是多少",
+      "数据库没有字段可以存储任务状态"
+    ],
+    "options_en": [
+      "A poison job that keeps failing retries forever and drags down the whole worker fleet.",
+      "The web server responds too fast for the user to react.",
+      "The client doesn't know what job_id it submitted.",
+      "The database has no field to store task status."
     ],
     "answer": [
       0
     ],
     "why": "超过最大重试次数后，把 job 移到 DLQ 隔离，避免一直消耗 worker。DLQ 增长通常意味着代码 bug 或坏数据。",
     "why_en": "A dead letter queue isolates repeatedly failing jobs so healthy work can continue.",
+    "termDefinitions": [
+      {
+        "term": "DLQ",
+        "fullName": "Dead Letter Queue",
+        "meaning": "死信队列（DLQ）：任务重试超过次数上限后被移入的隔离队列，避免拖垮正常 worker。",
+        "meaningEn": "A dead letter queue is where jobs go after exceeding their retry limit, isolating them from healthy workers."
+      },
+      {
+        "term": "poison job",
+        "meaning": "无论重试多少次都会让 worker 崩溃或失败的坏任务，通常源于代码 bug 或坏数据。",
+        "meaningEn": "A poison job is a task that crashes or fails the worker on every retry, usually due to a bug or bad data."
+      }
+    ],
     "tags": [
       "dlq",
       "poison-message",
@@ -570,18 +1110,32 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "dlq",
-    "q": "任务通常失败多少次后应进入 DLQ？",
+    "scenario": "DLQ 的重试上限要选一个具体数字；这个数字本身不是重点，重点是选 0、选很小、选很大分别会带来什么后果。",
+    "q": "为什么 DLQ 的重试上限通常设在 3-5 次，而不是 0 次或无限次？",
     "options": [
-      "3-5 次",
-      "0 次，永远不重试",
-      "1000 次",
-      "无限次"
+      "0 次误杀抖动；无限次让 poison job 占满 worker",
+      "重试次数必须和 worker 机器数量保持严格一致",
+      "重试次数越多永远越安全，完全没有任何代价",
+      "DLQ 只是用来存放已经成功完成的历史任务"
+    ],
+    "options_en": [
+      "0 retries kills jobs on any brief blip; unlimited retries lets a poison job hog every worker.",
+      "The retry count must always match the number of worker machines.",
+      "More retries is always strictly safer with no downside.",
+      "A dead letter queue is only where already-completed jobs are stored."
     ],
     "answer": [
       0
     ],
-    "why": "3-5 次能覆盖短暂错误，又不会让永久坏数据无限占用 worker。具体次数取决于任务成本和错误类型。",
-    "why_en": "Jobs commonly move to a dead letter queue after about three to five failed attempts.",
+    "why": "3-5 次能覆盖短暂错误（网络抖动、临时限流），又不会让永久坏数据无限占用 worker。这个次数是后续告警和 DLQ 容量规划的基数，具体值取决于任务成本和错误类型。",
+    "why_en": "Jobs commonly move to a dead letter queue after about three to five failed attempts, balancing transient-error tolerance against wasted worker time.",
+    "termDefinitions": [
+      {
+        "term": "抖动",
+        "meaning": "网络或依赖服务的短暂、偶发性失败，重试一两次通常就能恢复。",
+        "meaningEn": "A blip is a brief, transient failure in the network or a dependency that usually recovers after one or two retries."
+      }
+    ],
     "tags": [
       "dlq",
       "numbers",
@@ -594,12 +1148,18 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "dlq",
-    "q": "DLQ 设计中应该监控哪些信号？（多选）",
+    "q": "DLQ 设计中应该持续监控哪些信号？（多选）",
     "options": [
-      "DLQ depth 是否增长",
-      "失败原因分布",
-      "从 DLQ 修复后重新投递的流程",
-      "忽略 DLQ，因为它只存垃圾"
+      "DLQ depth 是否在持续增长",
+      "失败原因的分布情况",
+      "从 DLQ 修复后重新投递回主队列的流程",
+      "完全忽略 DLQ，因为它只存垃圾数据"
+    ],
+    "options_en": [
+      "Whether DLQ depth keeps growing over time.",
+      "The distribution of failure reasons.",
+      "The process for redriving fixed jobs from the DLQ back to the main queue.",
+      "Ignore the DLQ entirely since it only holds garbage."
     ],
     "answer": [
       0,
@@ -608,6 +1168,13 @@
     ],
     "why": "DLQ 是生产故障信号，不是垃圾桶。持续增长意味着系统需要人工调查、代码修复或数据清洗。",
     "why_en": "A growing dead letter queue is an operational signal that needs investigation and repair.",
+    "termDefinitions": [
+      {
+        "term": "redrive",
+        "meaning": "把 DLQ 里已经修复的任务重新投递回主队列继续处理的操作。",
+        "meaningEn": "A redrive moves a fixed job from the dead letter queue back into the main queue for reprocessing."
+      }
+    ],
     "tags": [
       "dlq",
       "monitoring",
@@ -620,24 +1187,38 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "idempotency",
-    "scenario": "用户不耐烦连续点击“Generate Report”三次，三个请求输入完全一样。",
-    "q": "如何避免重复创建相同任务？",
+    "scenario": "用户不耐烦，连续点击“Generate Report”三次，三个请求的输入参数完全一样。",
+    "q": "如何避免为同一个业务意图重复创建三个 job？",
     "options": [
-      "使用 idempotency key，已有相同 key 的 job 就返回现有 job_id",
-      "盲目创建三个 job",
-      "只靠前端禁用按钮",
-      "随机选择一个请求丢弃且不返回状态"
+      "已有相同 idempotency key 就返回旧 job_id",
+      "盲目为三次点击分别创建三个独立的 job 记录",
+      "只在前端禁用按钮防重复，后端完全不做校验",
+      "随机丢弃两个请求且不给出任何响应状态"
+    ],
+    "options_en": [
+      "If a job with the same idempotency key already exists, return its old job_id.",
+      "Blindly create three separate job records for the three clicks.",
+      "Only disable the button on the frontend, with zero backend validation.",
+      "Randomly drop two of the requests and return no response status for them."
     ],
     "answer": [
       0
     ],
     "why": "idempotency key 把同一次业务意图映射到同一个 job。前端防抖有帮助，但后端必须兜底。",
     "why_en": "An idempotency key maps repeated submissions of the same operation to the existing job.",
-    "whenOtherWins": "如果任务本来就允许多次执行且每次结果独立，可以不用合并，但仍要明确语义。",
-    "tags": [
-      "idempotency",
-      "duplicate-work",
-      "fit"
+    "whenOtherWins": "如果任务本来就允许多次独立执行且每次结果互不影响，可以不用合并，但仍要明确语义。",
+    "tradeoff": "去重换来一次性执行 vs 不去重更简单但可能重复扣款/发信",
+    "termDefinitions": [
+      {
+        "term": "idempotency key",
+        "meaning": "标识同一次业务操作的唯一键，重复提交带同样 key 的请求时用来判重。",
+        "meaningEn": "An idempotency key uniquely identifies one business operation so repeated submissions can be deduplicated."
+      },
+      {
+        "term": "防抖",
+        "meaning": "前端在短时间内合并/抑制重复触发的技巧，例如点击后禁用按钮。",
+        "meaningEn": "Debouncing is a frontend technique that suppresses duplicate triggers in a short window, like disabling a button after a click."
+      }
     ],
     "table": {
       "headers": [
@@ -654,7 +1235,7 @@
         [
           "Worker",
           "dedupe output",
-          "duplicate side effects"
+          "dup side effects"
         ],
         [
           "DB",
@@ -662,7 +1243,12 @@
           "race duplicates"
         ]
       ]
-    }
+    },
+    "tags": [
+      "idempotency",
+      "duplicate-work",
+      "fit"
+    ]
   },
   {
     "id": "sd-patterns-long-running-tasks-025",
@@ -670,12 +1256,18 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "idempotent-work",
-    "q": "为什么 worker 执行本身也要尽量 idempotent？（多选）",
+    "q": "为什么 worker 执行本身也要尽量做成 idempotent？（多选）",
     "options": [
-      "worker 崩溃后 job 可能被重试",
-      "queue 交付常是 at-least-once",
-      "重复发送邮件、重复扣款等 side effect 很危险",
-      "idempotent 会让任务永远不失败"
+      "worker 处理中崩溃后，job 很可能被别的 worker 重试",
+      "queue 交付语义通常是 at-least-once，本来就可能重复投递",
+      "重复发送邮件、重复扣款等 side effect 一旦发生代价很高",
+      "idempotent 设计能让任务从此永远不会失败"
+    ],
+    "options_en": [
+      "A worker that crashes mid-job will very likely have its job retried by another worker.",
+      "Queue delivery is typically at-least-once, so redelivery can happen on its own.",
+      "Side effects like duplicate emails or duplicate charges are expensive once they happen.",
+      "Being idempotent means the task can never fail from then on."
     ],
     "answer": [
       0,
@@ -684,6 +1276,18 @@
     ],
     "why": "异步系统里重复执行很正常。worker 应在发送邮件、写文件、扣款前检查是否已完成，或使用外部服务的 idempotency key。",
     "why_en": "Workers should be idempotent because retries and at-least-once delivery can repeat side effects.",
+    "termDefinitions": [
+      {
+        "term": "at-least-once",
+        "meaning": "消息交付语义：消息至少会被投递一次，可能重复，但不会丢失。",
+        "meaningEn": "At-least-once delivery guarantees a message arrives one or more times — never lost, but possibly duplicated."
+      },
+      {
+        "term": "side effect",
+        "meaning": "任务执行过程中产生的外部可见影响，例如发邮件、扣款、写文件。",
+        "meaningEn": "A side effect is an externally visible result of running a job, such as sending an email or charging a card."
+      }
+    ],
     "tags": [
       "idempotency",
       "at-least-once",
@@ -697,12 +1301,18 @@
     "topic": "system-design",
     "sub": "idempotency",
     "scenario": "提交 job 时，客户端传入 idempotency_key，你要避免重复 job。",
-    "q": "这段伪代码的关键语义是什么？",
+    "q": "这段 submit_job 伪代码的关键语义是什么？",
     "options": [
-      "先查 key，存在则返回旧 job_id；不存在才创建并入队",
-      "每次都创建新 job",
-      "只在内存里保存 key，重启后丢失",
-      "忽略 user_id 和 job_type"
+      "先查 key 是否已存在，存在就返回旧 job_id；不存在才创建并入队",
+      "每次调用都无条件创建一个新 job",
+      "key 只存在内存变量里，进程重启后就丢失",
+      "函数完全忽略 user_id 和 job_type 参数"
+    ],
+    "options_en": [
+      "Look up the key first; if it exists, return the old job_id — only create and enqueue when it doesn't.",
+      "Unconditionally create a brand-new job on every call.",
+      "Keep the key only in an in-memory variable that's lost on process restart.",
+      "The function completely ignores the user_id and job_type parameters."
     ],
     "answer": [
       0
@@ -712,6 +1322,19 @@
     "why": "幂等入口要在持久存储里建立 key -> job_id 映射。否则重复点击或网络重试会创建重复任务。",
     "why_en": "The idempotency key is persisted so repeated submissions return the same job instead of creating duplicates.",
     "whenOtherWins": "实际实现还需要数据库唯一约束或事务，避免并发提交同一个 key 时竞态创建两个 job。",
+    "tradeoff": "持久化 key->job_id 映射防重复 vs 只在内存判重、重启即失效",
+    "termDefinitions": [
+      {
+        "term": "db.store_idempotency_key",
+        "meaning": "把 key 和它对应的 job_id 持久写入数据库，供后续查重使用。",
+        "meaningEn": "This call persists the key together with its job_id in the database so future submissions can be deduplicated."
+      },
+      {
+        "term": "竞态",
+        "meaning": "两个并发请求几乎同时执行同一段判重逻辑，都没查到已存在的 key，从而各自创建了一个 job。",
+        "meaningEn": "A race condition is when two concurrent requests both check the key before either has written it, so each creates its own job."
+      }
+    ],
     "tags": [
       "idempotency",
       "code",
@@ -724,18 +1347,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "backpressure",
-    "q": "Backpressure 在 async worker 系统中指什么？",
+    "q": "Backpressure 在 async worker 系统中具体指什么？",
     "options": [
-      "当 workers 处理不过来时，主动放慢或拒绝新 job 接收",
-      "让 queue 无限增长",
-      "只增加前端 loading 文案",
-      "让所有 worker 停止心跳"
+      "当 workers 处理不过来时，主动放慢或拒绝新 job 的接收",
+      "让 queue 无限增长，来者不拒",
+      "只在前端加一行 loading 提示文案",
+      "让所有 worker 同时停止发送心跳"
+    ],
+    "options_en": [
+      "Actively slowing or rejecting new job intake when workers can't keep up.",
+      "Letting the queue grow without bound and accepting everything.",
+      "Just adding a loading message on the frontend.",
+      "Having every worker stop sending heartbeats at the same time."
     ],
     "answer": [
       0
     ],
     "why": "Backpressure 防止系统接受超过处理能力的工作。否则 queue 深度、等待时间和内存/存储成本都会失控。",
     "why_en": "Backpressure slows or rejects new job intake when workers cannot keep up.",
+    "termDefinitions": [
+      {
+        "term": "backpressure",
+        "meaning": "当下游处理能力跟不上时，主动放慢或拒绝新请求，防止队列无限堆积。",
+        "meaningEn": "Backpressure slows or rejects new intake when downstream workers cannot keep up, preventing unbounded queue growth."
+      }
+    ],
     "tags": [
       "backpressure",
       "queue-depth",
@@ -755,13 +1391,13 @@
         ],
         [
           "Workers saturated",
-          "rate limit submitters",
+          "rate limit intake",
           "protect system"
         ],
         [
           "Long jobs blocking",
           "split queues",
-          "avoid head of line"
+          "avoid HOL block"
         ]
       ]
     }
@@ -773,12 +1409,18 @@
     "topic": "system-design",
     "sub": "backpressure",
     "scenario": "Black Friday 时 job 流量突然 10x，queue 已经堆到几百万，用户等待时间变成数小时。",
-    "q": "应优先讨论哪些措施？",
+    "q": "应优先讨论哪些应对措施？",
     "options": [
-      "按 queue depth autoscale workers，并在过深时返回 system busy/限流",
-      "继续无条件接收所有 job",
-      "只看 CPU，不看 queue depth",
-      "删除所有 pending job"
+      "按 queue depth autoscale，过深时限流/返回 busy",
+      "继续无条件接收所有新 job，队列先堆着再处理",
+      "只盯着 CPU 使用率，完全忽略 queue depth 信号",
+      "直接删除队列里全部 pending 状态的 job"
+    ],
+    "options_en": [
+      "Autoscale on queue depth, and rate-limit or return busy once it's too deep.",
+      "Keep accepting every new job unconditionally and let the queue pile up first.",
+      "Watch only CPU usage and completely ignore the queue depth signal.",
+      "Simply delete every pending job in the queue."
     ],
     "answer": [
       0
@@ -786,6 +1428,20 @@
     "why": "queue depth 是 worker 系统的关键扩容指标。处理不过来时，扩容和限流要同时考虑。",
     "why_en": "Use queue depth for autoscaling and apply rate limits or busy responses when the backlog is too deep.",
     "whenOtherWins": "如果任务可延迟数小时且用户可接受，可以继续排队，但仍要明确 SLA 和容量上限。",
+    "tradeoff": "扩容+限流保护系统吞吐 vs 无条件接收但拖垮延迟",
+    "termDefinitions": [
+      {
+        "term": "queue depth",
+        "meaning": "队列里还未被处理的任务数量，是衡量积压程度的核心指标。",
+        "meaningEn": "Queue depth is the number of unprocessed jobs waiting in the queue, the key backlog signal."
+      },
+      {
+        "term": "SLA",
+        "fullName": "Service Level Agreement",
+        "meaning": "服务承诺的量化指标，例如任务处理延迟的上限。",
+        "meaningEn": "An SLA is a quantified service promise, such as a cap on job processing latency."
+      }
+    ],
     "tags": [
       "backpressure",
       "autoscaling",
@@ -798,18 +1454,52 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "autoscaling",
-    "q": "为什么 worker pool 扩容通常看 queue depth，而不是只看 CPU？",
+    "q": "为什么 worker pool 扩容通常看 queue depth，而不是只看 CPU 使用率？",
     "options": [
-      "queue depth 直接反映 backlog 和等待时间，CPU 高时可能已经排队很久",
-      "CPU 永远没有意义",
-      "queue depth 只适合 Web server",
-      "worker 不会消耗 CPU"
+      "queue depth 直接反映积压和等待时间，CPU 高时可能已经排队很久了",
+      "CPU 指标对系统来说完全没有任何参考价值",
+      "queue depth 这个概念只适用于 Web server，不适用于 worker",
+      "worker 进程运行时不会消耗任何 CPU 资源"
+    ],
+    "options_en": [
+      "Queue depth directly reflects backlog and wait time; by the time CPU is high, the queue may already be badly backed up.",
+      "The CPU metric has no reference value for the system whatsoever.",
+      "The concept of queue depth only applies to web servers, not to workers.",
+      "Worker processes consume no CPU resources while running."
     ],
     "answer": [
       0
     ],
-    "why": "异步系统的用户体验取决于排队时延。CPU 是资源信号，queue depth 是工作积压信号。",
+    "why": "异步系统的用户体验取决于排队时延。CPU 是资源利用率信号，queue depth 才是工作积压信号。",
     "why_en": "Queue depth better captures backlog and wait time, while CPU alone can lag the actual service-level problem.",
+    "tradeoff": "queue depth 反映积压/等待时间 vs CPU 只反映资源利用率",
+    "termDefinitions": [
+      {
+        "term": "CPU",
+        "fullName": "Central Processing Unit",
+        "meaning": "中央处理器（CPU），CPU 使用率高只说明机器在忙，不直接说明有多少任务在排队。",
+        "meaningEn": "A CPU is the processor; high CPU usage only shows the machine is busy, not how much work is backlogged."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Signal",
+        "Reflects",
+        "Blind spot"
+      ],
+      "rows": [
+        [
+          "Queue depth",
+          "backlog and wait",
+          "queue access needed"
+        ],
+        [
+          "CPU",
+          "instant load",
+          "lags true backlog"
+        ]
+      ]
+    },
     "tags": [
       "autoscaling",
       "queue-depth",
@@ -822,18 +1512,37 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "mixed-workloads",
-    "q": "把 5 秒 PDF 和 5 小时年终报表放同一个 FIFO queue，会有什么问题？",
+    "q": "把 5 秒 PDF 和 5 小时年终报表放进同一个 FIFO queue，会有什么问题？",
     "options": [
-      "短任务被长任务阻塞，产生 head-of-line blocking",
-      "短任务一定更快完成",
-      "worker 会自动知道优先级",
-      "所有任务都变成 5 秒"
+      "短任务被排在长任务后面，产生 head-of-line blocking",
+      "短任务因为体积小，一定会被优先处理完",
+      "worker 会自动感知并识别出任务的优先级",
+      "所有进入这个队列的任务都会变成 5 秒完成"
+    ],
+    "options_en": [
+      "Short jobs get stuck behind long ones, causing head-of-line blocking.",
+      "Short jobs are guaranteed to finish first just because they're smaller.",
+      "Workers automatically infer and respect each job's priority.",
+      "Every job entering this queue magically finishes in 5 seconds."
     ],
     "answer": [
       0
     ],
     "why": "长任务占住 worker，短任务排在后面会等很久。混合耗时任务需要分队列、优先级或拆分长任务。",
     "why_en": "Mixed short and very long jobs in one queue can cause head-of-line blocking.",
+    "termDefinitions": [
+      {
+        "term": "FIFO queue",
+        "fullName": "First In First Out queue",
+        "meaning": "先进先出队列，任务按到达顺序被处理，不区分耗时长短。",
+        "meaningEn": "A FIFO queue processes jobs strictly in arrival order regardless of how long each one takes."
+      },
+      {
+        "term": "head-of-line blocking",
+        "meaning": "队首的大任务卡住通道，后面排队的小任务被迫跟着等待。",
+        "meaningEn": "Head-of-line blocking is when a big job at the front of the queue delays all the smaller jobs waiting behind it."
+      }
+    ],
     "tags": [
       "mixed-workloads",
       "head-of-line-blocking",
@@ -846,20 +1555,41 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "mixed-workloads",
-    "scenario": "有些报告 5 秒，有些报告 5 小时，你想保持 fast queue 响应。",
+    "scenario": "有些报告 5 秒完成，有些报告要跑 5 小时，你想保持 fast queue 的响应始终很快。",
     "q": "应如何拆分 worker/queue？",
     "options": [
-      "按 job type 或预期耗时拆 fast queue 和 slow queue，并分别配置 worker 数和机器规格",
-      "所有任务都进一个 queue",
-      "先运行 5 小时任务再运行 5 秒任务",
-      "取消状态跟踪"
+      "按耗时拆 fast/slow queue，各配 worker 数",
+      "不管耗时长短，所有任务都塞进同一个 queue",
+      "先集中跑完所有 5 小时任务，再处理 5 秒任务",
+      "干脆取消对所有任务的状态跟踪机制"
+    ],
+    "options_en": [
+      "Split into a fast queue and a slow queue by duration, each with its own worker count.",
+      "Put every job into the same single queue no matter how long it takes.",
+      "Run all the 5-hour jobs to completion first, then handle the 5-second ones.",
+      "Simply stop tracking status for any task at all."
     ],
     "answer": [
       0
     ],
     "why": "拆队列能隔离不同 SLA 和资源需求。无法提前预测时，可先进入 fast queue，超过时间限制再迁移到 slow queue。",
     "why_en": "Separate queues by job type or expected duration to keep short jobs responsive and tune workers independently.",
-    "whenOtherWins": "如果所有任务耗时相近，单队列更简单。",
+    "whenOtherWins": "如果所有任务耗时相近，单队列更简单，不用维护两套配置。",
+    "tradeoff": "拆分 fast/slow queue 隔离 SLA vs 单队列简单但短任务被拖累",
+    "codeSample": "queues:\n  fast:\n    max_duration: 60s   # keep this responsive\n    worker_count: 50\n  slow:\n    max_duration: 6h    # fewer, beefier workers\n    worker_count: 10",
+    "lang": "yaml",
+    "termDefinitions": [
+      {
+        "term": "fast queue",
+        "meaning": "配给短任务、worker 数量多的队列，保证低延迟响应。",
+        "meaningEn": "A fast queue is dedicated to short jobs and staffed with many workers to keep latency low."
+      },
+      {
+        "term": "slow queue",
+        "meaning": "配给长任务、机器规格更强但 worker 数量较少的队列。",
+        "meaningEn": "A slow queue handles long jobs with beefier machines but fewer workers."
+      }
+    ],
     "tags": [
       "mixed-workloads",
       "queues",
@@ -872,13 +1602,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "job-dependencies",
-    "scenario": "生成报告需要 fetch data -> generate PDF -> email user 三个步骤，且每步可能重试。",
-    "q": "简单链式依赖可以怎么做？",
+    "scenario": "生成报告需要 fetch data -> generate PDF -> email user 三个步骤，且每一步可能都要单独重试。",
+    "q": "这种简单链式依赖可以怎么实现？",
     "options": [
-      "每个 worker 完成后 queue 下一步 job，并在 job context 中带 workflow_id 和上一步产物",
-      "把所有状态只存在 worker 内存",
-      "失败后永远从头开始且不记录原因",
-      "让客户端手动触发每一步"
+      "worker 完成后自排下一步，context 带 workflow_id",
+      "把整条链的状态只存在某个 worker 的内存变量里",
+      "任何一步失败都从第一步重新开始，且不记录失败原因",
+      "让客户端手动逐步触发链条中的每一个步骤"
+    ],
+    "options_en": [
+      "Each worker enqueues the next step itself, carrying a workflow_id in the context.",
+      "Keep the whole chain's state only in one worker's in-memory variable.",
+      "Restart the entire chain from step one on any failure, without recording why.",
+      "Have the client manually trigger each step of the chain in sequence."
     ],
     "answer": [
       0
@@ -886,6 +1622,16 @@
     "why": "简单链可以由前一步显式排下一步，并携带可重试上下文。复杂分支/并行流程再考虑 workflow orchestrator。",
     "why_en": "For simple chains, each worker can enqueue the next step with workflow context and retryable outputs.",
     "whenOtherWins": "如果有复杂分支、并行、补偿或长期等待，用 Step Functions、Temporal 或 Airflow 更清晰。",
+    "tradeoff": "worker 显式排下一步简单上线快 vs orchestrator 换来分支/可视化能力",
+    "codeSample": "{\n  \"workflow_id\": \"report_123\",\n  \"step\": \"generate_pdf\",\n  \"previous_steps\": [\"fetch_data\"],\n  \"context\": {\"user_id\": 456, \"data_s3_url\": \"s3://bucket/data.json\"}\n}",
+    "lang": "json",
+    "termDefinitions": [
+      {
+        "term": "workflow_id",
+        "meaning": "标识一整条多步骤任务链的 ID，各步骤 worker 用它关联上下游产物。",
+        "meaningEn": "A workflow_id ties together every step of a multi-step job chain so workers can associate upstream and downstream outputs."
+      }
+    ],
     "tags": [
       "job-dependencies",
       "workflow",
@@ -898,13 +1644,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "workflow-orchestration",
-    "scenario": "任务依赖包含分支、并行步骤、每步独立 retry 和可视化状态，你发现 worker 之间互相 queue 下一步变得很乱。",
-    "q": "下一步应考虑什么？",
+    "scenario": "任务依赖出现分支、并行步骤、每步独立 retry 和可视化状态的需求，worker 之间互相 queue 下一步变得越来越乱。",
+    "q": "这种情况下一步应该考虑引入什么？",
     "options": [
-      "Workflow orchestrator，如 AWS Step Functions、Temporal、Airflow",
-      "继续把流程散落在 worker 代码里",
-      "删除重试逻辑",
-      "只用一个巨大同步请求"
+      "引入 workflow orchestrator（Temporal 等）",
+      "继续让流程分支逻辑散落在各个 worker 代码里维护",
+      "干脆删掉现有重试逻辑，让失败任务直接静默丢弃",
+      "把整条流程压缩成一个巨大的同步 HTTP 请求处理"
+    ],
+    "options_en": [
+      "Bring in a workflow orchestrator, such as Temporal.",
+      "Keep letting the branching logic stay scattered across worker code.",
+      "Just delete the existing retry logic and let failed jobs silently vanish.",
+      "Squeeze the entire flow into one giant synchronous HTTP request."
     ],
     "answer": [
       0
@@ -912,6 +1664,24 @@
     "why": "复杂依赖会让手写链式 queue 变成 spaghetti。工作流系统集中表达流程、重试和状态可见性。",
     "why_en": "Complex branching or parallel job dependencies justify a workflow orchestrator.",
     "whenOtherWins": "单步任务或简单线性链条用 queue + worker 就足够，不必引入 orchestrator。",
+    "tradeoff": "引入 orchestrator 换取分支/可视化能力 vs 增加一层基础设施复杂度",
+    "termDefinitions": [
+      {
+        "term": "Step Functions",
+        "meaning": "AWS 托管的工作流编排服务，用状态机描述步骤、重试和分支。",
+        "meaningEn": "AWS Step Functions is a managed workflow orchestrator that models steps, retries, and branching as a state machine."
+      },
+      {
+        "term": "Temporal",
+        "meaning": "开源工作流编排引擎，用普通代码定义长时间运行、可重试的业务流程。",
+        "meaningEn": "Temporal is an open-source workflow engine that lets you define long-running, retryable business processes in ordinary code."
+      },
+      {
+        "term": "Airflow",
+        "meaning": "常用于数据管道调度的开源工作流编排工具，以 DAG 描述任务依赖。",
+        "meaningEn": "Airflow is an open-source workflow tool commonly used for data-pipeline scheduling, expressing task dependencies as a DAG."
+      }
+    ],
     "tags": [
       "workflow-orchestration",
       "dependencies",
@@ -929,7 +1699,13 @@
       "queue depth / oldest job age",
       "worker health / heartbeat",
       "job failure rate / retry rate / DLQ depth",
-      "只监控前端页面访问量"
+      "只监控前端页面的访问量"
+    ],
+    "options_en": [
+      "Queue depth and the age of the oldest job.",
+      "Worker health and heartbeat.",
+      "Job failure rate, retry rate, and DLQ depth.",
+      "Only frontend page view counts."
     ],
     "answer": [
       0,
@@ -938,6 +1714,13 @@
     ],
     "why": "异步系统的故障常表现为队列堆积、worker 死亡、失败重试或 DLQ 增长。只看 API latency 会漏掉后台问题。",
     "why_en": "Async systems need monitoring for backlog, worker health, failures, retries, and dead-letter queues.",
+    "termDefinitions": [
+      {
+        "term": "oldest job age",
+        "meaning": "队列里等待最久的那个任务已经排队多长时间，直接体现最坏等待延迟。",
+        "meaningEn": "Oldest job age is how long the longest-waiting job has sat in the queue, showing the worst-case delay."
+      }
+    ],
     "tags": [
       "monitoring",
       "queue-depth",
@@ -950,20 +1733,34 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "interview-signal",
-    "scenario": "面试官说“我们每天处理 100 万张图片，每张处理 10 秒”。",
-    "q": "你应该如何主动推导？",
+    "scenario": "面试官说“我们每天处理 100 万张图片，每张处理耗时 10 秒”。",
+    "q": "你应该如何主动用这两个数字推导架构结论？",
     "options": [
-      "100 万/天约 12 张/秒，乘以 10 秒处理时间约需要 120 个并发 worker-seconds/s，不能放 Web server，应异步 worker pool",
-      "忽略计算，直接说单机够了",
-      "所有图片同步处理在登录服务器上",
-      "让用户等待一天"
+      "算出约 12 张/秒×10 秒≈120 并发，需异步 worker pool",
+      "跳过计算，直接断言单机硬件资源就足够撑住这个量级",
+      "把所有图片处理逻辑都同步塞进登录服务器里做",
+      "让用户干脆排队等上一整天，完全不做架构调整"
+    ],
+    "options_en": [
+      "Compute about 12 images/sec times 10 seconds, roughly 120 concurrent — needs an async worker pool.",
+      "Skip the math and just assert a single machine has plenty of headroom.",
+      "Process every image synchronously inside the login server.",
+      "Just make the user queue and wait an entire day, no architecture change."
     ],
     "answer": [
       0
     ],
-    "why": "把规模和处理时间乘起来能暴露资源不匹配。这个推导是引入 worker pool 的强理由。",
+    "why": "把规模和处理时间乘起来能暴露资源不匹配：日处理量转成每秒到达率，再乘处理时长就是同一时刻所需的并发工作量。这个数字是决定要不要上 worker pool 及配多少 worker 的依据。",
     "why_en": "Doing the throughput math shows image processing would saturate the web tier and should move to async workers.",
     "whenOtherWins": "如果处理耗时只有几毫秒且流量低，同步路径可能仍可接受。",
+    "tradeoff": "提前用规模计算暴露瓶颈 vs 等 latency 恶化才被动处理",
+    "termDefinitions": [
+      {
+        "term": "并发",
+        "meaning": "同一时刻正在被处理、还未完成的任务数量。",
+        "meaningEn": "Concurrency is the number of tasks being processed at the same instant, not yet finished."
+      }
+    ],
     "tags": [
       "interview-signal",
       "capacity-math",
@@ -976,20 +1773,44 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "interview-scenarios",
-    "q": "哪些系统设计题常用 long-running tasks？（多选）",
+    "q": "哪些系统设计题里经常会用到 long-running tasks 模式？（多选）",
     "options": [
-      "YouTube 视频转码和缩略图",
-      "Instagram 图片处理和 feed fanout",
-      "Dropbox 文件扫描、索引、预览生成",
-      "只读取用户昵称"
+      "YouTube 的视频转码和缩略图生成",
+      "Instagram 的图片处理和 feed fanout",
+      "Dropbox 的文件病毒扫描、索引、预览生成",
+      "只读取用户昵称这一个字段"
+    ],
+    "options_en": [
+      "YouTube's video transcoding and thumbnail generation.",
+      "Instagram's image processing and feed fanout.",
+      "Dropbox's file virus scanning, indexing, and preview generation.",
+      "Reading just a single user nickname field."
     ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "媒体处理、fanout、文件扫描/索引都耗时且可异步。简单读取用户昵称不需要该模式。",
+    "why": "媒体处理、fanout、文件扫描/索引都耗时且可异步。简单读取用户昵称不需要 long-running task 模式。",
     "why_en": "Media processing, feed fanout, and file scanning are common long-running task scenarios.",
+    "optionMeanings": [
+      "转码/缩略图属于计算密集型批处理。",
+      "图片处理和向大量粉丝写扩散都耗时。",
+      "扫描/索引/预览生成都要读取和处理整份文件。",
+      "单字段读取是毫秒级操作，不需要异步。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "feed fanout",
+        "meaning": "作者发帖后把内容写扩散到大量粉丝各自 feed 里的过程，粉丝多时很耗时。",
+        "meaningEn": "Feed fanout is writing a new post out to every follower's individual feed, which gets slow when follower counts are huge."
+      },
+      {
+        "term": "缩略图",
+        "meaning": "从原始图片/视频派生出的小尺寸预览图。",
+        "meaningEn": "A thumbnail is a small preview image derived from the original photo or video."
+      }
+    ],
     "tags": [
       "interview-scenarios",
       "youtube",
@@ -1004,19 +1825,44 @@
     "topic": "system-design",
     "sub": "payment",
     "scenario": "支付系统中，基础 card authorization 同步很快，但 fraud detection、3DS、webhook 通知和延迟结算会持续较久。",
-    "q": "如何拆分同步/异步边界？",
+    "q": "如何拆分这个系统的同步/异步边界？",
     "options": [
-      "把必须立即返回的授权同步处理，把耗时校验/通知/结算放 async workers",
-      "所有支付步骤都同步卡住用户",
-      "所有支付步骤都异步，永远不返回初始状态",
-      "不记录 payment 状态"
+      "关键授权做成同步，风控/通知/结算放进 async workers",
+      "让支付的每一步都同步卡住用户，直到全部完成",
+      "让支付的每一步都异步，且永远不返回任何初始状态",
+      "完全不记录 payment 的处理状态"
+    ],
+    "options_en": [
+      "Keep the critical authorization synchronous, and move fraud checks, webhooks, and settlement to async workers.",
+      "Make every payment step synchronous and block the user until all of it completes.",
+      "Make every payment step async and never return any initial status at all.",
+      "Don't record the payment's processing status at all."
     ],
     "answer": [
       0
     ],
     "why": "支付经常混合同步和异步：用户需要及时知道初始状态，但后续风控、webhook 和 settlement 可以后台推进。",
     "why_en": "Payments often keep the immediate authorization synchronous while moving fraud checks, webhooks, and settlement to async workers.",
-    "whenOtherWins": "如果某一步影响是否可继续下单且必须强一致，就不能随意异步化。",
+    "whenOtherWins": "如果某一步影响用户是否可以继续下单且必须强一致，就不能随意把它异步化。",
+    "tradeoff": "关键授权同步保证即时反馈 vs 风控/结算异步换取可扩展性",
+    "termDefinitions": [
+      {
+        "term": "3DS",
+        "fullName": "3-D Secure",
+        "meaning": "银行卡在线支付的额外身份验证流程，常见于欧洲监管要求，会引入额外耗时。",
+        "meaningEn": "3DS, or 3-D Secure, is an extra identity-verification step for online card payments that adds processing time."
+      },
+      {
+        "term": "webhook",
+        "meaning": "系统间通过 HTTP 回调异步通知事件的机制，例如支付渠道通知结算结果。",
+        "meaningEn": "A webhook is an HTTP callback one system uses to asynchronously notify another of an event, like a settlement result."
+      },
+      {
+        "term": "结算",
+        "meaning": "支付渠道之间真正完成资金转移和对账的后续流程，通常比授权慢得多。",
+        "meaningEn": "Settlement is the later process where money actually moves between payment parties and gets reconciled, much slower than authorization."
+      }
+    ],
     "tags": [
       "payment",
       "sync-async-boundary",
@@ -1033,6 +1879,13 @@
     "text": "先{{接受并入队}}，立即返回{{job_id}}，再由{{worker pool}}异步处理，并更新{{job status}}。",
     "why": "这是该模式的核心闭环：快速确认、后台执行、状态可查。",
     "why_en": "The pattern is accept and enqueue, return a job ID, process in workers, and update job status.",
+    "termDefinitions": [
+      {
+        "term": "job status",
+        "meaning": "持久化记录任务当前处于 pending/processing/completed/failed 中哪个阶段的字段。",
+        "meaningEn": "Job status is the persisted field tracking which stage — pending, processing, completed, or failed — a task is in."
+      }
+    ],
     "tags": [
       "summary",
       "cloze",
@@ -1045,18 +1898,37 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "queue-down",
-    "q": "文章提到“如果 queue 短暂不可用，web server 仍可创建 pending job”，这个设计隐含需要什么？",
+    "scenario": "Queue 服务短暂宕机的几秒内，Web server 仍然校验通过请求并在数据库里创建了 status='pending' 的 job 记录，但没能把 job_id 推进 queue。",
+    "q": "这批“卡在 pending”的任务后续要怎样才能被处理到？",
     "options": [
-      "后续有机制把 pending jobs 补推到 queue 或由 poller 扫描 pending 状态",
-      "pending job 会自动被 worker 发现，无需任何机制",
-      "数据库不需要保存 job",
-      "用户永远不会提交任务"
+      "需要 poller 定期扫描 pending 记录，或做补偿逻辑把它们重新推入 queue",
+      "worker 会自动扫描数据库表，完全不需要额外机制",
+      "这些 pending 记录应该直接从数据库删除，让用户重新提交",
+      "queue 恢复正常后会自动找回所有丢失的 job_id"
+    ],
+    "options_en": [
+      "A poller needs to periodically scan pending records, or a compensation path re-enqueues them.",
+      "Workers will automatically scan the database table, no extra mechanism needed.",
+      "These pending records should just be deleted from the database, forcing users to resubmit.",
+      "Once the queue recovers, it will automatically recover all the lost job_ids on its own."
     ],
     "answer": [
       0
     ],
     "why": "如果接受请求和入队不是同一个原子动作，就要设计补偿路径。否则 pending job 可能永远不被处理。",
     "why_en": "If job creation can succeed while queueing fails, a poller or repair path must enqueue pending jobs later.",
+    "termDefinitions": [
+      {
+        "term": "poller",
+        "meaning": "定期扫描数据库、把该处理但还没入队的记录重新补推给 queue 的后台进程。",
+        "meaningEn": "A poller is a background process that periodically scans the database and re-enqueues records that should be processed but never made it to the queue."
+      },
+      {
+        "term": "原子动作",
+        "meaning": "要么全部成功要么全部失败、不会停在中间状态的一次操作。",
+        "meaningEn": "An atomic action either fully succeeds or fully fails, never leaving the system in a half-done state."
+      }
+    ],
     "tags": [
       "failure-handling",
       "queue-down",
@@ -1070,19 +1942,33 @@
     "topic": "system-design",
     "sub": "when-not-to-use",
     "scenario": "一个 API 查询用户 profile，耗时 30ms，用户必须立即看到结果。",
-    "q": "是否应该引入 queue + worker？",
+    "q": "这种场景是否应该引入 queue + worker？",
     "options": [
-      "不应该，同步请求更简单",
-      "必须引入 queue",
-      "必须返回 job_id",
-      "必须用 GPU worker"
+      "不应该，保持同步请求更简单、延迟也更低",
+      "必须无条件引入 queue",
+      "必须给这个请求返回 job_id",
+      "必须用 GPU worker 来处理这次查询"
+    ],
+    "options_en": [
+      "No — staying synchronous is simpler and has lower latency.",
+      "Yes, a queue must be introduced unconditionally.",
+      "Yes, this request must return a job_id.",
+      "Yes, a GPU worker must handle this lookup."
     ],
     "answer": [
       0
     ],
-    "why": "长任务模式是为“超过几秒、资源不匹配或失败恢复复杂”的工作服务。轻量同步读取不要过度设计。",
+    "why": "长任务模式是为“超过几秒、资源不匹配或失败恢复复杂”的工作服务。30ms 的轻量同步读取不该被过度设计。",
     "why_en": "A 30-millisecond profile read should remain synchronous because queueing would add needless complexity.",
-    "whenOtherWins": "如果 profile 请求背后触发昂贵 recomputation，可把 recomputation 异步化，但读取本身仍应快返。",
+    "whenOtherWins": "如果 profile 请求背后触发了昂贵的 recomputation，可以把 recomputation 异步化，但读取本身仍应快返。",
+    "tradeoff": "同步简单直接、延迟最低 vs 引入 queue+worker 换来的扩展性此处用不上",
+    "termDefinitions": [
+      {
+        "term": "过度设计",
+        "meaning": "为一个不需要额外复杂度的场景引入不必要的架构组件。",
+        "meaningEn": "Over-engineering is adding architectural components a scenario doesn't actually need."
+      }
+    ],
     "tags": [
       "when-not-to-use",
       "sync-api",
@@ -1097,9 +1983,9 @@
     "sub": "failure-lifecycle",
     "q": "按正确顺序排列一个失败 job 的处理生命周期：",
     "steps": [
-      "超过最大次数后移入 DLQ，并报警/等待调查",
-      "Worker 崩溃或任务抛错",
-      "队列根据 heartbeat/visibility timeout 重新投递",
+      "超过最大次数后移入 DLQ，并报警/等待人工调查",
+      "Worker 崩溃或任务执行抛错",
+      "队列根据 heartbeat/visibility timeout 判定并重新投递",
       "Worker 重试处理，job attempt count 增加"
     ],
     "answerOrder": [
@@ -1108,14 +1994,22 @@
       3,
       0
     ],
-    "why": "异步失败处理要可控：先重试 transient failure，持续失败才隔离到 DLQ。",
+    "why": "异步失败处理要可控：先重试 transient failure，持续失败才隔离到 DLQ，避免拖垮整个 worker 队伍。",
     "why_en": "A failed job is redelivered, retried with an attempt count, and eventually isolated in a dead letter queue.",
+    "tradeoff": "先重试挽救短暂故障 vs 超限后隔离进 DLQ 保护 worker",
+    "termDefinitions": [
+      {
+        "term": "attempt count",
+        "meaning": "记录一个 job 已经被重试过多少次的计数字段，用来判断是否该移入 DLQ。",
+        "meaningEn": "Attempt count tracks how many times a job has been retried, used to decide when it should move to the DLQ."
+      }
+    ],
+    "diagram": "flowchart TD\n  A[\"Run job\"] --> B[\"Fail\"]\n  B --> C[\"Record error\"]\n  C --> D[\"Retry with backoff\"]\n  D --> E[\"DLQ or success\"]",
     "tags": [
       "failure-lifecycle",
       "retry",
       "dlq"
-    ],
-    "diagram": "flowchart TD\n  A[\"Run job\"] --> B[\"Fail\"]\n  B --> C[\"Record error\"]\n  C --> D[\"Retry with backoff\"]\n  D --> E[\"DLQ or success\"]"
+    ]
   },
   {
     "id": "sd-patterns-long-running-tasks-042",
@@ -1123,20 +2017,46 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "notification",
-    "scenario": "后台任务完成后，你希望用户不用手动刷新就收到结果。",
-    "q": "可以使用哪些通知方式？",
+    "scenario": "后台任务完成后，你希望用户不用手动刷新页面就能收到结果。",
+    "q": "可以使用哪些方式主动通知用户？",
     "options": [
-      "Email、push notification 或 WebSocket/SSE 实时更新",
-      "只更新服务器日志",
-      "只把结果放在 worker 内存",
-      "让用户猜测完成时间"
+      "Email、push，或 WebSocket/SSE 实时推送",
+      "只把结果写进服务器日志，不告诉用户",
+      "只把结果存在 worker 进程的内存里",
+      "什么都不做，让用户自己猜测完成时间"
+    ],
+    "options_en": [
+      "Email, push, or a realtime WebSocket/SSE update.",
+      "Only write the result to server logs and never tell the user.",
+      "Only keep the result in the worker process's memory.",
+      "Do nothing and let the user guess when it's done."
     ],
     "answer": [
       0
     ],
     "why": "异步任务完成和用户页面不在同一个请求里，需要额外通知或状态查询机制。实时需求高时可接入 realtime updates 模式。",
     "why_en": "Async job completion should notify users through email, push, or realtime updates, or be visible through status polling.",
-    "whenOtherWins": "低优先级任务可只提供状态页和邮件，不必实时推送。",
+    "whenOtherWins": "低优先级任务可只提供状态页和邮件，不必上实时推送。",
+    "tradeoff": "主动实时推送体验好 vs 只提供状态页更轻量但要用户主动查",
+    "optionMeanings": [
+      "三种典型主动通知渠道，覆盖不同紧急度。",
+      "结果只在后端可见，用户无从得知。",
+      "内存易失，进程重启或崩溃后结果就没了。",
+      "完全没有通知机制，体验最差。"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "服务器推送事件，服务器通过一条长连接单向持续推送更新给浏览器。",
+        "meaningEn": "SSE, or Server-Sent Events, lets a server continuously push updates to the browser over one long-lived connection."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "允许服务器和浏览器保持长连接、双向实时推送消息的协议。",
+        "meaningEn": "WebSocket is a protocol that keeps a persistent, two-way connection open between server and browser for realtime pushes."
+      }
+    ],
     "tags": [
       "notification",
       "realtime-updates",
@@ -1149,12 +2069,18 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "interview-depth",
-    "q": "面试里主动提出该模式时，应准备回答哪些 deep dive？（多选）",
+    "q": "面试里主动提出 long-running task 模式时，应准备回答哪些 deep dive？（多选）",
     "options": [
-      "worker 崩溃如何重试",
-      "poison message 如何进 DLQ",
+      "worker 崩溃后如何被重新分配和重试",
+      "poison message 如何最终被隔离进 DLQ",
       "重复点击如何用 idempotency key 去重",
-      "queue 堆积如何 backpressure/autoscale"
+      "queue 堆积时如何 backpressure/autoscale"
+    ],
+    "options_en": [
+      "How a crashed worker's job gets reassigned and retried.",
+      "How a poison message eventually gets isolated in the DLQ.",
+      "How repeated clicks get deduplicated with an idempotency key.",
+      "How to apply backpressure and autoscale when the queue backs up."
     ],
     "answer": [
       0,
@@ -1176,18 +2102,51 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "long-running-vs-workflow",
-    "q": "Long-running task queue 和 workflow orchestrator 的边界是什么？",
+    "q": "Long-running task queue 和 workflow orchestrator 的边界大致在哪？",
     "options": [
-      "单步或简单线性异步任务用 queue + worker；复杂分支、并行和补偿用 workflow system",
-      "所有异步任务都必须上 Temporal",
-      "queue 不能处理任何任务",
-      "workflow system 只能处理同步请求"
+      "单步/线性异步用 queue+worker；复杂分支/并行用 orchestrator",
+      "所有异步任务都必须无条件上 Temporal 这类系统",
+      "queue+worker 这套组合完全无法处理任何任务",
+      "workflow orchestrator 只能用来处理同步 HTTP 请求"
+    ],
+    "options_en": [
+      "Single-step or linear async work uses queue plus worker; complex branching or parallelism uses an orchestrator.",
+      "Every async task must unconditionally be built on something like Temporal.",
+      "The queue-plus-worker combo can't handle any task at all.",
+      "A workflow orchestrator can only be used for synchronous HTTP requests."
     ],
     "answer": [
       0
     ],
     "why": "不要为了一个单步任务引入工作流引擎；也不要把复杂状态机硬塞进 workers 互相排队的 spaghetti。",
     "why_en": "Use queues for simple async work and workflow systems for complex branching, retries, and compensation.",
+    "tradeoff": "queue+worker 简单直接 vs orchestrator 换取分支/并行可视化能力",
+    "termDefinitions": [
+      {
+        "term": "补偿",
+        "meaning": "工作流某一步失败后，撤销/修正之前已完成步骤造成的影响的逻辑。",
+        "meaningEn": "Compensation is the logic that undoes or corrects the effects of earlier completed steps after a later step fails."
+      }
+    ],
+    "table": {
+      "headers": [
+        "Approach",
+        "Best for",
+        "Visibility"
+      ],
+      "rows": [
+        [
+          "Queue+worker",
+          "single async step",
+          "logs only"
+        ],
+        [
+          "Orchestrator",
+          "branch/parallel steps",
+          "built-in state UI"
+        ]
+      ]
+    },
     "tags": [
       "workflow",
       "queue",
@@ -1203,7 +2162,7 @@
     "q": "按正确顺序排列面试中引入 long-running tasks 的表达：",
     "steps": [
       "说明用户体验：返回 job_id，支持状态查询和完成通知",
-      "指出该操作会超过同步请求可接受时长或资源不适合 Web tier",
+      "指出该操作会超过同步请求可接受时长，或资源不适合放 Web tier",
       "提出 queue + worker pool，Web server 快速入队",
       "补充失败处理：retry、DLQ、idempotency、backpressure"
     ],
@@ -1215,6 +2174,7 @@
     ],
     "why": "先证明为什么需要异步，再给架构和用户体验，最后主动处理生产 failure modes。",
     "why_en": "A strong interview answer motivates async processing, proposes queue workers, explains UX, and covers failure modes.",
+    "tradeoff": "先论证异步必要性再给架构 vs 直接上架构显得想当然",
     "tags": [
       "interview-answer",
       "decision-chain",

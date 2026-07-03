@@ -76,6 +76,9 @@ for (const rel of files) {
     if (!c.topic) err(base, id, 'missing topic');
     if (!c.sub) err(base, id, 'missing sub');
     if (!c.q) err(base, id, 'missing q');
+    if (c.q_en !== undefined && typeof c.q_en !== 'string') err(base, id, 'q_en must be a string');
+    if (c.scenario_en !== undefined && typeof c.scenario_en !== 'string') err(base, id, 'scenario_en must be a string');
+    if (c.text_en !== undefined && typeof c.text_en !== 'string') err(base, id, 'text_en must be a string');
     if (!c.why) err(base, id, 'missing why');
     if (!c.why_en) err(base, id, 'missing why_en');
     for (const k of LEGACY) if (k in c) err(base, id, `legacy field present: ${k}`);

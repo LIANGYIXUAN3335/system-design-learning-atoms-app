@@ -6,22 +6,91 @@
     "topic": "system-design",
     "sub": "replication",
     "scenario": "商品详情页：读远多于写，写很少，用户能容忍读到略微陈旧的数据（比如库存数字晚几百毫秒）。",
+    "scenario_en": "A product detail page: reads vastly outnumber writes, writes are rare, and users can tolerate slightly stale data, such as an inventory count that is a few hundred milliseconds old.",
     "q": "扩展读性能最合适的做法是？",
+    "q_en": "What is the best way to scale read throughput for this page?",
     "options": [
       "加只读从库（主从复制，异步）",
       "把所有读写都压到一台更大的主库",
       "给每个读请求加分布式锁",
       "关闭复制只留一台机器"
     ],
+    "options_en": [
+      "Add read-only followers via asynchronous leader-follower replication.",
+      "Push all reads and writes onto one bigger leader database.",
+      "Wrap every read request in a distributed lock.",
+      "Turn off replication and run a single machine."
+    ],
     "answer": [
       0
     ],
     "why": "读多写少、可容忍轻微陈旧，正是主从复制的典型场景：写走主库，读分摊到多个异步复制的从库，读吞吐随从库数量扩展。",
-    "why_en": "A read-heavy workload that tolerates slight staleness is the classic case for leader-follower replication: writes go to the leader and reads fan out to asynchronously-replicated followers.",
-    "whenOtherWins": "若某用户必须立刻读到自己刚写的值（read-your-writes），就把该用户的读临时路由到主库——决定因素是「能否容忍复制延迟」。",
+    "why_en": "This workload is read-heavy and tolerates staleness, so scale reads by adding asynchronously-replicated followers behind the leader.",
+    "tradeoff": "读吞吐水平扩展 vs 复制延迟带来的短暂陈旧读",
+    "whenOtherWins": "若某用户必须立刻读到自己刚写的值（read-your-writes），就把该用户的读临时路由到主库——决定因素是能否容忍复制延迟。",
     "diagram": "flowchart LR\n  C[客户端] -->|写| L[(主库 Leader)]\n  C -->|读| F1[(从库 Follower)]\n  C -->|读| F2[(从库 Follower)]\n  L -.->|异步复制| F1\n  L -.->|异步复制| F2",
+    "optionMeanings": [
+      "为主库配一个或多个异步复制的只读从库。",
+      "不做水平扩展，靠单机纵向加资源顶读写。",
+      "读请求前先抢一把跨节点互斥锁再查询。",
+      "去掉从库，读写全部压回唯一一台机器。"
+    ],
+    "optionScenarioImpacts": [
+      "读请求分摊到多个从库，吞吐随从库数量增长。",
+      "单机纵向扩容有硬件上限，读写还会互相抢资源。",
+      "锁只解决互斥写冲突，不提升读吞吐，反而拖慢并发读。",
+      "没有从库分担，读写全部压在一台机器，扩展性最差。"
+    ],
+    "optionDirectness": [
+      "读多写少且能容忍复制延迟时，这是默认起手方案。",
+      "只有读写量都很小、纵向加机器就够用时才合理。",
+      "分布式锁用于互斥写冲突，不是读扩展手段。",
+      "只有完全不需要高可用和读扩展时才会这样做。"
+    ],
+    "codeSample": "# App picks a follower for reads, the leader for writes\nreadDsn  = \"postgresql://app@replica1.db.internal/shop?target_session_attrs=read-only\"\nwriteDsn = \"postgresql://app@primary.db.internal/shop\"\n\n# target_session_attrs=read-only: libpq refuses this host if it\n# turns out to be the primary, and tries the next replica instead.",
+    "lang": "text",
     "tags": [
-      "replication"
+      "replication",
+      "read-scaling",
+      "leader-follower"
+    ],
+    "termDefinitions": [
+      {
+        "term": "主库",
+        "fullName": "Leader / Primary",
+        "meaning": "承担写入的数据库节点，所有写请求都先到这里。",
+        "meaningEn": "The leader, or primary, is the database node that accepts all writes."
+      },
+      {
+        "term": "从库",
+        "fullName": "Follower / Replica",
+        "meaning": "从主库复制数据的只读副本节点，用来分担读流量。",
+        "meaningEn": "A follower, or replica, is a read-only node that copies data from the leader to absorb read traffic."
+      },
+      {
+        "term": "主从复制",
+        "fullName": "Leader-Follower Replication",
+        "meaning": "写只发给主库，主库再把变更复制给一个或多个从库的架构。",
+        "meaningEn": "Leader-follower replication sends writes only to the leader, which then propagates the changes to one or more followers."
+      },
+      {
+        "term": "异步复制",
+        "fullName": "Asynchronous Replication",
+        "meaning": "主库确认写成功后才把变更发给从库，从库可能暂时落后。",
+        "meaningEn": "Asynchronous replication acknowledges a write before forwarding it to followers, so a follower can briefly lag behind."
+      },
+      {
+        "term": "分布式锁",
+        "fullName": "Distributed Lock",
+        "meaning": "跨多个节点或进程互斥访问共享资源的协调机制。",
+        "meaningEn": "A distributed lock coordinates mutually exclusive access to a shared resource across multiple nodes or processes."
+      },
+      {
+        "term": "read-your-writes",
+        "fullName": "Read-Your-Writes Consistency",
+        "meaning": "保证一个用户写入后，自己马上能读到刚写的值。",
+        "meaningEn": "Read-your-writes consistency guarantees a user immediately sees the value they just wrote."
+      }
     ],
     "origin": "seed"
   },
@@ -31,44 +100,94 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "replication",
+    "scenario": "评估把从库复制配成同步还是异步：主库要不要等从库确认收到写入，才能把这次写算成功。",
+    "scenario_en": "Deciding whether follower replication should be synchronous or asynchronous: should the leader wait for a follower's acknowledgment before a write counts as done?",
     "q": "同步复制 vs 异步复制，最主要的取舍是？",
+    "q_en": "Synchronous vs asynchronous replication — what is the core tradeoff?",
     "options": [
-      "同步更快但会丢数据",
-      "异步保证零丢失但更慢",
-      "同步不丢已确认的写但写更慢；异步写更快但可能丢最近的写",
-      "两者完全等价"
+      "同步复制更快但可能丢数据",
+      "异步复制保证零丢失但更慢",
+      "同步更慢更安全，异步更快可能丢写",
+      "两者延迟和丢失风险完全相同"
+    ],
+    "options_en": [
+      "Synchronous replication is faster but may lose data.",
+      "Asynchronous replication guarantees zero loss but is slower.",
+      "Synchronous is slower but safer; asynchronous is faster but may lose writes.",
+      "Both have identical latency and data-loss risk."
     ],
     "answer": [
       2
     ],
-    "why": "同步复制等从库确认才算写成功——主库挂了也不丢已确认的写，代价是写延迟高、从库慢会拖累写。异步不等，写快、可用性好，但主库崩溃可能丢掉还没复制出去的写。",
-    "why_en": "Synchronous replication waits for a follower to acknowledge, so no confirmed write is lost on failover, at the cost of higher write latency; asynchronous is faster and more available but can lose the most recent writes.",
+    "why": "同步复制等从库确认才算写成功，主库挂了也不丢已确认的写，代价是写延迟高；异步不等确认，写更快、可用性更好，但主库崩溃可能丢掉还没复制出去的写。",
+    "why_en": "Synchronous replication trades write latency for safety since no confirmed write is lost, while asynchronous is faster but can lose the newest writes on a leader crash.",
+    "tradeoff": "写延迟与可用性 vs 已确认写的数据安全",
     "table": {
       "headers": [
-        "维度",
-        "同步复制",
-        "异步复制"
+        "复制方式",
+        "数据安全",
+        "写延迟",
+        "可用性影响"
       ],
       "rows": [
         [
-          "数据安全",
-          "主库挂了不丢已确认的写",
-          "可能丢最近未复制的写"
+          "同步复制",
+          "不丢已确认写",
+          "高，等从库确认",
+          "从库慢会拖累写"
         ],
         [
-          "写延迟",
-          "高（等从库确认）",
-          "低（不等）"
-        ],
-        [
-          "可用性",
-          "从库慢会拖累写",
-          "主库可独立提交"
+          "异步复制",
+          "可能丢最近写",
+          "低，不等确认",
+          "从库慢不影响写"
         ]
       ]
     },
+    "codeSample": "# postgresql.conf on the leader\nsynchronous_commit = on\nsynchronous_standby_names = 'ANY 1 (replica1, replica2)'\n\n# A write only returns success once >=1 listed standby confirms it.\n# Set synchronous_standby_names = '' to fall back to fully async.",
+    "lang": "ini",
+    "optionMeanings": [
+      "把同步复制的安全代价和异步复制的速度代价说反了。",
+      "把异步复制说成绝不丢数据，忽略了它的核心风险。",
+      "同步复制换写延迟保安全，异步复制换速度担丢写风险。",
+      "假设两种复制方式在延迟和丢失风险上没有差别。"
+    ],
+    "optionScenarioImpacts": [
+      "若照此设计，会为了求快选异步却误以为它更安全。",
+      "若照此设计，会低估异步复制在主库崩溃时的丢写风险。",
+      "能按约束选型：账务写偏同步，日志和埋点偏异步。",
+      "会让人误以为复制方式选哪个都无所谓。"
+    ],
+    "optionDirectness": [
+      "同步复制的代价是写变慢而不是丢数据，方向说反了。",
+      "异步复制会丢最近未复制的写，不是零丢失，方向说反了。",
+      "需要在数据安全和写延迟之间做选择时，这句话保留了两边代价。",
+      "两者在延迟和丢失风险上有明确差异，这个说法不成立。"
+    ],
     "tags": [
-      "replication"
+      "replication",
+      "contrast",
+      "consistency"
+    ],
+    "termDefinitions": [
+      {
+        "term": "同步复制",
+        "fullName": "Synchronous Replication",
+        "meaning": "主库要等至少一个从库确认收到写入，才把这次写算成功。",
+        "meaningEn": "Synchronous replication waits for at least one follower to acknowledge a write before it is considered successful."
+      },
+      {
+        "term": "异步复制",
+        "fullName": "Asynchronous Replication",
+        "meaning": "主库写完立刻返回成功，再把变更发给从库，不等确认。",
+        "meaningEn": "Asynchronous replication returns success immediately and forwards the change to followers without waiting for an acknowledgment."
+      },
+      {
+        "term": "从库确认",
+        "fullName": "Follower Acknowledgment",
+        "meaning": "从库收到并应用了复制的写入后，回复主库的确认信号。",
+        "meaningEn": "A follower acknowledgment is the confirmation a replica sends back after it receives and applies a replicated write."
+      }
     ],
     "origin": "seed"
   },
@@ -79,22 +198,83 @@
     "topic": "system-design",
     "sub": "replication-lag",
     "scenario": "系统用主从异步复制。某用户刚在主库改了自己的资料。",
+    "scenario_en": "The system uses asynchronous leader-follower replication. A user just updated their profile on the leader.",
     "q": "紧接着他从某个从库读自己的资料，最可能发生什么？",
+    "q_en": "Right after that, he reads his profile from a follower — what most likely happens?",
     "options": [
       "一定读到刚写的新值",
       "可能读到旧值（复制还没同步到）",
       "读操作报错",
       "主库自动回滚这次写"
     ],
+    "options_en": [
+      "He is guaranteed to see the value he just wrote.",
+      "He may see the old value, because replication has not caught up yet.",
+      "The read fails with an error.",
+      "The leader automatically rolls back the write."
+    ],
     "answer": [
       1
     ],
-    "why": "异步复制有延迟，写到主库后从库需要时间同步；这段窗口内读从库会读到旧值，即 read-your-writes 被破坏。缓解：写后一段时间把该用户的读路由到主库，或让用户读自己的写走主库。",
-    "why_en": "Async replication has lag, so a follower read right after a write can return a stale value—read-your-writes is violated. Mitigate by routing that user's reads to the leader for a short window.",
+    "why": "异步复制有延迟，写到主库后从库需要时间赶上；这段窗口内读从库可能拿到旧值，即 read-your-writes 被打破。缓解：写后短时间把该用户的读路由回主库。",
+    "why_en": "Because asynchronous replication lags, a follower read right after a write can return a stale value, breaking read-your-writes for a short window.",
     "diagram": "sequenceDiagram\n  participant C as 客户端\n  participant L as 主库\n  participant F as 从库\n  C->>L: 写 资料=新\n  L-->>F: 异步复制 有延迟\n  C->>F: 立刻读 资料\n  F-->>C: 返回旧值",
+    "codeSample": "-- Run on a follower to see how far behind it is\nSELECT now() - pg_last_xact_replay_timestamp() AS replica_lag;\n-- lag > 0 means this follower may still return the pre-write value",
+    "lang": "sql",
+    "optionMeanings": [
+      "假设复制是同步或瞬时完成，从库立刻和主库一致。",
+      "认识到异步复制有延迟窗口，从库可能还没赶上。",
+      "假设复制延迟会让读请求直接报错。",
+      "假设主库会因为读端异常自动撤销刚才的写。"
+    ],
+    "optionScenarioImpacts": [
+      "会让人误以为写后自己一定能立刻读到最新值。",
+      "能解释为什么要做黏性路由或短暂读主库来缓解陈旧读。",
+      "会让人以为陈旧读会被系统拦下，其实并不会报错。",
+      "会让人误以为数据一致性问题会被系统自动修复。"
+    ],
+    "optionDirectness": [
+      "只有同步复制或读写都打主库时才成立，这里是异步。",
+      "复制延迟窗口内从库读到旧值，这是异步复制的直接后果。",
+      "复制延迟不会让读请求失败，只会返回旧数据。",
+      "复制延迟不影响主库上已经提交的写，不会被回滚。"
+    ],
     "tags": [
       "replication",
-      "replication-lag"
+      "replication-lag",
+      "read-your-writes"
+    ],
+    "termDefinitions": [
+      {
+        "term": "异步复制",
+        "fullName": "Asynchronous Replication",
+        "meaning": "主库确认写成功后才把变更发给从库，从库可能暂时落后。",
+        "meaningEn": "Asynchronous replication acknowledges a write before forwarding it to followers, so a follower can briefly lag behind."
+      },
+      {
+        "term": "复制延迟",
+        "fullName": "Replication Lag",
+        "meaning": "从库落后主库的时间差，差值越大陈旧读风险越高。",
+        "meaningEn": "Replication lag is how far behind the leader a follower is; the larger it is, the higher the risk of stale reads."
+      },
+      {
+        "term": "read-your-writes",
+        "fullName": "Read-Your-Writes Consistency",
+        "meaning": "保证一个用户写入后，自己马上能读到刚写的值。",
+        "meaningEn": "Read-your-writes consistency guarantees a user immediately sees the value they just wrote."
+      },
+      {
+        "term": "从库",
+        "fullName": "Follower / Replica",
+        "meaning": "从主库复制数据的只读副本节点。",
+        "meaningEn": "A follower, or replica, is a read-only node that copies data from the leader."
+      },
+      {
+        "term": "主库",
+        "fullName": "Leader / Primary",
+        "meaning": "承担写入的数据库节点，所有写请求都先到这里。",
+        "meaningEn": "The leader, or primary, is the database node that accepts all writes."
+      }
     ],
     "origin": "seed"
   },
@@ -105,18 +285,28 @@
     "topic": "system-design",
     "sub": "quorum",
     "scenario": "无主(去中心化)存储，N=3 个副本，想在不引入单点主库的前提下，尽量保证读到最新写入。",
+    "scenario_en": "A leaderless (decentralized) store with N=3 replicas — you want to maximize the chance of reading the latest write without introducing a single-leader bottleneck.",
     "q": "读写法定数(quorum)该怎么配？",
+    "q_en": "How should you configure the read/write quorum here?",
     "options": [
       "W=1, R=1",
-      "W=2, R=2（使 W+R>N）",
       "W=1, R=1 并关闭复制",
-      "随机，不用管 W 和 R"
+      "随机，不用管 W 和 R",
+      "W=2, R=2（使 W+R>N）"
+    ],
+    "options_en": [
+      "W=1, R=1.",
+      "W=1, R=1, and turn off replication.",
+      "Pick W and R randomly, it does not matter.",
+      "W=2, R=2, so that W+R > N."
     ],
     "answer": [
-      1
+      3
     ],
-    "why": "无主复制用法定数保证一致性：只要写法定数 W + 读法定数 R > N，读集合与最近的写集合必然相交，就能读到最新值。N=3 时 W=R=2 即满足。",
-    "why_en": "In leaderless replication a read reflects the latest write whenever W + R > N, because the read and write quorums must overlap; for N=3, W=R=2 works.",
+    "why": "无主复制用 W+R>N 让读写法定数必然相交；在同一副本集合且读端能选最新版本时，这个交集会把最近写入带回读路径。N=3 时 W=R=2 是最小过半配置。",
+    "why_en": "Use W + R > N in leaderless replication so read and write quorums overlap; with N=3, W=R=2 is the smallest majority pair.",
+    "tradeoff": "更强的读新鲜度保证 vs 更高的读写延迟和副本压力",
+    "whenOtherWins": "若只要最终一致、不追求每次读到最新写，W=R=1 延迟最低；要更强安全可把 W 提到 N。",
     "table": {
       "headers": [
         "N",
@@ -149,9 +339,68 @@
         ]
       ]
     },
+    "codeSample": "-- Cassandra: N=3 replicas, ask for quorum on both sides\nCONSISTENCY QUORUM;\nINSERT INTO users (id, name) VALUES (42, 'Ada');\nSELECT * FROM users WHERE id = 42;\n-- QUORUM on N=3 means W=2 and R=2, so W+R(4) > N(3)",
+    "lang": "cql",
+    "optionMeanings": [
+      "只要求一个副本确认写、一个副本响应读，法定数最弱。",
+      "在最弱法定数基础上直接停止副本间同步。",
+      "完全不设定量化的读写法定数关系。",
+      "让写法定数和读法定数都过半，确保两者交集非空。"
+    ],
+    "optionScenarioImpacts": [
+      "W+R=2≤N=3，读写集合可能不重叠，易读到旧值。",
+      "关闭复制后从库根本拿不到任何写入，数据完全不同步。",
+      "没有约束，读到最新值全凭运气，无法给出一致性保证。",
+      "W+R=4>N=3，读写集合必然相交，能读到最新值。"
+    ],
+    "optionDirectness": [
+      "只有能接受经常读到旧值时才可用，不满足题目要求。",
+      "关闭复制等于放弃多副本本身，违背了本题的前提。",
+      "没有法定数规则时无法保证一致性，不满足题目要求。",
+      "N=3 时，这是满足 W+R>N 的最小配置。"
+    ],
     "tags": [
       "replication",
-      "quorum"
+      "quorum",
+      "leaderless"
+    ],
+    "termDefinitions": [
+      {
+        "term": "N",
+        "fullName": "Total Replica Count",
+        "meaning": "副本集合的总节点数。",
+        "meaningEn": "N is the total number of replica nodes in the set."
+      },
+      {
+        "term": "W",
+        "fullName": "Write Quorum",
+        "meaning": "一次写操作需要等待确认的最小副本数。",
+        "meaningEn": "W, the write quorum, is the minimum number of replicas that must acknowledge a write."
+      },
+      {
+        "term": "R",
+        "fullName": "Read Quorum",
+        "meaning": "一次读操作需要查询的最小副本数。",
+        "meaningEn": "R, the read quorum, is the minimum number of replicas a read must query."
+      },
+      {
+        "term": "quorum / 法定数",
+        "fullName": "Quorum",
+        "meaning": "读或写操作需要联系并得到响应的最小副本数量。",
+        "meaningEn": "A quorum is the minimum number of replicas that must respond to a read or write for it to succeed."
+      },
+      {
+        "term": "版本/时间戳",
+        "fullName": "Version / Timestamp",
+        "meaning": "副本返回多个值时，用来判断哪个值更新的元数据。",
+        "meaningEn": "A version or timestamp is metadata used to choose the newest value when replicas return multiple values."
+      },
+      {
+        "term": "无主复制",
+        "fullName": "Leaderless Replication",
+        "meaning": "没有固定主库，任意副本都能接受读写请求的复制架构。",
+        "meaningEn": "Leaderless replication has no fixed leader; any replica can accept reads and writes."
+      }
     ],
     "origin": "seed"
   },
@@ -162,12 +411,53 @@
     "topic": "system-design",
     "sub": "quorum",
     "q": "补全无主复制的法定数不等式：",
+    "q_en": "Complete the leaderless-replication quorum inequality.",
     "text": "在同一副本集合、无并发冲突且读端能解析版本时，要让读写 quorum 相交，需满足 {{W}} + {{R}} > {{N}}。",
-    "why": "W+R>N 保证读法定数和写法定数重叠；但“读到最新值”还依赖同一副本集合、无 sloppy quorum、无并发写，以及读端用版本/时间戳选择最新值。",
-    "why_en": "The quorum inequality W + R > N guarantees overlap between read and write sets, but freshness also depends on the same replica set, no sloppy quorum or concurrent conflicts, and version resolution.",
+    "text_en": "With the same replica set, no concurrent conflicts, and a reader that can resolve versions, overlapping read/write quorums require {{W}} + {{R}} > {{N}}.",
+    "why": "W+R>N 是选 W/R 时的检查式：它保证读法定数和写法定数重叠。读到最新还依赖同一副本集合、无 sloppy quorum、无并发写，并由读端用版本/时间戳挑最新值。",
+    "why_en": "Use W + R > N as the quorum check: it forces overlap, but freshness still needs a stable replica set, no sloppy quorum, and version resolution.",
     "tags": [
       "replication",
-      "quorum"
+      "quorum",
+      "formula"
+    ],
+    "termDefinitions": [
+      {
+        "term": "N",
+        "fullName": "Total Replica Count",
+        "meaning": "副本集合的总节点数。",
+        "meaningEn": "N is the total number of replica nodes in the set."
+      },
+      {
+        "term": "W",
+        "fullName": "Write Quorum",
+        "meaning": "一次写操作需要等待确认的最小副本数。",
+        "meaningEn": "W, the write quorum, is the minimum number of replicas that must acknowledge a write."
+      },
+      {
+        "term": "R",
+        "fullName": "Read Quorum",
+        "meaning": "一次读操作需要查询的最小副本数。",
+        "meaningEn": "R, the read quorum, is the minimum number of replicas a read must query."
+      },
+      {
+        "term": "quorum / 法定数",
+        "fullName": "Quorum",
+        "meaning": "读或写操作需要联系并得到响应的最小副本数量。",
+        "meaningEn": "A quorum is the minimum number of replicas that must respond to a read or write for it to succeed."
+      },
+      {
+        "term": "sloppy quorum",
+        "fullName": "Sloppy Quorum",
+        "meaning": "网络分区时把写临时接受到集合外的副本上，牺牲严格法定数换可用性。",
+        "meaningEn": "A sloppy quorum accepts writes on replicas outside the usual set during a network partition, trading strict quorum guarantees for availability."
+      },
+      {
+        "term": "版本/时间戳",
+        "fullName": "Version / Timestamp",
+        "meaning": "副本返回多个值时，用来判断哪个值更新的元数据。",
+        "meaningEn": "A version or timestamp is metadata used to choose the newest value when replicas return multiple values."
+      }
     ],
     "origin": "seed"
   },
@@ -178,22 +468,89 @@
     "topic": "system-design",
     "sub": "failover",
     "scenario": "主从架构里，主库突然宕机。",
+    "scenario_en": "In a leader-follower setup, the leader suddenly goes down.",
     "q": "系统怎样恢复可写？",
+    "q_en": "How does the system recover the ability to accept writes?",
     "options": [
-      "永远无法再写",
-      "通过故障转移(failover)：从库经选举产生新主库",
-      "客户端直接改写从库文件",
-      "自动退化成无主模式"
+      "系统永久无法再接受写入",
+      "从库选举产生新主库接管写入",
+      "客户端直接改写从库磁盘文件",
+      "系统自动退化为无主复制模式"
+    ],
+    "options_en": [
+      "The system permanently loses the ability to accept writes.",
+      "The followers elect a new leader, which takes over writes.",
+      "Clients directly edit a follower's data files on disk.",
+      "The system automatically falls back to leaderless replication."
     ],
     "answer": [
       1
     ],
-    "why": "主库宕机后进入故障转移：从库检测到主库失联 → 发起/参与选举 → 胜出者成为新主库并接管写入。代价是选举窗口内短暂不可写，且异步复制下可能丢掉老主库还没复制出去的写。",
-    "why_en": "On leader failure the system fails over: a follower detects the outage, an election runs, and the winner becomes the new leader—at the cost of a brief write outage and possible loss of un-replicated writes.",
+    "why": "主库宕机后进入故障转移：从库检测到主库失联→发起/参与选举→胜出者成为新主库并接管写入。代价是选举窗口内短暂不可写，异步复制下还可能丢掉老主库没复制出去的写。",
+    "why_en": "On leader failure, followers elect a new leader to restore writes after a brief outage, but async replication can lose unreplicated writes.",
     "diagram": "stateDiagram-v2\n  [*] --> Follower\n  Follower --> Candidate: 检测到主库失联\n  Candidate --> Leader: 赢得选举\n  Candidate --> Follower: 收到更高任期\n  Leader --> Follower: 发现更高任期",
+    "codeSample": "# Redis Sentinel manually triggering / observing failover\nSENTINEL failover mymaster\n# Sentinels promote a replica to master once quorum sentinels agree\n# the old master is down; clients reconnect via\n# SENTINEL get-master-addr-by-name mymaster",
+    "lang": "redis",
+    "optionMeanings": [
+      "假设主库故障是不可恢复的永久性事件。",
+      "描述故障转移的标准流程：选举产生新主库。",
+      "假设可以绕过复制协议，手工改从库文件。",
+      "假设系统会切换成没有主库角色的架构。"
+    ],
+    "optionScenarioImpacts": [
+      "会让人误以为主从架构没有自愈能力。",
+      "能解释系统如何在选举窗口后恢复写入。",
+      "手工改文件会破坏复制一致性，出现两份不同的数据。",
+      "混淆了故障转移和架构类型切换，两者是两回事。"
+    ],
+    "optionDirectness": [
+      "主从架构标准都带故障转移机制，不会永久瘫痪。",
+      "这是主从复制故障转移的标准恢复路径。",
+      "正常运维不会让客户端直接碰复制的数据文件。",
+      "故障转移只是换一个主库，不会改变复制架构本身。"
+    ],
     "tags": [
       "replication",
-      "failover"
+      "failover",
+      "leader-election"
+    ],
+    "termDefinitions": [
+      {
+        "term": "主库",
+        "fullName": "Leader / Primary",
+        "meaning": "承担写入的数据库节点，所有写请求都先到这里。",
+        "meaningEn": "The leader, or primary, is the database node that accepts all writes."
+      },
+      {
+        "term": "从库",
+        "fullName": "Follower / Replica",
+        "meaning": "从主库复制数据的只读副本节点。",
+        "meaningEn": "A follower, or replica, is a read-only node that copies data from the leader."
+      },
+      {
+        "term": "故障转移",
+        "fullName": "Failover",
+        "meaning": "主节点不可用时，系统自动或人工把某个从节点提升为新主节点的过程。",
+        "meaningEn": "Failover is the process of promoting a follower to be the new leader when the current leader becomes unavailable."
+      },
+      {
+        "term": "选举",
+        "fullName": "Leader Election",
+        "meaning": "多个从库之间协商产生一个新主库的协议过程。",
+        "meaningEn": "Leader election is the protocol followers run to agree on which one becomes the new leader."
+      },
+      {
+        "term": "Redis Sentinel",
+        "fullName": "Redis Sentinel",
+        "meaning": "Redis 的高可用组件，负责监控主库、达成故障判断并触发主从切换。",
+        "meaningEn": "Redis Sentinel is Redis's high-availability component that monitors the master, agrees on failure, and triggers failover."
+      },
+      {
+        "term": "quorum / 法定数",
+        "fullName": "Quorum",
+        "meaning": "在故障转移里，认定主库失效所需的最少 Sentinel 同意数量。",
+        "meaningEn": "In failover, a quorum is the minimum number of Sentinels that must agree the leader is down."
+      }
     ],
     "origin": "seed"
   }

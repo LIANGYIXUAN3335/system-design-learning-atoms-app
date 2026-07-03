@@ -34,6 +34,7 @@ const NUMBER_RE =
   /(\d[\d,.]*\s*(万|亿|k|m|b|ms|s|秒|分钟|小时|天|年|DAU|QPS|RPS|TPS|req\/s|RCU|WCU|KB|MB|GB|TB|%|倍)|[一二三四五六七八九十百千万亿]+\s*(个|次|天|年|秒|分钟|小时))/i;
 const NUMERIC_CHOICE_RE =
   /^(约\s*)?(\d[\d,.]*|[一二三四五六七八九十百千万亿]+)\s*(万|亿|k|m|b|ms|s|秒|分钟|小时|天|年|DAU|QPS|RPS|TPS|req\/s|RCU|WCU|KB|MB|GB|TB|%|个|次|条|行|用户|商品)?/i;
+const CLOZE_RE = /\{\{([^}]+)\}\}/g;
 
 /**
  * Length budgets (SuperMemo minimum information principle: short cards are
@@ -50,7 +51,7 @@ const BUDGET = {
 
 /** zero-information filler the runtime/enrich templates tend to emit */
 const TEMPLATE_FILLER_RE =
-  /(代表一种可以拿来比较的判断路径|意味着你认为当前比较维度上|把概念边界划到|这道题里的(候选方案|对比对象|概念判断)|一种可以.*的(思路|路径)而已)/;
+  /(代表一种可以拿来比较的判断路径|意味着你认为当前比较维度上|把概念边界划到|这道题里的(候选方案|对比对象|概念判断)|一种可以.*的(思路|路径)而已|选择它会把(排查|方案|设计|解释|问题)?.{0,18}带向|把排查带向|直接命中题目的关键约束|最直接命中|^(含义|影响|直接性)\s*\d+$|^(Meaning|Impact|Directness)\s*\d+$)/i;
 
 /** explicit tradeoff signal: naming both sides of an axis */
 const TRADEOFF_RE =
@@ -72,7 +73,9 @@ function compact(text) {
 function allText(card) {
   return [
     card.q,
+    card.q_en,
     card.scenario,
+    card.scenario_en,
     card.why,
     card.why_en,
     card.whenOtherWins,
@@ -103,6 +106,12 @@ function auditCard(card, rel) {
   if (!scenario && CONTEXTLESS_RE.test(q)) {
     add(issues, 'missing_context', 3, 'question depends on article/page context but has no scenario');
   }
+  if (!compact(card.q_en)) {
+    add(issues, 'missing.q_en', 1, 'question has no English helper line (q_en); bilingual drill should show it under Chinese');
+  }
+  if (scenario && !compact(card.scenario_en)) {
+    add(issues, 'missing.scenario_en', 1, 'scenario has no English helper line (scenario_en); bilingual drill should show it under Chinese');
+  }
 
   const numericOptions = options.filter((option) => NUMERIC_CHOICE_RE.test(compact(option))).length;
   if (
@@ -111,6 +120,19 @@ function auditCard(card, rel) {
     /多少|多久|量级|大约|约|每天|每秒|几跳|几层|几次|几秒|几毫秒|benchmark|基准/i.test(q)
   ) {
     add(issues, 'trivia_or_bad_number_question', 3, 'mostly numeric choices; likely tests recall instead of design implication');
+  }
+
+  if (card.format === 'cloze' && /补全.*数字|填.*数字|核心.*数字/i.test(q)) {
+    const blanks = [...compact(card.text).matchAll(CLOZE_RE)].map((m) => compact(m[1]));
+    const numericBlanks = blanks.filter((blank) => NUMBER_RE.test(blank)).length;
+    if (numericBlanks > 0) {
+      add(
+        issues,
+        'trivia_or_bad_number_question',
+        2,
+        'cloze asks learners to recall raw numeric targets; put numbers in scenario and cloze the design consequence',
+      );
+    }
   }
 
   if (!scenario && card.atomType === 'number' && NUMBER_RE.test(text)) {

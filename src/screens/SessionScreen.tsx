@@ -59,216 +59,10 @@ function compactText(text: string | undefined): string {
   return (text ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function clipText(text: string | undefined, max = 96): string {
-  const compact = compactText(text);
-  if (compact.length <= max) return compact;
-  return `${compact.slice(0, max - 1).trim()}…`;
-}
-
 function asSentence(text: string): string {
   const compact = compactText(text);
   if (!compact) return '';
   return /[。.!?！？]$/.test(compact) ? compact : `${compact}。`;
-}
-
-function correctOptionSummary(card: Card): string {
-  if (!card.options || !card.answer?.length) return '正确答案';
-  return card.answer
-    .map((index) => card.options?.[index])
-    .filter(Boolean)
-    .map((option) => `「${option}」`)
-    .join('、');
-}
-
-interface InferredOptionFrame {
-  meaning: string;
-  impact: string;
-}
-
-function hasAny(text: string, needles: string[]): boolean {
-  return needles.some((needle) => text.includes(needle));
-}
-
-function inferOptionFrame(option: string): InferredOptionFrame | null {
-  const lower = option.toLowerCase();
-
-  if (hasAny(lower, ['太慢', '过慢', '性能', 'latency', 'slow'])) {
-    return {
-      meaning: `「${option}」是在把问题归因到组件或链路性能：它假设瓶颈来自某个东西本身不够快。`,
-      impact: '选择它会把排查带向容量、延迟或性能调优，而不是先看架构职责是否放在了正确时刻。',
-    };
-  }
-  if (hasAny(lower, ['索引', 'index'])) {
-    return {
-      meaning: `「${option}」是在把问题归因到索引或查询路径：它假设数据访问方式没有设计好。`,
-      impact: '选择它会让你优先优化查询路径、二级索引或访问模式，而不是先改变系统的整体数据流。',
-    };
-  }
-  if (hasAny(lower, ['网络', '带宽', 'network', 'bandwidth'])) {
-    return {
-      meaning: `「${option}」是在把问题归因到网络传输：它关注带宽、跨地域距离或链路延迟。`,
-      impact: '选择它会让方案先去压缩传输、就近部署或扩容网络，而不是先处理业务计算/存储模型。',
-    };
-  }
-  if (hasAny(lower, ['预计算', 'fan-out', '读取', '读时', '写入', '写时', '计算', 'read', 'write'])) {
-    return {
-      meaning: `「${option}」是在讨论工作发生的时机：到底把计算放在写入侧、读取侧，还是提前预计算。`,
-      impact: '选择它会把设计重心放到读写路径的职责分配上，也就是谁提前做工作、谁保持低延迟。',
-    };
-  }
-  if (hasAny(lower, ['cdn', '边缘'])) {
-    return {
-      meaning: `「${option}」是边缘分发/边缘缓存方案，核心是把静态内容放到离用户更近的位置。`,
-      impact: '选择它会让系统优先解决全球静态内容分发和跨地域延迟，而不是应用服务器内部的数据共享。',
-    };
-  }
-  if (hasAny(lower, ['redis', 'memcached', '缓存', 'cache'])) {
-    return {
-      meaning: `「${option}」是缓存层方向，用更快的存储保存热点数据，减少主数据库读取压力。`,
-      impact: '选择它会把方案带向命中率、TTL、淘汰策略和缓存一致性这些问题。',
-    };
-  }
-  if (hasAny(lower, ['浏览器', 'client', '客户端'])) {
-    return {
-      meaning: `「${option}」是客户端侧能力，依赖用户设备或浏览器保存/复用数据。`,
-      impact: '选择它会把优化放到单个用户设备上，通常不能解决多台服务端共享状态的问题。',
-    };
-  }
-  if (hasAny(lower, ['进程内', 'in-process', '本地缓存'])) {
-    return {
-      meaning: `「${option}」是单机本地优化，把数据放在某个服务进程自己的内存里。`,
-      impact: '选择它会获得很低延迟，但也会引入多实例不共享、重启丢失和一致性更弱的问题。',
-    };
-  }
-  if (hasAny(lower, ['kafka', 'queue', '队列', 'pub/sub', 'sqs', 'stream'])) {
-    return {
-      meaning: `「${option}」是异步队列或事件流方向，用缓冲和消费者解耦生产者与处理逻辑。`,
-      impact: '选择它会把系统变成异步处理模型，适合削峰和解耦，但会引入延迟、重试和幂等问题。',
-    };
-  }
-  if (hasAny(lower, ['postgres', 'mysql', 'sql', '关系型', 'relational'])) {
-    return {
-      meaning: `「${option}」是关系型数据库方向，强调事务、约束、查询能力和清晰的数据模型。`,
-      impact: '选择它会优先保证一致性和查询表达力，但横向写扩展通常要额外设计。',
-    };
-  }
-  if (hasAny(lower, ['cassandra', 'dynamodb', 'nosql'])) {
-    return {
-      meaning: `「${option}」是分布式 NoSQL 存储方向，通常用分区和副本换取更强的水平扩展能力。`,
-      impact: '选择它会把方案带向访问模式建模、分区键选择、最终一致性和热点分散。',
-    };
-  }
-  if (hasAny(lower, ['shard', '分片', 'partition'])) {
-    return {
-      meaning: `「${option}」是水平拆分数据的方向，把数据按某个键分散到多个分区或节点。`,
-      impact: '选择它会优先解决容量和吞吐扩展，但也会带来热点、跨分片查询和再均衡成本。',
-    };
-  }
-  if (hasAny(lower, ['replica', '复制', 'leader', 'follower', 'quorum'])) {
-    return {
-      meaning: `「${option}」是复制与一致性方向，关注副本如何同步、读写走哪里、需要多少确认。`,
-      impact: '选择它会把方案带向可用性、一致性、故障切换和读扩展之间的取舍。',
-    };
-  }
-  if (hasAny(lower, ['websocket', 'sse', 'polling', 'http', 'grpc', 'tcp', 'udp', 'webrtc'])) {
-    return {
-      meaning: `「${option}」是通信协议或连接模式方向，决定客户端和服务端怎样交换数据。`,
-      impact: '选择它会优先影响实时性、连接成本、双向通信能力、可靠性和基础设施复杂度。',
-    };
-  }
-  if (hasAny(lower, ['consistency', '一致性'])) {
-    return {
-      meaning: `「${option}」是在强调一致性：用户或节点是否能马上看到同一份最新数据。`,
-      impact: '选择它会让系统优先避免旧读和冲突，但通常会牺牲部分可用性或延迟。',
-    };
-  }
-  if (hasAny(lower, ['availability', '可用性'])) {
-    return {
-      meaning: `「${option}」是在强调可用性：请求尽量得到响应，即使结果可能不是最新。`,
-      impact: '选择它会让系统优先保持服务可响应，但需要接受更弱一致性或后续修正。',
-    };
-  }
-  if (hasAny(lower, ['acid', '事务', 'transaction'])) {
-    return {
-      meaning: `「${option}」是事务/不变量方向，关注一组操作是否原子、隔离并保持约束。`,
-      impact: '选择它会把设计重点放到正确性边界和并发控制上，通常不是所有分布式取舍的第一层答案。',
-    };
-  }
-  if (hasAny(lower, ['内存', 'memory', 'cpu', '磁盘', 'disk', 'ssd'])) {
-    return {
-      meaning: `「${option}」是在比较硬件和存储介质延迟：内存、CPU、磁盘距离不同，访问成本不同。`,
-      impact: '选择它会让解释落在物理延迟和存储层级上，而不是软件接口或语法开销。',
-    };
-  }
-
-  return null;
-}
-
-function inferOptionFrameEn(option: string): InferredOptionFrame | null {
-  const lower = option.toLowerCase();
-
-  if (hasAny(lower, ['太慢', '过慢', '性能', 'latency', 'slow'])) {
-    return {
-      meaning: `The option "${option}" frames the problem as a component or link performance bottleneck.`,
-      impact: 'Choosing it pushes the design toward capacity, latency, or performance tuning before checking whether work is assigned to the right part of the architecture.',
-    };
-  }
-  if (hasAny(lower, ['索引', 'index'])) {
-    return {
-      meaning: `The option "${option}" frames the problem as an indexing or query-access-path issue.`,
-      impact: 'Choosing it pushes the solution toward query/index optimization before changing the overall data flow.',
-    };
-  }
-  if (hasAny(lower, ['网络', '带宽', 'network', 'bandwidth'])) {
-    return {
-      meaning: `The option "${option}" frames the problem as a network-transfer issue.`,
-      impact: 'Choosing it pushes the solution toward bandwidth, placement, or transport optimization before addressing the business computation or storage model.',
-    };
-  }
-  if (hasAny(lower, ['预计算', 'fan-out', '读取', '读时', '写入', '写时', '计算', 'read', 'write'])) {
-    return {
-      meaning: `The option "${option}" is about when the work happens: read time, write time, or ahead-of-time precomputation.`,
-      impact: 'Choosing it puts the design focus on read/write path responsibility and who must do work before the user waits.',
-    };
-  }
-  if (hasAny(lower, ['cdn', '边缘'])) {
-    return {
-      meaning: `The option "${option}" is an edge distribution or edge caching layer.`,
-      impact: 'Choosing it targets global static content delivery and cross-region latency more than server-side shared application state.',
-    };
-  }
-  if (hasAny(lower, ['redis', 'memcached', '缓存', 'cache'])) {
-    return {
-      meaning: `The option "${option}" is a caching-layer direction for hot data and database read relief.`,
-      impact: 'Choosing it brings in hit rate, TTL, eviction, and cache consistency trade-offs.',
-    };
-  }
-  if (hasAny(lower, ['kafka', 'queue', '队列', 'pub/sub', 'sqs', 'stream'])) {
-    return {
-      meaning: `The option "${option}" is an async queue or event-stream direction.`,
-      impact: 'Choosing it changes the system into an asynchronous processing model with retries, latency, and idempotency concerns.',
-    };
-  }
-  if (hasAny(lower, ['postgres', 'mysql', 'sql', '关系型', 'relational'])) {
-    return {
-      meaning: `The option "${option}" is a relational-database direction.`,
-      impact: 'Choosing it emphasizes transactions, constraints, and query power, with extra work for horizontal write scaling.',
-    };
-  }
-  if (hasAny(lower, ['cassandra', 'dynamodb', 'nosql'])) {
-    return {
-      meaning: `The option "${option}" is a distributed NoSQL storage direction.`,
-      impact: 'Choosing it pushes the design toward access-pattern modeling, partition-key choice, eventual consistency, and hot-key avoidance.',
-    };
-  }
-  if (hasAny(lower, ['websocket', 'sse', 'polling', 'http', 'grpc', 'tcp', 'udp', 'webrtc'])) {
-    return {
-      meaning: `The option "${option}" is a protocol or connection-pattern choice.`,
-      impact: 'Choosing it mainly affects real-time behavior, connection cost, bidirectionality, reliability, and infrastructure complexity.',
-    };
-  }
-
-  return null;
 }
 
 function optionIdentityFromLegacy(explanation: string): string {
@@ -280,59 +74,49 @@ function optionIdentityFromLegacy(explanation: string): string {
 }
 
 // Fallback policy (rubric 1.3-F1): empty beats filler. When there's no
-// explicit note, no usable legacy text, and no keyword-inferred frame, we show
-// NOTHING for that slot — the old catch-all template sentences ("……是这道题里
-// 的概念判断，代表一种可以拿来比较的判断路径") carried zero information and
-// re-read `why` up to 4×, which is exactly the bloat being removed.
-function optionMeaning(card: Card, originalIndex: number, option: string): string {
+// explicit note and no usable legacy text, we show NOTHING for that slot.
+// Auto-generated keyword frames read like filler and can be wrong in context.
+function optionMeaning(card: Card, originalIndex: number): string {
   const explicit = compactText(card.optionMeanings?.[originalIndex]);
   if (explicit) return explicit;
 
   const legacyIdentity = optionIdentityFromLegacy(card.optionExplanations?.[originalIndex] ?? '');
   if (legacyIdentity) return legacyIdentity;
 
-  return inferOptionFrame(option)?.meaning ?? '';
+  return '';
 }
 
 function optionScenarioImpact(card: Card, originalIndex: number): string {
   const explicit = compactText(card.optionScenarioImpacts?.[originalIndex]);
   if (explicit) return explicit;
 
-  return inferOptionFrame(card.options?.[originalIndex] ?? '')?.impact ?? '';
+  return '';
 }
 
-function optionDirectness(card: Card, originalIndex: number, isCorrect: boolean): string {
+function optionFitContext(card: Card, originalIndex: number): string {
   const explicit = compactText(card.optionDirectness?.[originalIndex]);
   if (explicit) return explicit;
 
   const legacy = compactText(card.optionExplanations?.[originalIndex]);
   if (legacy) return asSentence(legacy);
 
-  // Correct option: one pointer back to the deciding constraint. Wrong
-  // options get no auto-generated comparison — `why` (shown once above) and
-  // `whenOtherWins` (own amber box) already carry it; repeating them per
-  // option was the main source of the re-reading bloat.
-  if (isCorrect) {
-    const why = compactText(card.why);
-    return why ? `它最直接命中题目的关键约束：${clipText(why, 90)}` : '';
-  }
+  // Empty beats filler. We used to auto-generate a "most direct" sentence
+  // from `why`, but that duplicated the verdict instead of teaching the
+  // option's own applicability boundary.
   return '';
 }
 
-// One flowing English sentence-run per option — no "Meaning:/Scenario:/Fit:"
+// One flowing English sentence-run per option — no "Meaning:/Fit:/Scenario:"
 // labels; the zh paragraph above it already carries the structure.
-function optionExplanationEn(card: Card, originalIndex: number, option: string, isCorrect: boolean): string {
-  const inferred = inferOptionFrameEn(option);
-  const meaning = compactText(card.optionMeanings_en?.[originalIndex]) || inferred?.meaning || '';
-  const scenario = compactText(card.optionScenarioImpacts_en?.[originalIndex]) || inferred?.impact || '';
-  const directness =
+function optionExplanationEn(card: Card, originalIndex: number): string {
+  const meaning = compactText(card.optionMeanings_en?.[originalIndex]) || '';
+  const fitContext =
     compactText(card.optionDirectness_en?.[originalIndex]) ||
     compactText(card.optionExplanations_en?.[originalIndex]) ||
-    (compactText(card.why_en) && isCorrect
-      ? `This is the most direct answer because ${compactText(card.why_en)}`
-      : '');
+    '';
+  const scenario = compactText(card.optionScenarioImpacts_en?.[originalIndex]) || '';
 
-  return [meaning, scenario, directness].filter(Boolean).join(' ');
+  return [meaning, fitContext, scenario].filter(Boolean).join(' ');
 }
 
 function buildAnswerOptionDetail(
@@ -348,10 +132,10 @@ function buildAnswerOptionDetail(
     text,
     isCorrect,
     wasPicked,
-    meaning: optionMeaning(card, originalIndex, text),
+    meaning: optionMeaning(card, originalIndex),
+    fitContext: optionFitContext(card, originalIndex),
     scenarioImpact: optionScenarioImpact(card, originalIndex),
-    directness: optionDirectness(card, originalIndex, isCorrect),
-    explanationEn: optionExplanationEn(card, originalIndex, text, isCorrect),
+    explanationEn: optionExplanationEn(card, originalIndex),
   };
 }
 
@@ -574,6 +358,10 @@ export function SessionScreen({
     isChoice && eph.shuffledOptions && card.optionDiagrams
       ? eph.shuffledOptions.toOriginal.map((orig) => card.optionDiagrams?.[orig] ?? null)
       : undefined;
+  const optionSubtexts =
+    isChoice && eph.shuffledOptions && card.options_en
+      ? eph.shuffledOptions.toOriginal.map((orig) => card.options_en?.[orig] ?? null)
+      : undefined;
   const optionDetails: AnswerOptionDetail[] =
     isChoice && eph.shuffledOptions && card.options && card.answer
       ? eph.shuffledOptions.items.map((text, displayIndex) => {
@@ -625,13 +413,19 @@ export function SessionScreen({
             ]}
           >
             <TagRow card={card} />
-            {card.scenario ? <ScenarioBox text={card.scenario} /> : null}
-            <Text style={[styles.q, { color: colors.ink }]}>{card.q}</Text>
+            {card.scenario ? <ScenarioBox text={card.scenario} textEn={card.scenario_en} /> : null}
+            <View style={styles.questionBlock}>
+              <Text style={[styles.q, { color: colors.ink }]}>{card.q}</Text>
+              {compactText(card.q_en) ? (
+                <Text style={[styles.qEn, { color: colors.muted }]}>{compactText(card.q_en)}</Text>
+              ) : null}
+            </View>
 
             {isChoice && eph.shuffledOptions ? (
               <>
                 <OptionList
                   options={eph.shuffledOptions.items}
+                  optionSubtexts={optionSubtexts}
                   correctDisplay={correctDisplay}
                   selected={eph.multiSel}
                   revealed={eph.phase === 'revealed'}
@@ -651,7 +445,7 @@ export function SessionScreen({
 
             {card.format === 'cloze' && card.text ? (
               <>
-                <ClozeView text={card.text} revealed={eph.phase === 'revealed'} />
+                <ClozeView text={card.text} textEn={card.text_en} revealed={eph.phase === 'revealed'} />
                 {eph.phase === 'question' ? (
                   <View style={styles.btnRow}>
                     <ActButton label="🤔 不确定 / 显示答案" onPress={revealCloze} />
@@ -759,6 +553,8 @@ const styles = StyleSheet.create({
   sidePanel: { borderWidth: 1, borderRadius: 16, overflow: 'hidden' },
   sidePanelScroll: { flexGrow: 0 },
   sidePanelContent: { padding: 20, paddingBottom: 24 },
-  q: { fontSize: 17, fontWeight: '600', marginBottom: 14, lineHeight: 25 },
+  questionBlock: { marginBottom: 14 },
+  q: { fontSize: 17, fontWeight: '600', lineHeight: 25 },
+  qEn: { fontSize: 13, lineHeight: 19, marginTop: 5 },
   btnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 16 },
 });

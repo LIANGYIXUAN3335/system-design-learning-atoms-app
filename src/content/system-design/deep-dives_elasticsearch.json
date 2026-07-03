@@ -4760,64 +4760,90 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "cdc-sync",
+    "scenario": "商品、帖子或店铺的权威数据存在主库里，CDC 把变更同步到 Elasticsearch，ES 只负责搜索索引。",
     "q": "Elasticsearch 与底层权威数据的同步失败，会导致什么？如何应对？",
     "options": [
-      "Elasticsearch 会自动检测并回源修复漂移的数据，完全无需人工介入处理",
+      "Elasticsearch 会自动知道哪里漂移，并自己回源修复",
       "同步失败只会稍微拖慢一点点写入速度，完全不影响查询结果的正确性",
-      "索引与真相源漂移（drift）——Elasticsearch 场景最常见的 bug 来源之一；要监控同步、必要时对账/重建索引",
+      "搜索索引与 source of truth 发生 drift，要监控同步并从真相源对账/重建",
       "同步只要一失败，整个集群就会立刻直接宕机彻底崩溃，谁都没法恢复"
     ],
     "answer": [
       2
     ],
     "options_en": [
-      "Elasticsearch automatically detects and repairs the drifted data from the source, with zero manual intervention needed",
+      "Elasticsearch automatically knows which records drifted and repairs itself from the source",
       "A sync failure only slows writes down a little and does not affect the correctness of query results at all",
-      "The index drifts from the source of truth, one of the most common bug sources with Elasticsearch, requiring sync monitoring and reconciliation",
+      "The search index drifts from the source of truth, so sync monitoring plus reconciliation or reindexing is needed",
       "The instant sync fails, the entire cluster crashes hard and completely, with no way to recover"
     ],
-    "why": "同步链路一旦悄悄断掉，搜索结果和真实数据渐行渐远；这是 Elasticsearch 系统最常见的 bug 类别，必须设计监控与修复手段。",
-    "why_en": "Synchronization failures make the search index drift from the source of truth, a common source of bugs that needs monitoring and reconciliation.",
+    "why": "drift 是 ES 索引和主库真相不一致：搜索可能漏新数据、显示旧数据或搜到已删除数据。修复依赖真相源或可 replay 的变更日志，而不是 ES 自己凭空恢复。",
+    "why_en": "Drift means the Elasticsearch index no longer matches the source of truth; repair depends on the primary store or replayable change log, not Elasticsearch magically healing itself.",
+    "whenOtherWins": "如果权威数据或可重放事件日志也丢了，就不能可靠重建 ES；只能从备份、审计日志或业务补录里恢复。",
     "tags": [
       "elasticsearch",
       "cdc",
       "drift"
     ],
+    "table": {
+      "headers": [
+        "问题",
+        "含义",
+        "修复前提"
+      ],
+      "rows": [
+        [
+          "sync fail",
+          "CDC 断/漏事件",
+          "主库仍正确"
+        ],
+        [
+          "drift",
+          "ES 与主库不一致",
+          "能对账比较"
+        ],
+        [
+          "repair",
+          "reindex/replay",
+          "有真相可读"
+        ]
+      ]
+    },
     "optionMeanings": [
-      "编造的自愈能力",
+      "把对账修复误认为 ES 内置自愈。",
       "把影响窄化为写入速度",
-      "准确定义：索引漂移加需要对账修复",
+      "搜索副本偏离主库真相，需要外部修复流程。",
       "把影响夸大为集群宕机"
     ],
     "optionScenarioImpacts": [
-      "ES 不会自动检测并修复同步断裂",
-      "实际影响的是数据正确性，不只是速度",
-      "这正是需要主动设计监控和对账机制的原因",
-      "同步失败不等于集群崩溃，只是数据不再新鲜"
+      "ES 不知道主库最新状态，必须额外做监控/对账。",
+      "用户会搜不到新数据、看到旧数据或搜到已删数据。",
+      "从主库 reindex 或从 CDC/Kafka replay 可修复。",
+      "ES 集群仍可查，只是查到的索引可能不可信。"
     ],
     "optionDirectness": [
-      "不相关或错误",
-      "不相关或错误",
-      "最直接，正确答案",
-      "不相关或错误"
+      "不对；自动还原只有在你建了对账修复系统后才有。",
+      "不对；正确性才是核心风险。",
+      "最直接；它说清了问题和恢复路径。",
+      "不对；同步失败不是集群宕机。"
     ],
     "optionMeanings_en": [
-      "A fabricated self-healing capability",
+      "Mistakes reconciliation for built-in Elasticsearch self-healing.",
       "Narrowing the impact to write speed",
-      "The accurate call: index drift requiring monitoring and reconciliation",
+      "The search copy diverges from the primary truth and needs repair.",
       "Exaggerating the impact into a cluster crash"
     ],
     "optionScenarioImpacts_en": [
-      "Elasticsearch does not automatically detect or repair a broken sync link",
-      "The real impact is data correctness, not just speed",
-      "This is exactly why monitoring and reconciliation must be designed in",
-      "A sync failure does not crash the cluster, it just makes data stale"
+      "ES does not know the latest primary state; monitoring and comparison are external.",
+      "Users may miss new data, see stale data, or find deleted data.",
+      "Reindexing from the primary store or replaying CDC/Kafka can repair it.",
+      "The ES cluster may still answer queries, but the index is no longer trustworthy."
     ],
     "optionDirectness_en": [
-      "Unrelated or incorrect",
-      "Unrelated or incorrect",
-      "Most direct, correct answer",
-      "Unrelated or incorrect"
+      "Wrong; automatic repair exists only if you build that reconciliation path.",
+      "Wrong; correctness is the core risk.",
+      "Most direct; it names both the bug and the recovery path.",
+      "Wrong; sync failure is not cluster failure."
     ],
     "termDefinitions": [
       {
@@ -4825,6 +4851,31 @@
         "meaning": "持续捕获权威数据库变更并同步到下游系统的机制。",
         "meaningEn": "Change data capture continuously streams changes from an authoritative database to downstream systems.",
         "fullName": "Change Data Capture"
+      },
+      {
+        "term": "source of truth",
+        "meaning": "真相源：系统认定最权威、可用来恢复衍生数据的主数据存储。",
+        "meaningEn": "The source of truth is the authoritative store used to recover derived data."
+      },
+      {
+        "term": "drift",
+        "meaning": "漂移：衍生索引里的数据和权威数据源不一致。",
+        "meaningEn": "Drift is when a derived index no longer matches the authoritative source."
+      },
+      {
+        "term": "reconciliation",
+        "meaning": "对账：定期比较 ES 与主库，找出缺失、过期或多余的索引记录。",
+        "meaningEn": "Reconciliation compares Elasticsearch with the primary store to find missing, stale, or extra indexed records."
+      },
+      {
+        "term": "reindex",
+        "meaning": "重建索引：从权威数据源重新生成 Elasticsearch 索引。",
+        "meaningEn": "Reindexing rebuilds the Elasticsearch index from the authoritative data source."
+      },
+      {
+        "term": "replay",
+        "meaning": "重放：从 CDC、Kafka 或事件日志重新应用遗漏的变更。",
+        "meaningEn": "Replay reapplies missed changes from CDC, Kafka, or an event log."
       }
     ]
   },
@@ -4914,20 +4965,51 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "inverted-index",
+    "scenario": "查询 keyword=redis 时，Lucene 先要在词典里找到 redis 这个 term，再跳到它对应的 postings list（文档列表）。",
     "q": "补全 Lucene 倒排索引用到的辅助数据结构：",
     "text": "除倒排表本身，Lucene 还用 {{skip list}}（跳表）和 {{finite state transducer}}（有限状态转换器，FST）等专用结构加速词项查找与合并。",
-    "why": "针对访问模式定制数据结构能带来数量级的性能差异——这是 ES 给所有系统设计的启示之一。",
-    "why_en": "Lucene accelerates its inverted index with specialized structures like skip lists and finite state transducers.",
+    "why": "这里的“补全”是填空，不是 autocomplete。FST 优化的是 term dictionary：用很小的自动机判断词是否存在，并映射到 postings list 的位置。",
+    "why_en": "Here, completion means filling the blank, not autocomplete. An FST optimizes the term dictionary: it compactly checks whether a term exists and maps it to the posting-list location.",
     "tags": [
       "elasticsearch",
       "lucene",
       "data-structures"
     ],
+    "diagram": "flowchart LR\n    Q[\"query term: redis\"] --> FST[\"FST term dictionary\"]\n    FST -->|\"exists + pointer\"| P[\"postings list\"]\n    P --> D[\"doc IDs + positions\"]\n    P --> S[\"skip list jumps\"]",
+    "table": {
+      "headers": [
+        "层",
+        "保存什么",
+        "作用"
+      ],
+      "rows": [
+        [
+          "FST",
+          "term -> pointer",
+          "找词典"
+        ],
+        [
+          "postings",
+          "term -> docIDs",
+          "找文档"
+        ],
+        [
+          "skip list",
+          "跳跃点",
+          "快合并"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "inverted index（倒排索引）",
         "meaning": "从词到包含该词的文档列表的映射，让关键词查找接近 O(1)。",
         "meaningEn": "An inverted index maps each term to the documents containing it, turning search into a near constant-time lookup."
+      },
+      {
+        "term": "term dictionary",
+        "meaning": "所有已索引词项的有序词典，负责把查询词定位到对应倒排表的位置。",
+        "meaningEn": "The term dictionary is the sorted vocabulary of indexed terms; it maps a query term to the location of its postings."
       },
       {
         "term": "skip list",
@@ -4936,8 +5018,8 @@
       },
       {
         "term": "finite state transducer",
-        "meaning": "能同时做字符串查找与值映射的紧凑自动机结构，常用于词典压缩。",
-        "meaningEn": "A finite state transducer is a compact automaton that performs string lookup and value mapping together, often used to compress term dictionaries.",
+        "meaning": "一种像压缩 trie 的有限状态机：沿字符路径走到词尾，同时输出一个值，例如 postings list 的指针。",
+        "meaningEn": "A finite state transducer is a compact trie-like automaton: it follows characters to a term and outputs a value such as a postings pointer.",
         "fullName": "Finite State Transducer (FST)"
       }
     ]

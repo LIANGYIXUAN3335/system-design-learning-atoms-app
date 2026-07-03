@@ -1,5 +1,7 @@
 # Atoms card authoring spec (for card-generation agents)
 
+> 📍 **体系导航**：三条内容管线之一（从文章写全新 deck）。判据权威是 `docs/card-quality-rubric.md`——本文 Hard rules 是其浓缩转述，若两者冲突以 rubric 为准（改标准先改 rubric 再同步这里）。地图：`docs/INDEX.md`。
+
 You are authoring spaced-repetition drill cards ("atoms") for a personal system-design study app, from Hello Interview articles the user already owns. Follow this spec exactly. Quality matters: bad distractors or vague explanations make the drill worthless.
 
 ## Inputs & outputs
@@ -18,25 +20,28 @@ interface Card {
   atomType: 'fact' | 'fit' | 'contrast' | 'consequence' | 'number';
   topic: string;         // the <topic> above
   sub: string;           // short kebab sub-topic, e.g. "eviction", "sharding-strategy"
-  scenario?: string;     // REQUIRED for fit mcq/code: the concrete requirement being decided
+  scenario?: string;     // REQUIRED for fit mcq/code: the concrete requirement being decided, Chinese
+  scenario_en?: string;  // English version of scenario, shown as small helper text
   q: string;             // the question (Chinese)
+  q_en?: string;         // English version of q, shown as small helper text
   options?: string[];    // mcq/multi/code: 3-4 options
   optionDiagrams?: (string | null)[]; // optional Mermaid specs aligned to options; use when choices are architectures/flows
   optionMeanings?: string[];          // optional Chinese: what each option is
+  optionDirectness?: string[];        // optional Chinese: when each option is the better fit (legacy field name)
   optionScenarioImpacts?: string[];   // optional Chinese: what choosing it means in this scenario
-  optionDirectness?: string[];        // optional Chinese: why each option is or is not the most direct answer
   optionMeanings_en?: string[];       // optional English counterparts
   optionScenarioImpacts_en?: string[];
   optionDirectness_en?: string[];
   answer?: number[];     // mcq/code: exactly 1 index; multi: >=1 index; indexes 0-based, in range
   text?: string;         // cloze: contains {{answer}} markers (answer text inside braces)
+  text_en?: string;      // English cloze text with matching {{answer}} markers when useful
   steps?: string[];      // chain: the ordered reasoning steps, authored already-shuffled
   answerOrder?: number[];// chain: permutation of 0..steps.length-1 giving the correct order
   acceptAltOrders?: number[][]; // chain: optional other valid orderings
   why: string;           // <=2 sentences, Chinese, shown after answering
   why_en: string;        // ONE English sentence, drives text-to-speech
   whenOtherWins?: string;// fit cards: when the rejected alternative would be the right call
-  termDefinitions?: { term: string; meaning: string; meaningEn?: string }[]; // card-local glossary for jargon-heavy cards
+  termDefinitions?: { term: string; fullName?: string; meaning: string; meaningEn?: string }[]; // card-local glossary; fullName REQUIRED for abbreviations ("CRDT" → "Conflict-free Replicated Data Type")
   codeSample?: string;   // optional implementation snippet shown with explanation
   lang?: string;         // code language for codeSample (e.g. "redis", "sql", "python")
   diagram?: string;      // optional Mermaid spec (flowchart/sequenceDiagram/stateDiagram/ER)
@@ -71,7 +76,9 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 ## Hard rules
 
 - **Paraphrase in your own words. Never copy sentences verbatim** (personal-use, paraphrased study material only).
-- **Bilingual**: `q`, `scenario`, `why`, `whenOtherWins` in **Chinese**; `why_en` is **one natural English sentence** (it is read aloud by TTS). `why` ≤ 2 sentences.
+- **Bilingual**: `q`, `scenario`, `why`, `whenOtherWins` in **Chinese**; add `q_en` and `scenario_en` as natural English helper lines shown under the Chinese text; `why_en` is **one natural English sentence** (it is read aloud by TTS). `why` ≤ 2 sentences.
+- **English helper lines**: `q_en` and `scenario_en` should be plain interview English, not word-for-word translation. Preserve the same constraints, system name, and technical meaning. If a `scenario` exists, `scenario_en` exists. For cloze cards, add `text_en` only when it can preserve the same blanks without leaking extra information.
+- **Question as title**: the app has no separate card title, so `q` is the learner-facing title. It must name the system/component/mechanism enough to stand alone. Do not write bare internal labels such as "last-disconnect 方案" or "成功标准是什么" unless `scenario` first explains the project background and the term in one sentence.
 - **fit** mcq/code MUST have a `scenario` and a `whenOtherWins` (the rejected-alternative / when-other-wins line).
 - **Vary the correct-answer index** across cards (spread across 0..3). Do not always put it at index 1.
 - **cloze** must contain at least one `{{...}}`; the text inside braces is the expected answer.
@@ -79,15 +86,22 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 - **Visual layer is required for visual concepts.** Use `diagram` (Mermaid) whenever the concept is spatial/temporal/structural: data flow, request lifecycle, write path, replication, sharding, leader/follower, queue/worker, state machine, protocol handshake, component-choice flowchart, or architecture trade-off. For deep-dives and problem-breakdowns, target roughly **15-25%** of cards with a visual atom, plus at least one visual early in the deck that teaches the core mental model.
 - Use `table` for contrast cards when the learner needs to compare dimensions (e.g. Postgres vs Cassandra, TCP vs UDP, SSE vs WebSocket).
 - Use `optionDiagrams` when the answer choices are architectures, flows, or topologies. It must be the same length as `options`; use `null` for text-only choices. Each non-null value is a Mermaid spec for that option. Keep option diagrams small so A/B/C/D remains scannable.
-- For important choice cards, add `optionMeanings`, `optionScenarioImpacts`, and `optionDirectness` so every A/B/C/D option teaches what it is, what it implies in the scenario, and why it is more or less direct than the best answer. Avoid shallow "wrong because correct is B" wording.
+- For important choice cards, add `optionMeanings`, `optionDirectness`, and `optionScenarioImpacts` so every A/B/C/D option teaches what it is, when it is a better fit, and what choosing it implies in the current scenario. Avoid shallow "wrong because correct is B" wording.
+- `optionDirectness` is a legacy field name. New content uses it for fit context / applicability boundary, not a directness verdict. Do not write "最直接", "不直接", "不够直接", or "直接命中题目的关键约束".
 - Every card needs `why` AND `why_en`.
 - Do NOT use legacy field names: `en`, `other`, `opts`, `prompt`, `answerIndex`.
-- Cards must be self-contained. Do not ask "this layer", "the article", "the above design", or a bare company fact unless the scenario gives enough context to answer the card in isolation.
+- Cards must be self-contained. Do not ask "this layer", "the article", "the above design", "this plan", or a bare company fact unless the scenario gives enough context to answer the card in isolation.
 - Do not turn article assumptions or benchmark numbers into trivia. If a number matters, ask what design implication follows from that number, or give the number in the scenario and ask for the architectural consequence.
 - Distractors should be plausible misconceptions or real alternative designs. Avoid throwaway choices and avoid generic explanations such as "does not fit the requirements".
 - For jargon-heavy choice cards, define the term locally in `scenario`, `why`, or per-option fields. A learner should not need the original article open to understand TCP, UDP, WebRTC, DynamoDB, CDC, DLRM, GraphSAGE, GSI, RCU/WCU, fan-out, etc.
 - Use `termDefinitions` when the card needs a local glossary entry that the global term detector may not know, especially for product-specific or paper-specific terms.
 - Prefer single-best-answer wording for tradeoffs. Many technologies are defensible; the card must say why one option is most direct under the stated constraints, not imply the other technologies are globally wrong.
+- **Mechanism/recovery cards must walk the FULL state chain** (rubric 1.4-S4): normal path → failure → intermediate state → recovery action → cost. E.g. Redis Streams: "XREADGROUP 领取 → 未 XACK 留在 PEL → worker 死后 idle 增长 → XCLAIM/XAUTOCLAIM 接管重做 → XACK；代价：可能重复执行，业务要幂等". Never jump from problem to conclusion word ("XCLAIM 接管") while skipping PEL/idle; every term on the chain gets a termDefinitions entry.
+- **Estimation/number cards give the trio** (rubric 1.4-S5): the formula ("10 亿注册 × 20% 在线 = 2 亿并发"), the unit's full name ("TPS = Transactions Per Second"), and what the number feeds downstream ("后续服务器数、心跳量的基数"). A number with no formula and no downstream use is trivia. If a number is an SLO/SLA or product target rather than a calculation (for example "<500ms" or "<1 minute"), say that explicitly and test the design path it constrains instead of asking the learner to recall the raw number.
+- **Quantitative anchors beat vague adjectives** (rubric 1.4-S5a): if the explanation mentions latency, QPS/TPS, throughput, GB/TB, CPU/memory thresholds, connection counts, object size, or chunk/part size, add a rough explainable anchor when possible: assumption/source → formula → order of magnitude → design consequence. Example: "LA↔NY ≈ 4,000km; fiber ≈ 200,000km/s; one-way lower bound ≈20ms, RTT ≥40ms; real paths are higher, so cross-region synchronous reads cannot be fixed by SQL tuning." Mark operational thresholds like CPU 60-70% as rule of thumb, not law.
+- **Ground every adjective** (rubric 1.4-S6): "simpler/faster/cheaper" must point at a concrete interface, operation, or resource — "offset 简单 = 接口只传 offset/limit 两个整数、翻页 offset += limit；cursor 要稳定排序键 + 保存末条 id + 范围查询". An adjective you can't ground gets deleted.
+- **Interview voice is mandatory** (rubric 1.4-S7): write explanations as short spoken answers the learner can say back in an interview. One sentence = one idea. Prefer "我会先…因为…但代价是…" over abstract report prose. Do not write template phrases such as "选择它会把排查带向…" or "直接命中题目的关键约束".
+- **List/layer cards (multi, security layers, hardening, optimization menus)**: each item's note is one sentence of "what risk it blocks / where it removes pressure" (rubric 1.3-S5) — "read-only filesystem：防止用户代码改依赖、留持久文件", "batch processing：多条写合一次事务，减少 WAL flush，但有缓冲丢失风险". Never a noun translation list.
 
 ## id scheme (collision-free — derive mechanically)
 
