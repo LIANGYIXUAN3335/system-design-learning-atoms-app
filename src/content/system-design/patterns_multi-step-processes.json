@@ -7,16 +7,30 @@
     "sub": "definition",
     "q": "Multi-step processes 模式主要解决什么问题？",
     "options": [
-      "跨多个服务、等待和失败点的长流程如何可靠推进、重试和补偿",
-      "单次数据库 SELECT 如何加索引",
-      "静态图片如何 CDN 缓存",
-      "单用户偏好如何存储"
+      "跨服务的长流程如何在失败点可靠地推进、重试和补偿",
+      "单条数据库查询如何选择合适索引",
+      "静态图片资源如何用 CDN 分发缓存",
+      "单个用户的偏好字段如何持久化存储"
+    ],
+    "options_en": [
+      "How to reliably drive a long cross-service flow through failure points with retries and compensation.",
+      "How to pick the right index for a single database query.",
+      "How to cache static image assets at the CDN.",
+      "How to persist a single user's preference field."
     ],
     "answer": [
       0
     ],
     "why": "真实业务流程常包含支付、库存、发货、人审、邮件等多步操作，任何一步都可能失败或超时。该模式关注 durable state、retry、compensation 和 orchestration。",
     "why_en": "Multi-step process patterns make long, failure-prone workflows across services reliable through durable state, retries, and compensation.",
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "内容分发网络，把内容缓存在靠近用户的边缘节点。",
+        "meaningEn": "A CDN, or Content Delivery Network, caches content on edge servers close to users."
+      }
+    ],
     "tags": [
       "multi-step-processes",
       "definition",
@@ -31,16 +45,42 @@
     "sub": "single-server",
     "q": "把订单履约流程只写成单个 API server 函数有什么致命问题？",
     "options": [
-      "server 在 charge payment 后崩溃，内存状态丢失，无法知道后续该继续还是补偿",
-      "函数不能调用支付服务",
-      "JavaScript 不能写 if",
-      "邮件不能异步发送"
+      "只要用 try/catch 包住整个流程，崩溃重启后就能自动恢复到中断点",
+      "server 在扣款成功后崩溃重启，内存中的进度全部丢失，不知道该继续还是补偿",
+      "只要每一步都打印日志，重启后就能从日志读出流程进度",
+      "只要用 async/await 写步骤，Node 崩溃重启后会自动重放未完成的调用"
+    ],
+    "options_en": [
+      "Wrapping the whole flow in try/catch means it auto-recovers to the crash point after a restart.",
+      "The server crashes after charging succeeds, all in-memory progress is lost, and it has no way to know whether to resume or compensate.",
+      "Printing a log line at every step means the process can read its progress back from the logs after restart.",
+      "Writing each step with async/await means Node automatically replays unfinished calls after a crash."
     ],
     "answer": [
-      0
+      1
     ],
     "why": "单机内存不是 durable progress。跨服务流程必须把已完成步骤记录到可恢复的存储，否则崩溃后会留下半完成状态。",
     "why_en": "A single in-memory function loses progress on crash, leaving the system unable to resume or compensate safely.",
+    "termDefinitions": [
+      {
+        "term": "API server",
+        "fullName": "Application Programming Interface server",
+        "meaning": "处理请求逻辑的应用服务器进程。",
+        "meaningEn": "An API server is the application process that handles request logic."
+      },
+      {
+        "term": "try/catch",
+        "meaning": "编程语言里捕获运行时异常的语法，只处理程序内错误，不提供跨进程持久化。",
+        "meaningEn": "try/catch is a language construct for catching runtime exceptions; it does not persist state across process crashes."
+      },
+      {
+        "term": "async/await",
+        "meaning": "JavaScript 里编写异步代码的语法糖，本身不提供崩溃后自动重放的能力。",
+        "meaningEn": "async/await is JavaScript syntax for writing asynchronous code; it does not by itself provide crash replay."
+      }
+    ],
+    "codeSample": "async function fulfillOrder(order) {\n  await chargePayment(order);       // committed externally\n  await reserveInventory(order);\n  // process crashes here — no durable record of progress\n  await createShippingLabel(order);\n  await sendConfirmationEmail(order);\n}",
+    "lang": "javascript",
     "tags": [
       "single-server",
       "crash",
@@ -59,6 +99,12 @@
       "reserve inventory",
       "create shipping label / wait for warehouse pick",
       "send confirmation email"
+    ],
+    "options_en": [
+      "Charge the customer's payment.",
+      "Reserve inventory for the order.",
+      "Create a shipping label and wait for the warehouse to pick the item.",
+      "Send the confirmation email."
     ],
     "answer": [
       0,
@@ -82,16 +128,34 @@
     "sub": "callback-routing",
     "q": "为什么支付网关 webhook 会让单服务器内存编排更不可靠？",
     "options": [
-      "callback 可能落到负载均衡后的另一台 API server，而那台没有原流程内存状态",
-      "webhook 不能携带 order_id",
-      "支付网关只能同步返回",
-      "load balancer 会删除数据库"
+      "webhook 请求里不会携带订单标识，所以永远无法关联到具体订单",
+      "支付网关一定同步返回结果，不存在异步回调这种情况",
+      "callback 可能落在负载均衡后的另一台 server 上，那台机器没有原来的内存状态",
+      "load balancer 在流量高峰时会清空后端数据库记录"
+    ],
+    "options_en": [
+      "Webhook requests never carry an order identifier, so they can never be linked to a specific order.",
+      "The payment gateway always responds synchronously, so there is no such thing as an async callback.",
+      "The callback can land on a different server behind the load balancer that has no memory of the original flow.",
+      "The load balancer wipes backend database records during traffic spikes."
     ],
     "answer": [
-      0
+      2
     ],
     "why": "扩容后请求不一定回到同一台机器。流程状态必须通过 durable store 和 workflow ID 关联，而不能靠某台服务器记忆。",
     "why_en": "Webhook callbacks may land on a different host, so workflow state must be durable and addressable by ID.",
+    "termDefinitions": [
+      {
+        "term": "webhook",
+        "meaning": "外部系统在事件发生后主动 HTTP 回调你服务的机制。",
+        "meaningEn": "A webhook is an HTTP callback an external system makes to your service when an event happens."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把请求分发到多台后端服务器的组件。",
+        "meaningEn": "A load balancer distributes incoming requests across multiple backend servers."
+      }
+    ],
     "tags": [
       "callback-routing",
       "webhook",
@@ -106,16 +170,39 @@
     "sub": "saga",
     "q": "Saga pattern 的核心定义是什么？",
     "options": [
-      "一系列本地提交步骤，每一步都有可补偿动作；失败时反向执行补偿",
-      "一个覆盖所有服务的永久分布式锁",
-      "只读缓存",
-      "一次 SQL SELECT"
+      "跨所有参与服务加一把全局分布式锁，直到最后一步成功才释放",
+      "在读路径加一层缓存，用来加速重复查询",
+      "把所有步骤压缩成一次原子 SQL 事务来保证一致性",
+      "一系列本地提交的步骤，每一步都有对应的补偿动作；失败时按反方向执行补偿"
+    ],
+    "options_en": [
+      "Take a single global distributed lock across every participating service until the last step succeeds.",
+      "Add a cache layer on the read path to speed up repeated queries.",
+      "Squeeze every step into one atomic SQL transaction to guarantee consistency.",
+      "A sequence of locally committed steps, each with a matching compensating action, undone in reverse order on failure."
     ],
     "answer": [
-      0
+      3
     ],
     "why": "Saga 不保证所有步骤原子同时提交，而是保证已提交的步骤可以被补偿。它接受短暂不一致。",
     "why_en": "A saga is a sequence of local steps with compensating actions that undo completed work if a later step fails.",
+    "termDefinitions": [
+      {
+        "term": "saga",
+        "meaning": "一系列本地事务加补偿动作的模式，用于跨服务保证最终一致性。",
+        "meaningEn": "A saga is a sequence of local transactions with compensating actions that keep cross-service work eventually consistent."
+      },
+      {
+        "term": "分布式锁",
+        "meaning": "跨多个进程/服务共享的锁，用来阻止并发修改同一资源。",
+        "meaningEn": "A distributed lock is a lock shared across processes or services that prevents concurrent modification of the same resource."
+      },
+      {
+        "term": "SQL 事务",
+        "meaning": "单个数据库内保证原子性的一组操作。",
+        "meaningEn": "A SQL transaction is a set of operations inside a single database guaranteed to be atomic together."
+      }
+    ],
     "tags": [
       "saga",
       "compensation",
@@ -131,16 +218,41 @@
     "sub": "saga-vs-2pc",
     "q": "为什么很多跨服务业务流程不用 Two-Phase Commit，而用 saga？",
     "options": [
-      "2PC 会长时间锁住参与者且外部系统不一定支持事务协议；saga 用补偿处理失败",
-      "2PC 永远比 saga 更快更可靠",
-      "saga 要求所有步骤同步锁定",
-      "外部支付网关都原生支持你的数据库事务"
+      "2PC 长时间锁住所有参与者，外部系统未必支持事务协议",
+      "2PC 在任何场景下都比 saga 更快更可靠",
+      "saga 要求所有步骤都同步加锁直到全部完成",
+      "外部支付网关天生就支持你数据库的事务协议"
     ],
+    "options_en": [
+      "2PC holds a lock on every participant for a long time, and external systems often don't speak your transaction protocol.",
+      "2PC is always faster and more reliable than a saga in every scenario.",
+      "A saga requires every step to be synchronously locked until the whole flow finishes.",
+      "External payment gateways natively support your database's transaction protocol."
+    ],
+    "tradeoff": "长事务加锁的原子性 vs 补偿式的最终一致性",
     "answer": [
       0
     ],
     "why": "支付、人审、发货等步骤可能很慢或不受你控制，不能靠长事务锁住全部资源。Saga 更适合现实中的异步业务流程。",
     "why_en": "Sagas avoid long distributed locks and work with external systems by compensating committed steps instead of atomically locking everything.",
+    "termDefinitions": [
+      {
+        "term": "2PC",
+        "fullName": "Two-Phase Commit",
+        "meaning": "两阶段提交协议，参与者先投票再统一提交或回滚。",
+        "meaningEn": "Two-Phase Commit is a distributed transaction protocol where participants vote, then all commit or all roll back together."
+      },
+      {
+        "term": "saga",
+        "meaning": "一系列本地事务加补偿动作的模式，用于跨服务保证最终一致性。",
+        "meaningEn": "A saga is a sequence of local transactions with compensating actions that keep cross-service work eventually consistent."
+      },
+      {
+        "term": "支付网关",
+        "meaning": "处理信用卡/银行扣款的第三方服务，通常不支持你的数据库事务协议。",
+        "meaningEn": "A payment gateway is the third-party service that processes card or bank charges, and it usually does not speak your database's transaction protocol."
+      }
+    ],
     "tags": [
       "saga",
       "2pc",
@@ -148,20 +260,20 @@
     ],
     "table": {
       "headers": [
-        "Approach",
-        "Best for",
-        "Tradeoff"
+        "方案",
+        "适合场景",
+        "代价"
       ],
       "rows": [
         [
-          "Two phase commit",
-          "Atomic commit across participants",
-          "Locks and tight coupling"
+          "两阶段提交 (2PC)",
+          "跨库原子提交",
+          "长时间加锁、强耦合"
         ],
         [
           "Saga",
-          "Long business workflow",
-          "Compensation instead of atomicity"
+          "跨服务长流程",
+          "补偿代替原子性"
         ]
       ]
     }
@@ -187,6 +299,18 @@
     ],
     "why": "Saga 中每个已提交步骤都要有反向补偿。补偿本身也要重试和幂等。",
     "why_en": "If inventory fails after payment succeeds, the saga compensates by refunding the payment and marking the order failed.",
+    "termDefinitions": [
+      {
+        "term": "saga",
+        "meaning": "一系列本地事务加补偿动作的模式，用于跨服务保证最终一致性。",
+        "meaningEn": "A saga is a sequence of local transactions with compensating actions that keep cross-service work eventually consistent."
+      },
+      {
+        "term": "补偿动作",
+        "meaning": "撤销已提交步骤业务效果的反向操作，例如退款撤销扣款。",
+        "meaningEn": "A compensating action is a reverse business operation, like a refund, that undoes an already-committed step."
+      }
+    ],
     "tags": [
       "saga",
       "compensation",
@@ -202,18 +326,41 @@
     "sub": "compensation",
     "q": "关于 compensating actions，哪些说法正确？（多选）",
     "options": [
-      "补偿也可能失败，需要 retry 和人工兜底",
-      "补偿应尽量 idempotent",
-      "补偿不是时间倒流，而是业务上的反向动作，例如 refund",
-      "补偿永远不需要监控"
+      "补偿永远不需要额外监控，出问题也不用告警",
+      "补偿也可能失败，需要重试机制和人工兜底处理",
+      "补偿动作应该尽量做到幂等",
+      "补偿不是时间倒流，而是业务上的反向动作，例如退款"
+    ],
+    "options_en": [
+      "Compensation never needs extra monitoring or alerting when it fails.",
+      "Compensation can also fail, so it needs retries and a human fallback.",
+      "Compensating actions should be as idempotent as possible.",
+      "Compensation isn't time travel; it's a business-level reverse action, like a refund."
     ],
     "answer": [
-      0,
       1,
-      2
+      2,
+      3
     ],
     "why": "补偿是生产流程的一等公民：退款、释放库存、取消标签等都可能失败，必须可重试、可观测。",
     "why_en": "Compensations are business undo steps that must be retryable, idempotent, and observable.",
+    "termDefinitions": [
+      {
+        "term": "补偿动作",
+        "meaning": "撤销已提交步骤业务效果的反向操作，例如退款撤销扣款。",
+        "meaningEn": "A compensating action is a reverse business operation, like a refund, that undoes an already-committed step."
+      },
+      {
+        "term": "幂等",
+        "meaning": "多次执行同一操作，业务效果和执行一次相同。",
+        "meaningEn": "Idempotent means repeating the same operation has the same business effect as doing it once."
+      },
+      {
+        "term": "refund",
+        "meaning": "退款，撤销一次已完成扣款的业务动作。",
+        "meaningEn": "A refund is the business action that reverses a completed charge."
+      }
+    ],
     "tags": [
       "compensation",
       "idempotency",
@@ -228,16 +375,40 @@
     "sub": "choreography-vs-orchestration",
     "q": "Saga choreography 和 orchestration 的主要区别是什么？",
     "options": [
-      "Choreography 没有中心协调者，服务响应事件；orchestration 有中心 coordinator 拥有流程",
-      "Choreography 只能同步执行，orchestration 只能异步执行",
-      "两者都没有状态",
-      "Orchestration 不能处理补偿"
+      "Choreography 只能同步调用外部服务；orchestration 则只能用异步事件调用外部服务",
+      "Choreography 没有中心协调者、靠事件驱动；orchestration 有中心 coordinator 拥有全流程",
+      "无论 choreography 还是 orchestration，两者都完全不会保存任何跨步骤的流程状态",
+      "Orchestration 架构下的补偿逻辑天生无法实现，只能靠人工事后补救"
     ],
+    "options_en": [
+      "Choreography can only call external services synchronously, and orchestration can only call them through async events.",
+      "Choreography has no central coordinator and advances by services reacting to events; orchestration has one coordinator that owns the whole flow.",
+      "Neither choreography nor orchestration keeps any cross-step flow state at all.",
+      "Orchestration architectures fundamentally cannot implement compensation logic and need manual cleanup instead."
+    ],
+    "tradeoff": "隐式事件驱动的松耦合 vs 显式中心协调的可见性",
     "answer": [
-      0
+      1
     ],
     "why": "编舞让流程从事件反应中涌现；编排把流程显式写在一个协调者里。复杂流程通常更适合编排。",
     "why_en": "Choreography coordinates through service reactions to events, while orchestration uses a central coordinator that owns the flow.",
+    "termDefinitions": [
+      {
+        "term": "choreography",
+        "meaning": "无中心协调者，服务各自订阅事件并响应的协作方式。",
+        "meaningEn": "Choreography is coordination where services react to events without a central coordinator."
+      },
+      {
+        "term": "orchestration",
+        "meaning": "由一个中心协调者持有并驱动整个流程。",
+        "meaningEn": "Orchestration is coordination where a single coordinator owns and drives the whole flow."
+      },
+      {
+        "term": "coordinator",
+        "meaning": "拥有并推进跨服务流程的组件。",
+        "meaningEn": "A coordinator is the component that owns and advances a cross-service process."
+      }
+    ],
     "tags": [
       "choreography",
       "orchestration",
@@ -245,20 +416,20 @@
     ],
     "table": {
       "headers": [
-        "Style",
-        "Coordinator",
-        "Visibility"
+        "方式",
+        "协调者",
+        "流程可见性"
       ],
       "rows": [
         [
           "Choreography",
-          "Events between services",
-          "Flow is distributed"
+          "无中心，靠事件驱动",
+          "流程分散在多个worker"
         ],
         [
           "Orchestration",
-          "Central workflow owner",
-          "Flow is explicit"
+          "一个中心coordinator",
+          "流程集中、显式可见"
         ]
       ]
     }
@@ -272,17 +443,43 @@
     "scenario": "几个独立团队的服务通过事件松耦合协作，流程中等复杂，每个服务只需响应自己关心的事件。",
     "q": "哪种 saga 协调方式可能合适？",
     "options": [
-      "Event-driven choreography",
-      "单台 API server 内存流程",
-      "全局 2PC",
-      "浏览器本地状态机"
+      "让单台 API server 在内存里跑完整流程",
+      "给所有参与服务加一把全局 2PC 事务锁",
+      "采用事件驱动的 choreography",
+      "把整个状态机搬到浏览器本地保存"
     ],
+    "options_en": [
+      "Run the whole flow in memory on a single API server.",
+      "Wrap every participating service in one global 2PC transaction lock.",
+      "Use event-driven choreography.",
+      "Move the entire state machine into local browser storage."
+    ],
+    "tradeoff": "独立团队松耦合协作 vs 中心协调的可见性和控制力",
     "answer": [
-      0
+      2
     ],
     "why": "编舞适合独立服务和中等复杂流程。它降低中心耦合，但整体流程不在单个地方显式可见。",
     "why_en": "Event-driven choreography fits moderately complex flows across independent services.",
     "whenOtherWins": "如果流程分支很多、需要强可视性和集中控制，orchestration/workflow engine 更合适。",
+    "termDefinitions": [
+      {
+        "term": "choreography",
+        "meaning": "无中心协调者，服务各自订阅事件并响应的协作方式。",
+        "meaningEn": "Choreography is coordination where services react to events without a central coordinator."
+      },
+      {
+        "term": "2PC",
+        "fullName": "Two-Phase Commit",
+        "meaning": "两阶段提交协议，参与者先投票再统一提交或回滚。",
+        "meaningEn": "Two-Phase Commit is a distributed transaction protocol where participants vote, then all commit or all roll back together."
+      },
+      {
+        "term": "API server",
+        "fullName": "Application Programming Interface server",
+        "meaning": "处理请求逻辑的应用服务器进程。",
+        "meaningEn": "An API server is the application process that handles request logic."
+      }
+    ],
     "tags": [
       "choreography",
       "event-driven",
@@ -298,17 +495,36 @@
     "scenario": "一个流程有复杂分支、补偿、人类等待和审计要求，你希望在一个地方看到完整状态。",
     "q": "哪种方式更合适？",
     "options": [
-      "Workflow orchestration / durable execution engine",
-      "让各服务随便发事件，不记录全局流程",
-      "只靠 API server 内存变量",
-      "同步 HTTP 链式调用到底"
+      "让各服务随意发布事件、互不协调，也完全不记录任何全局流程状态",
+      "只把进度保存在 API server 进程的内存变量里，重启后立刻清空",
+      "把整个业务流程写成一条从头到尾同步阻塞的 HTTP 链式调用",
+      "使用 workflow orchestration / durable execution 引擎"
     ],
+    "options_en": [
+      "Let every service publish events freely with no coordination and no record of the overall flow.",
+      "Keep progress only in an in-memory variable inside the API server process, wiped on restart.",
+      "Write the entire business flow as one synchronous, blocking chain of HTTP calls end to end.",
+      "Use a workflow orchestration or durable execution engine."
+    ],
+    "tradeoff": "中心化可见性和 durable 恢复 vs 引擎运维和学习成本",
     "answer": [
-      0
+      3
     ],
     "why": "复杂流程需要中心化可见性、durable progress、retry 和 compensation。workflow engine 正是为此设计。",
     "why_en": "Complex branching, waiting, compensation, and audit requirements fit workflow orchestration.",
     "whenOtherWins": "简单单步异步任务用 queue + worker 即可，workflow engine 可能过重。",
+    "termDefinitions": [
+      {
+        "term": "orchestration",
+        "meaning": "由一个中心协调者持有并驱动整个流程。",
+        "meaningEn": "Orchestration is coordination where a single coordinator owns and drives the whole flow."
+      },
+      {
+        "term": "durable execution",
+        "meaning": "让长时间运行的代码在崩溃/重启后能从上次进度恢复的执行模型。",
+        "meaningEn": "Durable execution lets long-running code resume from its last recorded progress after a crash or restart."
+      }
+    ],
     "tags": [
       "orchestration",
       "workflow-engine",
@@ -323,16 +539,39 @@
     "sub": "event-store",
     "q": "Event-driven choreography 中 durable log / event store 的作用是什么？",
     "options": [
-      "记录发生过的事件，并驱动订阅 worker 继续处理下一步",
-      "只保存当前内存状态",
-      "替代所有业务服务",
-      "只用于前端日志"
+      "持久记录发生过的事件，并驱动订阅的 worker 继续处理下一步",
+      "只在内存里保存系统当前这一刻的状态快照，不留历史",
+      "完全替代所有业务服务本身要做的处理逻辑",
+      "只是给前端页面展示用的操作日志而已"
+    ],
+    "options_en": [
+      "It durably records events that happened and drives subscribed workers to process the next step.",
+      "It only keeps an in-memory snapshot of the current moment with no history.",
+      "It fully replaces every business service's own processing logic.",
+      "It's only operational logging for the frontend to display."
     ],
     "answer": [
       0
     ],
     "why": "事件日志既是审计历史，也是协调机制。Worker 消费事件、执行业务动作，并发出后续事件。",
     "why_en": "The durable event log stores history and drives workers that react to events and emit the next events.",
+    "termDefinitions": [
+      {
+        "term": "event store",
+        "meaning": "持久化事件流的存储，worker 消费事件驱动流程。",
+        "meaningEn": "An event store durably logs a stream of events that workers consume to drive the process."
+      },
+      {
+        "term": "worker",
+        "meaning": "消费事件或任务并执行业务逻辑的服务进程。",
+        "meaningEn": "A worker is a service process that consumes events or tasks and executes business logic."
+      },
+      {
+        "term": "durable log",
+        "meaning": "持久化、可重放的事件日志，如 Kafka。",
+        "meaningEn": "A durable log is a persistent, replayable event log, such as Kafka."
+      }
+    ],
     "tags": [
       "event-store",
       "durable-log",
@@ -347,18 +586,51 @@
     "sub": "choreography-benefits",
     "q": "Event-driven choreography 的收益包括哪些？（多选）",
     "options": [
-      "worker 崩溃后可从最后提交 offset 继续",
-      "可通过增加 consumer 扩展到 partition 数上限",
-      "event log 提供完整 audit trail",
-      "插入中间步骤永远不需要改 event contracts"
+      "worker 崩溃后可以从最后提交的 offset 继续处理",
+      "在事件链中间插入新步骤，永远不需要修改任何 event contract",
+      "可以通过增加 consumer 数量扩展，直到 partition 数量上限",
+      "event log 本身提供完整的 audit trail"
+    ],
+    "options_en": [
+      "After a worker crashes, it can resume from the last committed offset.",
+      "Inserting a new step in the middle of the chain never requires changing any event contract.",
+      "You can scale out by adding more consumers, up to the partition count.",
+      "The event log itself provides a complete audit trail."
     ],
     "answer": [
       0,
-      1,
-      2
+      2,
+      3
     ],
     "why": "事件日志给 fault tolerance、scaling 和 audit 带来好处。但流程是隐式的，中间插步骤常要改上下游事件契约。",
     "why_en": "Choreography gains fault tolerance, scalability, and auditability from the event log, but flow changes can require contract changes.",
+    "termDefinitions": [
+      {
+        "term": "offset",
+        "meaning": "消费者在事件日志中读到的位置标记。",
+        "meaningEn": "An offset marks the position a consumer has read up to in the event log."
+      },
+      {
+        "term": "consumer",
+        "meaning": "从事件日志读取并处理事件的客户端。",
+        "meaningEn": "A consumer is a client that reads and processes events from the log."
+      },
+      {
+        "term": "partition",
+        "meaning": "事件日志切分的并行分片，决定最大并发消费者数。",
+        "meaningEn": "A partition is a parallel shard of the event log that caps the number of concurrent consumers."
+      },
+      {
+        "term": "event contract",
+        "meaning": "事件的字段结构约定，上下游 worker 都依赖它。",
+        "meaningEn": "An event contract is the agreed field structure of an event that upstream and downstream workers depend on."
+      },
+      {
+        "term": "audit trail",
+        "meaning": "记录系统所有历史操作的可追溯日志。",
+        "meaningEn": "An audit trail is a traceable record of everything that happened in the system."
+      }
+    ],
     "tags": [
       "choreography",
       "benefits",
@@ -373,16 +645,39 @@
     "sub": "choreography-limits",
     "q": "Event-driven choreography 在复杂流程中的主要问题是什么？",
     "options": [
-      "整体流程隐式分散在许多 worker 和 event contract 中，理解和修改困难",
-      "它无法处理任何失败",
-      "它不能扩展 worker",
-      "它没有任何审计记录"
+      "Choreography 架构完全没有办法处理任何失败场景",
+      "整体流程隐式散落在很多 worker 和 event contract 里，难以理解和修改",
+      "Choreography 下无法通过增加 worker 数量来扩展",
+      "Choreography 完全不会留下任何审计记录信息"
+    ],
+    "options_en": [
+      "Choreography architectures have no way to handle any failure at all.",
+      "The overall flow is implicitly scattered across many workers and event contracts, making it hard to understand and change.",
+      "Choreography cannot scale by adding more workers.",
+      "Choreography leaves behind no audit record whatsoever."
     ],
     "answer": [
-      0
+      1
     ],
     "why": "编舞越复杂，越难回答“这个订单现在为什么卡在这里”。需要额外工具来理解事件链和缺失处理者。",
     "why_en": "Choreography becomes hard to understand and change because the flow is implicit across many workers and contracts.",
+    "termDefinitions": [
+      {
+        "term": "choreography",
+        "meaning": "无中心协调者，服务各自订阅事件并响应的协作方式。",
+        "meaningEn": "Choreography is coordination where services react to events without a central coordinator."
+      },
+      {
+        "term": "worker",
+        "meaning": "消费事件或任务并执行业务逻辑的服务进程。",
+        "meaningEn": "A worker is a service process that consumes events or tasks and executes business logic."
+      },
+      {
+        "term": "event contract",
+        "meaning": "事件的字段结构约定，上下游 worker 都依赖它。",
+        "meaningEn": "An event contract is the agreed field structure of an event that upstream and downstream workers depend on."
+      }
+    ],
     "tags": [
       "choreography",
       "limits",
@@ -397,16 +692,34 @@
     "sub": "durable-execution",
     "q": "Durable execution 是什么？",
     "options": [
-      "一种让长时间运行的业务代码跨崩溃/重启恢复到上次成功步骤的执行模型",
-      "让函数永远不返回",
-      "只在浏览器里保存流程状态",
-      "给数据库加索引"
+      "让函数永远保持挂起状态、不返回任何结果的执行方式",
+      "只在用户浏览器本地缓存里保存流程状态",
+      "让长时间运行的业务代码在崩溃重启后恢复到上次成功步骤的执行模型",
+      "给数据库表的高频查询列加索引以加速读取"
+    ],
+    "options_en": [
+      "It means keeping a function suspended forever without ever returning a result.",
+      "It means storing flow state only in the user's local browser cache.",
+      "An execution model where long-running business code resumes from its last successful step after a crash or restart.",
+      "It means adding an index to a frequently queried database column."
     ],
     "answer": [
-      0
+      2
     ],
     "why": "Durable execution engine 记录步骤历史，worker 崩溃后可在另一台机器恢复流程。Temporal 是典型代表。",
     "why_en": "Durable execution lets long-running workflow code survive crashes and resume from recorded progress.",
+    "termDefinitions": [
+      {
+        "term": "durable execution",
+        "meaning": "让长时间运行的代码在崩溃/重启后能从上次进度恢复的执行模型。",
+        "meaningEn": "Durable execution lets long-running code resume from its last recorded progress after a crash or restart."
+      },
+      {
+        "term": "Temporal",
+        "meaning": "最流行的开源 durable execution 引擎。",
+        "meaningEn": "Temporal is the most popular open-source durable execution engine."
+      }
+    ],
     "tags": [
       "durable-execution",
       "temporal",
@@ -421,22 +734,73 @@
     "sub": "workflow-vs-activity",
     "q": "Temporal 里 Workflow 和 Activity 的区别是什么？",
     "options": [
-      "Workflow 是确定性的流程决策代码；Activity 是真正调用外部系统的步骤",
-      "Activity 决定流程，Workflow 只能发 HTTP",
-      "两者都可以随意做随机数和网络调用",
-      "两者都只存在数据库里，不运行代码"
+      "Activity 负责决定流程走向，Workflow 只能用来发 HTTP 请求",
+      "Workflow 和 Activity 都可以随意生成随机数、发起网络调用",
+      "Workflow 和 Activity 都只存在数据库记录里，不运行任何代码",
+      "Workflow 是确定性的流程决策代码；Activity 才是真正调用外部系统、产生副作用的步骤"
     ],
+    "options_en": [
+      "Activities decide the flow, and workflows can only make HTTP requests.",
+      "Both workflows and activities can freely generate random numbers and make network calls.",
+      "Both workflows and activities are just database records that run no code.",
+      "A workflow is deterministic flow-decision code; an activity is the step that actually calls external systems and causes side effects."
+    ],
+    "tradeoff": "确定性流程控制 vs 有副作用的外部调用",
     "answer": [
-      0
+      3
     ],
     "why": "Workflow 像 recipe，负责控制流；Activity 像具体动作，负责支付、发邮件、调用服务等副作用。",
     "why_en": "A workflow is deterministic orchestration code, while activities perform the external side-effecting steps.",
+    "termDefinitions": [
+      {
+        "term": "Workflow",
+        "meaning": "描述流程控制逻辑的确定性代码，由引擎驱动执行。",
+        "meaningEn": "A Workflow is deterministic code describing the flow's control logic, driven by the engine."
+      },
+      {
+        "term": "Activity",
+        "meaning": "Workflow 里真正调用外部系统、产生副作用的一步。",
+        "meaningEn": "An Activity is the workflow step that actually calls external systems and causes side effects."
+      },
+      {
+        "term": "确定性",
+        "meaning": "同样输入和历史必须做出同样的执行路径。",
+        "meaningEn": "Determinism means the same input and history always produce the same execution path."
+      },
+      {
+        "term": "HTTP",
+        "fullName": "HyperText Transfer Protocol",
+        "meaning": "用于客户端和服务器之间通信的应用层协议。",
+        "meaningEn": "HTTP, or HyperText Transfer Protocol, is the application-layer protocol used for client-server communication."
+      }
+    ],
     "tags": [
       "temporal",
       "workflow",
       "activity",
       "contrast"
-    ]
+    ],
+    "table": {
+      "headers": [
+        "组件",
+        "职责",
+        "是否确定性"
+      ],
+      "rows": [
+        [
+          "Workflow",
+          "决定流程走向",
+          "必须确定性、可重放"
+        ],
+        [
+          "Activity",
+          "调用外部系统",
+          "可以有副作用、需幂等"
+        ]
+      ]
+    },
+    "codeSample": "const { processPayment, reserveInventory } =\n  proxyActivities<Activities>({ startToCloseTimeout: '5m' });\n\nasync function myWorkflow(input: Order) {\n  const payment = await processPayment(input); // Activity: real side effect\n  if (payment.success) {\n    await reserveInventory(input);              // Workflow: deterministic branch\n  }\n}",
+    "lang": "typescript"
   },
   {
     "id": "sd-patterns-multi-step-processes-017",
@@ -446,16 +810,39 @@
     "sub": "determinism",
     "q": "为什么 durable execution 的 Workflow code 必须 deterministic？",
     "options": [
-      "恢复时会 replay workflow；同样输入和历史必须做出同样决策",
-      "因为 workflow 不能有 if",
-      "因为 activity 不会失败",
-      "因为数据库不存历史"
+      "恢复时引擎会 replay workflow 代码；同样的输入和历史必须做出同样的决策",
+      "因为 workflow 代码里根本不允许写 if 条件判断",
+      "因为 activity 一旦发起调用就绝对不会失败",
+      "因为数据库完全不会保存任何历史记录"
+    ],
+    "options_en": [
+      "On recovery the engine replays the workflow code, and the same input and history must produce the same decisions.",
+      "Because workflow code is not allowed to contain if statements at all.",
+      "Because an activity, once called, can never fail.",
+      "Because the database never stores any history at all."
     ],
     "answer": [
       0
     ],
     "why": "Workflow 恢复靠从头重放代码并用 history 返回已完成 Activity 结果。若代码非确定性，重放会走到不同路径。",
     "why_en": "Workflow code must be deterministic because recovery replays it against recorded history.",
+    "termDefinitions": [
+      {
+        "term": "replay",
+        "meaning": "worker 崩溃后从头重新执行 workflow 代码，用历史记录跳过已完成的 Activity。",
+        "meaningEn": "Replay re-executes workflow code from the top after a crash, using recorded history to skip already-completed activities."
+      },
+      {
+        "term": "Workflow",
+        "meaning": "描述流程控制逻辑的确定性代码，由引擎驱动执行。",
+        "meaningEn": "A Workflow is deterministic code describing the flow's control logic, driven by the engine."
+      },
+      {
+        "term": "Activity",
+        "meaning": "Workflow 里真正调用外部系统、产生副作用的一步。",
+        "meaningEn": "An Activity is the workflow step that actually calls external systems and causes side effects."
+      }
+    ],
     "tags": [
       "determinism",
       "replay",
@@ -470,16 +857,39 @@
     "sub": "activity-idempotency",
     "q": "为什么 Activity 需要 idempotent？",
     "options": [
-      "如果 Activity 成功但成功回报丢失，engine 可能重试；重复副作用必须安全",
-      "因为 Activity 永远不会重试",
-      "因为 Activity 不能调用外部系统",
-      "因为 Workflow 不记录历史"
+      "因为 Activity 一旦执行就永远不会被重试",
+      "Activity 成功但成功回报丢失时，engine 可能重试；重复的副作用必须安全无害",
+      "因为 Activity 根本不允许调用任何外部系统",
+      "因为 Workflow 完全不记录任何执行历史"
+    ],
+    "options_en": [
+      "Because once an activity runs, it is never retried.",
+      "If an activity succeeds but its success report is lost, the engine may retry it, so repeated side effects must be safe.",
+      "Because activities are not allowed to call any external system at all.",
+      "Because workflows record no execution history whatsoever."
     ],
     "answer": [
-      0
+      1
     ],
     "why": "跨网络无法真正保证 exactly-once delivery。要通过 idempotency key 让重复尝试的业务效果只有一次。",
     "why_en": "Activities need idempotency because retries can happen after ambiguous success reports.",
+    "termDefinitions": [
+      {
+        "term": "Activity",
+        "meaning": "Workflow 里真正调用外部系统、产生副作用的一步。",
+        "meaningEn": "An Activity is the workflow step that actually calls external systems and causes side effects."
+      },
+      {
+        "term": "engine",
+        "meaning": "驱动 workflow/activity 执行、记录进度的引擎服务。",
+        "meaningEn": "The engine is the service that drives workflow and activity execution and records progress."
+      },
+      {
+        "term": "幂等",
+        "meaning": "多次执行同一操作，业务效果和执行一次相同。",
+        "meaningEn": "Idempotent means repeating the same operation has the same business effect as doing it once."
+      }
+    ],
     "tags": [
       "activity",
       "idempotency",
@@ -509,6 +919,23 @@
     ],
     "why": "Replay 让业务代码看起来从头跑，但已完成 Activity 不会重放副作用。执行会恢复到崩溃点之后。",
     "why_en": "Replay re-executes workflow code but returns recorded activity results until execution reaches the point after the crash.",
+    "termDefinitions": [
+      {
+        "term": "replay",
+        "meaning": "worker 崩溃后从头重新执行 workflow 代码，用历史记录跳过已完成的 Activity。",
+        "meaningEn": "Replay re-executes workflow code from the top after a crash, using recorded history to skip already-completed activities."
+      },
+      {
+        "term": "history",
+        "meaning": "记录每个 workflow 决策和 Activity 结果的追加日志。",
+        "meaningEn": "History is the append-only log of every workflow decision and activity result."
+      },
+      {
+        "term": "worker",
+        "meaning": "消费事件或任务并执行业务逻辑的服务进程。",
+        "meaningEn": "A worker is a service process that consumes events or tasks and executes business logic."
+      }
+    ],
     "tags": [
       "replay",
       "temporal",
@@ -524,18 +951,41 @@
     "sub": "temporal-components",
     "q": "Temporal 部署通常包含哪些核心组件？（多选）",
     "options": [
-      "Temporal Server 负责调度、timeout、记录进度",
-      "History Database 记录 workflow decisions 和 Activity results",
-      "Worker Pools 运行 workflow/activity 代码",
-      "客户端浏览器直接执行所有 workflow"
+      "Temporal Server 负责任务调度、超时管理、记录执行进度",
+      "History Database 记录所有 workflow 决策和 Activity 结果",
+      "客户端浏览器直接执行所有 workflow 代码",
+      "Worker Pools 运行你的 workflow/activity 代码"
+    ],
+    "options_en": [
+      "The Temporal Server handles task scheduling, timeouts, and progress bookkeeping.",
+      "The History Database records every workflow decision and activity result.",
+      "The client's browser directly executes all workflow code.",
+      "Worker pools run your workflow and activity code."
     ],
     "answer": [
       0,
       1,
-      2
+      3
     ],
     "why": "Temporal Server 不运行你的业务代码，它是 bookkeeper。业务代码在你运行的 worker 进程里。",
     "why_en": "Temporal uses a server for bookkeeping, a history database, and worker pools that run workflow and activity code.",
+    "termDefinitions": [
+      {
+        "term": "Temporal Server",
+        "meaning": "Temporal 里负责调度和记录进度的引擎组件，不运行你的业务代码。",
+        "meaningEn": "The Temporal Server is the engine component that schedules work and records progress; it never runs your business code."
+      },
+      {
+        "term": "History Database",
+        "meaning": "记录每个 workflow 决策和 Activity 结果的追加日志存储。",
+        "meaningEn": "The History Database is the append-only storage of every workflow decision and activity result."
+      },
+      {
+        "term": "Worker Pool",
+        "meaning": "运行你自己 workflow/activity 代码的进程集合。",
+        "meaningEn": "A worker pool is the set of processes that run your own workflow and activity code."
+      }
+    ],
     "tags": [
       "temporal",
       "components",
@@ -552,17 +1002,43 @@
     "scenario": "贷款审批 workflow 需要等待客户签署文件，可能 5 分钟也可能 5 天。",
     "q": "Workflow system 应如何高效等待？",
     "options": [
-      "用 signal / durable timer 等外部事件，等待时不占 worker 线程",
-      "让一个 worker thread sleep 5 天",
-      "每秒轮询客户浏览器",
-      "要求用户同步等待 HTTP 请求"
+      "让一个 worker thread 一直阻塞 sleep 5 天来等待",
+      "让服务器每隔一秒轮询一次客户端浏览器状态",
+      "用 signal / durable timer 等外部事件，等待时不占用 worker 线程",
+      "让用户发起的 HTTP 请求同步挂起，直到文件签署完成为止"
     ],
+    "options_en": [
+      "Have a worker thread block with sleep for 5 straight days to wait.",
+      "Have the server poll the client's browser once every second.",
+      "Wait for the external event with a signal or durable timer, without holding a worker thread.",
+      "Make the user's HTTP request hang synchronously until the document is signed."
+    ],
+    "tradeoff": "持久信号等待零线程占用 vs 简单轮询的实现成本",
     "answer": [
-      0
+      2
     ],
     "why": "Workflow engine 持久化等待状态并释放 worker。webhook 到来时通过 workflow ID 发 signal 唤醒流程。",
     "why_en": "Workflow systems wait for external events with durable signals and timers without holding worker threads.",
     "whenOtherWins": "如果等待只有几秒且流程简单，普通 queue + status polling 也可能足够。",
+    "termDefinitions": [
+      {
+        "term": "signal",
+        "meaning": "外部系统用来唤醒等待中 workflow 的持久化消息机制。",
+        "meaningEn": "A signal is a durable message mechanism used to wake up a waiting workflow."
+      },
+      {
+        "term": "durable timer",
+        "meaning": "不占用 worker 线程、可持续数天的定时等待机制。",
+        "meaningEn": "A durable timer is a wait mechanism that can last days without holding a worker thread."
+      },
+      {
+        "term": "worker thread",
+        "meaning": "实际执行代码的工作线程/进程。",
+        "meaningEn": "A worker thread is the thread or process that actually executes code."
+      }
+    ],
+    "codeSample": "const documentSigned = defineSignal<[SignatureData]>('documentSigned');\n\nasync function documentSigningWorkflow(docId: string) {\n  let signature: SignatureData | undefined;\n  setHandler(documentSigned, (data) => { signature = data; });\n  await sendForSignature(docId);\n  await condition(() => signature !== undefined, '30 days'); // waits without a thread\n}",
+    "lang": "typescript",
     "tags": [
       "signals",
       "human-in-the-loop",
@@ -577,16 +1053,47 @@
     "sub": "temporal-vs-step-functions",
     "q": "Temporal 和 AWS Step Functions 的主要建模差异是什么？",
     "options": [
-      "Temporal 通常用代码描述 workflow；Step Functions 用 state machine/DAG 定义",
-      "Temporal 不能恢复失败；Step Functions 不能记录状态",
-      "Step Functions 只能运行在浏览器",
-      "两者都只用于 ETL"
+      "Temporal 完全无法从失败中恢复；Step Functions 完全不记录任何状态",
+      "Step Functions 只能运行在用户浏览器里",
+      "Temporal 和 Step Functions 都只能用来做 ETL 批处理",
+      "Temporal 通常用代码描述 workflow；Step Functions 用 state machine/DAG 定义流程"
     ],
+    "options_en": [
+      "Temporal cannot recover from failures at all, and Step Functions records no state at all.",
+      "Step Functions can only run inside the user's browser.",
+      "Both Temporal and Step Functions can only be used for ETL batch jobs.",
+      "Temporal typically describes workflows as code, while Step Functions defines them as a state machine or DAG."
+    ],
+    "tradeoff": "代码优先的灵活性 vs 声明式状态机的可视化托管",
     "answer": [
-      0
+      3
     ],
     "why": "两者都能 durable orchestration，但表达方式不同：代码驱动更灵活，声明式状态机更可视化和托管。",
     "why_en": "Temporal usually models workflows as code, while Step Functions models them as managed state machines.",
+    "termDefinitions": [
+      {
+        "term": "Temporal",
+        "meaning": "最流行的开源 durable execution 引擎。",
+        "meaningEn": "Temporal is the most popular open-source durable execution engine."
+      },
+      {
+        "term": "AWS Step Functions",
+        "meaning": "AWS 提供的托管、声明式状态机 workflow 服务。",
+        "meaningEn": "AWS Step Functions is a managed, declarative state-machine workflow service."
+      },
+      {
+        "term": "DAG",
+        "fullName": "Directed Acyclic Graph",
+        "meaning": "有向无环图，表示没有环路的依赖/流程结构。",
+        "meaningEn": "A DAG, or Directed Acyclic Graph, represents a flow with no cycles."
+      },
+      {
+        "term": "ETL",
+        "fullName": "Extract, Transform, Load",
+        "meaning": "从源系统抽取数据、转换、再加载到目标系统的批处理流程。",
+        "meaningEn": "ETL, or Extract Transform Load, is the batch process of pulling data from sources, transforming it, and loading it into a target."
+      }
+    ],
     "tags": [
       "temporal",
       "step-functions",
@@ -594,20 +1101,20 @@
     ],
     "table": {
       "headers": [
-        "Tool",
-        "Model",
-        "Fit"
+        "工具",
+        "建模方式",
+        "适合场景"
       ],
       "rows": [
         [
           "Temporal",
-          "Code first workflow",
-          "Complex custom logic"
+          "代码描述 workflow",
+          "复杂自定义逻辑"
         ],
         [
           "Step Functions",
-          "State machine definition",
-          "Managed AWS integrations"
+          "声明式状态机/DAG",
+          "托管 AWS 集成"
         ]
       ]
     }
@@ -625,6 +1132,12 @@
       "Airflow 擅长 scheduled batch/ETL，不是用户面对的事件驱动长流程首选",
       "所有工具都完全一样，没有任何限制"
     ],
+    "options_en": [
+      "Temporal is powerful and flexible, workflows can run for a long time, but you must operate it yourself or use Temporal Cloud.",
+      "AWS Step Functions is a managed serverless state machine; standard workflows can run for a long time but have payload and other limits.",
+      "Airflow excels at scheduled batch and ETL work, not as the first choice for user-facing, event-driven long-running flows.",
+      "All these tools are exactly the same with no limitations whatsoever."
+    ],
     "answer": [
       0,
       1,
@@ -632,6 +1145,34 @@
     ],
     "why": "面试里工具选择次于理解 recovery model 和 limits。Temporal/Step Functions 覆盖多数设计讨论。",
     "why_en": "Workflow tool choice matters less than understanding the selected tool's recovery model and limits.",
+    "termDefinitions": [
+      {
+        "term": "Temporal",
+        "meaning": "最流行的开源 durable execution 引擎。",
+        "meaningEn": "Temporal is the most popular open-source durable execution engine."
+      },
+      {
+        "term": "Temporal Cloud",
+        "meaning": "Temporal 官方提供的托管服务，免去自己运维引擎。",
+        "meaningEn": "Temporal Cloud is the managed offering from Temporal that removes the need to operate the engine yourself."
+      },
+      {
+        "term": "AWS Step Functions",
+        "meaning": "AWS 提供的托管、声明式状态机 workflow 服务。",
+        "meaningEn": "AWS Step Functions is a managed, declarative state-machine workflow service."
+      },
+      {
+        "term": "Airflow",
+        "meaning": "擅长调度批处理/ETL 的 workflow 工具，不是事件驱动长流程首选。",
+        "meaningEn": "Airflow is a workflow tool that excels at scheduled batch and ETL jobs, not event-driven long-running processes."
+      },
+      {
+        "term": "ETL",
+        "fullName": "Extract, Transform, Load",
+        "meaning": "从源系统抽取数据、转换、再加载到目标系统的批处理流程。",
+        "meaningEn": "ETL, or Extract Transform Load, is the batch process of pulling data from sources, transforming it, and loading it into a target."
+      }
+    ],
     "tags": [
       "workflow-tools",
       "temporal",
@@ -645,18 +1186,42 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "step-functions-limits",
-    "q": "文章提到 AWS Step Functions Standard workflows 的两个典型限制是什么？",
+    "scenario": "Step Functions Standard workflow 执行时长上限约一年，状态间 payload 上限 256KB。",
+    "q": "这两个限制对 workflow 状态设计意味着什么？",
     "options": [
-      "最长一年，状态间 payload 256KB",
-      "最长 1 秒，payload 1 byte",
-      "最长无限，payload 无限",
-      "只能运行 5 分钟，payload 10GB"
+      "大对象不能直接放进 state，必须传引用/ID，长流程也要设计成可分段执行",
+      "只要不超过一年，payload 大小完全不用考虑",
+      "这两个数字只是文档建议，实际没有强制限制",
+      "只要升级到 Express workflow 就能同时突破两个上限"
+    ],
+    "options_en": [
+      "Large objects can't go directly into state; pass references or IDs instead, and design long flows to run in resumable segments.",
+      "As long as you stay under a year, payload size doesn't matter at all.",
+      "These two numbers are just documentation suggestions with no real enforcement.",
+      "Upgrading to Express workflows removes both limits at once."
     ],
     "answer": [
       0
     ],
-    "why": "这些数字不用死背，但要记得托管状态机有执行时长和 payload 限制，不能把大对象塞进状态。",
-    "why_en": "Step Functions Standard workflows are described as capped at about one year with 256 KB payloads between states.",
+    "why": "这是产品给定的硬上限，不是公式推导结果：256KB payload 上限意味着状态只能存 ID/引用；执行时长上限意味着长流程要设计成可恢复的分段执行。",
+    "why_en": "These are fixed product limits rather than derived numbers, so state must carry references instead of large payloads and long flows must be resumable in segments.",
+    "termDefinitions": [
+      {
+        "term": "AWS Step Functions",
+        "meaning": "AWS 提供的托管、声明式状态机 workflow 服务。",
+        "meaningEn": "AWS Step Functions is a managed, declarative state-machine workflow service."
+      },
+      {
+        "term": "payload",
+        "meaning": "在流程步骤之间传递的数据内容。",
+        "meaningEn": "A payload is the data passed between steps in a flow."
+      },
+      {
+        "term": "Standard workflow",
+        "meaning": "Step Functions 的一种执行模式，支持长时间运行但有 payload 限制。",
+        "meaningEn": "A Standard workflow is a Step Functions execution mode that supports long durations but has payload limits."
+      }
+    ],
     "tags": [
       "step-functions",
       "limits",
@@ -672,17 +1237,42 @@
     "scenario": "你发现设计里有一个清晰状态机：多步、长时间等待、失败后要补偿、还要审计历史。",
     "q": "这通常是引入什么的信号？",
     "options": [
-      "Workflow system / durable execution",
-      "普通同步 API",
-      "只用浏览器 localStorage",
-      "只加 CDN"
+      "普通同步 API 已经完全可以应付这种多步骤状态机",
+      "这是引入 workflow system / durable execution 的强信号",
+      "只靠浏览器 localStorage 保存状态，重启页面也不怕",
+      "只需要在前面加一层 CDN 缓存就能应付所有等待"
     ],
+    "options_en": [
+      "A plain synchronous API can already fully handle this multi-step state machine.",
+      "This is a strong signal to introduce a workflow system or durable execution.",
+      "Just keep state in browser localStorage, and a page reload won't matter.",
+      "Just add a CDN layer in front and that covers all the waiting."
+    ],
+    "tradeoff": "复杂状态机的可靠编排 vs 简单方案的低运维成本",
     "answer": [
-      0
+      1
     ],
     "why": "需要 flow chart 的 stateful process 往往适合 workflow。尤其有补偿、长期等待、外部服务和审计时。",
     "why_en": "A stateful multi-step process with waiting, compensation, and audit needs is a strong workflow signal.",
     "whenOtherWins": "如果只是单步发邮件或 resize image，message queue + worker 更简单。",
+    "termDefinitions": [
+      {
+        "term": "durable execution",
+        "meaning": "让长时间运行的代码在崩溃/重启后能从上次进度恢复的执行模型。",
+        "meaningEn": "Durable execution lets long-running code resume from its last recorded progress after a crash or restart."
+      },
+      {
+        "term": "状态机",
+        "meaning": "一组状态和状态间转移规则组成的流程模型。",
+        "meaningEn": "A state machine is a flow model made of states and the transition rules between them."
+      },
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "内容分发网络，把内容缓存在靠近用户的边缘节点。",
+        "meaningEn": "A CDN, or Content Delivery Network, caches content on edge servers close to users."
+      }
+    ],
     "tags": [
       "when-to-use",
       "workflow",
@@ -697,18 +1287,36 @@
     "sub": "interview-signals",
     "q": "哪些面试短语强烈提示 workflow/saga？（多选）",
     "options": [
-      "如果 step X 失败，需要 undo step Y",
-      "需要确保所有步骤完成或已完成步骤被补偿",
-      "用户/外部服务可能几天后回调",
-      "只读一个 profile row"
+      "只是读取一个用户 profile 行的数据",
+      "如果 step X 失败，需要撤销（undo）step Y",
+      "需要确保所有步骤都完成，或者已完成的步骤被补偿",
+      "用户或外部服务可能几天后才会回调通知结果"
+    ],
+    "options_en": [
+      "It's just reading a single user profile row.",
+      "If step X fails, step Y needs to be undone.",
+      "All steps must complete, or completed steps must be compensated.",
+      "The user or an external service might call back days later."
     ],
     "answer": [
-      0,
       1,
-      2
+      2,
+      3
     ],
     "why": "补偿、长等待、外部回调和跨服务状态都是 workflow 信号。单次读请求不是。",
     "why_en": "Compensation, long waits, callbacks, and cross-service state are strong workflow signals.",
+    "termDefinitions": [
+      {
+        "term": "补偿动作",
+        "meaning": "撤销已提交步骤业务效果的反向操作，例如退款撤销扣款。",
+        "meaningEn": "A compensating action is a reverse business operation, like a refund, that undoes an already-committed step."
+      },
+      {
+        "term": "回调",
+        "meaning": "外部系统在稍后时间点主动通知你结果的机制。",
+        "meaningEn": "A callback is a mechanism where an external system notifies you of a result at a later time."
+      }
+    ],
     "tags": [
       "interview-signals",
       "saga",
@@ -724,17 +1332,41 @@
     "scenario": "支付系统中，用户不能被扣款却收不到商品，流程要处理支付、库存、发货、退款和回调。",
     "q": "为什么 workflow/saga 是合理选择？",
     "options": [
-      "流程跨多个系统且有补偿和失败恢复需求",
-      "因为支付只需要一个 SELECT",
-      "因为所有步骤都能放进一个数据库事务",
-      "因为用户无需知道状态"
+      "因为支付只需要执行一条 SQL SELECT 查询",
+      "因为所有步骤都能放进同一个数据库事务里提交",
+      "因为流程跨多个系统，且存在补偿和失败恢复的需求",
+      "因为用户完全不需要知道订单当前处于什么状态"
     ],
+    "options_en": [
+      "Because payment only requires running one SQL SELECT query.",
+      "Because every step can be committed inside the same database transaction.",
+      "Because the flow spans multiple systems and needs compensation and crash recovery.",
+      "Because the user never needs to know the order's current status."
+    ],
+    "tradeoff": "跨系统补偿式可靠性 vs 单库事务的简单性",
     "answer": [
-      0
+      2
     ],
     "why": "支付/履约是 saga 经典场景：各步骤本地提交，失败后按业务规则补偿，并保留可审计历史。",
     "why_en": "Payment fulfillment fits sagas because it spans systems and needs compensation and crash-safe progress.",
     "whenOtherWins": "单个支付网关授权的短同步调用不一定需要 workflow；复杂履约链路才需要。",
+    "termDefinitions": [
+      {
+        "term": "saga",
+        "meaning": "一系列本地事务加补偿动作的模式，用于跨服务保证最终一致性。",
+        "meaningEn": "A saga is a sequence of local transactions with compensating actions that keep cross-service work eventually consistent."
+      },
+      {
+        "term": "SQL SELECT",
+        "meaning": "从数据库读取数据的查询语句。",
+        "meaningEn": "A SQL SELECT is a query statement that reads data from a database."
+      },
+      {
+        "term": "数据库事务",
+        "meaning": "单个数据库内保证原子性的一组操作。",
+        "meaningEn": "A database transaction is a set of operations inside a single database guaranteed to be atomic together."
+      }
+    ],
     "tags": [
       "payment-system",
       "saga",
@@ -750,17 +1382,36 @@
     "scenario": "Uber 派单流程中，系统要等待司机接受或拒绝，期间 rider 看到等待状态。",
     "q": "为什么这是 workflow 候选？",
     "options": [
-      "存在人类等待和外部事件，流程需要持久化状态并在 signal 到来后继续",
-      "因为司机接受永远同步返回",
-      "因为无需状态",
-      "因为只要缓存就能解决"
+      "因为司机接受订单这件事永远都是同步立刻返回结果的",
+      "因为整个派单流程完全不需要保存任何跨步骤的状态",
+      "因为只要在前面加一层缓存就能彻底解决等待问题",
+      "存在人类等待和外部事件，流程需要持久化状态、并在 signal 到来后继续"
     ],
+    "options_en": [
+      "Because a driver accepting a ride always returns synchronously and instantly.",
+      "Because the whole dispatch flow needs no cross-step state at all.",
+      "Because adding a cache layer in front alone completely solves the waiting problem.",
+      "Because there's human waiting and an external event, so the flow needs durable state that resumes when a signal arrives."
+    ],
+    "tradeoff": "持久等待人类响应 vs 同步调用的简单性",
     "answer": [
-      0
+      3
     ],
     "why": "人类步骤可能耗时不确定，不能占用 HTTP 或 worker thread。workflow signal/timer 适合这种等待。",
     "why_en": "Human-in-the-loop flows fit workflows because they wait durably for external signals.",
     "whenOtherWins": "非常简单的短等待可以用 queue/status 表，但复杂派单和超时分支更适合 workflow。",
+    "termDefinitions": [
+      {
+        "term": "signal",
+        "meaning": "外部系统用来唤醒等待中 workflow 的持久化消息机制。",
+        "meaningEn": "A signal is a durable message mechanism used to wake up a waiting workflow."
+      },
+      {
+        "term": "派单",
+        "meaning": "把订单/行程分配给具体司机的流程。",
+        "meaningEn": "Dispatch is the process of assigning an order or ride to a specific driver."
+      }
+    ],
     "tags": [
       "human-in-the-loop",
       "uber",
@@ -775,16 +1426,34 @@
     "sub": "when-not-to-use",
     "q": "为什么不应给“发送一封邮件”这种单步异步任务直接上 workflow engine？",
     "options": [
-      "workflow 增加 engine 往返、history writes 和运维复杂度，单步任务 queue + worker 已足够",
-      "workflow 不能发送邮件",
-      "queue 不能处理单步任务",
-      "单步任务一定需要补偿"
+      "workflow 会多出 engine 往返和 history 写入开销；单步任务 queue+worker 足够",
+      "因为像 workflow engine 这类重量级系统，完全没办法用来发送一封普通电子邮件",
+      "因为普通消息队列这种轻量组件，根本没有能力处理任何单步的异步任务",
+      "因为哪怕是最简单的单步异步任务，也一定必须设计一整套补偿回滚逻辑"
+    ],
+    "options_en": [
+      "Workflows add round trips through the engine and history-write overhead; a queue plus a worker is enough for a one-step task.",
+      "Because a heavyweight system like a workflow engine simply has no way to send a plain email.",
+      "Because a lightweight message queue has no ability to handle any single-step async task at all.",
+      "Because even the simplest single-step async task must always be designed with a full compensation and rollback flow."
     ],
     "answer": [
       0
     ],
     "why": "成熟设计要从简单开始。只有出现多步、补偿、长等待、复杂重试或审计时，workflow 的成本才值得。",
     "why_en": "A workflow engine is overkill for simple one-step async tasks that a queue and worker can handle.",
+    "termDefinitions": [
+      {
+        "term": "queue + worker",
+        "meaning": "消息队列加消费者的简单异步处理组合。",
+        "meaningEn": "Queue plus worker is the simple pattern of a message queue with a consuming process."
+      },
+      {
+        "term": "history writes",
+        "meaning": "引擎为每个 Activity 决策写入的持久化记录。",
+        "meaningEn": "History writes are the durable records the engine writes for each activity decision."
+      }
+    ],
     "tags": [
       "when-not-to-use",
       "overengineering",
@@ -799,18 +1468,36 @@
     "sub": "workflow-costs",
     "q": "引入 workflow system 的成本包括哪些？（多选）",
     "options": [
-      "新增分布式系统/托管服务依赖",
-      "开发者学习成本和调试模型变化",
-      "每个 activity 通过 engine 的往返和 history 写入开销",
-      "自动消除所有业务复杂度"
+      "新增一个分布式系统或托管服务的运维依赖",
+      "引入 workflow 后会自动消除所有业务复杂度",
+      "开发者要承担学习成本，调试模型也会变化",
+      "每个 activity 都要经过 engine 往返和 history 写入的开销"
+    ],
+    "options_en": [
+      "A new distributed system or managed service dependency to operate.",
+      "Introducing a workflow automatically eliminates all business complexity.",
+      "Developers take on a learning curve, and the debugging model changes.",
+      "Every activity pays a round trip through the engine plus history-write overhead."
     ],
     "answer": [
       0,
-      1,
-      2
+      2,
+      3
     ],
     "why": "Workflow system 集中处理复杂度，但不是消除复杂度。它把很多自研 checkpoint/retry/visibility 换成 engine 依赖。",
     "why_en": "Workflow systems add operational dependency, learning curve, and per-step orchestration overhead.",
+    "termDefinitions": [
+      {
+        "term": "engine",
+        "meaning": "驱动 workflow/activity 执行、记录进度的引擎服务。",
+        "meaningEn": "The engine is the service that drives workflow and activity execution and records progress."
+      },
+      {
+        "term": "history writes",
+        "meaning": "引擎为每个 Activity 决策写入的持久化记录。",
+        "meaningEn": "History writes are the durable records the engine writes for each activity decision."
+      }
+    ],
     "tags": [
       "workflow-costs",
       "tradeoffs",
@@ -826,17 +1513,41 @@
     "scenario": "流程已完成 charge payment 和 reserve inventory，coordinator 在 ship order 前崩溃。",
     "q": "恢复时最需要什么信息？",
     "options": [
-      "durable progress：哪些步骤已完成、哪些补偿可执行、下一步是什么",
-      "旧进程的内存栈",
-      "用户浏览器 session",
-      "随机重跑所有步骤"
+      "旧进程崩溃前残留在内存里、早已失效的调用栈",
+      "durable progress：哪些步骤已完成、哪些补偿可执行、下一步该做什么",
+      "保存在用户浏览器本地的 session 缓存数据",
+      "完全不看任何历史记录，直接随机重跑所有步骤"
     ],
+    "options_en": [
+      "The stale in-memory call stack the old process left behind before it crashed.",
+      "Durable progress: which steps completed, which compensations are available, and what the next step is.",
+      "Session cache data stored locally in the user's browser.",
+      "Ignore history entirely and just randomly rerun every step."
+    ],
+    "tradeoff": "持久化恢复记录 vs 简单场景下的单事务日志",
     "answer": [
-      0
+      1
     ],
     "why": "恢复不能靠猜。Coordinator 或 workflow engine 必须从 durable history 读出进度，然后继续或补偿。",
     "why_en": "Crash recovery needs durable progress recording so the coordinator can resume or compensate correctly.",
     "whenOtherWins": "如果流程只有单个原子数据库写，普通事务日志已足够。",
+    "termDefinitions": [
+      {
+        "term": "coordinator",
+        "meaning": "拥有并推进跨服务流程的组件。",
+        "meaningEn": "A coordinator is the component that owns and advances a cross-service process."
+      },
+      {
+        "term": "durable progress",
+        "meaning": "写入持久存储、可在崩溃后读回的流程完成记录。",
+        "meaningEn": "Durable progress is a record of completed steps written to storage that survives a crash."
+      },
+      {
+        "term": "补偿动作",
+        "meaning": "撤销已提交步骤业务效果的反向操作，例如退款撤销扣款。",
+        "meaningEn": "A compensating action is a reverse business operation, like a refund, that undoes an already-committed step."
+      }
+    ],
     "tags": [
       "crash-recovery",
       "durable-progress",
@@ -851,16 +1562,34 @@
     "sub": "workflow-versioning",
     "q": "Workflow versioning 的基本做法是什么？",
     "options": [
-      "新 workflow 用新版本，旧 in-flight workflow 继续跑旧版本",
-      "所有运行中 workflow 强制立刻换新代码且不考虑历史",
-      "删除旧 workflow 状态",
-      "让客户端决定流程版本"
+      "所有运行中的 workflow 强制立刻切换到新代码，不管历史",
+      "直接删除旧 workflow 的所有状态记录",
+      "新的 workflow 执行用新版本代码，旧的 in-flight 执行继续跑旧版本",
+      "让客户端自己决定这次流程该用哪个版本"
+    ],
+    "options_en": [
+      "Force every running workflow to switch to the new code immediately, ignoring history.",
+      "Just delete all state from the old workflow.",
+      "New workflow executions use the new version, while old in-flight executions keep running the old version.",
+      "Let the client decide which version this execution should use."
     ],
     "answer": [
-      0
+      2
     ],
     "why": "长流程可能运行数天或数周。最简单安全的版本策略是 old executions stay old, new executions use new。",
     "why_en": "Workflow versioning lets old executions keep their old definition while new executions use the new one.",
+    "termDefinitions": [
+      {
+        "term": "in-flight workflow",
+        "meaning": "已经开始还没结束的正在运行的 workflow 执行。",
+        "meaningEn": "An in-flight workflow is a currently running execution that has started but not finished."
+      },
+      {
+        "term": "versioning",
+        "meaning": "给不同版本的流程定义分别打标签、分别运行的做法。",
+        "meaningEn": "Versioning means tagging and running different flow definitions separately by version."
+      }
+    ],
     "tags": [
       "workflow-versioning",
       "migration",
@@ -876,17 +1605,48 @@
     "scenario": "有 10,000 个运行中的贷款审批 workflow，你要新增 compliance check，并且部分未到该步骤的流程也要执行新检查。",
     "q": "Durable execution engine 通常如何安全处理？",
     "options": [
-      "用 deterministic patch/version gate，让未越过该点的 execution 走新路径，已越过的保持旧路径",
-      "直接改代码，不管 replay 是否改变路径",
-      "清空所有 history",
-      "让 workflow code 调用随机数决定"
+      "直接改代码上线，不管 replay 会不会因此走上不同路径",
+      "把所有正在跑的 workflow 的 history 记录直接清空",
+      "让 workflow 代码调用随机数来决定走哪条分支",
+      "用确定性的 patch/version gate，让还没越过该点的执行走新路径，已越过的保持旧路径"
     ],
+    "options_en": [
+      "Ship the code change directly, regardless of whether replay takes a different path.",
+      "Wipe the history of every currently running workflow.",
+      "Have the workflow code call a random number to decide which branch to take.",
+      "Use a deterministic patch or version gate so executions that haven't passed that point take the new path, while ones that already passed it stay on the old path."
+    ],
+    "tradeoff": "同一部署内新旧路径并存 vs 完全重启迁移的简单性",
     "answer": [
-      0
+      3
     ],
     "why": "Temporal 这类系统靠 replay 恢复，代码变更必须不破坏历史确定性。patch gate 让同一部署服务新旧路径。",
     "why_en": "Durable engines use deterministic patch gates so workflow changes do not break replay for in-flight executions.",
     "whenOtherWins": "在 Step Functions 中，running execution 通常 pinned to old definition；需要新步骤时可能要重启或提前建分支。",
+    "termDefinitions": [
+      {
+        "term": "patch",
+        "meaning": "让同一部署里新旧执行走不同确定性分支的版本网关。",
+        "meaningEn": "A patch gate is a deterministic branch that lets old and new workflow executions take different code paths in the same deployment."
+      },
+      {
+        "term": "replay",
+        "meaning": "worker 崩溃后从头重新执行 workflow 代码，用历史记录跳过已完成的 Activity。",
+        "meaningEn": "Replay re-executes workflow code from the top after a crash, using recorded history to skip already-completed activities."
+      },
+      {
+        "term": "deterministic",
+        "meaning": "同样输入和历史必须得到同样的执行路径。",
+        "meaningEn": "Deterministic means the same input and history always produce the same execution path."
+      },
+      {
+        "term": "compliance check",
+        "meaning": "为满足监管要求而加入的合规校验步骤。",
+        "meaningEn": "A compliance check is a regulatory verification step added to satisfy legal requirements."
+      }
+    ],
+    "codeSample": "if (workflow.patched('add-compliance-check')) {\n  await runComplianceCheck(loan);   // new executions take this path\n} else {\n  await legacyApprovalFlow(loan);   // in-flight runs stay on old behavior\n}",
+    "lang": "typescript",
     "tags": [
       "workflow-migration",
       "patching",
@@ -901,16 +1661,34 @@
     "sub": "history-size",
     "q": "Temporal workflow history 过大有什么问题？",
     "options": [
-      "replay 变慢、存储变大，长循环 workflow 会拖着越来越长的历史",
-      "Activity 会自动变成同步 HTTP",
-      "Workflow 无法等待 signal",
-      "数据库会忘记所有步骤"
+      "replay 变慢、存储变大，长循环 workflow 的历史会越拖越长",
+      "Activity 会自动从异步调用变成同步 HTTP 请求",
+      "Workflow 会因此完全无法等待任何 signal",
+      "数据库会因此彻底忘记所有已执行过的步骤"
+    ],
+    "options_en": [
+      "Replay slows down and storage grows; a long-looping workflow drags an ever-longer history.",
+      "Activities automatically turn from async calls into synchronous HTTP requests.",
+      "Workflows become completely unable to wait for any signal.",
+      "The database completely forgets every step that already ran."
     ],
     "answer": [
       0
     ],
     "why": "Durable execution 的恢复依赖 history。长时间循环或大 payload 会让 history 膨胀，影响性能和成本。",
     "why_en": "Large workflow histories make replay slower and increase storage costs.",
+    "termDefinitions": [
+      {
+        "term": "history",
+        "meaning": "记录每个 workflow 决策和 Activity 结果的追加日志。",
+        "meaningEn": "History is the append-only log of every workflow decision and activity result."
+      },
+      {
+        "term": "replay",
+        "meaning": "worker 崩溃后从头重新执行 workflow 代码，用历史记录跳过已完成的 Activity。",
+        "meaningEn": "Replay re-executes workflow code from the top after a crash, using recorded history to skip already-completed activities."
+      }
+    ],
     "tags": [
       "history-size",
       "temporal",
@@ -925,18 +1703,36 @@
     "sub": "history-size",
     "q": "控制 workflow history size 的方法有哪些？（多选）",
     "options": [
-      "Activity input/result 尽量传 ID，不传巨大 payload",
-      "长循环 workflow 使用 Continue-as-New",
-      "把大文件放外部存储，只在 workflow 里传引用",
-      "把所有图片 bytes 放进 Activity result"
+      "Activity 的输入输出尽量传 ID，不要传巨大 payload",
+      "长循环的 workflow 使用 Continue-as-New 定期重置历史",
+      "把所有图片的原始字节都塞进 Activity 的 result 里",
+      "把大文件放进外部存储，workflow 里只传一个引用"
+    ],
+    "options_en": [
+      "Keep activity inputs and outputs as IDs instead of huge payloads.",
+      "Use Continue-as-New to periodically reset history for long-looping workflows.",
+      "Stuff every raw image byte directly into the activity's result.",
+      "Store large files in external storage and pass only a reference inside the workflow."
     ],
     "answer": [
       0,
       1,
-      2
+      3
     ],
     "why": "History 应存决策和小结果，不应承载大对象。Continue-as-New 用当前状态启动新 run，清空历史负担。",
     "why_en": "Keep histories small by passing references, storing large payloads externally, and using continue-as-new for long loops.",
+    "termDefinitions": [
+      {
+        "term": "Continue-as-New",
+        "meaning": "Temporal 用当前状态启动一个空 history 新 run 的机制，避免历史无限增长。",
+        "meaningEn": "Continue-as-New starts a fresh workflow run seeded with current state so history does not grow without bound."
+      },
+      {
+        "term": "payload",
+        "meaning": "在流程步骤之间传递的数据内容。",
+        "meaningEn": "A payload is the data passed between steps in a flow."
+      }
+    ],
     "tags": [
       "history-size",
       "continue-as-new",
@@ -951,16 +1747,45 @@
     "sub": "continue-as-new",
     "q": "Temporal 的 Continue-as-New 是什么？",
     "options": [
-      "捕获当前状态，启动一个空 history 的新 run，从当前位置继续",
-      "从 step 1 完全重新开始且忘记状态",
-      "删除所有 workflow",
-      "把 Activity 变成 Kafka event"
+      "从 step 1 完全重新开始执行，并且忘记之前的所有状态",
+      "捕获当前状态，启动一个 history 为空的新 run，从当前位置继续执行",
+      "彻底删除这个 workflow 的所有执行记录",
+      "把每一个 Activity 都转换成一条 Kafka event"
+    ],
+    "options_en": [
+      "Restart completely from step 1 and forget all prior state.",
+      "Capture the current state and start a new run with empty history, continuing from the current point.",
+      "Completely delete every execution record for this workflow.",
+      "Turn every activity into a Kafka event."
+    ],
+    "optionDirectness": [
+      "把它和从头重跑搞混——这个机制恰恰是为了避免丢状态重来。",
+      "抓住关键：状态被保留，只是历史归零、从当前点续跑。",
+      "把控制历史大小误解成删除记录，会丢失可审计性。",
+      "把执行引擎和消息系统弄混了，Kafka event 不参与 replay 机制。"
     ],
     "answer": [
-      0
+      1
     ],
     "why": "Continue-as-New 适合长期运行或循环的 workflow，避免一个 execution 的 history 无限增长。",
     "why_en": "Continue-as-new starts a fresh workflow run seeded with current state to avoid unbounded history growth.",
+    "termDefinitions": [
+      {
+        "term": "Continue-as-New",
+        "meaning": "Temporal 用当前状态启动一个空 history 新 run 的机制，避免历史无限增长。",
+        "meaningEn": "Continue-as-New starts a fresh workflow run seeded with current state so history does not grow without bound."
+      },
+      {
+        "term": "history",
+        "meaning": "记录每个 workflow 决策和 Activity 结果的追加日志。",
+        "meaningEn": "History is the append-only log of every workflow decision and activity result."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "常用的分布式持久化消息日志系统。",
+        "meaningEn": "Kafka is a distributed durable log system commonly used for event streaming."
+      }
+    ],
     "tags": [
       "continue-as-new",
       "temporal",
@@ -976,17 +1801,41 @@
     "scenario": "签名服务 webhook 到来时，要唤醒对应 document signing workflow。",
     "q": "系统应该如何路由这个外部事件？",
     "options": [
-      "webhook handler 用 workflow_id 调用 workflow engine API 发送 signal",
-      "随机唤醒一个 workflow",
-      "让 worker 一直 sleep 等待",
-      "把 webhook 结果只写日志"
+      "从所有正在运行的 workflow 执行里随机挑一个唤醒处理",
+      "让某个 worker 线程一直阻塞 sleep，死等结果返回",
+      "webhook handler 用 workflow_id 调用 engine API 发送 signal",
+      "把 webhook 收到的结果只写进日志文件，什么都不处理"
     ],
+    "options_en": [
+      "Randomly pick one currently running workflow execution to wake up.",
+      "Have some worker thread block with sleep, waiting forever for the result.",
+      "The webhook handler calls the workflow engine's API with the workflow ID to send a signal.",
+      "Just write the webhook result to a log file and do nothing else with it."
+    ],
+    "tradeoff": "按 ID 精确路由的持久信号 vs 无状态轮询/日志的简单性",
     "answer": [
-      0
+      2
     ],
     "why": "外部事件要带上能定位 workflow 的 ID。engine 收到 signal 后恢复持久化等待的 execution。",
     "why_en": "The webhook handler should signal the specific workflow execution using its workflow ID.",
     "whenOtherWins": "如果没有工作流引擎，可用状态表 + queue/poller，但要自己处理等待和恢复。",
+    "termDefinitions": [
+      {
+        "term": "webhook",
+        "meaning": "外部系统在事件发生后主动 HTTP 回调你服务的机制。",
+        "meaningEn": "A webhook is an HTTP callback an external system makes to your service when an event happens."
+      },
+      {
+        "term": "workflow_id",
+        "meaning": "唯一标识一次流程执行的 ID，外部事件靠它路由到正确的 workflow。",
+        "meaningEn": "A workflow ID uniquely identifies one execution so external events can be routed to the right workflow."
+      },
+      {
+        "term": "signal",
+        "meaning": "外部系统用来唤醒等待中 workflow 的持久化消息机制。",
+        "meaningEn": "A signal is a durable message mechanism used to wake up a waiting workflow."
+      }
+    ],
     "tags": [
       "external-events",
       "signals",
@@ -1002,16 +1851,39 @@
     "sub": "exactly-once",
     "q": "Workflow system 里“exactly once”更准确的说法是什么？",
     "options": [
-      "attempts 可能 at-least-once；通过幂等让业务 effect 近似 exactly-once",
-      "网络可以保证真正 exactly-once delivery",
-      "Activity 永远不会重试",
-      "不需要 idempotency key"
+      "网络层完全可以保证真正的 exactly-once 投递，绝不重复",
+      "Activity 只要被成功调用过一次，就永远不会再被重试",
+      "只要业务逻辑写得够简单，就完全不需要任何 idempotency key",
+      "attempts 通常是 at-least-once；靠幂等设计让 effect 近似 exactly-once"
+    ],
+    "options_en": [
+      "The network layer can fully guarantee true exactly-once delivery, with no duplicates ever.",
+      "Once an activity has been successfully called, it is never retried again.",
+      "As long as the business logic is written simply enough, no idempotency key is needed at all.",
+      "Attempts are usually at-least-once; an idempotent design makes the effect exactly-once in practice."
     ],
     "answer": [
-      0
+      3
     ],
     "why": "跨网络无法完全关闭“执行成功但回报丢失”的窗口。可靠系统靠 idempotent effect，而不是相信 delivery exactly-once。",
     "why_en": "Attempts are often at-least-once; idempotency makes the effect exactly-once in practice.",
+    "termDefinitions": [
+      {
+        "term": "exactly-once",
+        "meaning": "效果只发生一次的保证，通常靠幂等实现，而不是靠网络投递保证。",
+        "meaningEn": "Exactly-once is a guarantee that an effect happens only once, usually achieved through idempotency rather than network delivery guarantees."
+      },
+      {
+        "term": "at-least-once",
+        "meaning": "尝试可能重复发生至少一次的投递语义。",
+        "meaningEn": "At-least-once means an attempt may be delivered one or more times."
+      },
+      {
+        "term": "idempotency key",
+        "meaning": "标识一次操作意图的唯一键，用来防止重复执行产生重复副作用。",
+        "meaningEn": "An idempotency key uniquely identifies an operation attempt so retries do not repeat its side effect."
+      }
+    ],
     "tags": [
       "exactly-once",
       "idempotency",
@@ -1027,17 +1899,38 @@
     "scenario": "Activity 要发送邮件，但可能在发送成功后、记录完成前崩溃，之后被重试。",
     "q": "更稳健的 side effect 处理方式是什么？",
     "options": [
-      "用 idempotency key，并记录 IN_PROGRESS / COMPLETED；IN_PROGRESS 异常进入 reconciliation",
-      "每次重试都直接再发一封",
-      "完全禁止 Activity 有副作用",
-      "只靠 worker 内存记忆"
+      "用 idempotency key 记录 IN_PROGRESS/COMPLETED，异常状态走对账",
+      "不管三七二十一，每次重试都直接再发一封全新的邮件",
+      "干脆一刀切，完全禁止 Activity 里出现任何副作用",
+      "只靠 worker 进程内存里的一个变量去记住到底发没发过"
     ],
+    "options_en": [
+      "Use an idempotency key and record IN_PROGRESS/COMPLETED states; ambiguous ones go through reconciliation.",
+      "Regardless of anything, just resend a brand-new email on every single retry.",
+      "Take the blunt approach and simply forbid activities from having any side effects at all.",
+      "Only remember whether it already sent using a single variable in the worker's process memory."
+    ],
+    "tradeoff": "记录中间状态换安全 vs 直接重试的实现简单性",
     "answer": [
       0
     ],
     "why": "先记录意图，再记录完成，可以缩小不确定窗口。COMPLETED 跳过，IN_PROGRESS 需要对账，不要盲目重复副作用。",
     "why_en": "Use idempotency records with in-progress and completed states, and reconcile ambiguous in-progress side effects.",
     "whenOtherWins": "如果外部服务自身提供强 idempotency key，可直接利用它并把 key 存入 workflow 状态。",
+    "termDefinitions": [
+      {
+        "term": "idempotency key",
+        "meaning": "标识一次操作意图的唯一键，用来防止重复执行产生重复副作用。",
+        "meaningEn": "An idempotency key uniquely identifies an operation attempt so retries do not repeat its side effect."
+      },
+      {
+        "term": "reconciliation",
+        "meaning": "对状态不确定的记录进行人工或自动核对，确认真实结果的过程。",
+        "meaningEn": "Reconciliation is the process of manually or automatically checking ambiguous records to confirm the real outcome."
+      }
+    ],
+    "codeSample": "INSERT INTO idempotency_keys (key, status)\n  VALUES ($1, 'IN_PROGRESS');\n-- send the email here\nUPDATE idempotency_keys SET status = 'COMPLETED'\n  WHERE key = $1;\n-- retry: COMPLETED -> skip; IN_PROGRESS -> reconcile",
+    "lang": "sql",
     "tags": [
       "idempotency",
       "side-effects",
@@ -1065,6 +1958,23 @@
     ],
     "why": "从简单开始，只有复杂度和可靠性需求出现时才升级。Workflow engine 是为复杂状态机付成本。",
     "why_en": "Start with simple synchronous or queued work, then escalate to sagas and workflow engines as complexity grows.",
+    "termDefinitions": [
+      {
+        "term": "saga",
+        "meaning": "一系列本地事务加补偿动作的模式，用于跨服务保证最终一致性。",
+        "meaningEn": "A saga is a sequence of local transactions with compensating actions that keep cross-service work eventually consistent."
+      },
+      {
+        "term": "workflow engine",
+        "meaning": "提供状态持久化、重试、超时和补偿等能力的托管/自建系统。",
+        "meaningEn": "A workflow engine is a system that provides durable state, retries, timeouts, and compensation as built-in capabilities."
+      },
+      {
+        "term": "queue + worker",
+        "meaning": "消息队列加消费者的简单异步处理组合。",
+        "meaningEn": "Queue plus worker is the simple pattern of a message queue with a consuming process."
+      }
+    ],
     "tags": [
       "choosing-approach",
       "decision-chain",
@@ -1085,6 +1995,12 @@
       "history size 如何控制",
       "Activity side effect 如何幂等"
     ],
+    "options_en": [
+      "How does recovery work if the coordinator crashes?",
+      "How do you migrate a workflow version?",
+      "How do you keep history size under control?",
+      "How do you make an activity's side effect idempotent?"
+    ],
     "answer": [
       0,
       1,
@@ -1093,6 +2009,23 @@
     ],
     "why": "这些问题都检验你是否真正理解 durable execution，而不是只会说 Temporal/Step Functions 名字。",
     "why_en": "Workflow deep dives test crash recovery, versioning, history size, and idempotent side effects.",
+    "termDefinitions": [
+      {
+        "term": "coordinator",
+        "meaning": "拥有并推进跨服务流程的组件。",
+        "meaningEn": "A coordinator is the component that owns and advances a cross-service process."
+      },
+      {
+        "term": "versioning",
+        "meaning": "给不同版本的流程定义分别打标签、分别运行的做法。",
+        "meaningEn": "Versioning means tagging and running different flow definitions separately by version."
+      },
+      {
+        "term": "history",
+        "meaning": "记录每个 workflow 决策和 Activity 结果的追加日志。",
+        "meaningEn": "History is the append-only log of every workflow decision and activity result."
+      }
+    ],
     "tags": [
       "interview-depth",
       "workflow",
@@ -1109,6 +2042,23 @@
     "text": "Saga 是一系列{{local transaction}}，每一步都有{{compensating action}}；失败时按相反方向执行补偿，系统达到{{eventual consistency}}。",
     "why": "Saga 接受短暂不一致，用补偿而不是全局事务锁来管理跨服务流程。",
     "why_en": "A saga uses local transactions plus compensating actions to achieve eventual consistency across services.",
+    "termDefinitions": [
+      {
+        "term": "local transaction",
+        "meaning": "只在单个服务/数据库内提交的一步操作。",
+        "meaningEn": "A local transaction is a step that commits within a single service or database."
+      },
+      {
+        "term": "compensating action",
+        "meaning": "撤销已提交步骤业务效果的反向操作，例如退款撤销扣款。",
+        "meaningEn": "A compensating action is a reverse business operation, like a refund, that undoes an already-committed step."
+      },
+      {
+        "term": "eventual consistency",
+        "meaning": "系统在没有新写入后，经过一段时间最终会收敛到一致状态。",
+        "meaningEn": "Eventual consistency means the system converges to a consistent state over time once writes stop."
+      }
+    ],
     "tags": [
       "saga",
       "summary",
@@ -1123,21 +2073,64 @@
     "sub": "workflow-vs-cron-poller",
     "q": "手写状态表 + poller 与 workflow engine 的关键差异是什么？",
     "options": [
+      "手写 poller 状态表方案，永远比 workflow engine 更简单、没有故障模式",
       "前者要自己实现 claim、retry、timeout、补偿和可观测；后者把这些作为引擎能力提供",
-      "poller 永远更简单且无故障模式",
-      "workflow engine 不记录状态",
-      "两者都只存在内存里"
+      "workflow engine 这类系统完全不会记录任何执行状态",
+      "两种方案都只存在于进程内存里，重启后什么都不剩"
     ],
+    "options_en": [
+      "A hand-rolled poller and state table is always simpler than a workflow engine and has no failure modes.",
+      "The hand-rolled approach must implement claim, retry, timeout, and compensation itself; a workflow engine provides those as built-in capabilities.",
+      "A system like a workflow engine records no execution state at all.",
+      "Both approaches only live in process memory and lose everything on restart."
+    ],
+    "tradeoff": "自建轮询的控制力 vs 引擎自带可靠性能力的省心",
     "answer": [
-      0
+      1
     ],
     "why": "许多团队一开始手写状态机，最后发现自己在重建 workflow engine。复杂流程应考虑用成熟系统。",
     "why_en": "A hand-rolled poller must implement the reliability machinery that workflow engines provide directly.",
+    "termDefinitions": [
+      {
+        "term": "poller",
+        "meaning": "定期扫描状态表、发现可推进任务的手写轮询组件。",
+        "meaningEn": "A poller is a hand-rolled component that periodically scans a state table for work to advance."
+      },
+      {
+        "term": "claim",
+        "meaning": "worker 声明认领一个任务、防止被其他 worker 重复处理的动作。",
+        "meaningEn": "Claim is the act of a worker taking ownership of a task so no other worker processes it at the same time."
+      },
+      {
+        "term": "workflow engine",
+        "meaning": "提供状态持久化、重试、超时和补偿等能力的托管/自建系统。",
+        "meaningEn": "A workflow engine is a system that provides durable state, retries, timeouts, and compensation as built-in capabilities."
+      }
+    ],
     "tags": [
       "poller",
       "workflow-engine",
       "contrast"
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "重试机制",
+        "可观测性"
+      ],
+      "rows": [
+        [
+          "手写 poller",
+          "要自己实现",
+          "要自己搭建"
+        ],
+        [
+          "Workflow engine",
+          "引擎内建提供",
+          "引擎自带面板"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-patterns-multi-step-processes-044",
@@ -1148,17 +2141,41 @@
     "scenario": "AI agent pipeline 包含检索、调用多个模型、工具执行、人审和回滚，步骤多且外部依赖容易失败。",
     "q": "为什么这类系统常适合 workflow/durable execution？",
     "options": [
-      "它们是长链路、状态丰富、外部依赖多、需要恢复和可观测的流程",
-      "因为模型调用永远同步且不会失败",
-      "因为 workflow 只适合电商",
-      "因为不需要记录任何中间状态"
+      "因为模型调用永远都是同步的，而且绝对不会失败",
+      "因为 workflow 这类系统天生只适合电商场景",
+      "它们是长链路、状态丰富、外部依赖多、需要恢复和可观测能力的流程",
+      "因为这类流程完全不需要记录任何中间状态"
     ],
+    "options_en": [
+      "Because model calls are always synchronous and never fail.",
+      "Because workflow systems are inherently only suited to e-commerce.",
+      "They're long, stateful chains with many external dependencies that need recovery and observability.",
+      "Because this kind of flow never needs to record any intermediate state."
+    ],
+    "tradeoff": "长链路可恢复编排 vs 单次调用的同步简单性",
     "answer": [
-      0
+      2
     ],
     "why": "AI pipeline 往往正是多步、长时间、失败重试、人类介入和状态可观测的组合。",
     "why_en": "AI agent pipelines fit workflows because they are long, stateful chains of flaky external steps.",
     "whenOtherWins": "单次简单模型调用可保持同步或普通 queue；复杂 agent 流程才更需要 durable execution。",
+    "termDefinitions": [
+      {
+        "term": "AI agent pipeline",
+        "meaning": "由检索、模型调用、工具执行等多步骤组成的智能体处理链路。",
+        "meaningEn": "An AI agent pipeline is a multi-step chain of retrieval, model calls, and tool execution."
+      },
+      {
+        "term": "检索",
+        "meaning": "从知识库或搜索系统里取回相关信息的步骤。",
+        "meaningEn": "Retrieval is the step of fetching relevant information from a knowledge base or search system."
+      },
+      {
+        "term": "回滚",
+        "meaning": "撤销已执行动作、恢复到之前状态的操作。",
+        "meaningEn": "Rollback is the operation of undoing executed actions to restore a previous state."
+      }
+    ],
     "tags": [
       "ai-pipelines",
       "workflow",
@@ -1186,6 +2203,23 @@
     ],
     "why": "先说明问题为何难，再选架构，最后用失败恢复和操作细节证明方案可落地。",
     "why_en": "A strong answer motivates workflow complexity, chooses coordination, explains reliability, and covers operational deep dives.",
+    "termDefinitions": [
+      {
+        "term": "choreography",
+        "meaning": "无中心协调者，服务各自订阅事件并响应的协作方式。",
+        "meaningEn": "Choreography is coordination where services react to events without a central coordinator."
+      },
+      {
+        "term": "orchestration",
+        "meaning": "由一个中心协调者持有并驱动整个流程。",
+        "meaningEn": "Orchestration is coordination where a single coordinator owns and drives the whole flow."
+      },
+      {
+        "term": "幂等",
+        "meaning": "多次执行同一操作，业务效果和执行一次相同。",
+        "meaningEn": "Idempotent means repeating the same operation has the same business effect as doing it once."
+      }
+    ],
     "tags": [
       "interview-answer",
       "workflow",
