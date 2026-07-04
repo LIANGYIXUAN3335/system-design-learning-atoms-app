@@ -3777,8 +3777,9 @@
     "answer": [
       0
     ],
-    "why": "checkpoint 保护的是「算了一半的内存状态」。窗口长达一天一周时，重算代价巨大，检查点必不可少；窗口很小时收益有限。",
-    "why_en": "Checkpointing periodically snapshots Flink's in-memory state to durable storage, which matters most when aggregation windows are as long as a day or a week.",
+    "why": "Checkpoint 保护的是 Flink 已算到一半的内存状态。窗口长到天/周时，从 Kafka 全量重放代价高；checkpoint 可从快照恢复，但会多一次持久化开销。",
+    "why_en": "Checkpointing snapshots Flink state so a crash can resume cheaply, and it pays off most when day- or week-long windows make full replay expensive.",
+    "tradeoff": "恢复重算成本 vs checkpoint 持久化开销",
     "tags": [
       "checkpointing",
       "flink",
@@ -3786,56 +3787,112 @@
     ],
     "diagram": "graph LR\n    Flink[Flink operator state] --> CP[Checkpoint]\n    CP --> Store[(Durable checkpoint store)]\n    Crash[Worker crash] --> Restore[Restore state]\n    Restore --> Resume[Resume from stream offset]",
     "optionMeanings": [
-      "定期把内存状态快照到 S3",
-      "混淆成写 OLAP 的机制",
-      "混淆成 Kafka 的日志压缩",
-      "误当成任何场景的硬性要求"
+      "把 Flink operator state 定期写入 S3。",
+      "把已聚合结果写到 OLAP 查询库。",
+      "Kafka 按 key 保留较新的日志记录。",
+      "把 checkpoint 当成所有流任务的硬开关。"
     ],
     "optionScenarioImpacts": [
-      "窗口越大，checkpoint 价值越高",
-      "写 OLAP 是输出步骤，非状态恢复",
-      "日志压缩是 Kafka 的存储优化手段",
-      "小窗口、可重放时它的收益很小"
+      "宕机后从快照继续，少重放历史事件。",
+      "只能服务查询，救不回内存中的窗口状态。",
+      "只改变 Kafka 存储，不恢复 Flink 状态。",
+      "小窗口可重放时，强开可能只是加开销。"
     ],
     "optionDirectness": [
-      "最直接：准确描述机制和适用场景",
-      "不直接：混淆了两个不同组件的职责",
-      "不直接：这是另一系统的完全不同机制",
-      "不直接：价值高度依赖窗口大小"
+      "长窗口、有状态聚合且重算贵时最适合。",
+      "讨论 serving 层落表时才适合。",
+      "压缩 topic 历史、按 key 保新值时适合。",
+      "状态难重建或恢复时间很严时才接近强制。"
     ],
     "optionMeanings_en": [
-      "Snapshot in-memory state to S3 periodically",
-      "Confuses it with writing to OLAP",
-      "Confuses it with Kafka log compaction",
-      "Treats it as mandatory in every case"
+      "Flink periodically writes operator state to S3.",
+      "Computed aggregates are written to an OLAP query store.",
+      "Kafka keeps newer log records per key.",
+      "Checkpointing is treated as mandatory for every stream job."
     ],
     "optionScenarioImpacts_en": [
-      "Larger windows make checkpointing more valuable",
-      "Writing to OLAP is an output step, not recovery",
-      "Log compaction is a Kafka storage optimization",
-      "With small replayable windows the payoff is small"
+      "After a crash, Flink resumes from the snapshot and replays less history.",
+      "It serves queries, but cannot recover in-memory window state.",
+      "It changes Kafka storage, but does not restore Flink state.",
+      "For small replayable windows, it may mostly add overhead."
     ],
     "optionDirectness_en": [
-      "Most direct: accurately describes the mechanism and payoff",
-      "Less direct: conflates two unrelated components",
-      "Less direct: an entirely different system's feature",
-      "Less direct: its value hinges on window size"
+      "Use it for long stateful windows where recomputation is expensive.",
+      "This fits serving-layer writes, not failure recovery.",
+      "This fits topic cleanup when each key only needs the latest value.",
+      "It is close to mandatory only when state is hard to rebuild."
     ],
+    "table": {
+      "headers": [
+        "机制",
+        "保护对象",
+        "主要代价"
+      ],
+      "rows": [
+        [
+          "Flink checkpoint",
+          "算子状态",
+          "持久化开销"
+        ],
+        [
+          "OLAP 写入",
+          "查询结果",
+          "写入延迟"
+        ],
+        [
+          "Kafka compaction",
+          "topic 历史",
+          "只保新值"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
+        "term": "Flink",
+        "meaning": "Flink 是流处理引擎，用来持续处理事件并维护有状态计算。",
+        "meaningEn": "Flink is a stream processing engine that continuously processes events and maintains stateful computations."
+      },
+      {
         "term": "checkpointing",
-        "meaning": "流处理器定期把内存状态持久化，用于故障后恢复。",
-        "meaningEn": "Checkpointing periodically persists a stream processor's in-memory state so it can recover after a failure."
+        "meaning": "流处理器定期把状态和进度持久化，故障后从快照继续。",
+        "meaningEn": "Checkpointing periodically persists stream state and progress so processing can resume after a failure."
+      },
+      {
+        "term": "operator state",
+        "meaning": "算子在内存里保存的中间状态，例如窗口计数器或去重集合。",
+        "meaningEn": "Operator state is intermediate data kept by a stream operator, such as window counters or dedupe sets."
       },
       {
         "term": "S3",
-        "meaning": "AWS 的对象存储服务，常用来做持久化归档。",
-        "meaningEn": "S3 is AWS's object storage service, commonly used for durable archival storage."
+        "fullName": "Amazon Simple Storage Service",
+        "meaning": "Amazon S3 是对象存储服务，常用作持久化 checkpoint 存储。",
+        "meaningEn": "Amazon S3 is an object storage service often used as durable checkpoint storage."
+      },
+      {
+        "term": "OLAP",
+        "fullName": "Online Analytical Processing",
+        "meaning": "OLAP 是面向分析查询的存储或计算层，用来查询聚合或明细数据。",
+        "meaningEn": "OLAP is an analytics-oriented storage or compute layer used to query aggregate or detail data."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "Kafka 是分布式事件日志，生产者写入 topic，消费者可按 offset 重放。",
+        "meaningEn": "Kafka is a distributed event log where producers write to topics and consumers can replay by offset."
+      },
+      {
+        "term": "log compaction",
+        "meaning": "Kafka 按 key 保留较新的记录版本，用来压缩 topic 历史。",
+        "meaningEn": "Log compaction is Kafka's process of keeping newer records per key to shrink topic history."
+      },
+      {
+        "term": "offset",
+        "meaning": "offset 是消费者在事件流里读到的位置，用来从故障点继续。",
+        "meaningEn": "An offset is the position a consumer has reached in an event stream, used to resume after failure."
       },
       {
         "term": "聚合窗口 (aggregation window)",
-        "meaning": "流处理器把事件归并计算的时间区间，比如按分钟或按天。",
-        "meaningEn": "An aggregation window is the time span over which a stream processor groups and computes events, e.g. per minute or per day."
+        "meaning": "流处理器按时间区间归并事件的范围，比如 1 分钟、1 天或 1 周。",
+        "meaningEn": "An aggregation window is the time span over which a stream processor groups events, such as one minute, one day, or one week."
       }
     ],
     "scenario": "Flink 在内存里维护聚合状态，需要考虑进程宕机后如何恢复。",

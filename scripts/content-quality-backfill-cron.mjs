@@ -165,16 +165,34 @@ for (const f of allFindings) {
 }
 
 const plan = [];
+const needsStimulusRepair = [];
 for (const { track, rel } of deckFiles()) {
   if (cfg.onlyDeck && path.normalize(rel) !== path.normalize(cfg.onlyDeck)) continue;
   const cards = readJson(path.join(root, rel), []);
   if (!Array.isArray(cards) || cards.length === 0) continue;
-  const pending = cards.filter((c) => ledger.cards[c.id]?.v !== version).map((c) => c.id);
+  // judge failed a card twice → explanation-side repair can't save it (usually a
+  // broken stimulus: self-contradicting options, answer leak). Route to human
+  // instead of re-repairing it every night.
+  const pending = cards
+    .filter((c) => ledger.cards[c.id]?.v !== version)
+    .filter((c) => {
+      if ((ledger.cards[c.id]?.judgeFails ?? 0) >= 2) {
+        needsStimulusRepair.push(`${rel} :: ${c.id}`);
+        return false;
+      }
+      return true;
+    })
+    .map((c) => c.id);
   if (pending.length === 0) continue; // converged under this rubric version
   const agg = findingsByDeck.get(rel) ?? { errors: 0, warns: 0 };
   plan.push({ track, rel, pending, score: agg.errors * 10 + agg.warns, errors: agg.errors, warns: agg.warns });
 }
 plan.sort((a, b) => TRACK_PRIORITY[a.track] - TRACK_PRIORITY[b.track] || b.score - a.score || a.rel.localeCompare(b.rel));
+
+if (needsStimulusRepair.length > 0) {
+  rpt(`\n⚠️ needs-stimulus-repair (judge failed ×2, explanation-side repair can't save them — fix q/options/answer by hand or via REGEN):`);
+  for (const line of needsStimulusRepair) rpt(`  - ${line}`);
+}
 
 if (plan.length === 0) {
   rpt('nothing to do: every card has passed the current rubric version. (This is the self-degrading no-op.)');
@@ -313,9 +331,13 @@ for (const deck of batch) {
     report.push(...judgeLines.map((l) => `  - ${l.trim()}`));
   }
 
-  // ledger: passed cards only; judge-fails stay unledgered → auto-retry next night
+  // ledger: passed cards only; judge-fails get a fail-streak counter — one fail
+  // retries next night, two fails routes to the needs-stimulus-repair list.
   for (const id of repaired) {
-    if (judgeFails.includes(id)) continue;
+    if (judgeFails.includes(id)) {
+      ledger.cards[id] = { ...(ledger.cards[id] ?? {}), judgeFails: (ledger.cards[id]?.judgeFails ?? 0) + 1 };
+      continue;
+    }
     const card = finalCards.find((c) => c.id === id);
     ledger.cards[id] = { v: version, hash: stimulusHash(card) };
   }
