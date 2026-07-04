@@ -84,6 +84,25 @@
     "why": "读侧有读副本、缓存等成熟套路；写侧面对突发、高吞吐和竞争，一次错误选择还可能让情况更糟，所以面试官爱在这里追问。",
     "why_en": "Reads scale with familiar tools like replicas and caching, while bursty, high-contention writes are much harder and invite interviewer probing.",
     "tradeoff": "读扩展的现成工具箱 vs 写扩展的突发/竞争难度",
+    "table": {
+      "headers": [
+        "方向",
+        "常用手段",
+        "主要难点"
+      ],
+      "rows": [
+        [
+          "读扩展",
+          "副本/缓存",
+          "可容忍短暂旧数据"
+        ],
+        [
+          "写扩展",
+          "分片/队列/批处理",
+          "突发和竞争更难"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "副本",
@@ -127,6 +146,18 @@
         "fullName": "Sharding",
         "meaning": "把一份数据横向拆到多台服务器，每台只处理一部分写入。",
         "meaningEn": "Sharding splits data horizontally across multiple servers so each one only handles a portion of the writes."
+      },
+      {
+        "term": "垂直扩展",
+        "fullName": "Vertical Scaling",
+        "meaning": "给单台机器换更强的硬件来提升上限，例如更多 CPU 核或更高网络带宽。",
+        "meaningEn": "Vertical scaling means giving one machine stronger hardware, such as more CPU cores or more network bandwidth."
+      },
+      {
+        "term": "批处理",
+        "fullName": "Batching",
+        "meaning": "把多条写入合成一批提交，减少每条写入都单独付出的事务和刷盘开销。",
+        "meaningEn": "Batching combines multiple writes into one submission, reducing per-write transaction and flush overhead."
       }
     ],
     "tags": [
@@ -222,9 +253,15 @@
     "answer": [
       0
     ],
-    "why": "很多候选人还停留在 4-8 核 + 机械盘的旧印象；200 核、10Gbit 网络的机器并不罕见，这个基准是用来对照你算出的写吞吐，不是让你背诵固定数值。",
-    "why_en": "Many candidates still assume 4-8 cores and spinning disks, but machines with two hundred cores and ten-gigabit NICs are common — use that as your comparison baseline, not a number to memorize.",
+    "why": "这是给定的硬件锚点，不是公式推导结果：把你算出的写入 QPS 和约 200 核、10Gbit 网卡的现代单机对照，再决定是否真的要分片。",
+    "why_en": "Treat 200 cores and a 10Gbit NIC as a sizing anchor, then compare your estimated write QPS against it before jumping to sharding.",
     "termDefinitions": [
+      {
+        "term": "CPU",
+        "fullName": "Central Processing Unit",
+        "meaning": "处理器，执行计算指令；写入路径上的序列化、校验、事务处理都要占用它。",
+        "meaningEn": "The CPU, or Central Processing Unit, runs computation, and write-path work like serialization and transaction handling consumes it."
+      },
       {
         "term": "10Gbit 网卡",
         "fullName": "10 Gigabit Network Interface Card",
@@ -321,8 +358,8 @@
     "answer": [
       2
     ],
-    "why": "Cassandra 不做原地更新（那需要昂贵的磁盘寻道），而是把一切顺序追加写盘，这就是它写吞吐高的根本原因。",
-    "why_en": "Cassandra writes everything sequentially to an append-only commit log instead of updating in place, avoiding expensive disk seeks.",
+    "why": "Cassandra 写入先追加到 commit log 并进 memtable，稍后 flush 成 SSTable；顺序写避开随机寻道，所以吞吐高。代价是读路径常要合并多个 SSTable。",
+    "why_en": "Cassandra appends to a commit log and memtable first, then flushes SSTables later, trading easier writes for more read-side merging.",
     "table": {
       "headers": [
         "方案",
@@ -355,10 +392,21 @@
         "meaningEn": "A commit log is an append-only, sequentially written log a database writes to first so a committed write is never lost."
       },
       {
+        "term": "memtable",
+        "meaning": "Cassandra 内存里的有序写缓冲，写入先进入这里，之后批量刷成磁盘上的 SSTable。",
+        "meaningEn": "A memtable is Cassandra's in-memory sorted write buffer, later flushed to disk as an SSTable."
+      },
+      {
         "term": "连接池",
         "fullName": "Connection Pool",
         "meaning": "预先建立并复用的数据库连接集合，减少连接建立开销，不改变磁盘写入模式。",
         "meaningEn": "A connection pool is a reused set of open database connections that cuts connection-setup overhead but doesn't change how data is written to disk."
+      },
+      {
+        "term": "B-tree",
+        "fullName": "Balanced Tree",
+        "meaning": "关系库常用的索引结构，更新时通常要改写已有页面，容易带来随机 I/O。",
+        "meaningEn": "A B-tree is the balanced index structure relational databases commonly use, and updates often rewrite existing pages, causing random I/O."
       },
       {
         "term": "SSTable",
@@ -392,13 +440,25 @@
     "answer": [
       0
     ],
-    "why": "顺序追加写、分区和多节点写入让 Cassandra 在写密集、可按 key 分区的场景里更容易扩展高写吞吐。具体吞吐取决于硬件、批量写、索引、事务/fsync 和数据模型，不应把 10k vs 1k 当固定事实。",
-    "why_en": "Cassandra often scales write-heavy append workloads more easily, but exact throughput depends on hardware, batching, indexes, fsync, transactions, and data model.",
+    "why": "可以把「Cassandra 常比传统关系库高一个数量级」当口头锚点，但它不是固定公式。真实吞吐取决于硬件、批量写、索引、事务/fsync 和数据模型。",
+    "why_en": "Use Cassandra being roughly an order of magnitude easier to scale for writes as an anchor, not a fixed benchmark.",
     "termDefinitions": [
       {
         "term": "Cassandra",
         "meaning": "为高写入吞吐做了取舍的宽列存储 NoSQL 数据库。",
         "meaningEn": "Cassandra is a wide-column NoSQL database built to trade read performance for high write throughput."
+      },
+      {
+        "term": "数量级锚点",
+        "fullName": "Order-of-Magnitude Anchor",
+        "meaning": "用于面试估算的粗量级参照，只帮助判断方向，不代表固定 benchmark。",
+        "meaningEn": "An order-of-magnitude anchor is a rough sizing reference for interview math, not a fixed benchmark."
+      },
+      {
+        "term": "关系型数据库",
+        "fullName": "Relational Database",
+        "meaning": "用表、行、列和关系约束组织数据的数据库，例如 MySQL 或 PostgreSQL。",
+        "meaningEn": "A relational database stores data in tables, rows, columns, and relationships, such as MySQL or PostgreSQL."
       },
       {
         "term": "fsync",
@@ -445,6 +505,7 @@
     ],
     "why": "Cassandra 读一条数据常要检查多个文件再合并，读性能不如索引良好的关系库。用读性能换写性能，正是写重系统想要的交换。",
     "why_en": "Cassandra trades read performance for write performance, since reads often check multiple files and merge results.",
+    "tradeoff": "写入顺序追加换吞吐 vs 读取合并多个文件的成本",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -532,6 +593,11 @@
         "fullName": "Index",
         "meaning": "为加速查询而维护的额外数据结构；每多一个索引，每次写入就要多更新一份。",
         "meaningEn": "An index is extra structure maintained to speed up queries, and every added index means one more thing to update on every write."
+      },
+      {
+        "term": "write vs. read tension",
+        "meaning": "写路径和读路径的优化目标互相牵制：让一边更快，常会让另一边付出代价。",
+        "meaningEn": "Write-versus-read tension means optimizing one path often makes the other path pay a cost."
       }
     ],
     "tags": [
@@ -567,6 +633,12 @@
     ],
     "why": "时序库、日志结构库、列存都在各自方向上为写做了取舍；通用关系库是为混合负载设计的，并不为极端写负载优化。",
     "why_en": "Time-series databases, log-structured stores like LevelDB, and column stores like ClickHouse all trade toward write efficiency, unlike general-purpose relational databases.",
+    "optionScenarioImpacts": [
+      "时间戳顺序写能减少乱序更新，delta 编码还能压缩相邻点。",
+      "追加写把随机改页变成顺序写，后台再合并文件。",
+      "批量写列文件适合分析，但点更新通常不是强项。",
+      "通用关系库保留事务、索引和约束，极端写入会被这些开销拖住。"
+    ],
     "table": {
       "headers": [
         "类型",
@@ -619,6 +691,12 @@
         "meaningEn": "ClickHouse is a column-oriented database built for analytics, good at batched writes and large scans."
       },
       {
+        "term": "列存",
+        "fullName": "Column Store",
+        "meaning": "按列而不是按行组织数据的存储方式，适合批量写入和大范围分析扫描。",
+        "meaningEn": "A column store organizes data by column rather than row, which suits batched writes and large analytical scans."
+      },
+      {
         "term": "OLTP",
         "fullName": "Online Transaction Processing",
         "meaning": "面向高频小事务读写的工作负载类型，例如下单、转账。",
@@ -657,6 +735,12 @@
     ],
     "why": "禁用昂贵特性、调 WAL 刷盘、砍索引都是「给写让路」的本地优化；加更多索引恰恰会拖慢写入。",
     "why_en": "You can speed up writes on any database by disabling expensive features, tuning write-ahead logging, and reducing index overhead.",
+    "optionScenarioImpacts": [
+      "少做外键、触发器和全文索引维护，每次写入要付的检查更少。",
+      "多笔事务合并刷盘，减少 WAL flush 次数，但崩溃窗口要谨慎设。",
+      "每少一个索引，写入少维护一份结构；代价是对应查询变慢。",
+      "二级索引越多，每次写入要更新的索引页越多。"
+    ],
     "termDefinitions": [
       {
         "term": "外键约束",
@@ -675,6 +759,18 @@
         "fullName": "Secondary Index",
         "meaning": "主键之外为加速特定查询而建的额外索引，每建一个都会拖慢写入。",
         "meaningEn": "A secondary index is extra structure built beyond the primary key to speed up specific queries, and each one slows down writes further."
+      },
+      {
+        "term": "触发器",
+        "fullName": "Database Trigger",
+        "meaning": "数据库在写入、更新或删除时自动执行的逻辑，会给每次写操作增加额外工作。",
+        "meaningEn": "A database trigger is logic that runs automatically on writes, updates, or deletes, adding extra work to each write."
+      },
+      {
+        "term": "全文索引",
+        "fullName": "Full-Text Index",
+        "meaning": "为文本搜索维护的索引结构，能加速搜索，但写入时也要同步更新。",
+        "meaningEn": "A full-text index supports text search, but it also has to be updated on each relevant write."
       }
     ],
     "tags": [
@@ -718,6 +814,12 @@
       "把一个笼统标签当成技术判断，忽略场景差异。",
       "回避数据库选型这个决策点。"
     ],
+    "optionScenarioImpacts": [
+      "靠口碑和 benchmark 选型，没回答写路径为什么会更快。",
+      "把候选库和写入机制绑起来，能说明你知道代价。",
+      "NoSQL 也有数据模型和查询限制，不能当万能写入加速器。",
+      "只堆机器不解释分片键和写机制，等于跳过核心取舍。"
+    ],
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -735,6 +837,17 @@
         "fullName": "Time-Series Database",
         "meaning": "专为带时间戳的高频顺序写入优化的数据库，如 InfluxDB。",
         "meaningEn": "A time-series database is optimized for high-frequency, timestamped sequential writes, such as InfluxDB."
+      },
+      {
+        "term": "MySQL",
+        "meaning": "常见关系型数据库，默认面向通用 OLTP 负载，而不是极端写入吞吐。",
+        "meaningEn": "MySQL is a common relational database aimed at general OLTP workloads rather than extreme write throughput."
+      },
+      {
+        "term": "NoSQL",
+        "fullName": "Not Only SQL",
+        "meaning": "一组非传统关系模型数据库的统称，不等于所有场景都比关系库写得快。",
+        "meaningEn": "NoSQL, or Not Only SQL, is a broad family of non-relational databases, not a guarantee of faster writes in every case."
       }
     ],
     "tags": [
@@ -781,6 +894,12 @@
         "fullName": "Hot Spot",
         "meaning": "某个分片承受远超其他分片的流量，即使整体分片均匀也可能出现。",
         "meaningEn": "A hot spot is a single shard taking far more traffic than the others, which can still happen even with an evenly designed scheme."
+      },
+      {
+        "term": "线性扩展",
+        "fullName": "Linear Scaling",
+        "meaning": "机器数增加 N 倍时，总吞吐也接近增加 N 倍；真实系统通常只能逼近它。",
+        "meaningEn": "Linear scaling means N times as many machines gives close to N times the throughput, though real systems only approximate it."
       }
     ],
     "tags": [
@@ -817,6 +936,11 @@
     "codeSample": "# 客户端先算 key 属于哪个 slot\n> CLUSTER KEYSLOT user:1000\n(integer) 3999\n# 查路由表得知 slot 3999 归节点B，直接写它\n> SET user:1000:profile '{\"name\":\"Ann\"}'\nOK",
     "lang": "redis",
     "termDefinitions": [
+      {
+        "term": "Redis Cluster",
+        "meaning": "Redis 的分片集群模式，用 slot 把 key 空间分配到多个节点。",
+        "meaningEn": "Redis Cluster is Redis's sharded cluster mode, assigning key-space slots across multiple nodes."
+      },
       {
         "term": "CRC",
         "fullName": "Cyclic Redundancy Check",
@@ -864,6 +988,12 @@
     "why_en": "The most important sharding detail is selecting a partitioning key that spreads data evenly, which is what actually realizes the ten-times gain.",
     "whenOtherWins": "如果面试官继续深挖「客户端怎么找到正确的分片」，就要展开 consistent hashing、虚拟节点、slot 分配这些路由机制。",
     "tradeoff": "分区键选择 vs 其它次要实现细节",
+    "optionScenarioImpacts": [
+      "云区域影响延迟和容灾，但不能回答写入会不会均匀。",
+      "机器规格是容量计算，选错分区键时再大的机器也会热点。",
+      "心跳只判断节点存活，不决定一条写入落到哪里。",
+      "分区键决定每条写入的去向，直接决定负载是否打散。"
+    ],
     "termDefinitions": [
       {
         "term": "partitioning key",
@@ -876,6 +1006,22 @@
         "fullName": "Consistent Hashing",
         "meaning": "一种分片路由算法，节点增减时只需重新分配少量 key，而不是全量重哈希。",
         "meaningEn": "Consistent hashing is a sharding scheme where adding or removing a node only reshuffles a small slice of keys instead of rehashing everything."
+      },
+      {
+        "term": "虚拟节点",
+        "fullName": "Virtual Node",
+        "meaning": "一致性哈希环上的虚拟分片点，用来让真实节点承接多个小范围，减轻倾斜。",
+        "meaningEn": "A virtual node is a logical point on a consistent-hash ring that lets real nodes own many smaller ranges and reduces skew."
+      },
+      {
+        "term": "slot",
+        "meaning": "分片系统把 key 空间切出的固定槽位，槽位再分配给具体节点。",
+        "meaningEn": "A slot is a fixed bucket of key space in a sharded system, later assigned to a concrete node."
+      },
+      {
+        "term": "userID",
+        "meaning": "用户的唯一标识符，常被选作分片或分区的 key。",
+        "meaningEn": "userID is a user's unique identifier, commonly used as a sharding or partition key."
       }
     ],
     "tags": [
@@ -935,6 +1081,8 @@
     "text_en": "A good partition key should {{minimize}} the variance in writes per shard — \"{{flat}} is good\" on the chart; a common approach is to {{hash}} a primary identifier such as {{userId}} or postId.",
     "why": "选键原则：让每个分片的写入量尽量一样多。对高基数主标识符取哈希通常就能做到，候选标识符一般就那几个。",
     "why_en": "Pick a key that minimizes variance in writes per shard, usually by hashing a primary identifier like the user ID or post ID.",
+    "whenOtherWins": "如果主要查询总是按另一个实体聚合，就要优先评估那个实体是否该做分区键，避免高频读跨片。",
+    "tradeoff": "写入均匀分布 vs 高频读是否跨片",
     "termDefinitions": [
       {
         "term": "哈希",
@@ -946,6 +1094,17 @@
         "term": "userId",
         "meaning": "用户的唯一标识符，是最常见的分区键候选之一，基数高、分布均匀。",
         "meaningEn": "userId is a user's unique identifier, one of the most common partition-key candidates because it has high cardinality and even distribution."
+      },
+      {
+        "term": "postId",
+        "meaning": "帖子的唯一标识符，也常作为按帖子维度分布数据的分区键候选。",
+        "meaningEn": "postId is a post's unique identifier and a common partition-key candidate for post-centered data."
+      },
+      {
+        "term": "方差",
+        "fullName": "Variance",
+        "meaning": "衡量各分片写入量离平均值有多远的统计量；越小表示越均匀。",
+        "meaningEn": "Variance measures how far each shard's write count is from the average; lower variance means more even load."
       }
     ],
     "tags": [
@@ -1128,7 +1287,7 @@
     "why_en": "Split the monolithic table into content, metrics, and analytics tables so each access pattern stops interfering with the others.",
     "whenOtherWins": "如果三类访问的量都不大，单表加索引就够了——垂直分区带来的多库运维成本只有在互相干扰成为真实瓶颈时才值得。",
     "tradeoff": "拆表隔离访问模式 vs 单表加索引的运维简单",
-    "codeSample": "-- 内容（写一次、读多次）\nTABLE post_content (post_id BIGINT PK, user_id BIGINT, content TEXT);\n-- 互动指标（高频写）\nTABLE post_metrics (post_id BIGINT PK, like_count INT DEFAULT 0);\n-- 分析事件（追加式时序）\nTABLE post_analytics (post_id BIGINT, event_type VARCHAR(50), ts TIMESTAMP);",
+    "codeSample": "-- 内容：写一次、读多次\nCREATE TABLE post_content (post_id BIGINT PRIMARY KEY, user_id BIGINT, content TEXT);\n-- 指标：高频小更新\nCREATE TABLE post_metrics (post_id BIGINT PRIMARY KEY, like_count INT DEFAULT 0, view_count BIGINT DEFAULT 0);\n-- 分析：追加式时序事件\nCREATE TABLE post_analytics (post_id BIGINT, event_type VARCHAR(50), ts TIMESTAMP);",
     "lang": "sql",
     "termDefinitions": [
       {
@@ -1141,6 +1300,12 @@
         "fullName": "Vertical Partitioning",
         "meaning": "把一张表的不同列拆成多张表，按访问模式分开存放。",
         "meaningEn": "Vertical partitioning splits one table's columns into multiple tables, separated by access pattern."
+      },
+      {
+        "term": "二级索引",
+        "fullName": "Secondary Index",
+        "meaning": "主键之外为加速特定查询而建的额外索引；在这张大表上继续加会放大写入干扰。",
+        "meaningEn": "A secondary index is extra structure beyond the primary key; adding more here would increase write interference."
       }
     ],
     "tags": [
@@ -1176,7 +1341,14 @@
     ],
     "why": "垂直分区的收益之一：每张表可以搬到为它的访问模式优化的数据库。内容配 B-tree 读优化、指标配内存计数、分析配时序/列存。",
     "why_en": "Each partition can move to a database optimized for it: B-tree indexes for content, in-memory counters for metrics, and columnar or time-series storage for analytics.",
+    "whenOtherWins": "如果三张表的访问量都低、事务还常跨列更新，留在同一个实例里更简单，避免分布式事务和运维成本。",
     "tradeoff": "专用存储换性能 vs 多实例的运维成本",
+    "optionScenarioImpacts": [
+      "内容读多写少，B-tree 能让按 post_id 或 user_id 的读取更快。",
+      "互动计数高频变动，内存或专用计数器能减少关系库行锁压力。",
+      "分析事件只追加、常批量扫，列存或时序库能压缩并加速扫描。",
+      "强行同实例会让三种访问模式继续互相抢资源。"
+    ],
     "table": {
       "headers": [
         "表",
@@ -1207,6 +1379,18 @@
         "fullName": "Balanced Tree",
         "meaning": "关系型数据库常用的索引结构，适合点查和范围查询。",
         "meaningEn": "A B-tree is the balanced index structure relational databases commonly use, well suited to point lookups and range queries."
+      },
+      {
+        "term": "列式压缩",
+        "fullName": "Columnar Compression",
+        "meaning": "按列存储相似值再压缩，适合分析表的大范围扫描。",
+        "meaningEn": "Columnar compression stores similar values by column and compresses them, which suits large analytical scans."
+      },
+      {
+        "term": "专用计数器",
+        "fullName": "Specialized Counter",
+        "meaning": "为高频加减计数优化的存储或组件，用来减少通用关系库的行锁和写放大。",
+        "meaningEn": "A specialized counter is storage or logic optimized for frequent increments and decrements, reducing row locks and write amplification."
       }
     ],
     "tags": [
@@ -1234,14 +1418,14 @@
     "answer": [
       0
     ],
-    "why": "要随时吃下 4 倍峰值，平时就只能跑在 25% 利用率——大多数系统不会这么超配，所以需要队列或 load shedding 来处理突发。",
-    "why_en": "Absorbing a four-times peak with fixed capacity means running at only twenty-five percent utilization in quiet times, which most systems cannot afford.",
+    "why": "公式是平时利用率 ≤ 1 / 峰值倍数；4 倍峰值就是 ≤25%。多数系统不会长期付 75% 闲置成本，所以会用队列或 load shedding 处理突发。",
+    "why_en": "Normal utilization must be at most one divided by the peak multiplier, so a four-times peak means twenty-five percent utilization.",
     "termDefinitions": [
       {
         "term": "容量利用率",
         "fullName": "Capacity Utilization",
-        "meaning": "系统实际使用的容量占总配置容量的比例；为峰值预留得越多，平时利用率越低。",
-        "meaningEn": "Capacity utilization is the share of total provisioned capacity actually in use; the more headroom you reserve for peaks, the lower it runs day to day."
+        "meaning": "系统实际使用的容量占总配置容量的比例；公式是当前负载 / 总容量。",
+        "meaningEn": "Capacity utilization is the current load divided by total provisioned capacity."
       },
       {
         "term": "load shedding",
@@ -1425,8 +1609,14 @@
       {
         "term": "背压",
         "fullName": "Backpressure",
-        "meaning": "消费速率跟不上生产速率时，队列无限增长、延迟不断攀升的现象。",
-        "meaningEn": "Backpressure is what happens when consumers can't keep up with producers, so the queue grows without bound and latency keeps climbing."
+        "meaning": "下游跟不上时让上游减速或拒绝新请求的机制；没有它，队列就会持续积压。",
+        "meaningEn": "Backpressure is a mechanism that slows or rejects producers when downstream can't keep up; without it, the queue keeps backing up."
+      },
+      {
+        "term": "队列积压",
+        "fullName": "Queue Backlog",
+        "meaning": "已经入队但还没被消费的消息数量；入队长期快于出队时会不断增长。",
+        "meaningEn": "Queue backlog is the number of enqueued messages not yet consumed; it grows when enqueue rate stays above drain rate."
       }
     ],
     "tags": [
@@ -1464,6 +1654,12 @@
     "why_en": "Use queues for short-lived bursts, not to patch a database that cannot handle the steady-state load.",
     "whenOtherWins": "如果负载真的是间歇性尖峰、稳态在产能之内，队列就是正确工具——先在需求阶段确认对延迟写入的容忍度。",
     "tradeoff": "队列吸收短暂突发 vs 用它掩盖稳态容量不足",
+    "optionScenarioImpacts": [
+      "稳态超产能时入队永远快于出队，积压只会越来越大。",
+      "数据库仍要按自己的吞吐落库，队列不能取消容量规划。",
+      "队列改变到达时间，不改变数据库每秒能处理多少写。",
+      "容量变大只推迟爆掉时间，不会修复长期入队更快的问题。"
+    ],
     "termDefinitions": [
       {
         "term": "Kafka",
@@ -1518,6 +1714,12 @@
       "分区数是队列容量的实现参数，晚点再定不影响一致性判断。",
       "消费者语言是实现细节，不影响一致性/延迟这类业务需求。"
     ],
+    "optionScenarioImpacts": [
+      "先争产品名会跳过异步队列能不能满足业务语义的问题。",
+      "确认边界后，才能决定排队、回查和用户提示怎么设计。",
+      "分区数只能影响吞吐，不能回答写后是否必须立刻可见。",
+      "语言选择不改变队列带来的延迟写入和最终一致。"
+    ],
     "termDefinitions": [
       {
         "term": "Kafka",
@@ -1535,6 +1737,18 @@
         "fullName": "Eventual Consistency",
         "meaning": "写入后短暂时间内读可能读到旧值，但最终会收敛到最新值的一致性模型。",
         "meaningEn": "Eventual consistency means a read right after a write may see a stale value, but the system eventually converges to the latest one."
+      },
+      {
+        "term": "写后立读",
+        "fullName": "Read-Your-Writes",
+        "meaning": "客户端写入成功后，后续读取必须立刻看到自己的最新写入。",
+        "meaningEn": "Read-your-writes means that after a client writes successfully, its later reads must immediately see that write."
+      },
+      {
+        "term": "强一致",
+        "fullName": "Strong Consistency",
+        "meaning": "系统确认写入后，后续读取都必须看到最新值，不能短暂读到旧数据。",
+        "meaningEn": "Strong consistency means once a write is acknowledged, later reads must see the latest value, not a stale one."
       }
     ],
     "tags": [
