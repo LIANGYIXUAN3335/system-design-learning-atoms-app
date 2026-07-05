@@ -13,6 +13,8 @@ export interface SrsEntry {
 export interface QueueOpts {
   newPerDay?: number;
   learnAheadMin?: number;
+  /** Cards already graded today; they leave today's study debt until tomorrow. */
+  reviewedToday?: Set<string>;
 }
 
 function hashString(value: string): number {
@@ -77,17 +79,18 @@ export function buildQueue(
 ): string[] {
   const newPerDay = opts.newPerDay ?? NEW_PER_DAY;
   const learnAhead = opts.learnAheadMin ?? LEARN_AHEAD_MIN;
+  const reviewedToday = opts.reviewedToday ?? new Set<string>();
   const ids = new Set(cards.map((c) => c.id));
 
   const due = [...srs.entries()]
-    .filter(([id, e]) => ids.has(id) && isDueNow(e.fsrs, now, learnAhead))
+    .filter(([id, e]) => ids.has(id) && !reviewedToday.has(id) && isDueNow(e.fsrs, now, learnAhead))
     .sort((a, b) => a[1].fsrs.due.getTime() - b[1].fsrs.due.getTime())
     .map(([id]) => id);
 
   const quota = Math.max(0, newPerDay - introducedTodayCount(srs, now, ids));
   const today = localDateStr(now);
   const fresh = cards
-    .filter((c) => !srs.has(c.id))
+    .filter((c) => !reviewedToday.has(c.id) && !srs.has(c.id))
     .map((c, index) => ({ id: c.id, index, key: newCardSortKey(c.id, today) }))
     .sort((a, b) => a.key - b.key || a.index - b.index)
     .slice(0, quota)
@@ -141,12 +144,14 @@ export function laterTodayCount(
   srs: Map<string, SrsEntry>,
   now: Date,
   learnAheadMin: number = LEARN_AHEAD_MIN,
+  reviewedToday: Set<string> = new Set<string>(),
 ): number {
   const ids = new Set(cards.map((c) => c.id));
   const today = localDateStr(now);
   let n = 0;
   for (const [id, e] of srs.entries()) {
     if (!ids.has(id)) continue;
+    if (reviewedToday.has(id)) continue;
     if (isDueNow(e.fsrs, now, learnAheadMin)) continue;
     if (e.fsrs.state === State.New) continue;
     if (localDateStr(e.fsrs.due) === today) n++;

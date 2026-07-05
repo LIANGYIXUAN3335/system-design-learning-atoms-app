@@ -6,6 +6,7 @@ import {
   type Card as FsrsCard,
   type Grade,
 } from 'ts-fsrs';
+import { addLocalDays, localDateStr } from './dates';
 
 // FSRS is the ONLY scheduler (M2 spec §1). The rhythm preset tunes it through
 // request_retention; per-card state is untouched by a retention change, so
@@ -31,7 +32,13 @@ export function emptyCard(now: Date): FsrsCard {
 }
 
 export function applyReview(card: FsrsCard, now: Date, grade: Grade): FsrsCard {
-  return scheduler.next(card, now, grade).card;
+  const next = scheduler.next(card, now, grade).card;
+  // Product rule from M3 §3.1: once the learner grades a card today, it leaves
+  // today's review debt even if FSRS would schedule a short relearning step.
+  if (localDateStr(next.due) <= localDateStr(now)) {
+    return { ...next, due: addLocalDays(now, 1) };
+  }
+  return next;
 }
 
 export function serializeFsrs(card: FsrsCard): string {
