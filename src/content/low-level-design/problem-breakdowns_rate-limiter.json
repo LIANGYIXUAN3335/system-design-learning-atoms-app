@@ -26,8 +26,8 @@
       "The result has three fields: allowed, remaining, retryAfterMs.",
       "The system supports hot-reloading configuration at runtime."
     ],
-    "why": "配置只在启动加载一次，动态热更新明确列为 out of scope；其余四条都是基础需求里的真实约束。",
-    "why_en": "The base design loads config once at startup and explicitly excludes hot-reloading, while the other four statements are real in-scope requirements.",
+    "why": "基础设计把配置加载、请求输入、endpoint 策略和结构化结果先固定下来；运行时热更新会引入原子替换或保状态更新，不在这版范围内。",
+    "why_en": "The base design fixes startup config, simple request keys, per-endpoint policies, and structured results; hot reload is out of scope.",
     "tags": [
       "low-level-design",
       "rate-limiter",
@@ -49,7 +49,41 @@
         "term": "retryAfterMs",
         "meaning": "请求被拒绝时，建议客户端等待多少毫秒后重试。",
         "meaningEn": "retryAfterMs tells a denied caller how many milliseconds to wait before retrying."
+      },
+      {
+        "term": "hot reload",
+        "meaning": "服务不重启的情况下加载并应用新配置。",
+        "meaningEn": "Hot reload applies new configuration without restarting the service."
       }
+    ],
+    "q_en": "Which requirements are in scope for the base rate limiter design? (Select all that apply.)",
+    "optionMeanings": [
+      "启动时读配置，运行中不改已加载 limiter。",
+      "入口请求只提供定位规则的两个 key。",
+      "每个 endpoint 可走自己的限流策略。",
+      "返回值同时表达放行、剩余额度和重试时间。",
+      "运行时修改配置并让旧实例生效。"
+    ],
+    "optionScenarioImpacts": [
+      "构造阶段可一次性创建 limiter，不需要 reload 主路径。",
+      "clientId 和 endpoint 直接用于查表和限流 key。",
+      "Factory 要按 endpoint 配置创建不同 Limiter。",
+      "调用方能设置 remaining 和 Retry-After 类信息。",
+      "需要原子替换或保状态 updateConfig，复杂度上升。"
+    ],
+    "optionMeanings_en": [
+      "Config is read at startup and loaded limiters are not mutated live.",
+      "The request only provides two keys used to find the rule.",
+      "Each endpoint can use its own limiting strategy.",
+      "The return value carries allow, remaining quota, and retry timing.",
+      "Runtime config changes are applied to already loaded instances."
+    ],
+    "optionScenarioImpacts_en": [
+      "The constructor can create limiters once, with no reload path.",
+      "clientId and endpoint become lookup and limiter keys.",
+      "The factory must create different Limiters from endpoint config.",
+      "Callers can populate remaining and Retry-After style responses.",
+      "Atomic swap or state-preserving updateConfig is needed, adding complexity."
     ]
   },
   {
@@ -197,7 +231,28 @@
         "term": "RateLimitResult",
         "meaning": "封装 allowed/remaining/retryAfterMs 的不可变结果对象。",
         "meaningEn": "RateLimitResult is an immutable value object packaging the allowed flag, remaining quota, and retry time."
+      },
+      {
+        "term": "per-key state",
+        "meaning": "按每个 key 独立维护的状态数据。",
+        "meaningEn": "Per-key state is state tracked independently for each key."
       }
+    ],
+    "optionScenarioImpacts": [
+      "外部请求先进入这个编排入口。",
+      "所有算法只要实现同一个 allow(key) 契约。",
+      "配置解析和具体类创建集中在一处。",
+      "调用方拿到统一的 allowed/remaining/retryAfterMs。",
+      "TokenBucket 和 SlidingLog 不共享内部字段。",
+      "会把请求历史放错所有者，Client 不该承担算法状态。"
+    ],
+    "optionScenarioImpacts_en": [
+      "External requests enter through this orchestration class.",
+      "Every algorithm implements the same allow(key) contract.",
+      "Config parsing and concrete creation are centralized.",
+      "Callers get a consistent allowed/remaining/retryAfterMs response.",
+      "Concrete algorithms each own their per-key state.",
+      "This puts request history in the wrong owner; Client should not own algorithm state."
     ]
   },
   {
@@ -248,7 +303,65 @@
         "meaning": "按每个 key 独立维护的状态数据。",
         "meaningEn": "Per-key state is state tracked independently for each key."
       }
-    ]
+    ],
+    "optionMeanings": [
+      "只共享 allow(key) 这个契约。",
+      "把语言能力误判成设计限制。",
+      "把配置解析错放到接口上。",
+      "把一种算法的队列状态强加给所有算法。"
+    ],
+    "optionScenarioImpacts": [
+      "TokenBucket 和 SlidingWindowLog 可各自维护状态。",
+      "答案变成错误的 Java 事实，不是设计判断。",
+      "接口无法自动读取 JSON，也不该承担创建职责。",
+      "TokenBucket 会被迫持有无意义队列。"
+    ],
+    "optionDirectness": [
+      "适合算法状态差异大、只共享方法签名时。",
+      "只有团队禁用抽象类时才会是理由；这里不是。",
+      "配置解析属于 Factory，不属于 Limiter 接口。",
+      "只有所有算法都用时间戳队列时才可能共享字段。"
+    ],
+    "optionMeanings_en": [
+      "Only the allow(key) contract is shared.",
+      "This mistakes a design choice for a language limitation.",
+      "This puts config parsing on the interface.",
+      "This forces one algorithm's queue state onto every algorithm."
+    ],
+    "optionScenarioImpacts_en": [
+      "TokenBucket and SlidingWindowLog can each keep their own state.",
+      "The answer becomes a false Java fact, not a design judgment.",
+      "An interface cannot read JSON automatically and should not create objects.",
+      "TokenBucket would carry a meaningless timestamp queue."
+    ],
+    "optionDirectness_en": [
+      "Fits when algorithms share only a method signature, not state.",
+      "This matters only if the team bans abstract classes, which is not the case.",
+      "Config parsing belongs in the factory, not in the Limiter interface.",
+      "Shared fields make sense only if every algorithm uses the timestamp queue."
+    ],
+    "table": {
+      "headers": [
+        "Choice",
+        "State",
+        "Best for",
+        "Risk"
+      ],
+      "rows": [
+        [
+          "Interface",
+          "none",
+          "varied state",
+          "helper duplication"
+        ],
+        [
+          "Abstract base",
+          "shared fields",
+          "common state",
+          "empty shell"
+        ]
+      ]
+    }
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-005",
@@ -497,6 +610,42 @@
         "meaning": "用一个特殊数值代表'无意义'状态的技巧，容易和真实数值混淆。",
         "meaningEn": "A sentinel value overloads a special number to mean \"not applicable,\" which is easy to confuse with a real value."
       }
+    ],
+    "optionMeanings": [
+      "把“成功时无等待”表达成空值。",
+      "把 JSON 数字能力理解错了。",
+      "把单位清晰度和数据类型搞混。",
+      "想用一个字段替代放行判断。"
+    ],
+    "optionScenarioImpacts": [
+      "调用方能区分“无等待概念”和“立即重试”。",
+      "0 是合法 JSON 数字，不能作为理由。",
+      "字符串会让客户端再解析一次，反而更差。",
+      "没有 allowed 时，调用方还要猜这次是否放行。"
+    ],
+    "optionDirectness": [
+      "适合 nullable 结果字段：成功时 retryAfterMs 不适用。",
+      "只有序列化系统不支持 0 时才相关；JSON 支持。",
+      "毫秒单位已经由 Ms 后缀表达，不需要字符串。",
+      "allowed 仍是主判断，retryAfterMs 只是拒绝时的补充。"
+    ],
+    "optionMeanings_en": [
+      "It represents “no retry concept” as null on success.",
+      "This misunderstands JSON numeric support.",
+      "This confuses unit clarity with data type choice.",
+      "This tries to replace the allow decision with one field."
+    ],
+    "optionScenarioImpacts_en": [
+      "Callers distinguish “not applicable” from “retry immediately.”",
+      "Zero is a valid JSON number, so that reason is false.",
+      "A string forces clients to parse again and is worse.",
+      "Without allowed, callers must infer whether the request passed."
+    ],
+    "optionDirectness_en": [
+      "Fits a nullable result field because retryAfterMs is not applicable on success.",
+      "This matters only in a serializer that cannot represent zero; JSON can.",
+      "The Ms suffix already gives the unit, so a string is unnecessary.",
+      "allowed remains the main decision; retryAfterMs only helps on denial."
     ]
   },
   {
@@ -759,10 +908,11 @@
     "id": "lld-problem-breakdowns-rate-limiter-012",
     "format": "multi",
     "atomType": "fact",
-    "topic": "low-level-design",
-    "sub": "algorithms",
-    "q": "文章比较的常见限流算法有哪些？（多选）",
-    "options": [
+  "topic": "low-level-design",
+  "sub": "algorithms",
+  "q": "文章比较的常见限流算法有哪些？（多选）",
+  "q_en": "Which common rate-limiting algorithms does the article compare? (Select all that apply.)",
+  "options": [
       "Token Bucket",
       "Sliding Window Log",
       "Fixed Window Counter",
@@ -934,6 +1084,42 @@
         "meaning": "令牌桶每秒补充的令牌数量。",
         "meaningEn": "refillRatePerSecond is how many tokens a token bucket adds back per second."
       }
+    ],
+    "optionMeanings": [
+      "Token 可积累到容量，短时间内可连发。",
+      "这是 Sliding Window Log 的取舍。",
+      "这是 Fixed Window Counter 的取舍。",
+      "否认了限流算法必须保存历史状态。"
+    ],
+    "optionScenarioImpacts": [
+      "长期平均受 refillRate 控制，短突发受 capacity 控制。",
+      "会换成更精确但更耗内存的实现。",
+      "会得到更简单但边界突刺更明显的实现。",
+      "没有 per-key state 就无法记住谁已经用过额度。"
+    ],
+    "optionDirectness": [
+      "适合允许短 burst、但要控制长期平均速率的 API。",
+      "适合必须精确限制最近窗口请求数的场景。",
+      "适合实现极简、能接受边界误差的场景。",
+      "只有完全无状态的粗粒度拦截才可能不存 per-key state。"
+    ],
+    "optionMeanings_en": [
+      "Tokens can accumulate up to capacity and allow a short burst.",
+      "This is the sliding-window-log tradeoff.",
+      "This is the fixed-window-counter tradeoff.",
+      "This denies that rate limiting must remember prior usage."
+    ],
+    "optionScenarioImpacts_en": [
+      "Long-term average is controlled by refillRate, while burst is capped by capacity.",
+      "You would switch to a more exact but more memory-heavy design.",
+      "You would get a simpler design with a sharper boundary burst.",
+      "Without per-key state, the limiter cannot remember spent quota."
+    ],
+    "optionDirectness_en": [
+      "Fits APIs that allow short bursts while controlling average rate.",
+      "Fits when the exact recent-window count matters most.",
+      "Fits when simplicity matters and boundary error is acceptable.",
+      "No per-key state fits only very coarse stateless blocking."
     ]
   },
   {
@@ -998,6 +1184,11 @@
     },
     "termDefinitions": [
       {
+        "term": "TokenBucketLimiter",
+        "meaning": "用令牌桶算法实现 Limiter 接口的具体类。",
+        "meaningEn": "TokenBucketLimiter is the concrete Limiter implementation using the token bucket algorithm."
+      },
+      {
         "term": "capacity",
         "meaning": "令牌桶能容纳的最大令牌数，即最大突发量。",
         "meaningEn": "capacity is the maximum number of tokens a bucket can hold, i.e. the largest burst it allows."
@@ -1012,6 +1203,20 @@
         "meaning": "上一次计算补充量时的时间戳。",
         "meaningEn": "lastRefillTime is the timestamp from the last time refill was computed."
       }
+    ],
+    "optionScenarioImpacts": [
+      "设置单个 key 最多可积累多少突发额度。",
+      "决定空桶多久能补回一个 token。",
+      "让每个 key 找到自己的 bucket。",
+      "记录当前可用额度和上次补充时间。",
+      "会把全局配置错误复制到每个 client。"
+    ],
+    "optionScenarioImpacts_en": [
+      "It caps how much burst quota one key can accumulate.",
+      "It determines how fast an empty bucket regains one token.",
+      "It maps each key to its own bucket.",
+      "It records current quota and the last refill time.",
+      "This incorrectly copies global config into every client."
     ]
   },
   {
@@ -1057,6 +1262,42 @@
         "meaning": "处理完当前请求后，调用方还剩多少可用额度。",
         "meaningEn": "remaining is how much quota the caller has left after this request is processed."
       }
+    ],
+    "optionMeanings": [
+      "内部 token 可以处在小数中间态。",
+      "把数值类型和并发安全混为一谈。",
+      "把数字状态错误变成文本。",
+      "把内部状态格式泄漏到对外结果。"
+    ],
+    "optionScenarioImpacts": [
+      "0.5 秒补 0.5 token 这类计算能被保留。",
+      "并发下仍要锁住检查和扣减。",
+      "字符串会破坏数值比较和补充计算。",
+      "调用方看到的 remaining 仍是整数额度。"
+    ],
+    "optionDirectness": [
+      "适合按 elapsed 时间连续补充的实现。",
+      "只有单线程或显式同步时才不会竞态。",
+      "字符串只适合展示，不适合算法状态。",
+      "对外结果更适合 floor，避免暴露小数细节。"
+    ],
+    "optionMeanings_en": [
+      "Internal tokens can sit at a fractional intermediate value.",
+      "This confuses numeric type choice with concurrency safety.",
+      "This turns numeric state into text.",
+      "This leaks internal representation into the public result."
+    ],
+    "optionScenarioImpacts_en": [
+      "Calculations like 0.5 token after 0.5 seconds are preserved.",
+      "Concurrent code still needs to lock check-and-deduct.",
+      "Strings would break numeric comparison and refill math.",
+      "The public remaining value still reports integer quota."
+    ],
+    "optionDirectness_en": [
+      "Fits implementations that refill continuously from elapsed time.",
+      "Races disappear only with single-threading or explicit synchronization.",
+      "Strings fit display, not algorithm state.",
+      "Public results should floor the value instead of exposing fractions."
     ]
   },
   {
@@ -1171,6 +1412,11 @@
     "diagram": "flowchart TD\n  A[get bucket] --> B[refill by elapsed]\n  B --> C{tokens >= 1?}\n  C -->|yes| D[consume token]\n  D --> E[allow]\n  C -->|no| F[retryAfter]",
     "termDefinitions": [
       {
+        "term": "Token Bucket",
+        "meaning": "每个 key 一个令牌桶，按固定速率补充令牌，允许短时突发。",
+        "meaningEn": "Token bucket gives each key a bucket that refills at a fixed rate and allows short bursts up to its capacity."
+      },
+      {
         "term": "tokensToAdd",
         "meaning": "按经过时间和补充速率算出的、本次应新增的令牌数。",
         "meaningEn": "tokensToAdd is the number of tokens to add back, computed from elapsed time and the refill rate."
@@ -1179,8 +1425,14 @@
         "term": "lastRefillTime",
         "meaning": "上一次计算补充量时的时间戳。",
         "meaningEn": "lastRefillTime is the timestamp from the last time refill was computed."
+      },
+      {
+        "term": "retryAfterMs",
+        "meaning": "请求被拒绝时，建议客户端等待多少毫秒后重试。",
+        "meaningEn": "retryAfterMs tells a denied caller how many milliseconds to wait before retrying."
       }
-    ]
+    ],
+    "tradeoff": "先按时间补充再扣减 vs 先扣后补会误判当前额度"
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-018",
@@ -1459,6 +1711,42 @@
         "meaning": "滑动窗口的时长，单位毫秒。",
         "meaningEn": "windowMs is the length of the sliding window in milliseconds."
       }
+    ],
+    "optionMeanings": [
+      "窗口内每个请求都留一条时间戳。",
+      "这是 Token Bucket 的特性。",
+      "这是 Fixed Window Counter 的误差形状。",
+      "忽略了队列必须删除过期 timestamp。"
+    ],
+    "optionScenarioImpacts": [
+      "高 QPS key 的队列长度会跟请求数一起增长。",
+      "会允许 burst，但不再是精确窗口计数。",
+      "会更简单，但最近窗口判断不够精确。",
+      "不清理旧数据会让 size 一直偏大并浪费内存。"
+    ],
+    "optionDirectness": [
+      "适合必须精确执行最近 windowMs 限制的 endpoint。",
+      "适合允许短突发、只控制平均速率的 endpoint。",
+      "适合可接受边界突刺、追求最简单实现的场景。",
+      "任何长时间运行的日志窗口都需要清理。"
+    ],
+    "optionMeanings_en": [
+      "Every request in the window keeps one timestamp.",
+      "This is a token bucket property.",
+      "This is the fixed-window-counter error shape.",
+      "This ignores that expired timestamps must be removed."
+    ],
+    "optionScenarioImpacts_en": [
+      "A high-QPS key gets a queue that grows with request count.",
+      "It would allow bursts, but would no longer be exact-window counting.",
+      "It would be simpler, but recent-window decisions become less exact.",
+      "Without cleanup, size stays too high and memory is wasted."
+    ],
+    "optionDirectness_en": [
+      "Fits endpoints that need exact enforcement over the last windowMs.",
+      "Fits endpoints that allow bursts and only control average rate.",
+      "Fits when simplicity beats boundary accuracy.",
+      "Any long-running sliding log needs cleanup of expired timestamps."
     ]
   },
   {
@@ -1512,7 +1800,26 @@
         "term": "windowMs",
         "meaning": "滑动窗口的时长，单位毫秒。",
         "meaningEn": "windowMs is the length of the sliding window in milliseconds."
+      },
+      {
+        "term": "timestamp queue",
+        "meaning": "按时间顺序保存请求时间戳的队列，队头最先过期。",
+        "meaningEn": "A timestamp queue stores request times in order, with the head expiring first."
       }
+    ],
+    "optionScenarioImpacts": [
+      "配置窗口内最多允许多少请求。",
+      "配置最近窗口的时间长度。",
+      "让每个 key 找到自己的请求日志。",
+      "队列按时间顺序保存窗口内请求。",
+      "会把 Token Bucket 的消耗概念混进日志算法。"
+    ],
+    "optionScenarioImpacts_en": [
+      "It configures the maximum request count inside the window.",
+      "It configures the length of the recent window.",
+      "It maps each key to its own request log.",
+      "The queue stores in-window requests in time order.",
+      "This mixes token-bucket cost into a log-based algorithm."
     ]
   },
   {
@@ -1630,8 +1937,14 @@
         "term": "cutoff",
         "meaning": "窗口内还算有效的最早时间点，等于 now 减 windowMs。",
         "meaningEn": "cutoff is the earliest timestamp still inside the window, computed as now minus windowMs."
+      },
+      {
+        "term": "retryAfterMs",
+        "meaning": "请求被拒绝时，建议客户端等待多少毫秒后重试。",
+        "meaningEn": "retryAfterMs tells a denied caller how many milliseconds to wait before retrying."
       }
-    ]
+    ],
+    "tradeoff": "先清理过期记录再计数 vs 先计数会误拒已过期请求"
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-025",
@@ -1644,8 +1957,8 @@
     "q": "补全 Sliding Window Log 的 retry 公式：",
     "q_en": "Fill in the Sliding Window Log retry formula:",
     "text": "当达到上限时，oldestTimestamp 是最早会过期的请求；retryAfterMs = ({{oldestTimestamp + windowMs}}) - {{now}}。",
-    "why": "只要最老 timestamp 离开窗口，就空出一个名额；这个时间差就是建议客户端等待的时间。",
-    "why_en": "The oldest in-window timestamp determines when one request slot opens, and that gap is the suggested wait time.",
+    "why": "windowMs 是毫秒窗口时长；最老 timestamp 离开窗口就空出一个名额，所以这个差值就是 429 的 retryAfterMs。",
+    "why_en": "windowMs is the window length in milliseconds, and the oldest timestamp tells when one request slot opens.",
     "tags": [
       "low-level-design",
       "rate-limiter",
@@ -1657,6 +1970,16 @@
         "term": "oldestTimestamp",
         "meaning": "队列中最早、最先过期的请求时间戳。",
         "meaningEn": "oldestTimestamp is the earliest, soonest-to-expire request timestamp in the queue."
+      },
+      {
+        "term": "windowMs",
+        "meaning": "滑动窗口的时长，单位毫秒。",
+        "meaningEn": "windowMs is the length of the sliding window in milliseconds."
+      },
+      {
+        "term": "retryAfterMs",
+        "meaning": "请求被拒绝时，建议客户端等待多少毫秒后重试。",
+        "meaningEn": "retryAfterMs tells a denied caller how many milliseconds to wait before retrying."
       }
     ]
   },
@@ -1816,7 +2139,48 @@
         "term": "Fixed Window Counter",
         "meaning": "按固定时间窗口计数，实现简单但窗口边界可能放过突发流量。",
         "meaningEn": "Fixed window counter counts requests in a fixed time slot, simple to build but prone to boundary bursts."
+      },
+      {
+        "term": "boundary burst",
+        "meaning": "请求集中在两个相邻窗口边缘，导致短时间内通过接近两倍限制的流量。",
+        "meaningEn": "A boundary burst happens when requests cluster around two adjacent window edges and nearly double the short-term allowance."
       }
+    ],
+    "optionMeanings": [
+      "两个相邻窗口边缘会叠加放行。",
+      "这是 Sliding Window Log 的成本。",
+      "把结果字段能力说错了。",
+      "把 key 维度和窗口算法混为一谈。"
+    ],
+    "optionScenarioImpacts": [
+      "1 分钟 100 次的限制，边界附近可能接近 200 次。",
+      "Fixed Window 只存 count/windowStart，不存每次时间戳。",
+      "remaining 可以由 limit-count 算出。",
+      "按 clientId 建 counter 仍然可以做到 per-client 限流。"
+    ],
+    "optionDirectness": [
+      "适合追求极简实现但能接受边界突刺风险的场景。",
+      "每次 timestamp 只适合精确滑动窗口。",
+      "返回 remaining 是接口设计问题，不是固定窗口限制。",
+      "只要 key 选 clientId，就能按 client 限流。"
+    ],
+    "optionMeanings_en": [
+      "Two adjacent window edges can stack allowed requests.",
+      "This is the cost of sliding window log.",
+      "This misstates what the result object can report.",
+      "This confuses key choice with window algorithm."
+    ],
+    "optionScenarioImpacts_en": [
+      "A 100-per-minute limit can allow nearly 200 around the boundary.",
+      "Fixed window stores only count and windowStart, not every timestamp.",
+      "remaining can be computed as limit minus count.",
+      "Using clientId as the key still gives per-client limiting."
+    ],
+    "optionDirectness_en": [
+      "Fits when simplicity matters and boundary bursts are acceptable.",
+      "Every timestamp is stored only for exact sliding windows.",
+      "remaining is an API design choice, not a fixed-window limitation.",
+      "Per-client limiting works as long as clientId is the key."
     ]
   },
   {
@@ -2190,7 +2554,48 @@
         "term": "reloadConfig",
         "meaning": "重建全部 limiter 并原子替换的配置更新方法。",
         "meaningEn": "reloadConfig is the update method that rebuilds every limiter and atomically swaps them in."
+      },
+      {
+        "term": "per-key state",
+        "meaning": "按每个 key 独立维护的状态数据。",
+        "meaningEn": "Per-key state is state tracked independently for each key."
       }
+    ],
+    "optionMeanings": [
+      "全量重建会丢掉每个 key 的历史。",
+      "误以为重建不能换实现类。",
+      "误以为重建不能增加路由项。",
+      "把 limiter 生命周期和结果对象混淆。"
+    ],
+    "optionScenarioImpacts": [
+      "刚被限制的 client 也会重新拿到初始额度。",
+      "Factory 正好可以根据新算法创建新对象。",
+      "新 endpoint 可以随新 map 一起上线。",
+      "Result 是请求返回值，不会因重建而变空。"
+    ],
+    "optionDirectness": [
+      "适合讨论反滥用和降额时最危险的副作用。",
+      "切换算法是全量替换能处理的变化。",
+      "新增 endpoint 是全量替换能处理的变化。",
+      "Result 字段只有响应语义变化时才需要关注。"
+    ],
+    "optionMeanings_en": [
+      "Full rebuild drops every key's history.",
+      "This assumes rebuild cannot switch implementation class.",
+      "This assumes rebuild cannot add a route.",
+      "This confuses limiter lifecycle with the result object."
+    ],
+    "optionScenarioImpacts_en": [
+      "A just-limited client receives fresh initial quota again.",
+      "The factory can create new objects from the new algorithm.",
+      "A new endpoint can go live with the new map.",
+      "Result is a request return value and does not become null."
+    ],
+    "optionDirectness_en": [
+      "Fits the key downside when tightening limits against abuse.",
+      "Algorithm switching is exactly a change full replacement handles.",
+      "Endpoint addition is exactly a change full replacement handles.",
+      "Result fields matter only when response semantics change."
     ]
   },
   {
@@ -2310,8 +2715,14 @@
         "term": "critical section",
         "meaning": "同一时刻只允许一个线程执行的代码区域。",
         "meaningEn": "A critical section is a code region only one thread may execute at a time."
+      },
+      {
+        "term": "clamp",
+        "meaning": "把数值限制在某个上限或下限之内。",
+        "meaningEn": "clamp restricts a value so it never exceeds a given upper or lower bound."
       }
-    ]
+    ],
+    "tradeoff": "保状态更新参数 vs 全量重建会清空 client 历史"
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-035",
@@ -2443,16 +2854,53 @@
         "meaning": "主动删除长期不活跃的 per-key 状态以控制内存增长。",
         "meaningEn": "Eviction actively removes long-idle per-key state to keep memory bounded."
       }
+    ],
+    "optionMeanings": [
+      "淘汰只删除旧状态，不删除规则。",
+      "把一次清理误解为永久封禁。",
+      "把 per-key 状态和 endpoint 路由混为一谈。",
+      "误以为新对象会产生非法剩余额度。"
+    ],
+    "optionScenarioImpacts": [
+      "下次请求重新建 bucket，通常从 full capacity 开始。",
+      "这会把内存清理变成可用性问题，语义错误。",
+      "RateLimiter 的 endpoint->Limiter map 仍然存在。",
+      "新建 state 的 remaining 从合法初始值计算。"
+    ],
+    "optionDirectness": [
+      "适合清理长期不活跃 client 的内存。",
+      "永久拒绝只适合黑名单，不适合 eviction。",
+      "路由失效只会发生在配置或 limiter map 被删除时。",
+      "负数 remaining 只会来自错误扣减逻辑。"
+    ],
+    "optionMeanings_en": [
+      "Eviction deletes old state, not the rule.",
+      "This mistakes cleanup for a permanent ban.",
+      "This confuses per-key state with endpoint routing.",
+      "This assumes fresh objects create invalid remaining values."
+    ],
+    "optionScenarioImpacts_en": [
+      "The next request recreates a bucket, usually at full capacity.",
+      "That turns memory cleanup into an availability bug.",
+      "The RateLimiter endpoint-to-Limiter map still exists.",
+      "Fresh state computes remaining from a valid initial value."
+    ],
+    "optionDirectness_en": [
+      "Fits cleanup of long-idle clients.",
+      "Permanent denial is blacklist behavior, not eviction.",
+      "Routing breaks only if config or the limiter map is deleted.",
+      "Negative remaining comes from bad deduction logic, not fresh state."
     ]
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-037",
     "format": "multi",
     "atomType": "fact",
-    "topic": "low-level-design",
-    "sub": "out-of-scope",
-    "q": "基础题明确 out of scope 的内容有哪些？（多选）",
-    "options": [
+  "topic": "low-level-design",
+  "sub": "out-of-scope",
+  "q": "基础题明确 out of scope 的内容有哪些？（多选）",
+  "q_en": "Which items are explicitly out of scope for the basic problem? (Select all that apply.)",
+  "options": [
       "分布式 Redis 限流",
       "动态配置更新",
       "指标和监控",
@@ -2615,6 +3063,42 @@
         "meaning": "处理完当前请求后，调用方还剩多少可用额度。",
         "meaningEn": "remaining is how much quota the caller has left after this request is processed."
       }
+    ],
+    "optionMeanings": [
+      "remaining 是处理后的可继续请求额度。",
+      "把返回时点放到了扣减之前。",
+      "把动态剩余额度当成静态配置。",
+      "把两个不同结果字段混在一起。"
+    ],
+    "optionScenarioImpacts": [
+      "调用方看到的是这次请求之后还剩多少。",
+      "允许请求后会多报 1，容易误导客户端。",
+      "总上限不会反映本 client 已经用掉多少。",
+      "重试等待时间有自己的 retryAfterMs 字段。"
+    ],
+    "optionDirectness": [
+      "适合设置 X-RateLimit-Remaining 这类响应头。",
+      "处理前额度只适合内部调试，不适合对外语义。",
+      "总配置上限适合文档，不适合当前请求结果。",
+      "retryAfterMs 只在拒绝时表达等待多久。"
+    ],
+    "optionMeanings_en": [
+      "remaining is the quota available after processing.",
+      "This places the measurement before deduction.",
+      "This treats dynamic remaining quota as static config.",
+      "This mixes two different result fields."
+    ],
+    "optionScenarioImpacts_en": [
+      "The caller sees how much is left after this request.",
+      "After an allowed request, it overreports by one.",
+      "The total limit ignores what this client already spent.",
+      "Retry delay belongs in the separate retryAfterMs field."
+    ],
+    "optionDirectness_en": [
+      "Fits headers like X-RateLimit-Remaining.",
+      "Pre-request quota is useful for logs, not public semantics.",
+      "The configured limit belongs in docs, not the current result.",
+      "retryAfterMs says how long to wait only on denial."
     ]
   },
   {
@@ -2728,11 +3212,27 @@
     ],
     "termDefinitions": [
       {
+        "term": "Token Bucket",
+        "meaning": "每个 key 一个令牌桶，按固定速率补充令牌，允许短时突发。",
+        "meaningEn": "Token bucket gives each key a bucket that refills at a fixed rate and allows short bursts up to its capacity."
+      },
+      {
+        "term": "capacity",
+        "meaning": "令牌桶能容纳的最大令牌数，即最大突发量。",
+        "meaningEn": "capacity is the maximum number of tokens a bucket can hold, i.e. the largest burst it allows."
+      },
+      {
         "term": "remaining",
         "meaning": "处理完当前请求后，调用方还剩多少可用额度。",
         "meaningEn": "remaining is how much quota the caller has left after this request is processed."
+      },
+      {
+        "term": "retryAfterMs",
+        "meaning": "请求被拒绝时，建议客户端等待多少毫秒后重试。",
+        "meaningEn": "retryAfterMs tells a denied caller how many milliseconds to wait before retrying."
       }
-    ]
+    ],
+    "tradeoff": "用时序例子验证边界 vs 只看静态字段定义容易漏掉扣减时点"
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-042",
@@ -2765,8 +3265,8 @@
       "Per-key state eviction.",
       "You must implement distributed Redis rate limiting to count as senior."
     ],
-    "why": "高级答案要能讨论算法、状态、并发和长期运行内存问题；分布式实现明确是 out of scope，不是本题 senior 信号。",
-    "why_en": "Senior answers cover creation strategy, refill model, per-key concurrency, config evolution, and state eviction, while distributed implementation is explicitly out of scope here.",
+    "why": "高级答案要覆盖对象边界、补充模型、并发、配置演进和内存上界；分布式 Redis 是扩展话题，不是这道单机 LLD 的门槛。",
+    "why_en": "A senior answer covers boundaries, refill, per-key concurrency, config evolution, and eviction without requiring distributed Redis.",
     "tags": [
       "low-level-design",
       "rate-limiter",
@@ -2783,7 +3283,33 @@
         "term": "eviction",
         "meaning": "主动删除长期不活跃的 per-key 状态以控制内存增长。",
         "meaningEn": "Eviction actively removes long-idle per-key state to keep memory bounded."
+      },
+      {
+        "term": "on-demand refill",
+        "meaning": "只在请求到来时按经过时间计算补充量，不用后台线程扫描。",
+        "meaningEn": "On-demand refill computes the refill amount from elapsed time only when a request arrives, with no background scanning."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存数据存储，可用来做分布式共享限流状态。",
+        "meaningEn": "Redis is an in-memory data store often used to share rate-limit state across processes."
       }
+    ],
+    "optionScenarioImpacts": [
+      "说明创建职责和算法职责没有混在一起。",
+      "说明空闲 client 不会被后台线程反复扫描。",
+      "说明并发正确性不靠全局串行。",
+      "说明热更新时是否能保留已有状态。",
+      "说明长期运行时内存不会无限增长。",
+      "会把本题从单机 LLD 扩大到分布式系统实现。"
+    ],
+    "optionScenarioImpacts_en": [
+      "It shows creation and algorithm responsibilities are separated.",
+      "It shows idle clients are not repeatedly scanned by a background thread.",
+      "It shows correctness does not rely on global serialization.",
+      "It shows whether hot reload preserves existing state.",
+      "It shows long-running memory does not grow without bound.",
+      "This expands the problem from single-node LLD into distributed infrastructure."
     ]
   },
   {
@@ -2818,11 +3344,27 @@
     ],
     "termDefinitions": [
       {
+        "term": "RateLimiter",
+        "meaning": "系统入口/编排类，负责按 endpoint 路由到具体 Limiter。",
+        "meaningEn": "RateLimiter is the entry-point class that routes each request to the right Limiter implementation."
+      },
+      {
         "term": "LimiterFactory",
         "meaning": "根据配置中的 algorithm 字段创建具体 Limiter 实例的工厂类。",
         "meaningEn": "LimiterFactory reads the algorithm field in config and instantiates the matching Limiter."
+      },
+      {
+        "term": "defaultLimiter",
+        "meaning": "未配置 endpoint 时使用的兜底 Limiter 实例。",
+        "meaningEn": "defaultLimiter is the fallback Limiter instance used when an endpoint has no specific config."
+      },
+      {
+        "term": "per-key state",
+        "meaning": "按每个 key 独立维护的状态数据。",
+        "meaningEn": "Per-key state is state tracked independently for each key."
       }
-    ]
+    ],
+    "tradeoff": "编排层保持薄 vs 把算法状态塞进 RateLimiter"
   },
   {
     "id": "lld-problem-breakdowns-rate-limiter-044",
@@ -2926,8 +3468,8 @@
       "This mistakenly assumes mid-level candidates must write a distributed Redis script live.",
       "This mistakenly assumes Client should be forced into its own entity class."
     ],
-    "why": "文章明确不要求背诵算法，理解后要能划清 RateLimiter、Factory、Limiter、Result 之间的对象边界和状态归属。",
-    "why_en": "A mid-level answer should separate orchestration, creation, algorithm state, and structured results, not recite algorithm trivia or distributed infrastructure.",
+    "why": "中级答案要能划清 RateLimiter、Factory、Limiter、Result 的对象边界和状态归属；死背算法名或提前写分布式 Redis 都偏离主线。",
+    "why_en": "A mid-level answer should separate orchestration, creation, limiter state, and result semantics, not jump to Redis or trivia.",
     "tradeoff": "划清类边界和状态归属 vs 死记算法名称或提前实现分布式方案",
     "tags": [
       "low-level-design",
@@ -2940,7 +3482,48 @@
         "term": "LimiterFactory",
         "meaning": "根据配置中的 algorithm 字段创建具体 Limiter 实例的工厂类。",
         "meaningEn": "LimiterFactory reads the algorithm field in config and instantiates the matching Limiter."
+      },
+      {
+        "term": "Redis",
+        "meaning": "常用的内存数据存储，可用来做分布式共享限流状态。",
+        "meaningEn": "Redis is an in-memory data store often used to share rate-limit state across processes."
       }
+    ],
+    "optionMeanings": [
+      "把入口、创建和算法状态归属讲清楚。",
+      "把目标误判成算法名词背诵。",
+      "把单机对象设计升级成分布式脚本题。",
+      "把无行为输入硬建成实体。"
+    ],
+    "optionScenarioImpacts": [
+      "面试官能看到类边界、委派路径和状态所有者。",
+      "会漏掉 RateLimiter/Factory/Limiter 的职责拆分。",
+      "会偏离基础 LLD，且无法解释单机状态边界。",
+      "会增加空壳类，反而模糊状态归属。"
+    ],
+    "optionDirectness": [
+      "适合中级目标：稳定讲出主设计而不是堆高级话题。",
+      "算法名只在解释具体取舍时有用。",
+      "Redis 脚本适合分布式扩展题，不是基础答案核心。",
+      "Client 有套餐、身份生命周期时才值得建实体。"
+    ],
+    "optionMeanings_en": [
+      "It explains entry point, creation, and algorithm state ownership.",
+      "This mistakes the goal for memorizing algorithm names.",
+      "This turns a single-node object design into a distributed scripting task.",
+      "This forces behavior-free input into an entity."
+    ],
+    "optionScenarioImpacts_en": [
+      "The interviewer sees class boundaries, delegation, and state ownership.",
+      "It misses the RateLimiter/Factory/Limiter responsibility split.",
+      "It drifts away from base LLD and still misses local state ownership.",
+      "It adds empty classes and blurs where state lives."
+    ],
+    "optionDirectness_en": [
+      "Fits the mid-level goal: explain the main design without piling on advanced topics.",
+      "Algorithm names matter only when explaining a concrete tradeoff.",
+      "Redis scripts fit the distributed extension, not the base answer.",
+      "Client deserves an entity only when it has plan or identity lifecycle."
     ]
   }
 ]
