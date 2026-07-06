@@ -15,6 +15,13 @@ export const RECOMMENDED_NEW_PER_DAY = NEW_PER_DAY;
 /** "Mastered" proxy: Review state with stability ≥ this many days (M1 definition, now shared). */
 export const MASTERED_STABILITY_DAYS = 7;
 
+/**
+ * Final-stretch window (M3 §3.2 Phase 3): within this many days of the interview,
+ * stop introducing new cards and drill the not-yet-mastered "weak set" instead —
+ * by then the deck has been seen once, so the job is shoring up gaps, not breadth.
+ */
+export const FINAL_STRETCH_DAYS = 3;
+
 /** Anki-style learn-ahead: learning/relearning cards due within this window are served now. */
 export const LEARN_AHEAD_MIN = 20;
 

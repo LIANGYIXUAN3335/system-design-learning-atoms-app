@@ -21,8 +21,8 @@ import { MASTERED_STABILITY_DAYS, RHYTHMS } from './src/config';
 import { localDateStr } from './src/logic/dates';
 import { buildFeedbackExport } from './src/logic/feedback';
 import { ALL_CATEGORY, buildCategoryStats, filterByCategory } from './src/logic/categories';
-import { buildQueue, introducedTodayCount, isDueNow, laterTodayCount, orderSessionQueue } from './src/logic/queue';
-import { planNewPerDay } from './src/logic/planner';
+import { buildQueue, buildWeakSweepQueue, introducedTodayCount, isDueNow, laterTodayCount, orderSessionQueue } from './src/logic/queue';
+import { deadlineFloorDays, isFinalStretch, planNewPerDay } from './src/logic/planner';
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from './src/logic/settings';
 import { setRequestRetention, State } from './src/logic/srs';
 import { computeStreak, dailyGoal } from './src/logic/streak';
@@ -124,11 +124,18 @@ export default function App() {
     // wants to finish it in one go, so the daily new-card quota only applies
     // to the "全部" view where the planner paces the whole track.
     const focusedModule = validCategory !== ALL_CATEGORY;
-    const effectiveNewPerDay = focusedModule ? deck.length : plan.newPerDay;
-    const queue = buildQueue(deck, store.srs, now, {
-      newPerDay: effectiveNewPerDay,
-      reviewedToday: reviewedTodayInDeck,
-    });
+    // M3 §3.2 Phase 3: in the final stretch the "全部" view stops new cards and
+    // drills the weak set; the correct-fuzzy floor drops to 1 so weak cards recycle fast.
+    const finalStretch = !focusedModule && isFinalStretch(plan.daysLeft);
+    const effectiveNewPerDay = focusedModule ? deck.length : finalStretch ? 0 : plan.newPerDay;
+    // M3 §3.2 Phase 2: deadline-scaled floor for a "correct + 模糊" card.
+    const correctFuzzyFloor = finalStretch ? 1 : deadlineFloorDays(effectiveNewPerDay);
+    const queue = finalStretch
+      ? buildWeakSweepQueue(deck, store.srs, { reviewedToday: reviewedTodayInDeck })
+      : buildQueue(deck, store.srs, now, {
+          newPerDay: effectiveNewPerDay,
+          reviewedToday: reviewedTodayInDeck,
+        });
     const dueCount = queue.filter((id) => store.srs.has(id)).length;
     const newCount = queue.length - dueCount;
 
@@ -159,8 +166,14 @@ export default function App() {
       newPerDay: effectiveNewPerDay,
       rawNewPerDay: plan.raw,
       daysLeft: plan.daysLeft,
+      correctFuzzyFloor,
+      finalStretch,
       // pacing warnings are about the daily plan; a focused module ignores it
-      plannerWarning: focusedModule ? null : plan.warning,
+      plannerWarning: focusedModule
+        ? null
+        : finalStretch
+          ? '冲刺收尾：暂停新卡，集中刷未掌握的弱卡'
+          : plan.warning,
       focusedModule,
       categories: [
         {
@@ -238,10 +251,12 @@ export default function App() {
     const now = new Date();
     const deck = activeDeck();
     const reviewedToday = todayDoneIdsRef.current;
-    let q = buildQueue(deck, store.srs, now, {
-      newPerDay: stats.newPerDay,
-      reviewedToday,
-    });
+    let q = stats.finalStretch
+      ? buildWeakSweepQueue(deck, store.srs, { reviewedToday })
+      : buildQueue(deck, store.srs, now, {
+          newPerDay: stats.newPerDay,
+          reviewedToday,
+        });
     if (mode === 'review') q = q.filter((id) => store.srs.has(id));
     if (mode === 'new') q = q.filter((id) => !store.srs.has(id));
     // dues keep oldest-first order; only the new-card tail is shuffled per session
@@ -385,6 +400,7 @@ export default function App() {
           initialQueue={sessionQueue}
           requeueScope={sessionScope}
           reviewedToday={sessionReviewedToday}
+          correctFuzzyFloor={todayStats?.correctFuzzyFloor ?? 4}
           onExit={() => {
             void refresh();
             setScreen('today');

@@ -21,6 +21,7 @@ import {
 } from '../src/logic/srs';
 import {
   buildQueue,
+  buildWeakSweepQueue,
   dueAdditions,
   introducedTodayCount,
   isDueNow,
@@ -32,7 +33,7 @@ import { localDateStr } from '../src/logic/dates';
 import { buildFeedbackExport } from '../src/logic/feedback';
 import { ALL_TRACK, cardMatchesTrack, filterDeck, trackIdFromName } from '../src/logic/tracks';
 import { ALL_CATEGORY, buildCategoryStats, filterByCategory } from '../src/logic/categories';
-import { planNewPerDay } from '../src/logic/planner';
+import { deadlineFloorDays, isFinalStretch, planNewPerDay } from '../src/logic/planner';
 import { computeStreak, dailyGoal } from '../src/logic/streak';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
 import { buildArchitectureVisual } from '../src/logic/architectureVisuals';
@@ -413,6 +414,32 @@ console.log('planner');
   t('date is today → review-only + warning', today.warning !== null && today.newPerDay === 0 && today.daysLeft === 0);
   const done = planNewPerDay({ targetDate: '2026-08-12', deckSize: 100, mastered: 100, now });
   t('fully mastered → floor of 1', done.newPerDay === 1);
+
+  // M3 §3.2 Phase 2: deadline-scaled correct-fuzzy floor
+  t('floor at recommended pace = 4', deadlineFloorDays(RECOMMENDED_NEW_PER_DAY) === 4);
+  t('floor scales up under pressure (clamp 14)', deadlineFloorDays(1000) === 14);
+  t('floor scales down when relaxed (clamp 2)', deadlineFloorDays(10) === 2);
+  // M3 §3.2 Phase 3: final-stretch detection
+  t('final stretch: 2 days left → true', isFinalStretch(2) === true);
+  t('final stretch: no date → false', isFinalStretch(null) === false);
+  t('final stretch: far out → false', isFinalStretch(30) === false);
+  t('final stretch: day 0 → false (planner review-only)', isFinalStretch(0) === false);
+  // M3 §3.2 Phase 3: weak-set sweep — mastered excluded, weakest first
+  const mkWeak = (stability: number): SrsEntry => ({
+    fsrs: { ...emptyCard(now), state: State.Review, stability },
+    firstSeen: localDateStr(now),
+  });
+  const weakSrs = new Map<string, SrsEntry>([
+    ['mastered', mkWeak(30)],
+    ['w-mid', mkWeak(5)],
+    ['w-low', mkWeak(1)],
+  ]);
+  const weakCards = [{ id: 'mastered' }, { id: 'w-mid' }, { id: 'w-low' }] as unknown as Parameters<
+    typeof buildWeakSweepQueue
+  >[0];
+  const sweep = buildWeakSweepQueue(weakCards, weakSrs);
+  t('weak sweep excludes mastered', !sweep.includes('mastered'));
+  t('weak sweep weakest-first', sweep.join(',') === 'w-low,w-mid');
 }
 
 // ---- M2a: streak + daily goal ---------------------------------------------
