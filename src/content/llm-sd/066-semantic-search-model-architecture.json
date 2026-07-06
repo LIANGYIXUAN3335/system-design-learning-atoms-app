@@ -1,0 +1,1875 @@
+[
+  {
+    "id": "llm-066-semantic-search-model-architecture-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "two-stage-pipeline",
+    "scenario": "语义搜索要在数百万文档里为一个 query 找到最相关结果，还要在几十毫秒内返回。",
+    "scenario_en": "Semantic search must find the most relevant results for a query among millions of docs and return in tens of milliseconds.",
+    "q": "为什么工业级语义搜索几乎都用「两阶段」架构，两阶段各干什么？",
+    "q_en": "Why do production semantic-search systems use a two-stage architecture, and what does each stage do?",
+    "why": "第一阶段用便宜检索器在百万库毫秒级捞候选（召回优先），第二阶段用昂贵但精准的 re-ranker 只精排 top-K。单靠精排跑全库延迟爆炸，单靠检索器精度不够，分工才能同时拿到速度和精度。",
+    "why_en": "A cheap retriever pulls candidates from millions of docs in milliseconds, then an expensive re-ranker precisely scores only the top-K, so you get both speed and precision.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "two-stage"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query\"] --> R[\"① 检索器<br/>百万库毫秒召回\"]\n  R --> F[\"融合候选<br/>100–1000 篇\"]\n  F --> K[\"② re-ranker<br/>精排 top-K\"]\n  K --> O[\"最终结果\"]",
+    "options": [
+      "用一个昂贵精排模型给全库每篇文档逐一打分，牺牲延迟换全库最高精度，靠加机器扛吞吐",
+      "两阶段跑同一个检索模型，第二阶段把 top-K 重跑几遍取平均来降低打分方差",
+      "先用便宜检索器毫秒级从百万文档捞候选，再用昂贵 re-ranker 只精排 top-K",
+      "第一阶段先精排全库、第二阶段再粗排收窄，精度层层放宽以省算力"
+    ],
+    "options_en": [
+      "Use one expensive re-ranker to score every doc in the corpus, trading latency for max precision and scaling with hardware.",
+      "Run the same retrieval model in both stages, re-running the top-K a few times and averaging to cut scoring variance.",
+      "First a cheap retriever pulls candidates from millions of docs in ms, then an expensive re-ranker precisely scores only the top-K.",
+      "Stage one precisely ranks the whole corpus, stage two coarsely narrows it, loosening precision layer by layer."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "精排模型对每篇一次前向传播，全库百万篇跑一遍是秒级甚至分钟级，直接超时；加机器也补不回 O(N) 全库精排的成本。",
+      "重跑取平均降的是方差不是延迟，也没解决「全库打分太贵」这个根本矛盾，纯属浪费算力。",
+      "对；检索器负责召回（快、召回优先），re-ranker 负责精度（慢、只看 top-K），分工让系统同时拿到速度和精度。",
+      "顺序反了：全库精排正是两阶段架构要避免的昂贵操作，先精后粗把最贵的一步放在最费的位置。"
+    ],
+    "optionExplanations_en": [
+      "The re-ranker runs one forward pass per doc, so scoring millions takes seconds to minutes and times out; hardware cannot undo O(N) full-corpus scoring.",
+      "Re-running and averaging cuts variance not latency and never fixes the core problem that full-corpus scoring is too expensive.",
+      "Correct — the retriever handles recall (fast, recall-first) and the re-ranker handles precision (slow, top-K only), so the split gets both.",
+      "Backwards: full-corpus precise ranking is exactly what two-stage avoids, and precise-then-coarse puts the costliest step where it hurts most."
+    ],
+    "termDefinitions": [
+      {
+        "term": "retriever / 检索器",
+        "meaning": "第一阶段从全库快速召回候选的模型，通常是 dual encoder 配 ANN 索引。",
+        "meaningEn": "A retriever is the first-stage model that quickly recalls candidates from the full corpus, usually a dual encoder over an ANN index."
+      },
+      {
+        "term": "re-ranker / 精排器",
+        "meaning": "第二阶段对少量候选做精细相关性打分的模型，通常是 cross-encoder。",
+        "meaningEn": "A re-ranker is the second-stage model that finely scores a small candidate set, usually a cross-encoder."
+      },
+      {
+        "term": "top-K",
+        "meaning": "第一阶段召回后送去精排的前 K 篇候选。",
+        "meaningEn": "Top-K is the K best candidates from stage one that get passed to re-ranking."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-002",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "architecture-decisions",
+    "q": "两阶段语义搜索里有哪三个核心架构决策？(多选)",
+    "q_en": "What are the three core architectural decisions in two-stage semantic search? (multiple)",
+    "why": "这三个决策——dual encoder 选型、hybrid 融合、cross-encoder 精排——都被同一根轴（延迟 vs 精度）牵着走；前端渲染是产品层，不影响检索质量。",
+    "why_en": "The three decisions — dual-encoder choice, hybrid fusion, and cross-encoder re-ranking — are all governed by the latency-versus-accuracy axis.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "architecture"
+    ],
+    "options": [
+      "dual encoder 选型（DPR / E5 / BGE 等 dense 检索模型）",
+      "hybrid retrieval 融合（BM25 稀疏 + dense 稠密怎么合并候选）",
+      "cross-encoder re-ranking（top-K 精排模型与候选数 K）",
+      "用哪种前端框架渲染搜索结果页"
+    ],
+    "options_en": [
+      "Dual-encoder choice (dense retrieval models like DPR / E5 / BGE).",
+      "Hybrid retrieval fusion (how to merge BM25 sparse and dense candidates).",
+      "Cross-encoder re-ranking (the top-K re-ranker and the candidate count K).",
+      "Which front-end framework renders the results page."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；dual encoder 决定第一阶段召回质量和索引成本，是 dense 检索的地基。",
+      "对；dense 会漏精确关键词，hybrid 把 BM25 和 dense 候选融合，决定召回的完整性。",
+      "对；cross-encoder 决定精度上限，K 决定你在延迟-精度曲线上的位置。",
+      "错；渲染是前端产品层，和检索模型的延迟-精度权衡无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the dual encoder sets stage-one recall quality and index cost, the foundation of dense retrieval.",
+      "Correct — dense misses exact keywords, so hybrid fuses BM25 and dense candidates and governs recall completeness.",
+      "Correct — the cross-encoder sets the precision ceiling and K sets where you sit on the latency-precision curve.",
+      "Wrong — rendering is a front-end product layer, unrelated to the model's latency-accuracy tradeoff."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dual encoder / 双塔",
+        "meaning": "两个独立 transformer 分别把 query 和 doc 编码成同维向量。",
+        "meaningEn": "A dual encoder uses two separate transformers to encode query and doc into same-dimension vectors."
+      },
+      {
+        "term": "BM25",
+        "fullName": "Best Matching 25 (Okapi BM25)",
+        "meaning": "经典稀疏检索函数，按词频/逆文档频率给关键词匹配打分。",
+        "meaningEn": "BM25 (Best Matching 25) is a classic sparse retrieval function scoring keyword matches by term frequency and inverse document frequency."
+      },
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "把 query 和 doc 拼成一条序列过一个 transformer，让 token 互相 attend。",
+        "meaningEn": "A cross-encoder concatenates query and doc into one sequence through a transformer so tokens attend to each other."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-003",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "dual-encoder",
+    "scenario": "你要设计 dense 检索第一阶段：怎么让「一个 query」和「百万篇 doc」都变成可比的向量。",
+    "scenario_en": "You design the dense-retrieval first stage: how to turn one query and millions of docs into comparable vectors.",
+    "q": "dual encoder（双塔）怎么做 dense 检索，相关性怎么算？",
+    "q_en": "How does a dual encoder do dense retrieval, and how is relevance computed?",
+    "why": "两个独立 transformer 分别把 query、doc 编成同维向量，相关性用点积/余弦算。关键是 doc 向量离线预算好，query 来了只跑 query 编码器，再用 ANN 找最近邻，毫秒返回。",
+    "why_en": "Two separate transformers encode query and doc into same-dim vectors scored by dot product or cosine, with doc vectors precomputed offline so only the query encoder runs at query time.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "dual-encoder"
+    ],
+    "options": [
+      "一个 transformer 同时读入 query 和 doc 输出匹配分，每来一个 query 就把全库重编码一遍",
+      "两个独立 transformer 分别把 query、doc 编成同维向量，相关性用点积/余弦，doc 向量离线预算",
+      "把 query 和 doc 拼成一句话过 transformer，让每个 query token attend 每个 doc token",
+      "用倒排索引按关键词精确匹配，不需要向量，靠词频排序"
+    ],
+    "options_en": [
+      "One transformer reads query and doc together to output a match score, re-encoding the whole corpus for each query.",
+      "Two separate transformers encode query and doc into same-dim vectors scored by dot product/cosine, with doc vectors precomputed offline.",
+      "Concatenate query and doc into one sequence through a transformer so every query token attends every doc token.",
+      "Use an inverted index for exact keyword matching, no vectors, ranking by term frequency."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "那是 cross-encoder 的做法，每个 query 都要重扫全库、O(N) 前向传播，第一阶段召回根本扛不住。",
+      "对；双塔的精髓是 query 塔和 doc 塔解耦，doc 向量离线算好进 ANN 索引，在线只算 query 一次。",
+      "拼接过一个 transformer 是 cross-encoder，精度高但太慢，只适合第二阶段精排少量候选。",
+      "倒排+词频是 BM25 稀疏检索，抓精确关键词但不懂语义，不是 dense dual encoder。"
+    ],
+    "optionExplanations_en": [
+      "That is the cross-encoder approach, re-scanning the whole corpus per query with O(N) forward passes — first-stage recall cannot bear it.",
+      "Correct — the dual encoder decouples the query and doc towers, precomputing doc vectors into an ANN index and encoding only the query online.",
+      "Concatenating through one transformer is a cross-encoder: accurate but too slow, fit only for re-ranking a few candidates in stage two.",
+      "Inverted index plus term frequency is BM25 sparse retrieval — great at exact keywords but blind to semantics, not a dense dual encoder."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dot product / cosine",
+        "meaning": "两向量的点积/余弦相似度，值越大越相关，是 dense 检索的相关性分。",
+        "meaningEn": "Dot product / cosine similarity between two vectors — higher means more relevant — is the dense-retrieval relevance score."
+      },
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻搜索：在向量索引里快速找与 query 向量最近的一批 doc，不用扫全库。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) search quickly finds the doc vectors closest to a query vector without scanning the whole corpus."
+      },
+      {
+        "term": "dense retrieval / 稠密检索",
+        "meaning": "用稠密向量表示 query 和 doc，靠向量相似度找相关文档。",
+        "meaningEn": "Dense retrieval represents query and doc as dense vectors and finds relevant docs by vector similarity."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-004",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "offline-precompute",
+    "scenario": "语料库几百万篇，语义搜索要 <50ms 返回，每天还有海量 query。",
+    "scenario_en": "The corpus has millions of docs, search must return in under 50ms, and query volume is huge.",
+    "q": "dual encoder 为什么能做到毫秒级召回？关键设计是什么？",
+    "q_en": "Why can a dual encoder recall in milliseconds — what is the key design?",
+    "why": "doc 向量离线预算好存进 ANN 索引，在线只跑 query 编码器一次，再用 ANN 近似最近邻毫秒取回候选。若在线还要现编码全库 doc，就退化成 O(N) 全库扫描，延迟爆炸。",
+    "why_en": "Doc vectors are precomputed offline into an ANN index, so at query time only the query encoder runs once and ANN returns neighbors in milliseconds.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ann"
+    ],
+    "options": [
+      "doc 向量离线预算进 ANN 索引，query 来时只编码 query 一次，ANN 毫秒取回最近邻",
+      "每来一个 query 就把全库 doc 实时重新编码一遍，再逐一算相似度取最高",
+      "把所有 doc 全文缓存在内存里，用字符串匹配代替向量运算加速",
+      "靠更大的 GPU 集群把全库精排的秒级延迟硬压到毫秒"
+    ],
+    "options_en": [
+      "Doc vectors are precomputed into an ANN index, only the query is encoded per request, and ANN returns neighbors in ms.",
+      "Re-encode the entire corpus in real time for each query, then compute similarity one by one and take the max.",
+      "Cache all doc full text in memory and replace vector math with string matching to go faster.",
+      "Use a bigger GPU cluster to force full-corpus re-ranking's second-level latency down to milliseconds."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；离线预算 + 在线只算 query + ANN 近似最近邻，是把「百万库」变成「毫秒召回」的三件套。",
+      "在线重编码全库就是 O(N) 全量前向传播，正是双塔要绕开的成本，延迟直接秒级。",
+      "字符串匹配丢掉了语义相似性，也没利用向量索引，退回关键词检索的老路。",
+      "堆 GPU 改善不了全库精排的算法复杂度，成本线性膨胀，仍然追不上 SLA。"
+    ],
+    "optionExplanations_en": [
+      "Correct — offline precompute plus online query-only encoding plus ANN is the trio that turns millions of docs into millisecond recall.",
+      "Re-encoding the corpus online is O(N) full forward passes — exactly what the dual encoder avoids — pushing latency to seconds.",
+      "String matching drops semantic similarity and ignores the vector index, falling back to plain keyword retrieval.",
+      "More GPUs cannot change the algorithmic complexity of full-corpus re-ranking; cost grows linearly and still misses the SLA."
+    ],
+    "termDefinitions": [
+      {
+        "term": "ANN index / 近似最近邻索引",
+        "meaning": "预存 doc 向量、支持毫秒级近邻查询的向量索引（如 HNSW/IVF）。",
+        "meaningEn": "An ANN index stores doc vectors and supports millisecond nearest-neighbor queries (e.g. HNSW or IVF)."
+      },
+      {
+        "term": "SLA",
+        "fullName": "Service Level Agreement",
+        "meaning": "服务级别协议，这里指搜索延迟的承诺上限（如 p99 <100ms）。",
+        "meaningEn": "An SLA (Service Level Agreement) is a committed limit, here on search latency such as p99 under 100ms."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-005",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "embedding-dim",
+    "scenario": "你在 DPR（768 维）和 E5/BGE（1024 维）之间选 dual encoder，语料几百万篇要进 ANN 索引。",
+    "scenario_en": "You choose a dual encoder between DPR (768-dim) and E5/BGE (1024-dim), with millions of docs going into an ANN index.",
+    "q": "embedding 维度（768–1024）这个数字影响什么、下游怎么用？",
+    "q_en": "What does the embedding dimension (768–1024) affect, and how is it used downstream?",
+    "why": "维度是每篇 doc 向量的长度：768–1024 直接决定 ANN 索引内存（向量数×维度×4B）和每次相似度计算开销，进而影响 query 延迟。比如 500 万篇×1024×4B≈20GB 原始向量，是算索引内存和延迟预算的基数。",
+    "why_en": "The dimension is each vector's length, directly setting ANN index memory (count × dim × 4 bytes) and per-query similarity cost, e.g. 5M × 1024 × 4B ≈ 20GB of raw vectors.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "embedding-dim"
+    ],
+    "options": [
+      "维度只反映模型训练时长，与在线索引内存和 query 延迟这些服务侧成本无关",
+      "维度越高检索一定越准，应无脑选最大维度，因为它几乎不带来额外存储或计算成本",
+      "768–1024 指 SLA 规定的 query 延迟毫秒上限，而不是每篇文档向量的长度",
+      "是每篇 doc 向量的长度，决定 ANN 索引内存与相似度计算开销，是延迟/内存预算的基数"
+    ],
+    "options_en": [
+      "Dimension only reflects training time and is unrelated to serving-side costs like index memory and query latency.",
+      "Higher dimension always retrieves better, so pick the max blindly since it adds almost no storage or compute cost.",
+      "768–1024 is the SLA's millisecond latency ceiling for queries, not the length of each doc vector.",
+      "It is each doc vector's length, setting ANN index memory and similarity-compute cost — the base for latency/memory budgets."
+    ],
+    "answer": [
+      3
+    ],
+    "termDefinitions": [
+      {
+        "term": "embedding dimension / 嵌入维度",
+        "meaning": "每个 query/doc 向量的分量个数，常见 768（BERT-base）或 1024。",
+        "meaningEn": "The embedding dimension is the number of components in each query/doc vector, commonly 768 (BERT-base) or 1024."
+      },
+      {
+        "term": "ANN index memory / 索引内存",
+        "meaning": "存所有 doc 向量占的内存 ≈ 向量数 × 维度 × 4 字节（float32）。",
+        "meaningEn": "ANN index memory is roughly vector count times dimension times 4 bytes (float32)."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "encoder-comparison",
+    "scenario": "你要选一个 dual encoder 做 dense 检索，候选是 DPR、E5、BGE 三个主流模型。",
+    "scenario_en": "You pick a dual encoder for dense retrieval among three mainstream models: DPR, E5, BGE.",
+    "q": "DPR、E5、BGE 在「零样本能力 vs 微调投入」上怎么排？",
+    "q_en": "How do DPR, E5, and BGE rank on zero-shot ability versus fine-tuning effort?",
+    "why": "DPR 是双 BERT-base、768 维、NQ 上对比学习，零样本中等但微调投入最低；E5/BGE 是统一编码器、1024 维、大规模弱监督/指令训练，零样本强到 SOTA 但微调更重。核心轴是「开箱强度 vs 需要多少标注去微调」。",
+    "why_en": "DPR is dual BERT-base with moderate zero-shot but the lowest fine-tune effort, while E5/BGE are unified encoders with strong-to-SOTA zero-shot but heavier fine-tuning.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "encoder-comparison"
+    ],
+    "table": {
+      "headers": [
+        "模型",
+        "编码器",
+        "零样本",
+        "微调投入"
+      ],
+      "rows": [
+        [
+          "DPR",
+          "双 BERT-base",
+          "中等",
+          "低"
+        ],
+        [
+          "E5",
+          "统一+前缀",
+          "强",
+          "中"
+        ],
+        [
+          "BGE",
+          "统一+指令",
+          "SOTA",
+          "中高"
+        ]
+      ]
+    },
+    "options": [
+      "三者零样本能力相同，只是向量维度不同，微调投入也一样",
+      "DPR 零样本最强、微调最省；E5、BGE 都更弱更费",
+      "DPR 零样本中等、微调最省；E5、BGE 零样本更强直到 SOTA，但微调投入更高",
+      "BGE 零样本最弱，DPR 最强，三者微调投入递增"
+    ],
+    "options_en": [
+      "All three have identical zero-shot ability, differing only in vector dimension and with equal fine-tune effort.",
+      "DPR has the strongest zero-shot and cheapest fine-tuning; E5 and BGE are both weaker and costlier.",
+      "DPR is moderate zero-shot and cheapest to fine-tune; E5/BGE are stronger up to SOTA but cost more to fine-tune.",
+      "BGE has the weakest zero-shot and DPR the strongest, with fine-tune effort rising across the three."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "三者维度不同（768 vs 1024）也罢，零样本和微调投入其实差别很大，说「相同」直接错。",
+      "说反了：DPR 是零样本中等而非最强，它的优势是微调省，不是开箱强。",
+      "对；DPR 微调最省、开箱中等，E5/BGE 靠大规模预训练拿到强/SOTA 零样本，代价是微调更重。",
+      "BGE 恰恰是 MTEB 上的 SOTA、零样本最强，说它最弱与事实相反。"
+    ],
+    "optionExplanations_en": [
+      "Dimensions differ (768 vs 1024), but zero-shot and fine-tune effort vary a lot, so 'identical' is simply wrong.",
+      "Backwards: DPR is moderate not strongest at zero-shot; its edge is cheap fine-tuning, not out-of-box strength.",
+      "Correct — DPR is cheapest to fine-tune and moderate out-of-box, while E5/BGE buy strong/SOTA zero-shot at the cost of heavier fine-tuning.",
+      "BGE is actually the MTEB SOTA and strongest zero-shot, so calling it weakest is the opposite of reality."
+    ],
+    "termDefinitions": [
+      {
+        "term": "DPR",
+        "fullName": "Dense Passage Retrieval",
+        "meaning": "稠密段落检索：用双 BERT-base 在 Natural Questions 上对比学习训练的双塔模型。",
+        "meaningEn": "DPR (Dense Passage Retrieval) is a dual-tower model of two BERT-base encoders trained contrastively on Natural Questions."
+      },
+      {
+        "term": "E5",
+        "fullName": "EmbEddings from bidirEctional Encoder rEpresentations",
+        "meaning": "用大规模弱监督对比学习训练、query/passage 加前缀的统一编码器。",
+        "meaningEn": "E5 is a unified encoder trained with large-scale weakly-supervised contrastive learning, using query/passage prefixes."
+      },
+      {
+        "term": "BGE",
+        "fullName": "BAAI General Embedding",
+        "meaning": "智源通用嵌入：用 RetroMAE + 指令微调训练，MTEB 榜单 SOTA。",
+        "meaningEn": "BGE (BAAI General Embedding) is trained with RetroMAE plus instruction tuning and is SOTA on MTEB."
+      },
+      {
+        "term": "MTEB",
+        "fullName": "Massive Text Embedding Benchmark",
+        "meaning": "大规模文本嵌入基准，综合评测嵌入模型的检索/聚类等能力。",
+        "meaningEn": "MTEB (Massive Text Embedding Benchmark) broadly evaluates embedding models on retrieval, clustering, and more."
+      },
+      {
+        "term": "zero-shot / 零样本",
+        "meaning": "不做领域微调，直接开箱使用的检索效果。",
+        "meaningEn": "Zero-shot is retrieval quality out of the box without any domain fine-tuning."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "encoder-selection",
+    "scenario": "垂直领域搜索（如电商），你手里有大量领域内标注的 query-doc 相关性数据，想最省事地训到强效果。",
+    "scenario_en": "For a vertical search (e.g. e-commerce) you have abundant in-domain labeled query-doc relevance data and want the cheapest path to strong results.",
+    "q": "有充足领域标注数据时，dual encoder 该选哪个？",
+    "q_en": "With abundant in-domain labeled data, which dual encoder should you pick?",
+    "why": "有充足领域标注就选 DPR：它最简单、微调最快就能到强效果，标注正好补上它零样本中等的短板。E5/BGE 的价值是缺标注时的开箱强，此时用不上它们更重的预训练优势。",
+    "why_en": "With plenty of labels, pick DPR: it is simplest and fastest to fine-tune to strong results, and the labels cover its moderate zero-shot.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "encoder-selection"
+    ],
+    "tradeoff": "DPR（充足标注下微调最省最快）vs E5/BGE（缺标注时零样本更强）",
+    "whenOtherWins": "若几乎没有领域标注、又要马上有可用效果，就选 E5 或 BGE——它们零样本就强/SOTA，不靠你补标注。",
+    "options": [
+      "DPR：最简单、微调最快到强效果，充足标注正好喂满它",
+      "E5：零样本就 SOTA，有没有标注都无所谓，直接开箱",
+      "BGE：微调投入最低，标注多时训得最省",
+      "三者随便选，标注数据量不影响 encoder 选型"
+    ],
+    "options_en": [
+      "DPR: simplest and fastest to fine-tune to strong results, and abundant labels feed it fully.",
+      "E5: it is SOTA zero-shot, so labels don't matter — just use it out of the box.",
+      "BGE: it has the lowest fine-tune effort, so it trains cheapest when labels are plentiful.",
+      "Pick any of the three; the amount of labeled data does not affect encoder choice."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；有充足领域标注时 DPR 微调最省最快到强效果，标注正好补上它零样本中等的短板。",
+      "E5 的强项是缺标注时的零样本，有大量标注时它更重的预训练优势用不上，属于杀鸡用牛刀。",
+      "记反了：BGE 微调投入其实最高（中高），不是最低，标注多也不是它最省。",
+      "encoder 选型恰恰主要由「标注多不多」驱动，说不影响等于放弃了本题核心判据。"
+    ],
+    "optionExplanations_en": [
+      "Correct — with abundant labels DPR is cheapest and fastest to fine-tune to strong results, and the labels cover its moderate zero-shot.",
+      "E5's strength is zero-shot when labels are scarce; with plenty of labels its heavier pretraining edge goes unused — overkill.",
+      "Backwards: BGE actually has the highest fine-tune effort (medium-high), not the lowest, and isn't cheapest with many labels.",
+      "Encoder choice is mainly driven by how much labeled data you have, so 'no effect' discards this card's core criterion."
+    ],
+    "termDefinitions": [
+      {
+        "term": "DPR",
+        "fullName": "Dense Passage Retrieval",
+        "meaning": "双 BERT-base 双塔，微调投入低、零样本中等。",
+        "meaningEn": "DPR (Dense Passage Retrieval) is a dual BERT-base tower, low fine-tune effort and moderate zero-shot."
+      },
+      {
+        "term": "E5 / BGE",
+        "meaning": "统一编码器系列，零样本强到 SOTA，缺标注时更划算。",
+        "meaningEn": "E5/BGE are unified-encoder models with strong-to-SOTA zero-shot, best when labels are scarce."
+      },
+      {
+        "term": "fine-tune effort / 微调投入",
+        "meaning": "为达到强检索效果需要的标注量与训练成本。",
+        "meaningEn": "Fine-tune effort is the labeling volume and training cost needed to reach strong retrieval quality."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "hard-negatives",
+    "scenario": "训练 dual encoder 做对比学习时，要给每个正样本配「难负样本」——看着像相关、其实不相关的文档。",
+    "scenario_en": "Training a dual encoder contrastively needs hard negatives for each positive — docs that look relevant but are not.",
+    "q": "DPR/E5/BGE 分别怎么挖 hard negatives，为什么要用难负样本？",
+    "q_en": "How do DPR/E5/BGE mine hard negatives, and why use hard negatives at all?",
+    "why": "难负样本逼模型区分「表面相似但不相关」，比随机负样本训练信号强得多。DPR 用 BM25 挖（关键词像但语义不对），E5 用 in-batch + 挖掘，BGE 进一步用 cross-encoder 挖更难的负例。",
+    "why_en": "Hard negatives force the model to separate look-alike-but-irrelevant docs, giving far stronger signal than random negatives.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hard-negatives"
+    ],
+    "options": [
+      "三者都只用随机负样本，hard negatives 对检索训练没有帮助",
+      "DPR 用 BM25 挖、E5 用 in-batch+挖掘、BGE 用 cross-encoder 挖，难负样本训练信号更强",
+      "hard negatives 指正样本，用来直接当标签让模型背下来",
+      "难负样本只在推理时用，训练阶段一律用简单负样本"
+    ],
+    "options_en": [
+      "All three use only random negatives; hard negatives don't help retrieval training.",
+      "DPR mines with BM25, E5 uses in-batch plus mining, BGE mines with a cross-encoder — hard negatives give stronger training signal.",
+      "Hard negatives are the positives, used directly as labels for the model to memorize.",
+      "Hard negatives are used only at inference; training always uses easy negatives."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "随机负样本太好区分、梯度信号弱；正因如此三家都专门挖 hard negatives，说「没帮助」与做法相反。",
+      "对；BM25 挖出关键词像但不相关的、cross-encoder 挖出更刁钻的负例，越难越逼模型学细粒度语义。",
+      "弄反了：hard negatives 是难的负样本不是正样本，作用是提供强对比信号而非背答案。",
+      "难负样本是训练期的对比信号，推理时无所谓正负，说反了阶段。"
+    ],
+    "optionExplanations_en": [
+      "Random negatives are too easy and give weak gradients; that's exactly why all three mine hard negatives, so 'no help' contradicts their design.",
+      "Correct — BM25 surfaces keyword-similar-but-irrelevant docs and a cross-encoder mines trickier ones; harder negatives force finer semantics.",
+      "Backwards: hard negatives are hard negative examples, not positives, providing strong contrast rather than answers to memorize.",
+      "Hard negatives are a training-time contrast signal; at inference positive/negative is moot, so the stage is reversed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hard negatives / 难负样本",
+        "meaning": "与 query 表面相似但实际不相关的文档，用作对比学习里最有信息量的负例。",
+        "meaningEn": "Hard negatives are docs that look similar to the query but are actually irrelevant, the most informative negatives in contrastive learning."
+      },
+      {
+        "term": "in-batch negatives / 批内负样本",
+        "meaning": "把同一 batch 里其他样本的 doc 当作当前 query 的负样本，省去额外挖掘。",
+        "meaningEn": "In-batch negatives reuse other samples' docs in the same batch as negatives, avoiding extra mining."
+      },
+      {
+        "term": "contrastive learning / 对比学习",
+        "meaning": "拉近正样本对、推远负样本对的训练方式。",
+        "meaningEn": "Contrastive learning pulls positive pairs together and pushes negative pairs apart."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "hybrid-why",
+    "scenario": "你的 dense 检索在语义相近 query 上表现好，但用户搜稀有 SKU 编号、错误码、生僻专名时经常搜不到。",
+    "scenario_en": "Your dense retrieval works on semantically similar queries but often fails on rare SKUs, error codes, and uncommon proper nouns.",
+    "q": "dense 检索为什么会漏掉精确关键词匹配，怎么补？",
+    "q_en": "Why does dense retrieval miss exact keyword matches, and how do you fix it?",
+    "why": "dense 向量擅长语义相似，但会把稀有 token（SKU、错误码、生僻专名）压进模糊语义空间，精确匹配反而丢了；BM25 这类稀疏检索对精确词命中天然强。所以并行跑 BM25 + dual encoder，融合两路取长补短。",
+    "why_en": "Dense vectors blur rare tokens into fuzzy semantic space and lose exact matches, while BM25 nails exact terms, so you run both in parallel and fuse.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hybrid"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query\"] --> D[\"dense 稠密<br/>语义相似\"]\n  Q --> B[\"BM25 稀疏<br/>精确关键词\"]\n  D --> F[\"融合候选\"]\n  B --> F\n  F --> R[\"re-ranker\"]",
+    "options": [
+      "dense 检索本来就覆盖精确关键词，搜不到只是索引没建好",
+      "应该彻底换成 BM25，语义检索没有价值，dense 可以删掉",
+      "dense 擅长语义但漏精确词，并行加 BM25（稀疏检索）抓关键词，融合两路候选",
+      "把 embedding 维度调高就能解决所有精确关键词漏召回"
+    ],
+    "options_en": [
+      "Dense retrieval already covers exact keywords; failures just mean the index was built wrong.",
+      "Switch entirely to BM25 — semantic retrieval has no value, so drop dense.",
+      "Dense is great at semantics but misses exact terms, so add BM25 (sparse) in parallel and fuse the two candidate lists.",
+      "Just raise the embedding dimension and all exact-keyword misses disappear."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "不是索引问题：稀有 token 被稠密向量抹成模糊语义，本质上就召不回精确匹配，重建索引也没用。",
+      "全换 BM25 会丢掉语义泛化（同义、改写查询），两者是互补不是替代。",
+      "对；dense 管语义、BM25 管精确词，hybrid 并行融合让稀有 SKU/错误码也能命中。",
+      "加维度提升的是语义容量，补不了「精确 token 匹配」这个稀疏检索才擅长的能力。"
+    ],
+    "optionExplanations_en": [
+      "Not an index bug: rare tokens get blurred into fuzzy semantics, so exact matches truly can't be recalled — rebuilding won't help.",
+      "Going all-BM25 loses semantic generalization (synonyms, paraphrases); the two are complementary, not substitutes.",
+      "Correct — dense handles semantics, BM25 handles exact terms, and hybrid fusion lets rare SKUs/error codes hit.",
+      "More dimensions add semantic capacity but can't supply exact-token matching, which is sparse retrieval's job."
+    ],
+    "termDefinitions": [
+      {
+        "term": "BM25 / 稀疏检索",
+        "fullName": "Best Matching 25",
+        "meaning": "按关键词词频匹配打分，对精确 token（SKU、错误码、专名）命中很强。",
+        "meaningEn": "BM25 (Best Matching 25) sparse retrieval scores keyword frequency and excels at exact tokens like SKUs and error codes."
+      },
+      {
+        "term": "SKU",
+        "fullName": "Stock Keeping Unit",
+        "meaning": "库存单位编号，电商里每个具体商品的唯一编码。",
+        "meaningEn": "A SKU (Stock Keeping Unit) is the unique code identifying a specific product in commerce."
+      },
+      {
+        "term": "hybrid retrieval / 混合检索",
+        "meaning": "并行跑稀疏（BM25）+ 稠密（dual encoder）两路，融合候选再精排。",
+        "meaningEn": "Hybrid retrieval runs sparse (BM25) and dense (dual encoder) in parallel and fuses candidates before re-ranking."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-010",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "score-normalization",
+    "scenario": "你想把 BM25 分和 dense 余弦分直接相加融合候选。BM25 从 0 到任意大（跟词频走），dense 余弦在 [−1,1]。",
+    "scenario_en": "You try to fuse by directly adding BM25 and dense cosine scores. BM25 ranges 0 to arbitrarily large (term frequency); dense cosine is in [−1,1].",
+    "q": "为什么 BM25 分和 dense 分「直接相加」融合会失败？",
+    "q_en": "Why does directly adding BM25 and dense scores fail as a fusion method?",
+    "why": "两个分布尺度根本不同——BM25 无上界（词频越高越大），dense 余弦夹在 [−1,1]。直接相加让数值天生更大的 BM25 主导融合分，dense 信号被淹没，等于没融合。要么按 rank 融合（RRF），要么先归一化再加权。",
+    "why_en": "The two score distributions have different scales — BM25 is unbounded, dense cosine sits in [−1,1] — so adding them lets BM25's larger raw numbers dominate.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "score-fusion"
+    ],
+    "options": [
+      "直接相加没问题，两个分数本来就在同一尺度，结果可靠",
+      "失败是因为 dense 分太大，会盖过 BM25，应给 dense 乘小系数",
+      "因为 BM25 和 dense 测的是同一件事，相加等于重复计分",
+      "两个分布尺度不同、不可直接比较：BM25 无上界会主导，dense 的 [−1,1] 被淹没"
+    ],
+    "options_en": [
+      "Adding directly is fine — the two scores are already on the same scale and the result is reliable.",
+      "It fails because dense scores are too large and swamp BM25, so multiply dense by a small factor.",
+      "Because BM25 and dense measure the same thing, so adding double-counts.",
+      "The two distributions have different, non-comparable scales: unbounded BM25 dominates while dense's [−1,1] is drowned out."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "恰恰不在同一尺度：一个无上界、一个夹在 [−1,1]，直接相加不可靠，这正是本题要否定的。",
+      "大小说反了：是 BM25 无上界会盖过 dense，不是 dense 盖过 BM25。",
+      "两者测的不是同一件事（精确词 vs 语义），问题在尺度不可比，不是重复计分。",
+      "对；尺度不可比让原始数值大的 BM25 主导，dense 信号被淹没，必须靠 RRF 或归一化加权解决。"
+    ],
+    "optionExplanations_en": [
+      "They are precisely not on the same scale — one unbounded, one in [−1,1] — so adding is unreliable, which is what this card rejects.",
+      "The magnitudes are reversed: unbounded BM25 swamps dense, not the other way around.",
+      "They measure different things (exact terms vs semantics); the problem is incomparable scale, not double-counting.",
+      "Correct — incomparable scales let the larger raw BM25 dominate and drown dense, which RRF or normalized weighting must fix."
+    ],
+    "termDefinitions": [
+      {
+        "term": "normalization / 归一化",
+        "meaning": "把不同尺度的分数映射到可比区间（如 per-query min-max）再融合。",
+        "meaningEn": "Normalization maps differently-scaled scores into a comparable range (e.g. per-query min-max) before fusing."
+      },
+      {
+        "term": "cosine similarity / 余弦相似度",
+        "meaning": "两向量夹角余弦，取值 [−1,1]，是 dense 检索的相关性分。",
+        "meaningEn": "Cosine similarity is the cosine of the angle between two vectors, in [−1,1], the dense-retrieval relevance score."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-011",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "rrf",
+    "scenario": "你要融合 BM25 和 dense 两路候选，又不想处理两个分数尺度不同的归一化麻烦。",
+    "scenario_en": "You want to fuse BM25 and dense candidates without dealing with the normalization headache of two different score scales.",
+    "q": "RRF（Reciprocal Rank Fusion）是怎么融合两路候选的？",
+    "q_en": "How does RRF (Reciprocal Rank Fusion) fuse two candidate lists?",
+    "why": "RRF 只看 rank 不看原始分：每篇 doc 在每一路的得分是 1/(k+rank)，k≈60，把两路相加。因为用排名而非分数，天然绕开尺度不可比问题，无需归一化、无学习参数，是 Elasticsearch/Vespa 的强基线。",
+    "why_en": "RRF scores each doc 1/(k+rank) per list with k≈60 and sums both, using ranks not raw scores so it sidesteps scale mismatch with no normalization or learned params.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rrf"
+    ],
+    "options": [
+      "每篇 doc 在每路按 1/(k+rank) 打分（k≈60），两路相加；只看 rank 不看原始分",
+      "把 BM25 和 dense 的原始分直接相加，谁大听谁的",
+      "用点击数据学一个权重 α，按 α·dense+(1−α)·sparse 融合",
+      "只取 dense 一路的 top 结果，BM25 只在 dense 为空时兜底"
+    ],
+    "options_en": [
+      "Score each doc 1/(k+rank) per list (k≈60) and sum both lists, using ranks not raw scores.",
+      "Add BM25 and dense raw scores directly and let the larger one win.",
+      "Learn a weight α from click data and fuse as α·dense + (1−α)·sparse.",
+      "Take only the dense list's top results, using BM25 only as a fallback when dense is empty."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；1/(k+rank) 让排名靠前的 doc 得分高，k≈60 压平头部差距；只用 rank 就绕开了尺度不可比，零参数、零归一化。",
+      "直接相加原始分正是 RRF 要避免的尺度陷阱，BM25 无上界会主导。",
+      "那是 learned weighted fusion（学权重），需要点击数据和维护，不是无参数的 RRF。",
+      "dense 兜底式串联不是融合，会漏掉 BM25 独有的精确匹配候选。"
+    ],
+    "optionExplanations_en": [
+      "Correct — 1/(k+rank) rewards top-ranked docs, k≈60 flattens head gaps, and using only ranks sidesteps scale mismatch with zero params and no normalization.",
+      "Adding raw scores is exactly the scale trap RRF avoids; unbounded BM25 would dominate.",
+      "That is learned weighted fusion, which needs click data and maintenance — not parameter-free RRF.",
+      "Chaining dense with a BM25 fallback isn't fusion and misses BM25's unique exact-match candidates."
+    ],
+    "termDefinitions": [
+      {
+        "term": "RRF",
+        "fullName": "Reciprocal Rank Fusion",
+        "meaning": "倒数排名融合：按 1/(k+rank) 用排名而非分数融合多路候选。",
+        "meaningEn": "RRF (Reciprocal Rank Fusion) fuses multiple candidate lists by rank via 1/(k+rank), not by raw score."
+      },
+      {
+        "term": "rank / 排名",
+        "meaning": "一篇 doc 在某一路结果里的名次（第 1、第 2…）。",
+        "meaningEn": "Rank is a doc's position within one list (1st, 2nd, ...)."
+      },
+      {
+        "term": "k (RRF 常数)",
+        "meaning": "平滑常数，常取 60，越大越压平头部名次之间的得分差。",
+        "meaningEn": "The RRF constant k, typically 60, is a smoothing term; larger k flattens score gaps between top ranks."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "learned-fusion",
+    "scenario": "你希望融合能「看 query 意图」：关键词型 query 多信 BM25，语义型 query 多信 dense。",
+    "scenario_en": "You want fusion to read query intent: trust BM25 more on keyword queries, dense more on semantic ones.",
+    "q": "learned weighted fusion 怎么做，比 RRF 多了什么能力和代价？",
+    "q_en": "How does learned weighted fusion work, and what ability and cost does it add over RRF?",
+    "why": "先把每路分数归一化（如 per-query min-max），再按 α·dense + (1−α)·sparse 加权，α 从点击数据学或在留出集上按 NDCG 调。它能按 query 意图调权（RRF 做不到），代价是要数据、要调、要长期维护。",
+    "why_en": "Normalize each list then weight α·dense + (1−α)·sparse with α learned from clicks or tuned on held-out NDCG, adapting to intent at the cost of data and maintenance.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "learned-fusion"
+    ],
+    "options": [
+      "和 RRF 完全一样，只是换了个名字，没有额外能力或代价",
+      "归一化后按 α·dense+(1−α)·sparse 加权，α 从点击/NDCG 学；能按意图调权，代价是要数据和维护",
+      "直接相加原始分，不归一化也不学权重，最省事",
+      "用 cross-encoder 重编码两路候选后取平均，不需要权重"
+    ],
+    "options_en": [
+      "Exactly the same as RRF, just renamed, with no extra ability or cost.",
+      "Normalize then weight α·dense + (1−α)·sparse with α learned from clicks/NDCG; adapts to intent, at the cost of data and maintenance.",
+      "Add raw scores directly, no normalization and no learned weights — the least effort.",
+      "Re-encode both lists with a cross-encoder and average, needing no weights."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "关键差别在于 learned fusion 有可学的权重 α、能适配 query 意图，RRF 没有，说「一样」抹掉了这道题核心。",
+      "对；归一化解决尺度、α 让它按 query 意图在 BM25 和 dense 间调配，代价是要点击数据 + 调参 + 维护。",
+      "直接相加不归一化正是尺度陷阱；learned fusion 恰恰先归一化再加权。",
+      "cross-encoder 重编码是第二阶段精排的活，不是第一阶段两路融合的做法。"
+    ],
+    "optionExplanations_en": [
+      "The key difference is learned fusion's tunable α that adapts to intent, which RRF lacks, so 'the same' erases this card's point.",
+      "Correct — normalization fixes scale and α reallocates between BM25 and dense by intent, costing click data, tuning, and maintenance.",
+      "Adding raw scores unnormalized is the scale trap; learned fusion instead normalizes first, then weights.",
+      "Cross-encoder re-encoding is a second-stage re-ranking job, not first-stage two-list fusion."
+    ],
+    "termDefinitions": [
+      {
+        "term": "learned weighted fusion / 学习加权融合",
+        "meaning": "归一化后按 α·dense+(1−α)·sparse 融合，α 由数据学出。",
+        "meaningEn": "Learned weighted fusion normalizes then fuses as α·dense + (1−α)·sparse, with α learned from data."
+      },
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "归一化折损累积增益，衡量排序质量，越靠前的相关结果贡献越大。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) measures ranking quality, weighting relevant results higher when ranked earlier."
+      },
+      {
+        "term": "click-through data / 点击数据",
+        "meaning": "用户点了哪些结果的日志，用来学融合权重。",
+        "meaningEn": "Click-through data logs which results users clicked, used to learn fusion weights."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-013",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "fusion-contrast",
+    "scenario": "你要在 RRF 和 learned weighted fusion 之间给 hybrid 检索选融合策略。",
+    "scenario_en": "You must pick a fusion strategy for hybrid retrieval between RRF and learned weighted fusion.",
+    "q": "RRF 和 learned weighted fusion 差在哪一维？",
+    "q_en": "On what dimension do RRF and learned weighted fusion differ?",
+    "why": "核心轴是「鲁棒零参数 vs 能适配 query 意图」。RRF 无参数、只按 rank、开箱稳，但不会因 query 是关键词型还是语义型而调权；learned fusion 能按意图上调 BM25 或 dense，但需要点击数据、调参和长期维护。",
+    "why_en": "The axis is robust-and-parameter-free versus intent-adaptive: RRF is fixed by rank and can't adapt, while learned fusion adapts to intent but needs data and upkeep.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "fusion-contrast"
+    ],
+    "tradeoff": "RRF（零参数、鲁棒、不适配意图）vs learned fusion（适配 query 意图，但要数据+维护）",
+    "table": {
+      "headers": [
+        "策略",
+        "依据",
+        "需要数据",
+        "适配意图"
+      ],
+      "rows": [
+        [
+          "RRF",
+          "排名 rank",
+          "否",
+          "不能"
+        ],
+        [
+          "learned fusion",
+          "归一化分数",
+          "是",
+          "能"
+        ]
+      ]
+    },
+    "options": [
+      "两者都需要点击数据训练，区别只是公式写法不同",
+      "RRF 能按 query 意图调权，learned fusion 不能，正好相反",
+      "RRF 无参数按 rank、开箱稳但不适配意图；learned fusion 能按意图调权但要数据和维护",
+      "learned fusion 一定更好，RRF 已被淘汰没有使用场景"
+    ],
+    "options_en": [
+      "Both need click data to train, differing only in formula notation.",
+      "RRF adapts weights to query intent while learned fusion cannot — the reverse.",
+      "RRF is parameter-free by rank and robust but intent-blind; learned fusion adapts to intent but needs data and maintenance.",
+      "Learned fusion is always better and RRF is obsolete with no use case."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "RRF 恰恰不需要训练数据（纯按 rank），说两者都要数据是错的。",
+      "说反了：能按意图调权的是 learned fusion，RRF 是固定的无参数规则。",
+      "对；这就是取舍轴——RRF 拿鲁棒零维护换掉适配能力，learned fusion 拿维护成本换意图适配。",
+      "RRF 是 Elasticsearch/Vespa 的强基线、零维护，缺数据或求稳时反而更合适，没被淘汰。"
+    ],
+    "optionExplanations_en": [
+      "RRF needs no training data (pure rank), so claiming both need data is wrong.",
+      "Reversed: learned fusion is the intent-adaptive one; RRF is a fixed parameter-free rule.",
+      "Correct — that's the tradeoff axis: RRF trades adaptivity for robust zero-maintenance, learned fusion trades maintenance for intent adaptivity.",
+      "RRF is a strong zero-maintenance baseline in Elasticsearch/Vespa, better when data is scarce or robustness matters — not obsolete."
+    ],
+    "termDefinitions": [
+      {
+        "term": "RRF",
+        "fullName": "Reciprocal Rank Fusion",
+        "meaning": "按 1/(k+rank) 用排名融合，无参数、无需归一化。",
+        "meaningEn": "RRF (Reciprocal Rank Fusion) fuses by rank via 1/(k+rank), parameter-free and needing no normalization."
+      },
+      {
+        "term": "learned weighted fusion / 学习加权融合",
+        "meaning": "归一化后按 α·dense+(1−α)·sparse 融合，α 从数据学，能适配意图。",
+        "meaningEn": "Learned weighted fusion fuses as α·dense + (1−α)·sparse with α learned from data, adapting to intent."
+      },
+      {
+        "term": "query intent / 查询意图",
+        "meaning": "query 偏关键词型还是语义型，决定该多信 BM25 还是 dense。",
+        "meaningEn": "Query intent is whether a query is keyword-heavy or semantic, deciding whether to trust BM25 or dense more."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "fusion-selection",
+    "scenario": "你在搭新搜索系统的 hybrid 融合，暂时没有点击日志，团队也没人力长期调权重，但要马上上线一个稳版本。",
+    "scenario_en": "You're building hybrid fusion for a new search system with no click logs yet and no staffing to tune weights long-term, but need a stable version live now.",
+    "q": "没有点击数据、要快速上线一个稳基线，该选哪种融合？",
+    "q_en": "With no click data and a need to ship a stable baseline fast, which fusion do you pick?",
+    "why": "选 RRF：无参数、只按 rank、不用归一化和标注，开箱就是强基线，正好匹配「没数据没人力维护」。等积累了点击数据、也有资源维护，再升级到 learned fusion 按意图调权。",
+    "why_en": "Pick RRF: parameter-free, rank-based, no normalization or labels, a strong baseline out of the box that fits 'no data, no maintenance staff.'",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "fusion-selection"
+    ],
+    "tradeoff": "RRF（零数据零维护、稳）vs learned fusion（要数据要维护、能适配意图）",
+    "whenOtherWins": "当你已有充足点击数据、且 query 意图差异大（关键词型 vs 语义型混杂），learned weighted fusion 能按意图调权，效果超过固定的 RRF。",
+    "options": [
+      "learned weighted fusion：先花两周收点击数据训 α，再上线",
+      "RRF：无参数、按 rank、不用归一化，开箱即是强稳基线",
+      "直接相加 BM25 和 dense 原始分，最省事",
+      "只用 dense 一路，等有数据再考虑融合"
+    ],
+    "options_en": [
+      "Learned weighted fusion: spend two weeks collecting click data to train α, then ship.",
+      "RRF: parameter-free, rank-based, no normalization — a strong stable baseline out of the box.",
+      "Just add BM25 and dense raw scores directly — the least effort.",
+      "Use only the dense list and consider fusion once you have data."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "没数据、没维护人力时先训 α 是本末倒置，上线被拖两周还没人长期调。",
+      "对；RRF 零参数零维护、开箱稳，正好配「没数据没人力还要快上线」的约束。",
+      "直接相加会踩 BM25 无上界主导的尺度陷阱，不是「稳基线」。",
+      "只用 dense 会漏精确关键词（SKU/错误码），放弃了 hybrid 的核心收益。"
+    ],
+    "optionExplanations_en": [
+      "Training α first with no data or maintenance staff is backwards — it delays launch two weeks with nobody to tune it long-term.",
+      "Correct — RRF is zero-parameter, zero-maintenance, and stable out of the box, matching 'no data, no staff, ship fast.'",
+      "Adding raw scores hits the scale trap where unbounded BM25 dominates — not a stable baseline.",
+      "Dense-only misses exact keywords (SKUs/error codes), throwing away hybrid's core benefit."
+    ],
+    "termDefinitions": [
+      {
+        "term": "RRF",
+        "fullName": "Reciprocal Rank Fusion",
+        "meaning": "按 1/(k+rank) 用排名融合，无参数、开箱稳。",
+        "meaningEn": "RRF (Reciprocal Rank Fusion) fuses by rank via 1/(k+rank), parameter-free and stable out of the box."
+      },
+      {
+        "term": "learned weighted fusion / 学习加权融合",
+        "meaning": "归一化后按 α·dense+(1−α)·sparse 融合，α 从点击数据学，能适配意图但要维护。",
+        "meaningEn": "Learned weighted fusion fuses as α·dense + (1−α)·sparse with α learned from clicks, adapting to intent but needing maintenance."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-015",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "candidate-count",
+    "scenario": "hybrid 融合后的候选集要交给 cross-encoder 精排；融合候选通常在 100–1000 篇量级。",
+    "scenario_en": "The fused candidate set goes to the cross-encoder for re-ranking; fused candidates are typically 100–1000 docs.",
+    "q": "「融合候选 100–1000 篇」这个量级下游决定了什么？",
+    "q_en": "What does the '100–1000 fused candidates' magnitude determine downstream?",
+    "why": "100–1000 是第一阶段召回后、进精排前的候选规模，它是算第二阶段成本的输入：cross-encoder 每篇一次前向传播，1000 篇≈2s（超 SLA），所以还要从这里再砍到 20–50 篇才精排。这个数字是连接召回和精排的桥。",
+    "why_en": "It is the post-recall pre-rerank candidate size and the input to second-stage cost: at ~2ms/doc, 1000 docs ≈ 2s, so you further cut to 20–50 for re-ranking.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "candidate-count"
+    ],
+    "options": [
+      "是最终展示给用户的结果条数，页面上直接一次渲染这么多条",
+      "是 ANN 索引里 doc 向量的总量，决定整个索引占多大内存",
+      "是召回后进精排前的候选规模，决定 cross-encoder 精排成本和还要砍到多少篇",
+      "是系统每秒处理的 query 数（QPS），主要用于服务容量规划"
+    ],
+    "options_en": [
+      "The number of results shown to the user, all rendered on the page at once.",
+      "The total count of doc vectors in the ANN index, setting how much memory the whole index takes.",
+      "The post-recall pre-rerank candidate size, setting cross-encoder cost and how far you must trim.",
+      "The queries per second (QPS) the system handles, used mainly for serving capacity planning."
+    ],
+    "answer": [
+      2
+    ],
+    "termDefinitions": [
+      {
+        "term": "candidate set / 候选集",
+        "meaning": "第一阶段召回、进第二阶段精排前的一批文档。",
+        "meaningEn": "The candidate set is the batch of docs recalled in stage one before stage-two re-ranking."
+      },
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "第二阶段精排模型，每个 query-doc 对一次前向传播，成本随候选数线性增长。",
+        "meaningEn": "A cross-encoder is the second-stage re-ranker; it runs one forward pass per query-doc pair, so cost grows linearly with candidate count."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "cross-encoder",
+    "scenario": "第二阶段要对 top-K 候选做最精准打分，dual encoder 因 query 和 doc 分开编码，看不到 token 级交互。",
+    "scenario_en": "Stage two must score top-K candidates most precisely, but a dual encoder encodes query and doc separately and never sees token-level interaction.",
+    "q": "cross-encoder 相比 dual encoder 精度更高的机制是什么？",
+    "q_en": "What mechanism makes a cross-encoder more accurate than a dual encoder?",
+    "why": "cross-encoder 把 query 和 doc 拼成一条序列 [CLS] query [SEP] doc，整条过一个 transformer，让每个 query token 直接 attend 每个 doc token，捕捉 dual encoder 分开编码时丢掉的 token 级交互，所以精度高得多。",
+    "why_en": "A cross-encoder concatenates into [CLS] query [SEP] doc through one transformer so every query token attends every doc token, capturing interactions the dual encoder loses.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cross-encoder"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query token\"] --> A[\"cross-encoder<br/>[CLS] q [SEP] d\"]\n  D[\"doc token\"] --> A\n  A --> S[\"每个 q token attend<br/>每个 d token → 精排分\"]",
+    "options": [
+      "拼成 [CLS] query [SEP] doc 一条序列过 transformer，每个 query token 都 attend 每个 doc token",
+      "用更高维的向量分别编码 query 和 doc，再算点积",
+      "把 doc 向量离线预算好，query 来了只算一次相似度",
+      "用 BM25 给 dual encoder 的结果做二次加权"
+    ],
+    "options_en": [
+      "Concatenate into [CLS] query [SEP] doc through one transformer so every query token attends every doc token.",
+      "Encode query and doc separately into higher-dimensional vectors, then take the dot product.",
+      "Precompute doc vectors offline and compute one similarity when the query arrives.",
+      "Re-weight the dual encoder's results with a second pass of BM25."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；query 和 doc 在同一序列里逐 token 互相 attend，捕捉分开编码丢掉的细粒度交互，精度因此更高。",
+      "升维还是分开编码（双塔），仍然看不到 token 级交互，改变不了本质。",
+      "离线预算 + 一次相似度正是 dual encoder 的做法，精度受限就来自它。",
+      "BM25 加权是稀疏融合，和 cross-encoder 的 token 交互精排是两回事。"
+    ],
+    "optionExplanations_en": [
+      "Correct — query and doc tokens attend each other in one sequence, capturing the fine-grained interaction separate encoding drops, hence higher accuracy.",
+      "Higher dimensions are still separate (dual-tower) encoding with no token-level interaction, so nothing fundamental changes.",
+      "Offline precompute plus one similarity is exactly the dual encoder, and that's the source of its precision limit.",
+      "BM25 re-weighting is sparse fusion, a different thing from cross-encoder token-interaction re-ranking."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "把 query 和 doc 拼成一条序列过 transformer，让 token 互相 attend，精度高但慢。",
+        "meaningEn": "A cross-encoder concatenates query and doc into one sequence through a transformer so tokens attend each other — accurate but slow."
+      },
+      {
+        "term": "CLS",
+        "fullName": "Classification token",
+        "meaning": "分类符：序列开头的特殊 token，其输出向量汇总整条序列用于打分。",
+        "meaningEn": "CLS (Classification token) is a special token at the sequence start whose output vector summarizes the whole sequence for scoring."
+      },
+      {
+        "term": "SEP",
+        "fullName": "Separator token",
+        "meaning": "分隔符：用来分隔 query 和 doc 两段。",
+        "meaningEn": "SEP (Separator token) separates the query and doc segments."
+      },
+      {
+        "term": "attention / 注意力",
+        "meaning": "transformer 里每个 token 根据相关性加权融合其他 token 的信息。",
+        "meaningEn": "Attention lets each token in a transformer aggregate information from others weighted by relevance."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-017",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "cross-encoder-cost",
+    "scenario": "用 BERT-base cross-encoder 精排，每个 query-doc 对要一次独立前向传播，O(N)。",
+    "scenario_en": "Re-ranking with a BERT-base cross-encoder needs one independent forward pass per query-doc pair, O(N).",
+    "q": "「1000 篇精排 ≈ 2s（单 GPU）」这个数字推出什么设计动作？",
+    "q_en": "What design action does '1000 docs ≈ 2s on one GPU' imply?",
+    "why": "cross-encoder 是 O(N)：每对一次前向传播，1000 篇在单 GPU BERT-base 上约 2s，远超 <100ms 的 SLA。所以要把精排候选从 1000 砍到 20–50 篇——按比例约 40–100ms，才卡进延迟预算。这是定 K 的依据，不是背诵点。",
+    "why_en": "Cross-encoder cost is O(N): 1000 docs ≈ 2s on one GPU BERT-base, far over a <100ms SLA, so cut re-ranking to 20–50 docs (~40–100ms).",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cross-encoder-cost"
+    ],
+    "options": [
+      "说明可以直接对全部 1000 篇精排，2s 的延迟在搜索场景里用户完全能接受",
+      "说明只要换一块更大的 GPU 就能把 2s 压进毫秒，候选数完全不用动",
+      "说明 cross-encoder 成本和候选数无关，砍不砍候选数结果都一样快",
+      "O(N) 下 1000 篇约 2s 超 SLA，需把精排候选砍到 20–50 篇（约 40–100ms）"
+    ],
+    "options_en": [
+      "It means you can re-rank all 1000 docs directly, since a 2s latency is perfectly acceptable to search users.",
+      "It means a bigger GPU alone compresses 2s to milliseconds, so the candidate count needs no change.",
+      "It means cross-encoder cost is independent of candidate count, so trimming or not is equally fast.",
+      "Under O(N), 1000 docs ≈ 2s exceeds the SLA, so cut re-ranking candidates to 20–50 (~40–100ms)."
+    ],
+    "answer": [
+      3
+    ],
+    "termDefinitions": [
+      {
+        "term": "O(N) / 线性复杂度",
+        "meaning": "成本随候选数线性增长，cross-encoder 每篇一次前向传播。",
+        "meaningEn": "O(N) means cost grows linearly with candidate count, as a cross-encoder runs one forward pass per doc."
+      },
+      {
+        "term": "GPU",
+        "fullName": "Graphics Processing Unit",
+        "meaning": "图形处理器：跑深度模型前向传播的加速硬件。",
+        "meaningEn": "A GPU (Graphics Processing Unit) is the accelerator hardware that runs deep-model forward passes."
+      },
+      {
+        "term": "SLA",
+        "fullName": "Service Level Agreement",
+        "meaning": "服务级别协议，这里指搜索延迟上限（如 <100ms）。",
+        "meaningEn": "An SLA (Service Level Agreement) is a committed limit, here search latency under 100ms."
+      },
+      {
+        "term": "BERT",
+        "fullName": "Bidirectional Encoder Representations from Transformers",
+        "meaning": "双向 Transformer 编码器，cross-encoder 常用的底座。",
+        "meaningEn": "BERT (Bidirectional Encoder Representations from Transformers) is the bidirectional encoder commonly used as the cross-encoder backbone."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "rerank-k",
+    "scenario": "融合后有 500 篇候选，SLA 要求 p99 <100ms，单 GPU BERT-base cross-encoder 每篇约 2ms。",
+    "scenario_en": "After fusion there are 500 candidates, the SLA is p99 <100ms, and a one-GPU BERT-base cross-encoder costs ~2ms per doc.",
+    "q": "该把多少候选送进 cross-encoder 精排？",
+    "q_en": "How many candidates should you send into the cross-encoder for re-ranking?",
+    "why": "500 篇×2ms=1s，直接超 100ms SLA。要把精排候选砍到 20–50 篇（约 40–100ms），其余保留第一阶段融合排序即可。K 太小丢召回、太大超时，20–50 是精度和延迟的甜点区。",
+    "why_en": "500 × 2ms = 1s blows the 100ms SLA, so cut to 20–50 docs (~40–100ms) and keep the fused order for the rest — the sweet spot between recall and latency.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rerank-k"
+    ],
+    "tradeoff": "K 大（精度高但延迟高、可能超 SLA）vs K 小（延迟低但可能漏掉靠后的相关 doc）",
+    "whenOtherWins": "若 SLA 很宽松（离线批处理，或秒级可接受的场景），可以精排更多候选甚至全部 500 篇，用延迟换更高精度。",
+    "options": [
+      "全部 500 篇都精排，精度优先，延迟以后再优化",
+      "只精排 1 篇，最快",
+      "砍到 20–50 篇精排（约 40–100ms），其余保留融合排序",
+      "精排 300 篇，取中间值最稳"
+    ],
+    "options_en": [
+      "Re-rank all 500, precision first, optimize latency later.",
+      "Re-rank just 1, the fastest.",
+      "Trim to 20–50 docs (~40–100ms) and keep the fused order for the rest.",
+      "Re-rank 300, a middle value for stability."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "500 篇×2ms=1s，是 SLA 的 10 倍，全精排直接超时，不是「以后优化」的事。",
+      "只精排 1 篇等于没精排，K 太小会把靠后的相关 doc 全丢掉，召回崩塌。",
+      "对；20–50 篇约 40–100ms 卡进 SLA，又保住 top 区精度，是延迟-精度的甜点区。",
+      "300 篇×2ms=600ms 仍远超 100ms SLA，「取中间」没有对着延迟预算算账。"
+    ],
+    "optionExplanations_en": [
+      "500 × 2ms = 1s is 10× the SLA, so full re-ranking times out — not a 'later' problem.",
+      "Re-ranking 1 is effectively none; too small a K drops the relevant docs further down and recall collapses.",
+      "Correct — 20–50 docs at ~40–100ms fits the SLA while keeping top-region precision, the latency-precision sweet spot.",
+      "300 × 2ms = 600ms still far exceeds the 100ms SLA; 'middle value' never did the latency-budget math."
+    ],
+    "termDefinitions": [
+      {
+        "term": "K (re-rank 候选数)",
+        "meaning": "送进 cross-encoder 精排的候选篇数，是延迟 vs 精度的主旋钮。",
+        "meaningEn": "K is the number of candidates sent to the cross-encoder, the primary latency-versus-precision knob."
+      },
+      {
+        "term": "p99 latency / p99 延迟",
+        "meaning": "99% 的请求延迟都低于这个值，衡量尾部延迟。",
+        "meaningEn": "p99 latency is the value below which 99% of requests fall, measuring tail latency."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "colbert",
+    "scenario": "你想要比 dual encoder 更懂 token 级交互、又比 cross-encoder 便宜的中间方案。",
+    "scenario_en": "You want a middle ground that sees more token-level interaction than a dual encoder but is cheaper than a cross-encoder.",
+    "q": "ColBERT 的「late interaction / MaxSim」是怎么工作的，代价是什么？",
+    "q_en": "How does ColBERT's late interaction / MaxSim work, and what is the cost?",
+    "why": "ColBERT 离线预算每个 doc 的逐 token 向量，在线对每个 query token 取它与所有 doc token 的最大相似度（MaxSim）再求和。比单向量 dual encoder 表达更丰富，比 cross-encoder 便宜（doc 侧仍可离线），代价是索引更大——存的是每 token 向量。",
+    "why_en": "ColBERT precomputes per-token doc vectors offline and scores by MaxSim — each query token's max similarity to any doc token, summed — richer than single-vector dual, cheaper than cross, at the cost of a larger index.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "colbert"
+    ],
+    "options": [
+      "把 query 和 doc 拼成一条序列过 transformer，和 cross-encoder 完全一样",
+      "离线存每 doc 的逐 token 向量，在线每个 query token 取最大相似度（MaxSim）求和；代价是索引更大",
+      "只存每 doc 一个向量，用点积算相似度，和 dual encoder 无异",
+      "用 BM25 rank 融合 dense 结果，不涉及向量交互"
+    ],
+    "options_en": [
+      "Concatenate query and doc into one sequence through a transformer, exactly like a cross-encoder.",
+      "Store per-token doc vectors offline, and online take each query token's max similarity (MaxSim) and sum; the cost is a larger index.",
+      "Store just one vector per doc and score by dot product, no different from a dual encoder.",
+      "Fuse dense results by BM25 rank, with no vector interaction involved."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "cross-encoder 是 query+doc 拼一条序列在线全交互；ColBERT 是 late interaction，doc 侧逐 token 向量离线预算，两者不一样。",
+      "对；逐 token 向量 + MaxSim 让它比单向量双塔表达更细，又能离线预算 doc 侧比 cross-encoder 便宜，代价是每 token 存向量、索引膨胀。",
+      "单向量点积是 dual encoder；ColBERT 存的是每 token 向量、比它更丰富。",
+      "BM25 融合是稀疏路，和 ColBERT 的逐 token late interaction 无关。"
+    ],
+    "optionExplanations_en": [
+      "A cross-encoder does full online interaction over a concatenated sequence; ColBERT is late interaction with per-token doc vectors precomputed offline — different.",
+      "Correct — per-token vectors plus MaxSim make it richer than single-vector dual and cheaper than cross since doc vectors are precomputed, at the cost of index bloat.",
+      "Single-vector dot product is a dual encoder; ColBERT stores per-token vectors and is richer.",
+      "BM25 fusion is the sparse path, unrelated to ColBERT's per-token late interaction."
+    ],
+    "termDefinitions": [
+      {
+        "term": "ColBERT",
+        "fullName": "Contextualized Late Interaction over BERT",
+        "meaning": "基于 BERT 的延迟交互检索：逐 token 向量 + MaxSim 打分。",
+        "meaningEn": "ColBERT (Contextualized Late Interaction over BERT) is late-interaction retrieval using per-token vectors and MaxSim scoring."
+      },
+      {
+        "term": "MaxSim",
+        "fullName": "Maximum Similarity",
+        "meaning": "最大相似度：每个 query token 取它与所有 doc token 相似度的最大值再求和。",
+        "meaningEn": "MaxSim (Maximum Similarity) takes each query token's max similarity over all doc tokens, then sums them."
+      },
+      {
+        "term": "late interaction / 延迟交互",
+        "meaning": "query 和 doc 各自编码成逐 token 向量，只在打分时做 token 级匹配，而非在编码时拼接。",
+        "meaningEn": "Late interaction encodes query and doc into per-token vectors separately and matches tokens only at scoring time, not by concatenation."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "interaction-contrast",
+    "scenario": "你在 dual encoder、ColBERT、cross-encoder 三种交互方式里权衡精度、成本、索引大小。",
+    "scenario_en": "You weigh precision, cost, and index size across three interaction styles: dual encoder, ColBERT, cross-encoder.",
+    "q": "dual encoder、ColBERT、cross-encoder 在「交互粒度 vs 成本」上怎么排？",
+    "q_en": "How do dual encoder, ColBERT, and cross-encoder rank on interaction granularity versus cost?",
+    "why": "交互粒度：dual 单向量（无 token 交互）< ColBERT 逐 token late interaction < cross-encoder 全交互，精度同向递增。成本反向：dual 最便宜（离线+ANN），cross 最贵（O(N) 在线全交互），ColBERT 居中但索引最大（存每 token 向量）。",
+    "why_en": "Granularity and precision rise dual < ColBERT < cross, while cost inverts: dual cheapest (offline+ANN), cross priciest (O(N) online), ColBERT in between but with the largest index.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "interaction-contrast"
+    ],
+    "tradeoff": "交互粒度/精度（dual<ColBERT<cross）vs 成本与索引（dual 最省、cross 最贵、ColBERT 索引最大）",
+    "table": {
+      "headers": [
+        "模型",
+        "交互粒度",
+        "在线成本",
+        "索引大小"
+      ],
+      "rows": [
+        [
+          "dual encoder",
+          "单向量",
+          "低",
+          "小"
+        ],
+        [
+          "ColBERT",
+          "逐 token",
+          "中",
+          "大"
+        ],
+        [
+          "cross-encoder",
+          "全交互",
+          "高",
+          "不预存"
+        ]
+      ]
+    },
+    "options": [
+      "三者交互粒度和成本都一样，只是名字不同",
+      "cross-encoder 最便宜，dual encoder 最贵，成本从交互多的往少的递增",
+      "ColBERT 索引最小，因为它只存每 doc 一个向量",
+      "交互粒度 dual<ColBERT<cross、精度同向升；成本反向，cross 最贵，ColBERT 索引最大"
+    ],
+    "options_en": [
+      "All three have the same interaction granularity and cost, differing only in name.",
+      "The cross-encoder is cheapest and the dual encoder priciest, cost rising from more interaction to less.",
+      "ColBERT has the smallest index because it stores just one vector per doc.",
+      "Granularity dual < ColBERT < cross with precision rising the same way; cost inverts, cross priciest, ColBERT's index largest."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "三者恰恰在交互粒度和成本上层层不同，这正是选型依据，说「一样」抹掉了全部信息。",
+      "成本方向反了：全交互的 cross-encoder 最贵（O(N) 在线），单向量 dual 最便宜（离线+ANN）。",
+      "ColBERT 存的是每 token 向量不是每 doc 一个向量，所以索引反而最大。",
+      "对；精度随交互粒度升、成本随之涨，ColBERT 用「最大索引」换到 dual 和 cross 之间的中间点。"
+    ],
+    "optionExplanations_en": [
+      "They differ layer by layer in granularity and cost — that's the whole basis for choosing — so 'the same' erases all the information.",
+      "Cost is reversed: the full-interaction cross-encoder is priciest (O(N) online), the single-vector dual cheapest (offline+ANN).",
+      "ColBERT stores per-token vectors, not one per doc, so its index is actually the largest.",
+      "Correct — precision rises with granularity and so does cost; ColBERT spends the largest index to sit between dual and cross."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dual encoder / 双塔",
+        "meaning": "每 doc 一个向量，点积打分，最便宜、索引最小、无 token 交互。",
+        "meaningEn": "A dual encoder stores one vector per doc scored by dot product — cheapest, smallest index, no token interaction."
+      },
+      {
+        "term": "ColBERT",
+        "fullName": "Contextualized Late Interaction over BERT",
+        "meaning": "逐 token 向量 + MaxSim，精度和成本居中，但索引最大。",
+        "meaningEn": "ColBERT uses per-token vectors and MaxSim, mid precision and cost but the largest index."
+      },
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "query+doc 全 token 交互，精度最高、在线最贵、不预存索引。",
+        "meaningEn": "A cross-encoder does full query-doc token interaction — highest precision, priciest online, no precomputed index."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "rerank-choice",
+    "scenario": "第二阶段要提精度，但你担心 cross-encoder 对每个 query-doc 对在线全交互太慢，存储预算又有限。",
+    "scenario_en": "Stage two needs higher precision, but you worry the cross-encoder's full online interaction per pair is too slow, and storage budget is tight.",
+    "q": "精排该用 cross-encoder 还是 ColBERT，怎么权衡？",
+    "q_en": "For re-ranking, cross-encoder or ColBERT — how do you weigh it?",
+    "why": "追求精度天花板、候选已砍到 20–50 篇、延迟能容忍在线全交互 → cross-encoder。想在更大候选量上便宜地拿到接近精度、且能接受索引变大 → ColBERT（doc 侧逐 token 向量离线，在线只做 MaxSim）。核心是精度上限 vs 在线成本 vs 索引大小。",
+    "why_en": "For the precision ceiling with only 20–50 candidates and tolerable latency, use cross-encoder; for cheap near-precision over more candidates with a bigger index, use ColBERT.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rerank-choice"
+    ],
+    "tradeoff": "cross-encoder（精度最高、在线最贵、不预存）vs ColBERT（精度次高、在线便宜、索引最大）",
+    "whenOtherWins": "若存储紧张、候选本就很少（20–50 篇）、且要精度天花板，cross-encoder 更合适；ColBERT 的索引膨胀这时不划算。",
+    "options": [
+      "永远选 cross-encoder，ColBERT 没有任何使用价值",
+      "永远选 ColBERT，它又快又准还省存储",
+      "两者等价，随便选，没有权衡维度",
+      "要精度天花板且候选少选 cross-encoder；要在更大候选上便宜近似、可接受大索引选 ColBERT"
+    ],
+    "options_en": [
+      "Always cross-encoder; ColBERT has no use value.",
+      "Always ColBERT; it is fast, accurate, and saves storage.",
+      "They are equivalent, pick either, no tradeoff dimensions.",
+      "For the precision ceiling with few candidates use cross-encoder; for cheap approximation over more candidates with a big index use ColBERT."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "候选量大、存储够、想省在线算力时 ColBERT 很有价值，说它「没价值」太绝对。",
+      "ColBERT 快是相对 cross-encoder，但它索引最大、不省存储，「省存储」说反了。",
+      "两者在精度上限、在线成本、索引大小上都不同，正是这些维度构成选型权衡。",
+      "对；cross-encoder 换精度天花板（贵、候选要少），ColBERT 用大索引换在线便宜的近似精度。"
+    ],
+    "optionExplanations_en": [
+      "With many candidates, enough storage, and a wish to save online compute, ColBERT is valuable, so 'no value' is too absolute.",
+      "ColBERT is fast relative to cross-encoder, but its index is the largest and doesn't save storage — 'saves storage' is backwards.",
+      "They differ in precision ceiling, online cost, and index size — exactly the dimensions that form the tradeoff.",
+      "Correct — cross-encoder buys the precision ceiling (pricey, few candidates), ColBERT spends a big index for cheap near-precision online."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "query+doc 全 token 交互，精度最高但在线最贵。",
+        "meaningEn": "A cross-encoder does full query-doc token interaction — highest precision, priciest online."
+      },
+      {
+        "term": "ColBERT",
+        "fullName": "Contextualized Late Interaction over BERT",
+        "meaning": "逐 token 向量 + MaxSim，doc 侧可离线，在线便宜，代价是索引最大。",
+        "meaningEn": "ColBERT uses per-token vectors and MaxSim with offline doc side and cheap online scoring, at the cost of the largest index."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-022",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "tradeoff-triangle",
+    "scenario": "面试官让你用一句话总结两阶段语义搜索的架构取舍。",
+    "scenario_en": "The interviewer asks you to summarize the two-stage semantic-search tradeoff in one line.",
+    "q": "「取舍三角」里 dual encoder、cross-encoder、K 各扮演什么角色？",
+    "q_en": "In the tradeoff triangle, what role does each of dual encoder, cross-encoder, and K play?",
+    "why": "dual encoder 给吞吐（快、可离线+ANN），cross-encoder 给精度（慢、token 全交互），K（精排多少篇）决定你坐在延迟-精度曲线的哪个点。三者拼出「用多快换多准」的取舍三角。",
+    "why_en": "Dual encoders give throughput, cross-encoders give accuracy, and K sets where you sit on the latency-accuracy curve.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "tradeoff"
+    ],
+    "diagram": "flowchart TD\n  T[\"延迟 vs 精度曲线\"]\n  D[\"dual encoder<br/>吞吐/速度\"] --> T\n  C[\"cross-encoder<br/>精度\"] --> T\n  K[\"K<br/>决定曲线位置\"] --> T",
+    "options": [
+      "dual encoder 管吞吐/速度，cross-encoder 管精度，K 决定你在延迟-精度曲线上的位置",
+      "三者都只管精度，延迟由硬件单独决定，和架构无关",
+      "dual encoder 管精度，cross-encoder 管速度，K 管索引大小",
+      "K 只影响索引内存，和延迟、精度都无关"
+    ],
+    "options_en": [
+      "Dual encoder gives throughput/speed, cross-encoder gives accuracy, and K sets where you sit on the latency-accuracy curve.",
+      "All three only handle accuracy; latency is set solely by hardware and unrelated to architecture.",
+      "Dual encoder handles accuracy, cross-encoder handles speed, and K handles index size.",
+      "K only affects index memory and is unrelated to latency or accuracy."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；dual 快给吞吐、cross 准给精度、K 决定坐在曲线哪个点，一句话概括整套架构的取舍。",
+      "精度和延迟正是被架构决策牵动的，不是只靠硬件；否则就不用两阶段了。",
+      "角色反了：dual encoder 给速度/吞吐，cross-encoder 给精度。",
+      "K 主要牵动的是延迟和精度（精排几篇），不是索引内存。"
+    ],
+    "optionExplanations_en": [
+      "Correct — dual is fast for throughput, cross is precise for accuracy, and K picks the point on the curve, summing up the whole architecture's tradeoff.",
+      "Accuracy and latency are precisely what architecture decisions move, not hardware alone — otherwise two stages would be pointless.",
+      "Roles reversed: the dual encoder gives speed/throughput, the cross-encoder gives accuracy.",
+      "K mainly moves latency and accuracy (how many to re-rank), not index memory."
+    ],
+    "termDefinitions": [
+      {
+        "term": "throughput / 吞吐",
+        "meaning": "单位时间能处理的 query/doc 数，dual encoder 的强项。",
+        "meaningEn": "Throughput is how many queries/docs are processed per unit time, the dual encoder's strength."
+      },
+      {
+        "term": "trade-off triangle / 取舍三角",
+        "meaning": "dual（吞吐）、cross（精度）、K（曲线位置）三者构成的延迟-精度权衡。",
+        "meaningEn": "The tradeoff triangle is the latency-accuracy balance formed by dual (throughput), cross (accuracy), and K (curve position)."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-023",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "pipeline",
+    "q": "把两阶段 hybrid 语义搜索的处理流程排成正确顺序：",
+    "q_en": "Order the processing steps of a two-stage hybrid semantic-search pipeline.",
+    "steps": [
+      "RRF 或加权融合两路候选，合成 100–1000 篇候选集",
+      "query 编码器编 query 向量，同时 BM25 处理关键词",
+      "按 cross-encoder 精排分返回 top 结果",
+      "ANN 取 dense 最近邻、BM25 取关键词候选，两路并行召回",
+      "cross-encoder 对砍到 20–50 篇的 top 候选做精排"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      4,
+      2
+    ],
+    "why": "流程是：先编码 query + BM25 起跑 → dense（ANN）和稀疏两路并行召回 → 融合成候选集 → 砍到 20–50 篇给 cross-encoder 精排 → 按精排分返回。快召回在前、贵精排在后，是两阶段的骨架。",
+    "why_en": "Encode query and start BM25, recall dense (ANN) and sparse in parallel, fuse into a candidate set, trim to 20–50 for cross-encoder re-ranking, then return by re-rank score.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "pipeline"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query\"] --> E[\"编码+BM25\"]\n  E --> P[\"并行召回<br/>ANN+BM25\"]\n  P --> F[\"融合候选\"]\n  F --> R[\"cross 精排<br/>20–50 篇\"]\n  R --> O[\"返回 top\"]",
+    "termDefinitions": [
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻搜索，在向量索引里毫秒级召回与 query 最近的 doc。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) search recalls the docs closest to a query in a vector index in milliseconds."
+      },
+      {
+        "term": "RRF",
+        "fullName": "Reciprocal Rank Fusion",
+        "meaning": "倒数排名融合，按 1/(k+rank) 用排名融合两路候选。",
+        "meaningEn": "RRF (Reciprocal Rank Fusion) fuses two candidate lists by rank via 1/(k+rank)."
+      },
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "第二阶段精排模型，让 query 和 doc 的 token 互相 attend。",
+        "meaningEn": "A cross-encoder is the second-stage re-ranker letting query and doc tokens attend each other."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-024",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "fusion-recall",
+    "q": "补全 hybrid 融合的两条要点：",
+    "q_en": "Fill in the two key points of hybrid fusion.",
+    "text": "BM25 分无上界、dense 余弦夹在 [−1,1]，尺度不可比不能直接相加；无参数的融合方法是 {{RRF}}，它按 {{rank}}（而非原始分）打分 1/(k+rank)，k≈{{60}}。",
+    "text_en": "BM25 scores are unbounded while dense cosine sits in [−1,1], so they can't be added directly; the parameter-free fusion is {{RRF}}, scoring by {{rank}} (not raw score) as 1/(k+rank) with k≈{{60}}.",
+    "why": "记住两点：尺度不可比 → 不能直接相加；RRF 用 rank 绕开尺度、1/(k+rank) k≈60、零参数，是默认强基线。",
+    "why_en": "Different scales mean you can't add raw scores, so RRF fuses by rank with 1/(k+rank), k≈60, as a parameter-free strong baseline.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rrf"
+    ],
+    "termDefinitions": [
+      {
+        "term": "RRF",
+        "fullName": "Reciprocal Rank Fusion",
+        "meaning": "倒数排名融合，按 1/(k+rank) 用排名融合多路候选。",
+        "meaningEn": "RRF (Reciprocal Rank Fusion) fuses candidate lists by rank via 1/(k+rank)."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-025",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "dual-encoder-recall",
+    "q": "补全 dual encoder 的核心心智模型：",
+    "q_en": "Fill in the dual encoder's core mental model.",
+    "text": "dual encoder 用两个 transformer 分别编码 query 和 doc 成同维向量，相关性用 {{点积}}/余弦；doc 向量 {{离线}}预算进 {{ANN}} 索引，在线只跑 query 编码器，毫秒召回。",
+    "text_en": "A dual encoder encodes query and doc with two transformers into same-dim vectors scored by {{dot product}}/cosine; doc vectors are precomputed {{offline}} into an {{ANN}} index so only the query encoder runs online for millisecond recall.",
+    "why": "双塔的两个记忆点：相关性=点积/余弦；doc 向量离线进 ANN、在线只算 query，这才换来毫秒召回。",
+    "why_en": "The dual encoder scores by dot product/cosine and precomputes doc vectors offline into an ANN index so only the query encoder runs online.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "dual-encoder"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻搜索，预存 doc 向量、毫秒召回 query 的最近邻。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) search stores doc vectors and recalls a query's nearest neighbors in milliseconds."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "single-stage",
+    "scenario": "一个内部工具的搜索，语料只有几万篇，query 量很低，团队想省掉第二阶段精排。",
+    "scenario_en": "An internal-tool search with only tens of thousands of docs and low query volume; the team wants to drop the second-stage re-ranker.",
+    "q": "什么情况下可以只用 dual encoder、省掉 cross-encoder 精排？",
+    "q_en": "When can you use only a dual encoder and skip cross-encoder re-ranking?",
+    "why": "当召回本身已够准、规模小、精度要求不高时，单阶段 dual encoder + ANN 就够，省掉精排的延迟和复杂度。一旦 top 排序质量吃紧（电商、法律检索等对 NDCG 敏感的场景），就需要 cross-encoder 补精度。",
+    "why_en": "When recall is already good enough, scale is small, and precision demands are modest, a single-stage dual encoder plus ANN suffices, saving the re-ranker's latency and complexity.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "single-stage"
+    ],
+    "tradeoff": "单阶段 dual（省延迟/复杂度，精度封顶）vs 加 cross-encoder（精度高，多一层延迟和成本）",
+    "whenOtherWins": "当排序精度直接影响业务（点击/转化、合规检索），top 区错一位代价大，就必须加 cross-encoder 精排，单塔不够。",
+    "options": [
+      "任何搜索都必须用两阶段，单 dual encoder 永远不够",
+      "规模小、精度要求不高、召回已够准时，单 dual encoder + ANN 就够，省掉精排",
+      "只要语料大就该省掉精排，越大越不需要 cross-encoder",
+      "省掉精排只看 QPS，和精度要求无关"
+    ],
+    "options_en": [
+      "Every search must use two stages; a single dual encoder is never enough.",
+      "When scale is small, precision demands modest, and recall already good, a single dual encoder plus ANN suffices, skipping re-ranking.",
+      "As long as the corpus is large you should drop re-ranking; the bigger it is the less you need a cross-encoder.",
+      "Skipping re-ranking depends only on QPS and is unrelated to precision demands."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "系统设计没有「永远必须」；小规模、低精度要求时单塔够用，加精排是浪费延迟。",
+      "对；召回够准 + 精度要求不高 + 规模小，单塔 ANN 就满足，省掉精排的一层延迟和维护。",
+      "语料越大反而更需要精排收窄，「越大越不需要」把方向搞反了。",
+      "是否省精排主要看精度要求（NDCG 敏不敏感），不是只看 QPS。"
+    ],
+    "optionExplanations_en": [
+      "System design has no 'always must'; at small scale with modest precision needs a single tower is enough, and adding re-ranking just wastes latency.",
+      "Correct — good-enough recall plus modest precision needs plus small scale means single-tower ANN suffices, saving a re-ranking layer.",
+      "A larger corpus needs re-ranking to narrow more, not less; 'bigger means less needed' reverses the direction.",
+      "Whether to skip re-ranking is mainly about precision needs (NDCG sensitivity), not QPS alone."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dual encoder / 双塔",
+        "meaning": "第一阶段召回模型，doc 向量离线进 ANN，在线只算 query。",
+        "meaningEn": "A dual encoder is the first-stage recall model with doc vectors offline in ANN and only the query encoded online."
+      },
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "衡量排序质量，越靠前的相关结果贡献越大；对它敏感的场景需要精排。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) measures ranking quality, rewarding relevant results ranked earlier; NDCG-sensitive cases need re-ranking."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-027",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "unified-encoder",
+    "scenario": "E5 和 BGE 用「一个统一编码器」同时编 query 和 doc（不像 DPR 用两个分开的塔）。",
+    "scenario_en": "E5 and BGE use one unified encoder to embed both query and doc (unlike DPR's two separate towers).",
+    "q": "E5/BGE 用统一编码器时，靠什么区分「这是 query 还是 doc」？",
+    "q_en": "With a unified encoder, how do E5/BGE tell whether the input is a query or a doc?",
+    "why": "统一编码器一套权重编两种文本，靠输入前缀/指令区分角色：E5 加 query:/passage: 前缀，BGE 用指令（instruction）。这让一个模型学到 query、doc 各自该怎么表示，省去维护两个塔。",
+    "why_en": "One shared weight set embeds both, distinguishing roles by input prefixes/instructions: E5 adds query:/passage: prefixes, BGE uses an instruction.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "unified-encoder"
+    ],
+    "options": [
+      "靠两套完全独立的权重，本质还是 DPR 那种双塔",
+      "靠 doc 长度自动判断，长的是 doc、短的是 query",
+      "靠输入前缀/指令：E5 加 query:/passage: 前缀，BGE 加 instruction",
+      "靠 BM25 分数区分，分高的当 query"
+    ],
+    "options_en": [
+      "By two fully separate weight sets — essentially DPR's dual tower.",
+      "By doc length automatically — longer is a doc, shorter is a query.",
+      "By input prefix/instruction: E5 adds query:/passage: prefixes, BGE adds an instruction.",
+      "By BM25 score, treating the higher-scoring one as the query."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "统一编码器恰恰是一套权重编两种文本，用两套独立权重就退回 DPR 双塔了。",
+      "长度不是可靠信号，短 doc、长 query 都常见，模型无从据此区分角色。",
+      "对；前缀（query:/passage:）或指令显式告诉同一个编码器当前在编 query 还是 doc，一套权重两用。",
+      "BM25 是稀疏检索分，和统一编码器区分 query/doc 角色毫无关系。"
+    ],
+    "optionExplanations_en": [
+      "A unified encoder is precisely one weight set for both; two separate weight sets would revert to DPR's dual tower.",
+      "Length is not a reliable signal — short docs and long queries are common — so the model can't distinguish roles by it.",
+      "Correct — a prefix (query:/passage:) or instruction explicitly tells the shared encoder whether it's embedding a query or a doc.",
+      "BM25 is a sparse retrieval score, unrelated to how a unified encoder distinguishes query/doc roles."
+    ],
+    "termDefinitions": [
+      {
+        "term": "unified encoder / 统一编码器",
+        "meaning": "一套权重同时编码 query 和 doc（E5、BGE），靠前缀/指令区分角色。",
+        "meaningEn": "A unified encoder shares one weight set to embed both query and doc (E5, BGE), distinguishing roles by prefix/instruction."
+      },
+      {
+        "term": "prefix / 前缀",
+        "meaning": "E5 在输入前加 query: 或 passage: 标明文本角色。",
+        "meaningEn": "A prefix is E5's query: or passage: marker prepended to indicate the text's role."
+      },
+      {
+        "term": "RetroMAE",
+        "fullName": "Retrieval-oriented Masked Auto-Encoder",
+        "meaning": "面向检索的掩码自编码预训练，BGE 用它打底。",
+        "meaningEn": "RetroMAE (Retrieval-oriented Masked Auto-Encoder) is retrieval-focused masked autoencoding pretraining that BGE builds on."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-028",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "cross-encoder-recall",
+    "q": "补全 cross-encoder 的机制和成本：",
+    "q_en": "Fill in the cross-encoder's mechanism and cost.",
+    "text": "cross-encoder 把 query 和 doc 拼成 {{[CLS]}} query {{[SEP]}} doc 一条序列过 transformer，让每个 query token attend 每个 doc token；成本是每对一次前向传播即 {{O(N)}}，所以只精排 20–50 篇。",
+    "text_en": "A cross-encoder concatenates into {{[CLS]}} query {{[SEP]}} doc through one transformer so every query token attends every doc token; cost is one forward pass per pair, i.e. {{O(N)}}, so re-rank only 20–50.",
+    "why": "cross-encoder 的两个记忆点：拼 [CLS] query [SEP] doc 做全 token 交互（所以准）；每对一次前向传播 O(N)（所以慢、只精排 20–50 篇）。",
+    "why_en": "A cross-encoder does full token interaction over [CLS] query [SEP] doc for accuracy but costs O(N) per pair, so you re-rank only 20–50 candidates.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cross-encoder"
+    ],
+    "termDefinitions": [
+      {
+        "term": "CLS",
+        "fullName": "Classification token",
+        "meaning": "分类符：序列开头的特殊 token，其输出汇总整条序列用于打分。",
+        "meaningEn": "CLS (Classification token) is a special token at the sequence start whose output summarizes the sequence for scoring."
+      },
+      {
+        "term": "SEP",
+        "fullName": "Separator token",
+        "meaning": "分隔符：分隔 query 和 doc 两段。",
+        "meaningEn": "SEP (Separator token) separates the query and doc segments."
+      },
+      {
+        "term": "O(N) / 线性复杂度",
+        "meaning": "成本随候选数线性增长，每对一次前向传播。",
+        "meaningEn": "O(N) means cost grows linearly with candidate count, one forward pass per pair."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-dim",
+    "scenario": "语料 2000 万篇要进 ANN 索引，内存吃紧；你在 768 维（DPR）和 1024 维（E5/BGE）之间选。",
+    "scenario_en": "20M docs go into an ANN index with tight memory; you choose between 768-dim (DPR) and 1024-dim (E5/BGE).",
+    "q": "内存吃紧时，768 维 vs 1024 维怎么权衡？",
+    "q_en": "With tight memory, how do you weigh 768-dim versus 1024-dim?",
+    "why": "维度直接乘进索引内存和相似度计算：2000 万×1024×4B≈82GB，768 维则≈61GB，省约 25%，query 相似度也算得更快。内存/延迟吃紧且 768 维精度够用时选低维；当 1024 维带来的检索精度提升值回那点内存时选高维。",
+    "why_en": "Dimension multiplies into index memory and similarity cost: 20M×1024×4B≈82GB vs ~61GB at 768, ~25% saved, so pick low-dim when memory is tight and 768 is precise enough.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "embedding-dim"
+    ],
+    "tradeoff": "768 维（省约 25% 索引内存、算得快，精度可能略低）vs 1024 维（精度更高，内存/延迟更贵）",
+    "whenOtherWins": "当 1024 维（E5/BGE）带来的召回精度提升对业务关键、内存也扛得住时，高维更值——精度收益盖过 25% 的内存/延迟成本。",
+    "options": [
+      "内存吃紧且 768 维精度够用时选 768 维，省约 25% 索引内存、相似度也算得更快",
+      "无论内存怎样都选 1024 维，维度越高一定越好，没有成本",
+      "维度和索引内存无关，随便选，只影响训练时间",
+      "选维度只看模型名字，DPR 就一定比 E5 差"
+    ],
+    "options_en": [
+      "When memory is tight and 768 is precise enough, pick 768-dim, saving ~25% index memory and computing similarity faster.",
+      "Always pick 1024-dim regardless of memory; higher is always better and costs nothing.",
+      "Dimension is unrelated to index memory, pick any, it only affects training time.",
+      "Choose dimension by model name alone; DPR must be worse than E5."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；768 vs 1024 直接乘进内存（省约 25%）和相似度计算量，内存紧且精度够用时低维更划算。",
+      "1024 维要多约 25% 内存、算得更慢，「没有成本」忽略了 ANN 索引和延迟的真实开销。",
+      "维度是向量长度，直接决定索引内存（向量数×维度×4B），说「无关」与算式矛盾。",
+      "维度选型看内存/精度权衡，不是看模型名；DPR 低维省内存、微调省，各有胜场。"
+    ],
+    "optionExplanations_en": [
+      "Correct — 768 vs 1024 multiplies into memory (~25% saved) and similarity cost, so low-dim wins when memory is tight and precision suffices.",
+      "1024-dim needs ~25% more memory and computes slower; 'costs nothing' ignores the real ANN index and latency overhead.",
+      "Dimension is the vector length and directly sets index memory (count×dim×4B), so 'unrelated' contradicts the formula.",
+      "Dimension choice is a memory/precision tradeoff, not a name game; DPR's low dim saves memory and fine-tuning, with its own wins."
+    ],
+    "termDefinitions": [
+      {
+        "term": "embedding dimension / 嵌入维度",
+        "meaning": "向量长度，768 或 1024，直接乘进索引内存与相似度计算量。",
+        "meaningEn": "The embedding dimension is the vector length, 768 or 1024, multiplying into index memory and similarity cost."
+      },
+      {
+        "term": "ANN index memory / 索引内存",
+        "meaning": "≈ 向量数 × 维度 × 4 字节（float32）。",
+        "meaningEn": "ANN index memory is roughly vector count times dimension times 4 bytes (float32)."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-030",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "bm25-strengths",
+    "scenario": "hybrid 里加 BM25 是为了补 dense 的短板：哪些 query 靠 BM25 才召得回。",
+    "scenario_en": "Adding BM25 in hybrid covers dense's blind spot: which queries only BM25 can recall.",
+    "q": "以下哪些是 dense 容易漏、要靠 BM25 精确匹配才召回的？(多选)",
+    "q_en": "Which of these does dense tend to miss, needing BM25's exact match to recall? (multiple)",
+    "why": "dense 把稀有 token 抹进模糊语义空间，精确匹配就丢了——SKU、错误码、生僻专名这类「字面必须命中」的 query 靠 BM25 才稳。而同义改写的语义查询恰恰是 dense 的主场，不需要 BM25 补。",
+    "why_en": "Dense blurs rare tokens into fuzzy semantics and loses exact matches, so SKUs, error codes, and rare proper nouns need BM25, while paraphrased semantic queries are dense's home turf.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hybrid"
+    ],
+    "options": [
+      "稀有商品编号（SKU）",
+      "错误码（如 ERR_0x8007）",
+      "生僻专有名词",
+      "同义改写的语义相近查询"
+    ],
+    "options_en": [
+      "Rare product codes (SKUs).",
+      "Error codes (e.g. ERR_0x8007).",
+      "Uncommon proper nouns.",
+      "Paraphrased, semantically similar queries."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；稀有 SKU 在语义空间没有稳定表示，只有 BM25 的精确词匹配能稳召回。",
+      "对；错误码是字面 token，dense 会泛化跑偏，BM25 精确命中才可靠。",
+      "对；生僻专名训练里少见，dense 表示弱，BM25 按字面匹配更稳。",
+      "错；同义改写靠语义相似，正是 dense 的强项，不需要 BM25 来补。"
+    ],
+    "optionExplanations_en": [
+      "Correct — rare SKUs have no stable semantic representation, so only BM25's exact-term match recalls them reliably.",
+      "Correct — error codes are literal tokens where dense over-generalizes, so BM25's exact hit is reliable.",
+      "Correct — rare proper nouns are seldom seen in training and dense represents them weakly, so BM25's literal match is steadier.",
+      "Wrong — paraphrases rely on semantic similarity, exactly dense's strength, needing no BM25 backup."
+    ],
+    "termDefinitions": [
+      {
+        "term": "BM25",
+        "fullName": "Best Matching 25",
+        "meaning": "稀疏检索函数，按关键词词频匹配，对精确 token 命中强。",
+        "meaningEn": "BM25 (Best Matching 25) is a sparse retrieval function scoring keyword frequency, strong at exact-token hits."
+      },
+      {
+        "term": "SKU",
+        "fullName": "Stock Keeping Unit",
+        "meaning": "库存单位编号，每个具体商品的唯一编码。",
+        "meaningEn": "A SKU (Stock Keeping Unit) is the unique code for a specific product."
+      },
+      {
+        "term": "dense retrieval / 稠密检索",
+        "meaning": "靠向量语义相似度召回，擅长同义/改写，弱于稀有精确 token。",
+        "meaningEn": "Dense retrieval recalls by vector semantic similarity, strong on paraphrase but weak on rare exact tokens."
+      }
+    ]
+  },
+  {
+    "id": "llm-066-semantic-search-model-architecture-031",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cross-encoder-scale",
+    "scenario": "有人提议直接用 cross-encoder 给全库百万文档打分，省掉 dual encoder 第一阶段。",
+    "scenario_en": "Someone proposes scoring all million docs directly with a cross-encoder, skipping the dual-encoder first stage.",
+    "q": "为什么不能直接用 cross-encoder 做第一阶段全库检索？",
+    "q_en": "Why can't you use a cross-encoder for first-stage full-corpus retrieval?",
+    "why": "cross-encoder 必须把 query 和每篇 doc 拼在一起过一次 transformer，无法离线预算 doc 表示、建不了 ANN 索引，是 O(N) 全库前向传播——百万文档要几十分钟，彻底超时。所以它只能待在第二阶段精排少量候选。",
+    "why_en": "A cross-encoder must encode query with each doc together, so it can't precompute doc vectors or build an ANN index — full-corpus scoring is O(N) forward passes, minutes for millions of docs.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cross-encoder"
+    ],
+    "options": [
+      "完全可以，cross-encoder 精度高，全库直接精排最好",
+      "不行，因为 cross-encoder 精度太低，召回不全",
+      "cross-encoder 要 query+doc 拼一起算、无法离线预算或建 ANN，全库 O(N) 前向传播直接超时",
+      "不行，因为 cross-encoder 不支持 GPU，只能跑 CPU"
+    ],
+    "options_en": [
+      "Totally fine — the cross-encoder is accurate, so scoring the whole corpus directly is best.",
+      "No, because the cross-encoder's precision is too low and recall is incomplete.",
+      "It must encode query+doc together, can't precompute or build ANN, so full-corpus O(N) forward passes time out.",
+      "No, because the cross-encoder doesn't support GPUs and runs only on CPU."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "全库 O(N) 前向传播要几十分钟，精度再高也先超时，正是两阶段要避免的。",
+      "cross-encoder 精度恰恰最高，问题不在精度，在无法规模化到全库。",
+      "对；query 必须和每篇 doc 同序列编码，doc 表示不能离线复用、建不了 ANN，只能全库逐对算，超时。",
+      "cross-encoder 照样跑 GPU，瓶颈是 O(N) 全库前向传播的算法成本，不是硬件支持。"
+    ],
+    "optionExplanations_en": [
+      "Full-corpus O(N) forward passes take minutes, so even top precision times out first — exactly what two stages avoid.",
+      "The cross-encoder's precision is actually highest; the problem is not precision but inability to scale to the full corpus.",
+      "Correct — the query must be encoded in-sequence with each doc, so doc vectors can't be reused offline or indexed by ANN, forcing pairwise full-corpus scoring that times out.",
+      "A cross-encoder runs fine on GPUs; the bottleneck is the O(N) full-corpus forward-pass cost, not hardware support."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "query+doc 同序列全交互，无法离线预算 doc 向量，只能精排少量候选。",
+        "meaningEn": "A cross-encoder fully interacts query+doc in one sequence, can't precompute doc vectors, and only re-ranks a few candidates."
+      },
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻，需要 doc 向量可离线预存才能建，cross-encoder 满足不了。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) needs precomputable doc vectors to build an index, which a cross-encoder can't provide."
+      },
+      {
+        "term": "O(N) / 线性复杂度",
+        "meaning": "成本随文档数线性增长，全库精排即百万次前向传播。",
+        "meaningEn": "O(N) means cost grows linearly with doc count, so full-corpus re-ranking is millions of forward passes."
+      }
+    ]
+  }
+]

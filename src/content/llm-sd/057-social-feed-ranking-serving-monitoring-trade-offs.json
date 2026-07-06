@@ -1,0 +1,1227 @@
+[
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-001",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "题目要求:峰值流量下,feed 排序服务要在 200ms 内返回一个个性化、够新的 feed。这是给定的产品 SLO。",
+    "scenario_en": "The prompt: at peak traffic, the feed ranking service must return a personalized, fresh feed within 200ms — a given product SLO.",
+    "q": "这个 200ms 是怎么来的,它约束了哪条设计路径?",
+    "q_en": "Where does the 200ms come from, and which design path does it constrain?",
+    "why": "200ms 是产品/体验给定的 SLO,不是公式推导出来的。它是总墙钟预算,要拆给检索/打分/重排三段,逼出两段式轻重打分和 fan-out 预物化,而不能在读路径上跑一个大模型算全量。",
+    "why_en": "The 200ms is a given SLO, not a derived number, and it is the total wall-clock budget split across retrieval/scoring/re-ranking, forcing a two-stage light-then-heavy pipeline.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "latency"
+    ],
+    "options": [
+      "200ms 是由模型 FLOPs 除以 GPU 算力精确算出的物理下限",
+      "200ms 是给定的产品 SLO,作为总预算拆给检索/打分/重排,逼出两段式轻重打分",
+      "200ms 是网络单程物理延迟,和排序计算无关",
+      "200ms 只是监控阈值,超了报警但不影响架构选择"
+    ],
+    "options_en": [
+      "200ms is the physical lower bound computed by dividing model FLOPs by GPU throughput.",
+      "200ms is a given product SLO, a total budget split across retrieval/scoring/re-ranking, forcing a two-stage light-then-heavy pipeline.",
+      "200ms is the one-way network physical latency, unrelated to ranking compute.",
+      "200ms is just a monitoring threshold that pages on breach but does not shape the architecture."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "它不是算力推导的下限,而是产品对体验设的目标;架构要在这个目标下反推怎么排布计算。",
+      "对;200ms 是 SLO,拆成检索~30-50ms、首轮打分~50ms、重排~100ms,这个预算直接决定了必须分段、先轻后重。",
+      "网络单程只占其中一部分,200ms 是端到端墙钟预算,包含检索、打分、重排全部计算。",
+      "它既是 SLA 阈值,更是架构约束——正是因为要卡 200ms,才不得不用两段式和预物化。"
+    ],
+    "optionExplanations_en": [
+      "It is not a compute-derived bound but a product experience target; the architecture must lay out compute to fit it.",
+      "Correct — 200ms is an SLO split into retrieval ~30-50ms, first-pass ~50ms, re-rank ~100ms, which forces staging light-then-heavy.",
+      "One-way network is only a slice; 200ms is the end-to-end wall-clock budget covering all retrieval, scoring, and re-ranking.",
+      "It is both an SLA threshold and an architectural constraint — the 200ms cap is exactly why two-stage and pre-materialization are needed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SLO",
+        "fullName": "Service Level Objective",
+        "meaning": "服务级目标,如「200ms 内返回」,是产品给定的目标而非计算推导值。",
+        "meaningEn": "An SLO (Service Level Objective) is a target like 'respond within 200ms', given by the product rather than derived by computation."
+      },
+      {
+        "term": "ranking latency budget / 排序延迟预算",
+        "meaning": "每次请求的总墙钟时间(约 150-200ms),要拆分给检索、打分、重排各阶段。",
+        "meaningEn": "The ranking latency budget is total wall-clock per request (~150-200ms), split across retrieval, scoring, and re-ranking."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-002",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "fanout-strategy",
+    "scenario": "feed 系统要决定:是在发帖时把帖子推进每个粉丝的时间线缓存,还是在读时才拉取合并被关注者的帖子。",
+    "scenario_en": "The feed system must decide: push a post into every follower's timeline cache at publish, or fetch and merge followed accounts' posts at read time.",
+    "q": "fan-out-on-write 和 fan-out-on-read 在读写代价上怎么权衡?",
+    "q_en": "How do fan-out-on-write and fan-out-on-read trade off read vs write cost?",
+    "why": "fan-out-on-write 发帖时就推进每个粉丝的预物化时间线,读很快,但写随粉丝数放大;fan-out-on-read 读时才拉取合并,避免了高粉账号的写放大,但读更重。权衡轴就是把成本放在写侧还是读侧。",
+    "why_en": "Fan-out-on-write pre-materializes into each follower's timeline (fast reads, writes scale with followers) while fan-out-on-read merges at read time (no write amplification but heavier reads).",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "fan-out"
+    ],
+    "tradeoff": "fan-out-on-write(读快、写随粉丝数放大) vs fan-out-on-read(避免写放大、读更重)",
+    "table": {
+      "headers": [
+        "策略",
+        "读代价",
+        "写代价",
+        "适合谁"
+      ],
+      "rows": [
+        [
+          "fan-out-on-write",
+          "低(预物化)",
+          "高(随粉丝数)",
+          "普通用户"
+        ],
+        [
+          "fan-out-on-read",
+          "高(读时合并)",
+          "低",
+          "高粉账号"
+        ]
+      ]
+    },
+    "options": [
+      "fan-out-on-write 读时才合并所以读慢,fan-out-on-read 发帖就推所以写重",
+      "两者读写代价相同,区别只在用不用缓存",
+      "fan-out-on-write 发帖推进每个粉丝时间线(读快、写随粉丝放大);fan-out-on-read 读时合并(避免写放大、读更重)",
+      "fan-out-on-write 只适合高粉账号,fan-out-on-read 只适合普通用户"
+    ],
+    "options_en": [
+      "Fan-out-on-write merges at read time so reads are slow; fan-out-on-read pushes at publish so writes are heavy.",
+      "Both have identical read/write cost; the only difference is whether a cache is used.",
+      "Fan-out-on-write pushes into each follower's timeline at publish (fast reads, writes scale with followers); fan-out-on-read merges at read time (no write amplification, heavier reads).",
+      "Fan-out-on-write suits only high-follower accounts and fan-out-on-read only normal users."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "定义搞反了:on-write 是发帖时推、on-read 是读时合并。",
+      "两者读写代价恰恰相反,不是仅缓存有无的区别。",
+      "对;on-write 把成本前置到写(粉丝越多写越多)、读极快;on-read 把成本放到读、避免高粉写放大,这就是权衡轴。",
+      "反了:on-write 适合普通用户(粉丝少写放大可控),on-read 适合高粉账号(避免百万级写)。"
+    ],
+    "optionExplanations_en": [
+      "Definitions swapped: on-write pushes at publish, on-read merges at read.",
+      "Their read/write costs are opposite, not merely a cache-presence difference.",
+      "Correct — on-write front-loads cost to writes (more followers, more writes) with instant reads; on-read shifts cost to reads and avoids high-follower write amplification.",
+      "Reversed — on-write suits normal users (few followers, bounded amplification); on-read suits high-follower accounts (avoiding millions of writes)."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fan-out-on-write",
+        "meaning": "发帖时把帖子 ID 推进每个粉丝的预物化时间线缓存,读时直接取,读快写重。",
+        "meaningEn": "Fan-out-on-write pushes a post into every follower's pre-materialized timeline at publish, giving fast reads and heavy writes."
+      },
+      {
+        "term": "fan-out-on-read",
+        "meaning": "读时才拉取并合并所有被关注者的帖子,避免写放大,但读更重。",
+        "meaningEn": "Fan-out-on-read fetches and merges followed accounts' posts at read time, avoiding write amplification but making reads heavier."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hybrid-fanout",
+    "scenario": "一个名人有几百万粉丝。若发一条帖就 fan-out-on-write,要往几百万个粉丝时间线写入,峰值时写队列会被打爆。",
+    "scenario_en": "A celebrity has millions of followers. Fan-out-on-write on one post means millions of writes into follower timelines, blowing up the write queue at peak.",
+    "q": "高粉账号该怎么处理,普通用户又怎么处理?",
+    "q_en": "How should high-follower accounts be handled, and how about normal users?",
+    "why": "按粉丝数分流:普通用户走 fan-out-on-write(写放大可控、读极快);高粉账号不推,而是放进一个高粉帖索引,读时再合并进来。这样避开百万级写放大,又保住普通用户的快读。",
+    "why_en": "Split by follower count — normal users use fan-out-on-write, while high-follower accounts go into a high-follower post index merged at read time to avoid millions of writes.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "fan-out"
+    ],
+    "tradeoff": "高粉账号 fan-out-on-write(百万级写放大、不可接受) vs 高粉帖索引读时合并(避写放大、读时多一次合并)",
+    "whenOtherWins": "如果一个账号粉丝不多、发帖也不频繁,直接 fan-out-on-write 更简单——预物化的读快收益大于那点写成本,不必进高粉索引。",
+    "diagram": "flowchart TD\n  P[\"发帖\"] --> C{\"粉丝数?\"}\n  C -->|普通用户| W[\"fan-out-on-write<br/>推进每个粉丝时间线\"]\n  C -->|高粉账号| I[\"高粉帖索引<br/>读时合并\"]",
+    "options": [
+      "所有账号统一 fan-out-on-write,靠加机器扛住名人的百万级写放大",
+      "普通用户 fan-out-on-write;高粉账号放进高粉帖索引、读时合并,避开百万级写放大",
+      "所有账号统一 fan-out-on-read,读时全量合并,牺牲读延迟换写简单",
+      "高粉账号 fan-out-on-write、普通用户 fan-out-on-read,按活跃度而非粉丝数分"
+    ],
+    "options_en": [
+      "All accounts use fan-out-on-write, absorbing a celebrity's millions of writes by adding machines.",
+      "Normal users use fan-out-on-write; high-follower accounts go into a high-follower post index merged at read time, avoiding millions of writes.",
+      "All accounts use fan-out-on-read, merging everything at read time, trading read latency for write simplicity.",
+      "High-follower accounts use fan-out-on-write and normal users fan-out-on-read, split by activity not follower count."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "名人一条帖百万级写,加机器也顶不住峰值写放大,成本和尾延迟都失控。",
+      "对;混合方案让普通用户享受预物化快读,高粉账号走索引读时合并,精准避开写放大。",
+      "全 on-read 会让每次读都合并所有关注者、拖垮读延迟,普通用户没必要付这代价。",
+      "分流依据是粉丝数(写放大来源)不是活跃度,而且方向也反了。"
+    ],
+    "optionExplanations_en": [
+      "A celebrity post is millions of writes; adding machines cannot survive peak write amplification, and cost and tail latency spiral.",
+      "Correct — the hybrid gives normal users pre-materialized fast reads while high-follower accounts merge from an index at read time, precisely dodging amplification.",
+      "All-on-read merges every followed account on each read, tanking read latency; normal users need not pay that.",
+      "The split is by follower count (the amplification source) not activity, and the direction is also reversed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "write amplification / 写放大",
+        "meaning": "一次发帖引发多次写入,fan-out-on-write 下写入数等于粉丝数,高粉账号可达百万级。",
+        "meaningEn": "Write amplification is one publish causing many writes; under fan-out-on-write the count equals follower count, reaching millions for celebrities."
+      },
+      {
+        "term": "high-follower post index / 高粉帖索引",
+        "meaning": "存放高粉账号帖子的索引,读时再合并进粉丝 feed,避免发帖时的百万级写。",
+        "meaningEn": "A high-follower post index stores celebrity posts to merge into feeds at read time, avoiding millions of writes at publish."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-004",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "serving-pipeline",
+    "scenario": "在 200ms 预算内,feed 服务要把候选从几百个收敛到最终排序好的一屏。",
+    "scenario_en": "Within the 200ms budget, the feed service must narrow candidates from a few hundred to a final ranked screen.",
+    "q": "把 200ms 内的三段式服务流程按执行顺序排列:",
+    "q_en": "Order the three-stage serving pipeline that runs within 200ms:",
+    "steps": [
+      "候选检索(~30-50ms):读预物化时间线缓存 + 拉高粉帖索引,合并成几百个候选",
+      "轻量首轮打分(~50ms):蒸馏模型/逻辑回归用小特征集,裁到 top-K(50-100)",
+      "完整模型重排(~100ms):生产多任务 NN 用全特征含实时互动,产出最终列表"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2
+    ],
+    "why": "先检索出几百个候选,再用便宜模型粗筛到 top-K(50-100),最后只对这几十个跑昂贵的多任务 NN 重排。先轻后重是为了把 200ms 里最贵的那 100ms 只花在最有希望的少数候选上。",
+    "why_en": "Retrieve a few hundred candidates, cheaply trim to top-K (50-100), then run the expensive multi-task NN only on those, spending the costly 100ms only on the most promising few.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "pipeline"
+    ],
+    "diagram": "flowchart LR\n  R[\"检索 ~30-50ms<br/>几百候选\"] --> L[\"首轮打分 ~50ms<br/>裁到 top-K 50-100\"]\n  L --> F[\"重排 ~100ms<br/>多任务 NN 全特征\"]",
+    "termDefinitions": [
+      {
+        "term": "top-K",
+        "meaning": "首轮粗筛后保留的前 K 个候选(这里 50-100),只有它们进入昂贵的重排。",
+        "meaningEn": "Top-K is the K best candidates kept after coarse first-pass scoring (here 50-100), the only ones entering expensive re-ranking."
+      },
+      {
+        "term": "multi-task NN / 多任务神经网络",
+        "meaning": "同时预测点击、评论、分享等多个目标的神经网络,用于最终重排。",
+        "meaningEn": "A multi-task neural network jointly predicts several targets (click, comment, share) and does the final re-ranking."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "first-pass-scoring",
+    "scenario": "三段式里,首轮打分要在约 50ms 内把几百个候选裁成 top-K(50-100),再交给昂贵的重排。",
+    "scenario_en": "In the pipeline, first-pass scoring must trim a few hundred candidates to top-K (50-100) in ~50ms before the expensive re-rank.",
+    "q": "首轮打分该用什么模型和特征,为什么不用完整的多任务 NN?",
+    "q_en": "What model and features should first-pass scoring use, and why not the full multi-task NN?",
+    "why": "首轮用蒸馏小模型或逻辑回归,只吃少量便宜特征(帖龄、作者亲密度、内容类型),因为要在 50ms 内给几百个候选打分。完整多任务 NN 太贵,只留给已被裁到 50-100 的候选跑,把算力花在刀刃上。",
+    "why_en": "Use a distilled model or logistic regression on a small cheap feature set (post age, author affinity, content type), because scoring hundreds in 50ms rules out the expensive full NN.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "pipeline"
+    ],
+    "tradeoff": "首轮轻量模型(快、能扫几百候选、精度略低) vs 首轮就上完整 NN(精度高但几百候选跑不完 50ms)",
+    "whenOtherWins": "如果候选池本来就很小(几十个),没必要分两段,直接用完整模型一次排完更简单也更准。",
+    "options": [
+      "直接用完整多任务 NN 打全部几百个候选,精度最高",
+      "用蒸馏小模型/逻辑回归 + 少量便宜特征快速裁到 top-K,把完整 NN 留给幸存者",
+      "随机采样一半候选丢掉,剩下的直接进重排,省掉首轮打分",
+      "用最大的 ensemble 模型首轮打分,追求一次到位不需要重排"
+    ],
+    "options_en": [
+      "Run the full multi-task NN over all few hundred candidates for maximum accuracy.",
+      "Use a distilled model / logistic regression on a small cheap feature set to trim to top-K, saving the full NN for survivors.",
+      "Randomly drop half the candidates and send the rest straight to re-ranking, skipping first-pass scoring.",
+      "Use the largest ensemble for first-pass scoring to get it right in one shot with no re-ranking."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "完整 NN 打几百个候选在 50ms 内跑不完,直接违反延迟预算。",
+      "对;轻量模型 + 便宜特征够做粗筛,把几百裁到 50-100,再让昂贵 NN 只跑幸存者,算力用在刀刃上。",
+      "随机丢弃会误杀好候选,粗筛的意义是按信号保留最有希望的,不是靠运气。",
+      "首轮上最大 ensemble 与低延迟目标相悖,ensemble 在 serving 时正是被延迟预算排除的。"
+    ],
+    "optionExplanations_en": [
+      "The full NN over hundreds cannot finish in 50ms, directly violating the latency budget.",
+      "Correct — a light model plus cheap features does coarse screening, trimming hundreds to 50-100, then the costly NN runs only on survivors.",
+      "Random dropping kills good candidates; screening keeps the most promising by signal, not luck.",
+      "A large ensemble first-pass contradicts low latency; ensembles are exactly what the budget rules out at serving time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "distilled model / 蒸馏模型",
+        "meaning": "用大模型(teacher)的知识训练出的小模型,推理便宜,适合首轮快速打分。",
+        "meaningEn": "A distilled model is a small model trained from a large teacher's knowledge, cheap to infer, ideal for fast first-pass scoring."
+      },
+      {
+        "term": "author affinity / 作者亲密度",
+        "meaning": "用户与某作者历史互动的紧密程度,是便宜且有区分度的首轮特征。",
+        "meaningEn": "Author affinity is how strongly a user has historically interacted with an author, a cheap and discriminative first-pass feature."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "near-real-time-rerank",
+    "scenario": "为了让 feed 够新,系统用一个异步重排 worker 监听实时互动流,而不是每次读都跑整条三段式流水线。",
+    "scenario_en": "For freshness, an async re-ranking worker listens to a real-time engagement stream instead of running the full pipeline on every read.",
+    "q": "近实时重排是怎么工作的,为什么不在每次读时重跑全流水线?",
+    "q_en": "How does near-real-time re-ranking work, and why not re-run the full pipeline on every read?",
+    "why": "异步 worker 订阅实时互动流,几秒内把新帖/新互动刷新进缓存的时间线,读请求直接取已刷新的结果。每次读都重跑三段式会烧掉算力且撑爆延迟预算,近实时刷新把更新和读解耦。",
+    "why_en": "An async worker subscribes to the engagement stream and refreshes cached timelines within seconds, so reads serve the refreshed result instead of re-running the whole pipeline each time.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "freshness"
+    ],
+    "options": [
+      "每次读都同步重跑三段式流水线,保证绝对最新,不用缓存",
+      "异步 worker 订阅实时互动流,几秒内刷新缓存时间线,读时直接取,更新与读解耦",
+      "定时每小时批量重排一次,读时永远取上小时的快照",
+      "让客户端自己在本地重排,服务端不做任何近实时更新"
+    ],
+    "options_en": [
+      "Synchronously re-run the full pipeline on every read for absolute freshness, using no cache.",
+      "An async worker subscribes to the engagement stream and refreshes the cached timeline within seconds, so reads serve it — decoupling update from read.",
+      "Batch re-rank once per hour, and reads always serve the previous hour's snapshot.",
+      "Have the client re-rank locally, with the server doing no near-real-time updates."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "每次读同步重跑会烧算力、撑爆 200ms 预算,峰值下根本扛不住 QPS。",
+      "对;异步 worker 在后台按互动流刷新缓存,读请求只做取用,既新鲜又不违反延迟预算。",
+      "每小时批量太慢,feed 会明显过时,达不到「够新」的要求。",
+      "客户端本地重排拿不到全量实时互动信号,也无法保证一致,近实时更新应在服务端。"
+    ],
+    "optionExplanations_en": [
+      "Synchronous re-run per read burns compute and blows the 200ms budget, failing at peak QPS.",
+      "Correct — an async worker refreshes the cache from the engagement stream in the background, and reads just serve it: fresh without breaking the budget.",
+      "Hourly batch is too slow; the feed goes visibly stale, failing the freshness requirement.",
+      "Client-side re-ranking lacks full real-time engagement signals and consistency; near-real-time updates belong on the server."
+    ],
+    "termDefinitions": [
+      {
+        "term": "near-real-time re-ranking / 近实时重排",
+        "meaning": "异步 worker 监听实时互动流,几秒内刷新缓存时间线,而非每次读重跑全流水线。",
+        "meaningEn": "Near-real-time re-ranking uses an async worker on the engagement stream to refresh cached timelines within seconds, not per-read."
+      },
+      {
+        "term": "engagement stream / 互动流",
+        "meaning": "承载点赞、评论、点击等实时互动事件的消息流,供重排 worker 订阅。",
+        "meaningEn": "The engagement stream is a message stream of real-time likes, comments, and clicks that the re-ranking worker subscribes to."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "queue-backlog-failure",
+    "scenario": "流量突增,fan-out-on-write 的分发队列开始积压:帖子已提交但堆在队列里没分发出去。所有服务的 p99 延迟、错误率看着都正常。",
+    "scenario_en": "Traffic spikes and the fan-out-on-write queue backs up: posts are submitted but sit undistributed. Every service's p99 latency and error rate look healthy.",
+    "q": "这个首要故障模式为什么危险,唯一可靠的发现手段是什么?",
+    "q_en": "Why is this primary failure mode dangerous, and what is the only reliable way to catch it?",
+    "why": "危险在于系统看着健康(延迟/错误率都正常),但用户看到的是过时 feed——新帖卡在队列里没推到时间线。唯一可靠的捕捉是监控队列深度:队列积压是这个「静默过时」的直接信号。",
+    "why_en": "It is dangerous because the system looks healthy (latency and errors normal) while users see stale feeds, and monitoring fan-out queue depth is the only reliable catch.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "diagram": "flowchart LR\n  P[\"发帖提交\"] --> Q[\"fan-out 队列<br/>积压\"]\n  Q -.卡住.-> T[\"粉丝时间线<br/>未更新\"]\n  T --> U[\"用户看到过时 feed\"]\n  Q --> D[\"队列深度监控<br/>唯一可靠信号\"]",
+    "options": [
+      "危险在延迟飙升,靠 p99 latency 报警就能发现",
+      "危险在系统看着健康、用户却见过时 feed,只有监控队列深度能可靠捕捉",
+      "危险在错误率上升,靠 5xx 计数就能发现",
+      "危险在缓存命中率下降,靠命中率监控就能发现"
+    ],
+    "options_en": [
+      "The danger is latency spiking, and p99 latency alerts catch it.",
+      "The danger is the system looks healthy while users see stale feeds, and only monitoring queue depth reliably catches it.",
+      "The danger is error rate rising, and 5xx counts catch it.",
+      "The danger is cache hit rate dropping, and hit-rate monitoring catches it."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "正因为延迟没飙升,p99 报警完全不会触发,这才是它隐蔽的原因。",
+      "对;积压不改变在线延迟/错误率,系统「看起来正常」,只有队列深度暴露新帖没被分发这个真相。",
+      "错误率也不升,请求都成功返回,只是返回的是旧内容,5xx 抓不到。",
+      "缓存照常命中(命中的是旧时间线),命中率监控看不出内容已过时。"
+    ],
+    "optionExplanations_en": [
+      "Precisely because latency does not spike, p99 alerts never fire — that is why it hides.",
+      "Correct — a backlog does not change online latency/errors, so the system 'looks fine'; only queue depth reveals undistributed posts.",
+      "Error rate does not rise either; requests succeed but return stale content, so 5xx misses it.",
+      "The cache still hits (on the stale timeline), so hit-rate monitoring cannot see the content is outdated."
+    ],
+    "termDefinitions": [
+      {
+        "term": "queue depth monitoring / 队列深度监控",
+        "meaning": "跟踪 fan-out 分发队列里积压的消息数,是捕捉「静默过时 feed」的唯一可靠信号。",
+        "meaningEn": "Queue depth monitoring tracks pending messages in the fan-out queue, the only reliable signal for silently stale feeds."
+      },
+      {
+        "term": "p99 latency",
+        "meaning": "99 分位延迟:99% 的请求比这个值快,反映尾部最慢那批用户的体验。",
+        "meaningEn": "p99 latency is the 99th-percentile response time — 99% of requests are faster — reflecting the slowest tail users' experience."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "queue-vs-model-bottleneck",
+    "scenario": "监控显示 fan-out 队列深度 >10K 积压、用户报告 feed 过时,但完整重排模型的 p99 延迟仍在 SLA 之内。",
+    "scenario_en": "Monitoring shows fan-out queue depth >10K and users report stale feeds, but the full re-ranker's p99 latency is still within SLA.",
+    "q": "该先动哪里?",
+    "q_en": "Where should you act first?",
+    "why": "瓶颈在 fan-out 不在模型:模型 p99 正常说明排序算得动,问题是新帖卡在分发队列没进时间线。该扩 fan-out worker、并对「过时 feed 率」告警,而不是去动没问题的排序模型。",
+    "why_en": "The bottleneck is fan-out, not the model — the re-ranker's p99 is fine, so scale up fan-out workers and alert on stale-feed rate rather than touching the healthy model.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "tradeoff": "扩 fan-out worker(治真瓶颈、消积压) vs 优化排序模型(模型没问题、白费力)",
+    "whenOtherWins": "如果是模型 p99 超过 200ms 而队列深度正常,那瓶颈才在模型侧,该降级到轻量打分器或缩小候选集。",
+    "options": [
+      "扩容重排模型的 GPU,因为 feed 过时一定是排序太慢",
+      "扩 fan-out worker 并对过时 feed 率告警,因为瓶颈在分发不在模型",
+      "回滚排序模型到上一版本,先止血再排查",
+      "提高缓存 TTL,让旧 feed 缓存更久以减压"
+    ],
+    "options_en": [
+      "Scale up the re-ranker's GPUs, since stale feeds must mean ranking is too slow.",
+      "Scale up fan-out workers and alert on stale-feed rate, because the bottleneck is distribution, not the model.",
+      "Roll back the ranking model to the previous version to stop the bleeding first.",
+      "Raise the cache TTL so stale feeds cache longer to relieve pressure."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "模型 p99 在 SLA 内说明排序不慢,扩 GPU 治不了积压的分发队列,是找错了地方。",
+      "对;队列 >10K + 模型 p99 正常,明确指向 fan-out 分发瓶颈,扩 worker 消积压并对过时率告警才对症。",
+      "回滚模型无济于事,模型本来就健康,过时源自队列积压。",
+      "调高 TTL 只会让用户看到更旧的内容,是掩盖症状不是治瓶颈。"
+    ],
+    "optionExplanations_en": [
+      "The model's p99 within SLA means ranking is not slow; scaling GPUs cannot clear a backed-up distribution queue — wrong target.",
+      "Correct — queue >10K with a healthy model p99 points squarely at the fan-out bottleneck, so scale workers and alert on stale rate.",
+      "Rolling back the model helps nothing; the model is healthy and staleness comes from the queue backlog.",
+      "Raising TTL just serves even older content, masking the symptom rather than fixing the bottleneck."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fan-out worker / 分发工作进程",
+        "meaning": "负责把新帖推进各粉丝时间线的后台进程,积压时可水平扩容来消化队列。",
+        "meaningEn": "A fan-out worker is a background process pushing new posts into follower timelines, scaled horizontally to drain a backlog."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "silent-degradation",
+    "scenario": "一个排序模型不是突然崩,而是 CTR 每天悄悄跌 0.3%,没有任何单一硬阈值被击穿。",
+    "scenario_en": "A ranking model does not crash; CTR quietly drops 0.3% per day with no single hard threshold ever breached.",
+    "q": "这种静默退化为什么难抓,该用什么监控?",
+    "q_en": "Why is this silent degradation hard to catch, and what monitoring catches it?",
+    "why": "静默退化每天只跌一点、不触发任何硬阈值,盯单点阈值的告警看不见。要监控预测分数分布的漂移:把每小时打分直方图和 24 小时基线比,能提前抓到重训回归或特征管线故障导致的分布偏移。",
+    "why_en": "Each day's tiny drop breaches no hard threshold, so threshold alerts miss it; monitor prediction score-distribution drift (hourly histogram vs 24h baseline) to catch it.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "靠 p99 延迟阈值,延迟没变就说明模型没退化",
+      "靠单一 CTR 硬阈值告警,跌破就报警",
+      "监控预测分数分布漂移:每小时直方图对比 24h 基线,抓分布偏移与重训回归",
+      "只看总请求量,量没跌就说明模型健康"
+    ],
+    "options_en": [
+      "Rely on p99 latency thresholds; if latency is unchanged the model has not degraded.",
+      "Rely on a single hard CTR threshold alert that fires on breach.",
+      "Monitor prediction score-distribution drift: hourly histogram vs a 24h baseline to catch distribution shift and retraining regressions.",
+      "Watch only total request volume; if volume holds the model is healthy."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "延迟和模型质量退化无关,静默退化不会体现在延迟上。",
+      "单一硬阈值正是抓不到的原因——每天 0.3% 永远不会一次性击穿阈值。",
+      "对;分布漂移监控看的是形状变化而非单点越界,能在硬阈值被击穿前发现重训回归或特征故障。",
+      "请求量不反映排序质量,量稳定时 CTR 照样能慢慢烂掉。"
+    ],
+    "optionExplanations_en": [
+      "Latency is unrelated to quality degradation; silent decay does not show up in latency.",
+      "A single hard threshold is exactly why it is missed — 0.3% a day never breaches at once.",
+      "Correct — distribution-drift monitoring watches shape change, not a point breach, catching retraining regressions before any threshold trips.",
+      "Request volume does not reflect ranking quality; CTR can rot slowly while volume stays flat."
+    ],
+    "termDefinitions": [
+      {
+        "term": "score distribution drift / 分数分布漂移",
+        "meaning": "模型输出分数的分布随时间偏离基线,常由重训回归或特征管线故障引起。",
+        "meaningEn": "Score distribution drift is the model's output-score distribution moving away from baseline over time, often from retraining regressions or feature-pipeline failures."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-010",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "monitoring-stack",
+    "scenario": "你要给 feed 排序搭一套三层监控,从系统健康一直看到业务生态。",
+    "scenario_en": "You are building a three-layer monitoring stack for feed ranking, from system health to business ecosystem.",
+    "q": "这三层监控各看什么?",
+    "q_en": "What does each of the three monitoring layers watch?",
+    "why": "三层:基建层看 p50/p99 延迟、队列深度、缓存命中、QPS;模型健康层看分数分布漂移、特征新鲜度、NaN/null 率;业务结果层看 unfollow、28 天留存、创作者激活率、创作者曝光 Gini(7 天滚动窗)。三层从机器一路看到生态。",
+    "why_en": "Infra watches latency/queue/cache/QPS, model health watches score drift/feature freshness/null rate, and business watches unfollow/retention/creator activation/Gini on 7-day windows.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "基建层看分数漂移、模型层看延迟、业务层看 CPU",
+      "基建看延迟/队列/缓存/QPS,模型健康看分数漂移/特征新鲜度/null 率,业务看 unfollow/留存/创作者激活",
+      "三层都只看 CTR,分别按分钟/小时/天聚合",
+      "基建看营收、模型看点击、业务看服务器数量"
+    ],
+    "options_en": [
+      "Infra watches score drift, model watches latency, business watches CPU.",
+      "Infra watches latency/queue/cache/QPS, model health watches score drift/feature freshness/null rate, business watches unfollow/retention/creator activation.",
+      "All three watch only CTR, aggregated per minute/hour/day respectively.",
+      "Infra watches revenue, model watches clicks, business watches server count."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "层与指标错配:分数漂移属模型层、延迟属基建层,写反了。",
+      "对;基建管系统健康、模型管预测健康、业务管生态健康,三层各司其职、互不替代。",
+      "只看 CTR 就退回单指标监控,看不到延迟、漂移、创作者生态等不同层的问题。",
+      "营收/服务器数不是这三层的核心量,层与指标完全错位。"
+    ],
+    "optionExplanations_en": [
+      "Layers and metrics mismatched: score drift belongs to the model layer, latency to infra — reversed.",
+      "Correct — infra covers system health, model covers prediction health, business covers ecosystem health; each is distinct and non-substitutable.",
+      "Watching only CTR reverts to single-metric monitoring, missing latency, drift, and creator-ecosystem issues across layers.",
+      "Revenue/server count are not these layers' core quantities; layers and metrics are entirely misaligned."
+    ],
+    "termDefinitions": [
+      {
+        "term": "feature freshness / 特征新鲜度",
+        "meaning": "特征值距上次更新有多久,过时特征会让模型基于旧信息打分而悄悄退化。",
+        "meaningEn": "Feature freshness is how recently a feature was updated; stale features make the model score on old information and degrade quietly."
+      },
+      {
+        "term": "creator activation rate / 创作者激活率",
+        "meaning": "创作者持续发帖/活跃的比例,反映内容供给侧生态健康。",
+        "meaningEn": "Creator activation rate is the share of creators who keep posting and stay active, reflecting supply-side ecosystem health."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-011",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "kl-auto-rollback",
+    "scenario": "线上给模型打分分布配了自动回滚:每小时算当前分数分布和 24 小时基线的差异,超阈值就自动回滚到上一版模型。",
+    "scenario_en": "Production auto-rollback compares the current score distribution to a 24h baseline hourly and rolls back if it diverges past a threshold.",
+    "q": "用什么量衡量这个分布差异,阈值大概设在哪、触发后怎么办?",
+    "q_en": "What measures this divergence, roughly what threshold, and what happens on trigger?",
+    "why": "用 KL 散度衡量当前分数分布相对 24h 基线的偏离,经验阈值约 >0.05 就自动回滚到上一版模型。这是自动止血:分布突变往往是重训回归或特征管线故障,先回滚再排查根因。",
+    "why_en": "Use KL divergence of the current score distribution vs the 24h baseline, and a rule-of-thumb >0.05 triggers auto-rollback to the previous model.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "用准确率衡量,低于 90% 就回滚",
+      "用 KL 散度衡量分布偏离,经验阈值约 >0.05 就自动回滚到上一版模型",
+      "用 p99 延迟衡量,超 200ms 就回滚模型",
+      "用 CTR 绝对值衡量,跌破历史均值就回滚"
+    ],
+    "options_en": [
+      "Measure with accuracy, roll back below 90%.",
+      "Measure distribution divergence with KL divergence; a rule-of-thumb >0.05 auto-rolls back to the previous model.",
+      "Measure with p99 latency, roll back the model above 200ms.",
+      "Measure with absolute CTR, roll back when it drops below the historical mean."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "准确率需要标签、有延迟,拿不到实时;这里要的是无标签就能算的分布偏离量。",
+      "对;KL 散度比较两个分布的距离,>0.05(经验阈值)触发自动回滚,先止血再查是重训回归还是特征故障。",
+      "延迟是基建层信号,和分数分布漂移是两回事,不该用来触发模型回滚。",
+      "CTR 绝对值受季节/流量波动干扰大,不如无标签的分布漂移灵敏且及时。"
+    ],
+    "optionExplanations_en": [
+      "Accuracy needs labels and is delayed, unavailable in real time; here you want a label-free distribution divergence.",
+      "Correct — KL divergence compares two distributions' distance, and >0.05 (rule of thumb) triggers auto-rollback to stop the bleeding before root-causing.",
+      "Latency is an infra signal, distinct from score-distribution drift, and should not trigger a model rollback.",
+      "Absolute CTR is noisy from seasonality/traffic; label-free distribution drift is more sensitive and timely."
+    ],
+    "termDefinitions": [
+      {
+        "term": "KL divergence",
+        "fullName": "Kullback-Leibler divergence",
+        "meaning": "衡量两个概率分布差异的量,这里比较当前分数分布和 24h 基线,>0.05 触发回滚。",
+        "meaningEn": "KL (Kullback-Leibler) divergence measures the gap between two distributions, here current scores vs a 24h baseline, with >0.05 triggering rollback."
+      },
+      {
+        "term": "auto-rollback / 自动回滚",
+        "meaning": "监控指标越界时自动切回上一个已知良好模型版本,先止血后排查。",
+        "meaningEn": "Auto-rollback automatically reverts to the last known-good model version when a monitored metric breaches, stopping harm before diagnosis."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-012",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "feature-null-rate",
+    "scenario": "监控发现某个 top-10 重要特征的 null 率突然涨到超过 2%。",
+    "scenario_en": "Monitoring shows a top-10 feature's null rate suddenly climbs past 2%.",
+    "q": "这通常意味着什么,该触发什么动作?",
+    "q_en": "What does this usually mean, and what action should it trigger?",
+    "why": "重要特征 null 率飙升几乎总是上游特征管线出故障(数据源挂了、ETL 失败),模型只能拿缺失值打分、质量悄悄崩。动作:阻断本次模型更新并告警数据管线团队,先堵住坏特征进模型,再修上游。",
+    "why_en": "A spiking null rate on a key feature almost always means an upstream feature-pipeline failure, so block the model update and alert the data-pipeline team.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "意味着用户变少了,应扩容服务器",
+      "意味着上游特征管线故障,应阻断本次模型更新并告警数据管线团队",
+      "意味着模型过拟合,应立即重训一版",
+      "意味着缓存过期,应清空缓存重建"
+    ],
+    "options_en": [
+      "It means fewer users; scale up servers.",
+      "It means an upstream feature-pipeline failure; block the model update and alert the data-pipeline team.",
+      "It means the model overfits; immediately retrain.",
+      "It means the cache expired; flush and rebuild the cache."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "null 率是特征质量信号,和用户数无关,扩容治不了缺失特征。",
+      "对;重要特征突然大量缺失指向上游数据源/ETL 故障,先阻断更新防坏特征进模型,再让数据团队修根因。",
+      "过拟合是训练问题,不会表现为线上特征 null 率突增,重训也不修上游故障。",
+      "缓存过期不会导致特征值为 null,清缓存无关这个数据管线故障。"
+    ],
+    "optionExplanations_en": [
+      "Null rate is a feature-quality signal unrelated to user count; scaling cannot fix missing features.",
+      "Correct — a key feature suddenly missing points to an upstream source/ETL failure; block the update to keep bad features out, then have data fix the root cause.",
+      "Overfitting is a training issue, not a live null-rate spike, and retraining does not fix an upstream failure.",
+      "Cache expiry does not null out feature values; flushing the cache is unrelated to this pipeline failure."
+    ],
+    "termDefinitions": [
+      {
+        "term": "null rate / 空值率",
+        "meaning": "某特征取值为缺失/空的样本比例,突增通常暴露上游特征管线故障。",
+        "meaningEn": "Null rate is the share of samples where a feature is missing; a spike usually exposes an upstream feature-pipeline failure."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-013",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "business-metrics",
+    "scenario": "监控的业务结果层要在 7 天滚动窗上看 feed 排序对用户和创作者生态的长期影响。",
+    "scenario_en": "The business-outcome layer watches feed ranking's long-term impact on the user and creator ecosystem on rolling 7-day windows.",
+    "q": "以下哪些属于业务结果层该监控的指标?(多选)",
+    "q_en": "Which belong to the business-outcome monitoring layer? (multiple)",
+    "why": "业务结果层看关系和生态:unfollow 率、28 天留存、创作者激活率、创作者曝光 Gini,都在 7 天滚动窗上跑。推理 QPS 是基建层的吞吐信号,不属于业务结果。",
+    "why_en": "The business layer watches relationships and ecosystem — unfollow rate, 28-day retention, creator activation, creator-impression Gini — on 7-day windows, while inference QPS is an infra metric.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "unfollow 率——用户与创作者的关系流失",
+      "28 天留存——长期用户健康",
+      "创作者激活率与创作者曝光 Gini——供给侧生态健康与曝光公平",
+      "推理 QPS——每秒模型打分次数"
+    ],
+    "options_en": [
+      "Unfollow rate — user-creator relationship loss.",
+      "28-day retention — long-term user health.",
+      "Creator activation rate and creator-impression Gini — supply-side ecosystem health and exposure fairness.",
+      "Inference QPS — model scores per second."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对;unfollow 是关系流失的直接业务信号,7 天窗上看趋势。",
+      "对;28 天留存是长期用户健康的黄金指标,属业务结果层。",
+      "对;创作者激活率和曝光 Gini 守住供给侧生态,是业务层不可少的创作者视角。",
+      "错;推理 QPS 是基建层吞吐信号,反映系统压力而非业务生态结果。"
+    ],
+    "optionExplanations_en": [
+      "Correct — unfollow is a direct relationship-loss business signal, trended on a 7-day window.",
+      "Correct — 28-day retention is the gold long-term user-health metric, a business-layer concern.",
+      "Correct — creator activation and impression Gini guard supply-side ecosystem, the essential creator view at the business layer.",
+      "Wrong — inference QPS is an infra throughput signal reflecting system load, not a business-ecosystem outcome."
+    ],
+    "termDefinitions": [
+      {
+        "term": "rolling 7-day window / 7 天滚动窗",
+        "meaning": "始终取最近 7 天数据聚合,平滑日间波动、看出中期趋势。",
+        "meaningEn": "A rolling 7-day window always aggregates the last 7 days to smooth daily noise and reveal medium-term trends."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "graceful-degradation",
+    "scenario": "完整重排模型突然大量报错/超时,再等它恢复,用户就刷不出 feed 了。你要立刻止血。",
+    "scenario_en": "The full re-ranker suddenly errors/times out en masse; waiting for recovery means users get no feed. You must stop the bleeding now.",
+    "q": "立即处置该怎么做?",
+    "q_en": "What is the immediate response?",
+    "why": "立即处置两手:一是自动回滚到上一个已知良好 checkpoint;二是若完整排序器不健康,优雅降级到轻量首轮打分器——质量降一档但 feed 不断流。核心是先保可用,再中期排根因。",
+    "why_en": "Auto-roll back to the last known-good checkpoint, and if the full ranker is unhealthy, gracefully degrade to the lightweight first-pass scorer so feeds keep flowing at lower quality.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "degradation"
+    ],
+    "tradeoff": "降级到轻量打分器(质量降一档但 feed 不断) vs 死等完整模型恢复(质量满但用户刷不出 feed)",
+    "whenOtherWins": "如果只是单次坏 checkpoint 上线、轻量打分器同样受影响,那直接回滚到上一版模型比降级更对症。",
+    "options": [
+      "停服等工程师查明根因后再恢复,避免降质",
+      "自动回滚到已知良好 checkpoint;完整排序器不健康时降级到轻量首轮打分器,保 feed 不断流",
+      "把所有请求排队等完整模型恢复,宁慢不降质",
+      "直接关掉排序,给所有人按时间倒序展示,永久用这个兜底"
+    ],
+    "options_en": [
+      "Take the service down until engineers root-cause, avoiding any quality drop.",
+      "Auto-roll back to a known-good checkpoint; if the full ranker is unhealthy, degrade to the lightweight first-pass scorer to keep feeds flowing.",
+      "Queue all requests waiting for the full model to recover — slow but no quality loss.",
+      "Turn off ranking and show everyone reverse-chronological permanently as the fallback."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "停服是最差止血,用户直接刷不出 feed,可用性归零。",
+      "对;先回滚到已知良好版本,不行就降级到轻量打分器,牺牲一档质量换 feed 持续可用,再中期查根因。",
+      "排队死等会让延迟爆炸、请求堆积,同样导致用户刷不出,不是止血。",
+      "永久退回时间倒序放弃了个性化,是长期损失;降级应是临时兜底而非永久方案。"
+    ],
+    "optionExplanations_en": [
+      "Taking the service down is the worst stop-gap; users get no feed and availability hits zero.",
+      "Correct — roll back to known-good, and if needed degrade to the light scorer, trading one quality tier for continuous availability, then root-cause.",
+      "Queuing and waiting explodes latency and piles up requests, also leaving users without a feed — not a fix.",
+      "Permanent reverse-chronological abandons personalization for a long-term loss; degradation should be a temporary fallback, not permanent."
+    ],
+    "termDefinitions": [
+      {
+        "term": "graceful degradation / 优雅降级",
+        "meaning": "主组件故障时退到更简单但仍可用的组件(如轻量打分器),牺牲质量保可用。",
+        "meaningEn": "Graceful degradation falls back to a simpler but still-working component (e.g. the light scorer) when the main one fails, trading quality for availability."
+      },
+      {
+        "term": "known-good checkpoint / 已知良好检查点",
+        "meaning": "此前验证过健康、可随时回滚到的模型版本快照。",
+        "meaningEn": "A known-good checkpoint is a previously verified-healthy model snapshot you can roll back to at any time."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-015",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "root-cause-categories",
+    "scenario": "止血之后进入中期处置,你要系统性地定位 feed 排序退化的根因。",
+    "scenario_en": "After stopping the bleeding, the medium-term step is to systematically root-cause the ranking degradation.",
+    "q": "退化的根因通常落在哪三类?",
+    "q_en": "Which three categories does the root cause usually fall into?",
+    "why": "三类根因:特征管线故障(特征过时/为 null)、数据分布漂移(如某类内容突然刷屏改变了输入分布)、模型回归(某次训练跑坏了但离线评估没抓到)。分门别类才能对症修复。",
+    "why_en": "Three categories — feature-pipeline failure (stale/null), data distribution shift (a viral event flooding one content type), and model regression (a bad training run passing offline eval).",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "degradation"
+    ],
+    "options": [
+      "特征管线故障、数据分布漂移、模型回归",
+      "服务器过热、网络抖动、磁盘写满",
+      "用户流失、营收下降、竞品上线",
+      "缓存击穿、DNS 解析失败、证书过期"
+    ],
+    "options_en": [
+      "Feature-pipeline failure, data distribution shift, model regression.",
+      "Server overheating, network jitter, disk full.",
+      "User churn, revenue decline, competitor launch.",
+      "Cache breakdown, DNS failure, certificate expiry."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对;这三类覆盖了模型退化的主要来源——输入坏(特征)、世界变(分布)、模型坏(回归),排查按此分流。",
+      "这些是通用基建故障,不针对排序模型质量退化,方向太泛。",
+      "这些是业务结果不是技术根因,回答不了「模型为什么变差」。",
+      "这些是网络/基建可用性故障,和排序模型的质量退化不是一类问题。"
+    ],
+    "optionExplanations_en": [
+      "Correct — these three cover the main sources of model degradation: bad inputs (features), a changed world (distribution), a broken model (regression).",
+      "These are generic infra failures, not specific to ranking-model quality degradation — too broad.",
+      "These are business outcomes, not technical root causes, and cannot explain why the model got worse.",
+      "These are network/infra availability failures, a different class from ranking-model quality degradation."
+    ],
+    "termDefinitions": [
+      {
+        "term": "data distribution shift / 数据分布漂移",
+        "meaning": "线上输入分布偏离训练分布(如病毒事件让某类内容暴增),使模型预测失准。",
+        "meaningEn": "Data distribution shift is live input drifting from training (e.g. a viral event flooding one content type), throwing off predictions."
+      },
+      {
+        "term": "model regression / 模型回归",
+        "meaning": "某次训练产出更差的模型却通过了离线评估,上线后才暴露质量下降。",
+        "meaningEn": "Model regression is a training run producing a worse model that passed offline eval, revealing degradation only in production."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-016",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "freshness-vs-latency",
+    "scenario": "你想让 feed 更新鲜,于是提高近实时重排的频率,但工程师担心成本和尾延迟。",
+    "scenario_en": "You want a fresher feed so you raise near-real-time re-ranking frequency, but engineers worry about cost and tail latency.",
+    "q": "新鲜度和延迟这个 dial 怎么权衡?",
+    "q_en": "How does the freshness-vs-latency dial trade off?",
+    "why": "这是个连续 dial 不是开关:异步重排越频繁,feed 越新,但消耗更多算力、推高尾延迟(p99)和队列深度。要看着队列深度和 p99 去调这个旋钮,而不是一味求新。",
+    "why_en": "It is a continuous dial — more async re-ranking means fresher feeds but more compute, higher tail latency, and deeper queues, tuned by watching queue depth and p99.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "trade-off"
+    ],
+    "tradeoff": "重排更频繁(更新鲜) vs 更省算力/更低尾延迟(但稍旧)——看队列深度和 p99 调 dial",
+    "options": [
+      "新鲜度和延迟无关,可以同时拉满两者",
+      "重排越频繁 feed 越新,但更耗算力、推高 p99 和队列深度,要看这两个指标调旋钮",
+      "只要加缓存就能同时做到最新鲜和最低延迟,没有权衡",
+      "延迟只由网络决定,重排频率再高也不影响延迟"
+    ],
+    "options_en": [
+      "Freshness and latency are unrelated; you can max both at once.",
+      "More re-ranking means fresher feeds but more compute, higher p99, and deeper queues, tuned by watching those two.",
+      "Just add cache and you get both maximum freshness and minimum latency, no trade-off.",
+      "Latency is set only by the network; re-ranking frequency does not affect it."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "两者恰恰互相牵制,越追新鲜越费算力、越推高尾延迟,不能同时拉满。",
+      "对;这是连续 dial:频率↑→新鲜↑但算力/p99/队列↑,靠监控队列深度和 p99 找平衡点。",
+      "加缓存缓解读延迟,但更频繁的重排本身增加计算和尾延迟,权衡依然存在。",
+      "重排频率直接决定计算量和队列压力,进而影响 p99,不只是网络决定延迟。"
+    ],
+    "optionExplanations_en": [
+      "They constrain each other — chasing freshness costs compute and raises tail latency, so you cannot max both.",
+      "Correct — a continuous dial: higher frequency lifts freshness but also compute/p99/queue, balanced by watching queue depth and p99.",
+      "Cache eases read latency, but more frequent re-ranking itself adds compute and tail latency, so the trade-off remains.",
+      "Re-ranking frequency drives compute and queue pressure and thus p99; latency is not set by the network alone."
+    ],
+    "termDefinitions": [
+      {
+        "term": "freshness vs latency dial",
+        "meaning": "新鲜度与延迟的连续权衡:重排越勤越新但越费算力、尾延迟越高,是可调旋钮非开关。",
+        "meaningEn": "The freshness-vs-latency dial is a continuous trade-off: more re-ranking means fresher but costlier and higher-tail-latency, a knob not a switch."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-017",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "complexity-vs-budget",
+    "scenario": "你想上一个更大的排序模型提升质量,但更大的模型推理更慢,可能击穿 200ms 的 p99 SLA。",
+    "scenario_en": "You want a bigger ranking model for quality, but bigger means slower inference that may breach the 200ms p99 SLA.",
+    "q": "模型复杂度和服务预算这个 dial 怎么管?",
+    "q_en": "How do you manage the model-complexity-vs-serving-budget dial?",
+    "why": "更大模型质量更好但更慢、易撑破 p99 SLA。用蒸馏(把大模型知识压进小模型)加两段式流水线来管这个 dial:让轻量首轮扫全量、只有 top-K 才跑重模型,在预算内拿到接近大模型的质量。",
+    "why_en": "Bigger models give quality but risk the p99 SLA, so distillation plus a two-stage pipeline manage the dial — light scorer over all, heavy model only on top-K.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "trade-off"
+    ],
+    "tradeoff": "更大模型(质量高但慢、险破 p99) vs 蒸馏+两段式(质量接近但守住延迟预算)",
+    "options": [
+      "无脑上最大模型,延迟问题靠加机器无限扩容解决",
+      "更大模型质量高但险破 p99,用蒸馏+两段式:轻量扫全量、重模型只跑 top-K",
+      "永远只用最小模型,牺牲质量换绝对低延迟,不做任何两段式",
+      "模型大小和延迟无关,选多大都不影响 p99"
+    ],
+    "options_en": [
+      "Always ship the biggest model and solve latency by scaling machines infinitely.",
+      "Bigger models raise quality but risk p99, so use distillation plus two-stage: light scorer over all, heavy model only on top-K.",
+      "Always use the smallest model, sacrificing quality for absolute low latency, with no two-stage.",
+      "Model size is unrelated to latency; any size leaves p99 unchanged."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "加机器降不了单请求的模型推理时间,p99 该破还是破,成本还爆炸。",
+      "对;蒸馏压缩计算、两段式让重模型只碰 top-K,既逼近大模型质量又守住 200ms 预算。",
+      "一味用最小模型放弃了质量上限,两段式本可在预算内兼顾质量,没必要走极端。",
+      "模型越大单次推理越慢,直接影响 p99,大小与延迟强相关。"
+    ],
+    "optionExplanations_en": [
+      "Adding machines does not cut per-request inference time; p99 still breaches and cost explodes.",
+      "Correct — distillation shrinks compute and two-stage runs the heavy model only on top-K, approaching big-model quality within the 200ms budget.",
+      "Always-smallest forfeits the quality ceiling; two-stage can balance both within budget, so the extreme is unnecessary.",
+      "Bigger models infer slower per request, directly affecting p99 — size strongly correlates with latency."
+    ],
+    "termDefinitions": [
+      {
+        "term": "serving budget / 服务预算",
+        "meaning": "单请求可用的延迟/算力上限,模型复杂度必须被它约束住。",
+        "meaningEn": "The serving budget is the per-request latency/compute ceiling that model complexity must fit within."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "global-vs-local-ranking",
+    "scenario": "有人提议从「按用户各自时间线打分(local)」切换到「跨全平台内容统一打分(global)」以提升相关性。",
+    "scenario_en": "A proposal switches from scoring within each user's timeline (local) to scoring across all platform content (global) for relevance.",
+    "q": "全局排序 vs 局部排序这个 dial,风险在哪?",
+    "q_en": "For the global-vs-local ranking dial, where is the risk?",
+    "why": "全局排序常能提升相关性,但会把曝光分布推离小众创作者、拉高创作者 Gini,伤害多样性和公平——这是个带公平色彩的内容分发决策,不是纯技术开关。用创作者激活率来监测这种伤害。",
+    "why_en": "Global ranking often lifts relevance but shifts impressions away from niche creators, raising Gini and harming fairness — a fairness-laden distribution decision, watched via creator activation rate.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "trade-off"
+    ],
+    "tradeoff": "全局排序(相关性↑但曝光离开小众、Gini↑) vs 局部排序(多样性稳但相关性略低)",
+    "whenOtherWins": "如果平台正苦于内容同质、用户抱怨看不到全站好内容,且创作者 Gini 有余量,那切向全局排序换相关性是值得的。",
+    "options": [
+      "全局排序纯提升相关性,没有任何副作用,应无条件切换",
+      "全局排序提升相关性但把曝光推离小众创作者、拉高 Gini,是带公平色彩的分发决策",
+      "全局和局部排序结果完全一样,切换没意义",
+      "全局排序只影响延迟不影响曝光分布,是纯性能问题"
+    ],
+    "options_en": [
+      "Global ranking purely improves relevance with no side effects, so switch unconditionally.",
+      "Global ranking lifts relevance but shifts impressions away from niche creators and raises Gini — a fairness-laden distribution decision.",
+      "Global and local ranking give identical results, so switching is pointless.",
+      "Global ranking affects only latency, not exposure distribution — a pure performance issue."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "「无副作用」正是陷阱:全局排序会系统性地把曝光从小众挪向热门,损害多样性和公平。",
+      "对;相关性和创作者公平在这里对立,切全局要盯着 Gini 和创作者激活率,把它当分发决策而非纯技术选择。",
+      "两者结果不同——全局在更大候选集上比较,分布会明显偏移。",
+      "全局排序的核心影响是曝光分布(公平),不只是延迟,把它当纯性能问题会漏掉公平风险。"
+    ],
+    "optionExplanations_en": [
+      "'No side effects' is the trap: global ranking systematically moves exposure from niche to popular, hurting diversity and fairness.",
+      "Correct — relevance and creator fairness conflict here, so switching to global demands watching Gini and creator activation as a distribution decision.",
+      "Results differ — global compares over a larger candidate set, visibly shifting the distribution.",
+      "Global ranking's core impact is exposure distribution (fairness), not just latency; treating it as pure performance misses the fairness risk."
+    ],
+    "termDefinitions": [
+      {
+        "term": "global vs local ranking",
+        "meaning": "local 只在用户自己时间线内打分;global 跨全平台内容统一打分,相关性更高但易偏移曝光分布。",
+        "meaningEn": "Local ranking scores within a user's own timeline; global scores across all platform content, lifting relevance but skewing exposure."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-019",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "joint-consumer-creator",
+    "scenario": "一个实验显示 +2% CTR,像个明显的赢;但同一实验里创作者激活率 -1.5%。",
+    "scenario_en": "An experiment shows +2% CTR (a clear win), but in the same experiment creator activation rate drops 1.5%.",
+    "q": "为什么必须同时看消费者侧和创作者侧指标?",
+    "q_en": "Why must you monitor consumer-side and creator-side metrics jointly?",
+    "why": "只看消费者侧 CTR 会把它当赢,但创作者激活 -1.5% 说明供给侧生态在受损:创作者流失最终会掏空内容池、反噬长期消费体验。必须双侧联看,才能识破这种「看着赢、实则伤生态」。",
+    "why_en": "CTR-only reads it as a win, but the -1.5% creator activation shows supply-side ecosystem harm that eventually hollows out content, so both sides must be watched together.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "monitoring"
+    ],
+    "options": [
+      "只看 CTR 就够,创作者指标是次要的,+2% 就该上",
+      "双侧联看:+2% CTR 但创作者激活 -1.5% 说明供给侧受损,长期会反噬消费体验",
+      "只看创作者侧就够,消费者 CTR 不重要",
+      "两侧指标独立无关,一个涨一个跌纯属巧合"
+    ],
+    "options_en": [
+      "CTR alone suffices; creator metrics are secondary, so +2% should ship.",
+      "Watch both sides: +2% CTR but -1.5% creator activation signals supply-side harm that later hurts consumer experience.",
+      "Creator-side alone suffices; consumer CTR does not matter.",
+      "The two sides are independent; one up and one down is pure coincidence."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "把创作者当次要正是踩坑：创作者流失会掏空内容供给，短期 CTR 赢换来长期崩。",
+      "对;消费和创作是同一生态的两端,创作者激活下降预示内容池萎缩,双侧联看才不被单侧假赢骗到。",
+      "只看创作者又走另一极端,消费者体验同样是平台命脉,不能偏废。",
+      "两者高度耦合:排序偏向刺激性内容常同时抬 CTR、压创作者激活,不是巧合。"
+    ],
+    "optionExplanations_en": [
+      "Treating creators as secondary is the trap: creator attrition hollows out content supply, trading a short-term CTR win for a long-term collapse.",
+      "Correct — consumers and creators are two ends of one ecosystem, and falling creator activation foretells a shrinking content pool, so joint monitoring avoids the one-sided false win.",
+      "Creator-only is the other extreme; consumer experience is equally the platform's lifeblood and cannot be ignored.",
+      "The two are tightly coupled: ranking toward sensational content often lifts CTR while suppressing creator activation — not coincidence."
+    ],
+    "termDefinitions": [
+      {
+        "term": "consumer-creator joint monitoring / 消费者-创作者联合监控",
+        "meaning": "同时看用户侧 engagement 和创作者侧健康,识破「看着赢实则伤生态」的实验。",
+        "meaningEn": "Consumer-creator joint monitoring watches user engagement and creator health together to catch experiments that look like wins but harm the ecosystem."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-020",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "staff-feedback-loop",
+    "scenario": "Staff+ 级答案不满足于「退化就回滚」,而是想让系统在创作者生态受损时自我纠偏。",
+    "scenario_en": "A Staff+ answer is not content with 'roll back on degradation' and wants the system to self-correct when the creator ecosystem is harmed.",
+    "q": "面对创作者激活率持续下滑,Staff+ 会提出什么超越回滚的机制?",
+    "q_en": "For a sustained drop in creator activation, what beyond-rollback mechanism does Staff+ propose?",
+    "why": "Staff+ 提反馈回路:创作者激活率持续下滑时,自动触发重新校准目标函数的权重(比如上调创作者公平/多样性项),而不只是回滚到旧模型。这把公平从事后监控变成了目标函数里的闭环控制。",
+    "why_en": "Propose a feedback loop where declining creator activation triggers re-calibrating the objective's weights (boosting fairness/diversity terms), not just rolling back to the old model.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "trade-off"
+    ],
+    "options": [
+      "永远只回滚到旧模型,不改目标函数",
+      "反馈回路:创作者激活持续下滑时自动重校目标函数权重(上调公平/多样性项),而非只回滚",
+      "直接关闭个性化排序,退回时间倒序",
+      "给所有创作者发放固定补贴,和排序目标解耦"
+    ],
+    "options_en": [
+      "Always just roll back to the old model without changing the objective.",
+      "A feedback loop: sustained declining creator activation auto-recalibrates the objective's weights (boosting fairness/diversity), not merely rollback.",
+      "Turn off personalized ranking and revert to reverse-chronological.",
+      "Give all creators a fixed subsidy, decoupled from the ranking objective."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "只回滚是把系统拉回旧点,治不了「目标函数本身权重失衡」这个根因,下次照样退化。",
+      "对;把创作者激活当反馈信号去闭环调目标权重,让系统在生态受损时自动上调公平项,这才是 Staff+ 的生命周期视角。",
+      "关个性化是因噎废食,牺牲了相关性,也没解决目标权重问题。",
+      "发补贴是产品/运营手段,不改排序目标,治标不治本,和模型闭环无关。"
+    ],
+    "optionExplanations_en": [
+      "Rollback only returns to an old point and cannot fix the imbalanced objective weights, so it degrades again next time.",
+      "Correct — using creator activation as feedback to close the loop on objective weights auto-boosts fairness when the ecosystem suffers — the Staff+ lifecycle view.",
+      "Killing personalization overreacts, sacrifices relevance, and never addresses the objective-weight issue.",
+      "A subsidy is a product/ops lever that does not change the ranking objective — symptom relief, unrelated to a model feedback loop."
+    ],
+    "termDefinitions": [
+      {
+        "term": "objective re-calibration feedback loop / 目标校准反馈回路",
+        "meaning": "用生态指标(如创作者激活)作反馈,自动上调目标函数里的公平/多样性权重,而非只回滚模型。",
+        "meaningEn": "An objective-recalibration feedback loop uses ecosystem metrics like creator activation to auto-adjust fairness/diversity weights in the objective, beyond rollback."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-021",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "distribution-shift-flood",
+    "scenario": "一场病毒事件让某一类内容(比如短视频)在几小时内暴增刷屏,排序质量随之走样。",
+    "scenario_en": "A viral event floods one content type (say short video) within hours, and ranking quality warps.",
+    "q": "这属于哪类根因,为什么离线评估没提前抓到?",
+    "q_en": "Which root-cause category is this, and why did offline eval miss it?",
+    "why": "属于数据分布漂移:线上输入分布突然偏离训练时的分布,模型没见过这种内容配比,预测失准。离线评估用的是历史静态数据,抓不到「未来才会出现的病毒式分布突变」,只能靠线上分布漂移监控发现。",
+    "why_en": "It is data distribution shift — live input suddenly diverges from training — and offline eval on static historical data cannot foresee a future viral spike, so only online drift monitoring catches it.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "degradation"
+    ],
+    "options": [
+      "特征管线故障,因为特征值全变 null 了",
+      "数据分布漂移:输入分布突变偏离训练分布;离线用历史静态数据,抓不到未来的病毒式突变",
+      "模型回归,因为训练脚本写错了",
+      "网络故障,因为流量太大打满带宽"
+    ],
+    "options_en": [
+      "Feature-pipeline failure, because all feature values turned null.",
+      "Data distribution shift: input distribution spikes away from training; offline uses static historical data and cannot foresee a future viral surge.",
+      "Model regression, because the training script had a bug.",
+      "Network failure, because traffic saturated the bandwidth."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "特征没缺失,值是好的,只是内容配比变了,不是 null 问题。",
+      "对;病毒事件改变了输入分布,模型在训练时没见过这种配比;离线静态数据无法预见未来突变,得靠线上漂移监控。",
+      "训练脚本没错,模型本身是好的,退化来自世界变了不是模型坏了。",
+      "带宽满是基建可用性问题,和排序质量因分布突变而走样是两回事。"
+    ],
+    "optionExplanations_en": [
+      "Features are not missing; values are fine — the content mix changed, not a null problem.",
+      "Correct — the viral event changed the input distribution the model never saw in training; static offline data cannot foresee it, so online drift monitoring is needed.",
+      "The training script is fine and the model is good; degradation is from the world changing, not a broken model.",
+      "Saturated bandwidth is an infra-availability issue, distinct from ranking quality warping from a distribution spike."
+    ],
+    "termDefinitions": [
+      {
+        "term": "viral distribution shift / 病毒式分布漂移",
+        "meaning": "突发热点让某类内容短时暴增,线上输入分布偏离训练分布,模型预测失准。",
+        "meaningEn": "A viral distribution shift is a burst that floods one content type, moving live input off the training distribution and skewing predictions."
+      }
+    ]
+  },
+  {
+    "id": "llm-057-social-feed-ranking-serving-monitoring-trade-offs-022",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "level-comparison",
+    "scenario": "同样是「设计 feed 排序的 serving 与监控」,L4 和 L5 答案差在哪。",
+    "scenario_en": "For the same 'design feed-ranking serving and monitoring', how do L4 and L5 answers differ?",
+    "q": "L5 答案比 L4 多了哪些关键要素?",
+    "q_en": "What key elements does an L5 answer add over L4?",
+    "why": "L4 只泛泛讲 fan-out+缓存、点名 CTR/延迟、提个 A/B,把 serving 和监控当两件事,没有显式延迟预算和自动回滚。L5 给出带明确预算(50/50/100ms)的三段式、按写放大推理的混合 fan-out、含 KL 回滚触发的监控栈、护栏接生产告警。",
+    "why_en": "L4 vaguely describes fan-out plus caching with no explicit budget or auto-rollback, while L5 gives budgeted staging (50/50/100ms), write-amplification-reasoned hybrid fan-out, and a monitoring stack with KL rollback triggers.",
+    "tags": [
+      "llm-sd",
+      "feed-serving",
+      "leveling"
+    ],
+    "tradeoff": "L4(泛谈组件、serving 与监控分离) vs L5(显式预算、写放大推理、KL 回滚、护栏接告警)",
+    "options": [
+      "L5 只是把 L4 的图画得更漂亮,内容没有实质区别",
+      "L5 加了显式延迟预算的三段式、按写放大推理的混合 fan-out、含 KL 回滚触发的监控栈、护栏接生产告警",
+      "L5 只多讲了用哪种编程语言实现",
+      "L5 去掉了监控,专注把模型做大"
+    ],
+    "options_en": [
+      "L5 just draws L4's diagram more nicely with no substantive difference.",
+      "L5 adds budgeted three-stage pipeline, write-amplification-reasoned hybrid fan-out, a monitoring stack with KL rollback triggers, and guardrails wired to production alerting.",
+      "L5 only adds which programming language to use.",
+      "L5 drops monitoring and focuses on making the model bigger."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "差别是实质性的推理深度,不是画图好看:L5 把每个选择的预算和触发条件都讲清了。",
+      "对;L5 的加分点是显式预算、写放大量化、自动回滚触发、护栏与告警联动,体现端到端的工程闭环。",
+      "语言选型不是分级依据,面试考的是架构推理与权衡。",
+      "L5 恰恰强化了监控(KL 回滚、护栏告警),不是去掉它。"
+    ],
+    "optionExplanations_en": [
+      "The gap is substantive reasoning depth, not prettier diagrams: L5 spells out each choice's budget and trigger.",
+      "Correct — L5's plus points are explicit budgets, quantified write amplification, auto-rollback triggers, and guardrail-alerting integration, showing an end-to-end loop.",
+      "Language choice is not a leveling criterion; interviews test architectural reasoning and trade-offs.",
+      "L5 strengthens monitoring (KL rollback, guardrail alerts) rather than dropping it."
+    ],
+    "termDefinitions": [
+      {
+        "term": "leveling (L4/L5/Staff+)",
+        "meaning": "面试评级:L4 讲基础组件,L5 加显式预算与监控闭环,Staff+ 跨生命周期推理生态权衡。",
+        "meaningEn": "Leveling (L4/L5/Staff+) grades depth: L4 names components, L5 adds explicit budgets and monitoring loops, Staff+ reasons across the lifecycle and ecosystem trade-offs."
+      }
+    ]
+  }
+]

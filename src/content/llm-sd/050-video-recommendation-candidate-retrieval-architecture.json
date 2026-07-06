@@ -1,0 +1,1768 @@
+[
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "retrieval-funnel",
+    "scenario": "设计 YouTube 类推荐的第一道漏斗：要从 >10 亿视频里，在 <10ms 内挑出几百个候选交给排序。",
+    "scenario_en": "The first funnel of a YouTube-like recommender: pick a few hundred candidates from >1B videos in <10ms for ranking.",
+    "q": "候选检索阶段的职责和硬约束是什么？",
+    "q_en": "What is the candidate-retrieval stage's job and hard constraint?",
+    "why": "候选检索是最宽的第一道漏斗：把 >10 亿视频在 <10ms 内收窄到几百个候选。主流做法是双塔（two-tower）解耦编码，因为把用户和视频分开编码，才能靠预计算+ANN 在这个延迟内检索十亿级目录。",
+    "why_en": "Candidate retrieval is the widest first funnel — narrow >1B videos to a few hundred in <10ms — and the standard is a two-tower decoupled encoder, since separating user and video encoding enables precompute-plus-ANN retrieval within that budget.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "retrieval"
+    ],
+    "diagram": "flowchart LR\n  C[\">10 亿视频\"] --> R[\"候选检索<br/>双塔+ANN, <10ms\"]\n  R --> H[\"几百候选\"]\n  H --> RK[\"排序阶段\"]",
+    "options": [
+      "职责是给全部十亿视频逐个精打分，约束是准确率要最高",
+      "职责是把 >10 亿收窄到几百候选、<10ms 完成，靠双塔解耦编码+ANN 才做得到",
+      "职责是渲染前端列表，约束是配色好看",
+      "职责是存储视频元数据，约束是磁盘要大"
+    ],
+    "options_en": [
+      "Score all billions one by one; the constraint is maximum accuracy.",
+      "Narrow >1B to a few hundred candidates in <10ms, achievable via two-tower decoupled encoding plus ANN.",
+      "Render the frontend list; the constraint is nice colors.",
+      "Store video metadata; the constraint is big disks."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "逐个精打分是排序阶段的活，十亿量级在 <10ms 内根本打不完。",
+      "对；宽漏斗要的是快速收窄，双塔+ANN 是在延迟预算内检索十亿目录的标准解。",
+      "前端渲染与检索职责无关，答不到这一阶段的目标。",
+      "存储是基建，不回答候选检索「快速收窄」的核心职责。"
+    ],
+    "optionExplanations_en": [
+      "Per-item fine scoring is the ranking stage's job; billions can't be scored within <10ms.",
+      "Correct — the wide funnel needs fast narrowing, and two-tower plus ANN is the standard way to retrieve a billion-scale catalog in budget.",
+      "Frontend rendering is unrelated to retrieval's job.",
+      "Storage is infrastructure, not the fast-narrowing job of candidate retrieval."
+    ],
+    "termDefinitions": [
+      {
+        "term": "candidate retrieval / 候选检索",
+        "meaning": "两阶段推荐的第一/最宽漏斗，从海量目录快速收窄到几百候选交给排序。",
+        "meaningEn": "Candidate retrieval is the first, widest funnel of a two-stage recommender, quickly narrowing a huge catalog to a few hundred candidates for ranking."
+      },
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻检索：牺牲少许精度换取在海量向量里毫秒级找到相近项。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) search trades a little exactness for millisecond retrieval of nearby items among massive vectors."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "two-tower",
+    "scenario": "面试官让你讲双塔（dual encoder）到底长什么样、相关性怎么算。",
+    "scenario_en": "The interviewer asks what the two-tower (dual encoder) actually looks like and how relevance is computed.",
+    "q": "双塔模型的结构和打分方式是什么？",
+    "q_en": "What is the two-tower model's structure and scoring?",
+    "why": "双塔把打分拆成两条独立编码路径：user tower 和 video tower，各自输出一个固定 128–256 维、落在同一共享空间的 embedding；相关性 ≈ 两个向量的点积。两塔训练后相互独立，这正是能预计算视频侧的前提。",
+    "why_en": "Two-tower splits scoring into two independent encoders (user tower, video tower), each emitting a fixed 128-256-dim embedding in a shared space, with relevance approximated by their dot product.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "two-tower"
+    ],
+    "diagram": "flowchart TB\n  U[\"用户特征\"] --> UT[\"user tower\"] --> UE[\"用户 embedding\"]\n  V[\"视频特征\"] --> VT[\"video tower\"] --> VE[\"视频 embedding\"]\n  UE --> D[\"点积 = 相关性\"]\n  VE --> D",
+    "options": [
+      "单塔把用户和视频拼一起编码，输出一个概率",
+      "两条独立编码路径各出一个 128–256 维共享空间 embedding，相关性≈两向量点积",
+      "两塔共享权重，必须实时一起前向才能出分",
+      "只有一个视频塔，用户信息不参与编码"
+    ],
+    "options_en": [
+      "A single tower encodes user and video together and outputs a probability.",
+      "Two independent encoders each emit a 128-256-dim shared-space embedding, with relevance approximated by their dot product.",
+      "The towers share weights and must forward together in real time to score.",
+      "Only a video tower exists; user info doesn't get encoded."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "拼一起编码就无法分开预计算，失去双塔的核心优势。",
+      "对；两塔独立出同空间向量、点积算相关，独立性正是能离线预计算视频侧的关键。",
+      "双塔的意义就是训练后独立、可分开算，不需要实时一起前向。",
+      "用户塔不可或缺，缺了它就没法做个性化检索。"
+    ],
+    "optionExplanations_en": [
+      "Encoding them together prevents separate precompute, losing two-tower's core advantage.",
+      "Correct — two independent encoders emit same-space vectors and dot-product relevance, and that independence is what enables offline precompute of the video side.",
+      "The whole point is post-training independence and separate scoring, not a joint real-time forward.",
+      "The user tower is essential; without it there's no personalized retrieval."
+    ],
+    "termDefinitions": [
+      {
+        "term": "two-tower model / 双塔模型 (dual encoder)",
+        "meaning": "用两条独立编码路径分别把用户和物品映射到同一向量空间，用点积/相似度打分。",
+        "meaningEn": "A two-tower model (dual encoder) maps user and item through two independent encoders into one vector space, scoring by dot product/similarity."
+      },
+      {
+        "term": "embedding / 嵌入向量",
+        "meaning": "把用户或视频压成的定长稠密向量，落在共享空间里可比较相似度。",
+        "meaningEn": "An embedding is a fixed-length dense vector representing a user or video in a shared space for similarity comparison."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "serving-asymmetry",
+    "scenario": "十亿级目录、每次请求要 <10ms 出候选。你要解释双塔到底靠什么在这个预算内检索。",
+    "scenario_en": "A billion-scale catalog with a <10ms per-request budget — explain what actually makes two-tower retrieval fit.",
+    "q": "双塔在服务时的关键「不对称」是什么，为什么它是延迟优势的根源？",
+    "q_en": "What is two-tower's key serving asymmetry, and why is it the latency advantage?",
+    "why": "关键不对称：两塔训练后独立，所以整个目录的视频 embedding 可离线预计算好存起来，服务时只需为当前请求算一次用户 embedding，再做 ANN 检索。video tower 在服务时永不运行——这正是十亿级亚毫秒检索可行的根源。",
+    "why_en": "The asymmetry: since towers are independent after training, all video embeddings are precomputed offline, so serving only computes the user embedding per request then runs ANN — the video tower never runs at serving time.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "serving"
+    ],
+    "tradeoff": "预计算视频侧（服务时只算用户塔、亚毫秒） vs 实时双塔全算（灵活但扛不住十亿量级）",
+    "options": [
+      "服务时把用户塔和视频塔都实时跑一遍，保证最新",
+      "视频 embedding 离线预计算全目录、服务时只算用户 embedding+ANN，video tower 永不在线跑",
+      "用户和视频 embedding 都离线预计算，服务时不做任何计算",
+      "服务时只算视频塔，用户信息忽略"
+    ],
+    "options_en": [
+      "At serving, run both user and video towers in real time for freshness.",
+      "Precompute all video embeddings offline; serving only computes the user embedding + ANN, and the video tower never runs online.",
+      "Precompute both user and video embeddings offline; serving computes nothing.",
+      "At serving, run only the video tower and ignore user info."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果视频侧特征高度实时（如刚上传几秒的直播弹幕状态），无法离线预计算，那才需要在服务时对这部分做实时编码，牺牲一点延迟换新鲜度。",
+    "whenOtherWins_en": "If video-side features are highly real-time (a livestream's second-old state) and can't be precomputed, you must encode that part online, trading latency for freshness.",
+    "optionExplanations": [
+      "十亿视频实时跑视频塔在 <10ms 内不可能，失去双塔预计算的意义。",
+      "对；视频侧离线算好、在线只算用户塔+ANN，这个不对称让亚毫秒检索十亿目录可行。",
+      "用户 embedding 依赖当前请求上下文，必须在线算，不能全预计算。",
+      "缺了用户 embedding 就无法个性化，检索会退化成非个性化热门。"
+    ],
+    "optionExplanations_en": [
+      "Running the video tower over billions in <10ms is impossible, defeating precompute.",
+      "Correct — precompute the video side, compute only the user tower + ANN online, and that asymmetry makes sub-ms billion-scale retrieval feasible.",
+      "The user embedding depends on request context and must be computed online, not fully precomputed.",
+      "Without a user embedding there's no personalization; retrieval degrades to non-personalized popularity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "serving asymmetry / 服务不对称",
+        "meaning": "训练后两塔独立，视频侧可离线预计算，服务时只算用户侧，是双塔延迟优势的根源。",
+        "meaningEn": "Serving asymmetry: towers are independent post-training, so the video side is precomputed offline and only the user side runs at serving — the latency advantage."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-004",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "tower-inputs",
+    "scenario": "你要设计 user tower 的输入特征——它负责把「这个用户此刻想看什么」编码成一个向量。",
+    "scenario_en": "You're designing the user tower's input features — it encodes 'what this user wants now' into a vector.",
+    "q": "user tower 通常吃哪些输入特征？（多选）",
+    "q_en": "Which inputs typically feed the user tower? (multiple)",
+    "why": "user tower 吃：观看历史 embedding（mean pooling 或轻 attention 聚合）、人口统计（年龄段、国家、语言）、上下文信号（设备、时段、星期几）。视频的类别/时长/热度是 video tower 的输入，不进用户塔。",
+    "why_en": "The user tower takes watch-history embeddings (mean-pooled or lightly attended), demographics (age bucket, country, language), and context (device, time of day, day of week).",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "features"
+    ],
+    "options": [
+      "观看历史 embedding（mean pooling / 轻 attention 聚合）",
+      "人口统计：年龄段、国家、语言",
+      "上下文信号：设备、时段、星期几",
+      "视频类别、时长桶、创作者 ID"
+    ],
+    "options_en": [
+      "Watch-history embeddings (mean pooling / light attention).",
+      "Demographics: age bucket, country, language.",
+      "Context signals: device, time of day, day of week.",
+      "Video category, duration bucket, creator ID."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；观看历史是最强的个性化信号，聚合成向量喂用户塔。",
+      "对；人口统计给冷启动/粗粒度偏好兜底。",
+      "对；上下文让同一用户在不同设备/时段得到不同检索。",
+      "错；类别/时长/创作者是视频侧属性，属于 video tower 的输入。"
+    ],
+    "optionExplanations_en": [
+      "Correct — watch history is the strongest personalization signal, aggregated into the user tower.",
+      "Correct — demographics backstop cold-start and coarse preferences.",
+      "Correct — context lets the same user get different retrieval by device/time.",
+      "Wrong — category/duration/creator are video-side attributes for the video tower."
+    ],
+    "termDefinitions": [
+      {
+        "term": "mean pooling / 均值池化",
+        "meaning": "把一串向量按元素取平均聚合成一个向量，这里把观看历史压成单个用户表示。",
+        "meaningEn": "Mean pooling averages a sequence of vectors element-wise into one, here compressing watch history into a single user representation."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-005",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "tower-inputs",
+    "scenario": "你要设计 video tower 的输入特征——它把每个视频编码成可离线预计算的向量。",
+    "scenario_en": "You're designing the video tower's inputs — it encodes each video into a precomputable vector.",
+    "q": "video tower 通常吃哪些输入特征？（多选）",
+    "q_en": "Which inputs typically feed the video tower? (multiple)",
+    "why": "video tower 吃：内容 embedding（预训练视觉/多模态提取）、元数据（类别、时长桶、创作者 ID）、热度统计（播放量、点赞率、新鲜度）。观看历史、设备时段是用户侧信号，不进视频塔。",
+    "why_en": "The video tower takes content embeddings (from pretrained vision/multimodal models), metadata (category, duration bucket, creator ID), and popularity stats (views, like ratio, recency).",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "features"
+    ],
+    "options": [
+      "内容 embedding：预训练视觉/多模态模型提取",
+      "元数据：类别、时长桶、创作者 ID",
+      "热度统计：播放量、点赞率、新鲜度",
+      "用户的观看历史与当前设备"
+    ],
+    "options_en": [
+      "Content embeddings from pretrained vision/multimodal models.",
+      "Metadata: category, duration bucket, creator ID.",
+      "Popularity stats: views, like ratio, recency.",
+      "The user's watch history and current device."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；内容 embedding 让新视频没有交互也能被编码，缓解冷启动。",
+      "对；元数据是稳定的视频属性，适合离线预计算进向量。",
+      "对；热度统计让视频塔带上流行度信号，注意可能引入热度偏置。",
+      "错；观看历史和设备是用户侧信号，属于 user tower。"
+    ],
+    "optionExplanations_en": [
+      "Correct — content embeddings let a new video be encoded without interactions, easing cold start.",
+      "Correct — metadata are stable video attributes, good for offline precompute.",
+      "Correct — popularity stats bring flow signal, though they can introduce popularity bias.",
+      "Wrong — watch history and device are user-side signals for the user tower."
+    ],
+    "termDefinitions": [
+      {
+        "term": "content embedding / 内容 embedding",
+        "meaning": "用预训练视觉/多模态模型从视频画面音频提取的向量，让新视频无需交互即可表示。",
+        "meaningEn": "A content embedding is a vector extracted from a video's pixels/audio by a pretrained vision/multimodal model, representing new videos without interactions."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "dot-vs-cosine",
+    "scenario": "生产里给两塔 embedding 打相似度，你在点积和余弦相似度之间选。",
+    "scenario_en": "Scoring two-tower embeddings, you choose between dot product and cosine similarity in production.",
+    "q": "为什么生产双塔检索里点积常优于余弦相似度？",
+    "q_en": "Why is dot product often preferred over cosine similarity in production two-tower retrieval?",
+    "why": "余弦相似度先归一化、只看方向；点积保留向量模长（magnitude），让模型学到基于模长的相关性——比如把热门/高置信视频的向量拉长，检索时天然占优。所以点积能表达方向之外的强度信息。",
+    "why_en": "Cosine normalizes and keeps only direction, while dot product retains magnitude, letting the model learn magnitude-based relevance (e.g. longer vectors for high-confidence videos), expressing strength beyond direction.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "similarity"
+    ],
+    "tradeoff": "点积（保留模长、能学强度相关性） vs 余弦（归一化、只看方向）",
+    "options": [
+      "点积保留模长，能学基于强度的相关性；余弦归一化后只剩方向信息",
+      "余弦总是更准，点积只是算得快的近似",
+      "两者数学上完全等价，选哪个无所谓",
+      "点积只能用于文本，视频必须用余弦"
+    ],
+    "options_en": [
+      "Dot product keeps magnitude to learn strength-based relevance; cosine normalizes away magnitude, leaving only direction.",
+      "Cosine is always more accurate; dot product is just a fast approximation.",
+      "They're mathematically identical, so it doesn't matter.",
+      "Dot product only works for text; video must use cosine."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；模长承载了强度/置信信息，点积保留它，余弦归一化会抹掉。",
+      "余弦不总更准：抹掉模长会丢掉模型想利用的强度信号。",
+      "归一化与否不等价：余弦丢模长，点积保留，结果不同。",
+      "点积/余弦与模态无关，视频同样可用点积。"
+    ],
+    "optionExplanations_en": [
+      "Correct — magnitude carries strength/confidence, which dot product keeps and cosine normalizes away.",
+      "Cosine isn't always better: normalizing away magnitude discards a signal the model may want.",
+      "Normalizing is not equivalent: cosine drops magnitude, dot product keeps it.",
+      "Dot vs cosine is modality-agnostic; video can use dot product too."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dot product / 点积",
+        "meaning": "两向量对应元素乘积之和，同时反映方向一致性和模长，不做归一化。",
+        "meaningEn": "The dot product sums element-wise products, reflecting both directional agreement and magnitude without normalization."
+      },
+      {
+        "term": "cosine similarity / 余弦相似度",
+        "meaning": "归一化后的点积，只衡量两向量夹角（方向），丢弃模长信息。",
+        "meaningEn": "Cosine similarity is the normalized dot product, measuring only the angle (direction) and discarding magnitude."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "contrastive-loss",
+    "scenario": "训练双塔时，你有一批 (用户, 真看过的视频) 正样本对，要让模型学会检索。",
+    "scenario_en": "Training two-tower with a batch of (user, engaged-video) positive pairs, you want it to learn retrieval.",
+    "q": "对比损失（contrastive loss）怎么训练双塔，训练信号质量主要由什么决定？",
+    "q_en": "How does contrastive loss train two-tower, and what mainly determines signal quality?",
+    "why": "对比损失把 (用户, 看过的视频) 正样本的 embedding 拉近，把 (用户, 没看的视频) 负样本推远。训练信号质量几乎完全由负样本决定：负样本太「容易」学不到细粒度边界，好负样本才逼出有区分度的向量。",
+    "why_en": "Contrastive loss pulls positive (user, engaged-video) embeddings together and pushes negatives apart, and signal quality comes almost entirely from the negatives.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "contrastive"
+    ],
+    "options": [
+      "拉近正样本、推远负样本；信号质量几乎完全由负样本决定",
+      "只拉近正样本，不需要任何负样本",
+      "把所有 embedding 都推远，越分散越好",
+      "信号质量只由正样本数量决定，与负样本无关"
+    ],
+    "options_en": [
+      "Pull positives together, push negatives apart; signal quality comes almost entirely from the negatives.",
+      "Only pull positives together, needing no negatives.",
+      "Push all embeddings apart; the more spread, the better.",
+      "Signal quality depends only on the number of positives, not negatives."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；对比学习的判别力来自「和什么对比」，负样本的难度直接决定学到的边界。",
+      "没有负样本，模型可以把所有向量塌到一点也满足「拉近正样本」，会坍缩。",
+      "无差别推远会破坏正样本的相近关系，学不到相关性。",
+      "正样本给「该近」的信号，但没有负样本就没有「该远」的对比，信号不完整。"
+    ],
+    "optionExplanations_en": [
+      "Correct — contrastive discriminative power comes from what you contrast against, so negative difficulty sets the learned boundary.",
+      "With no negatives the model can collapse all vectors to one point and still 'pull positives together'.",
+      "Pushing everything apart breaks positive closeness and learns no relevance.",
+      "Positives give the 'should be near' signal, but without negatives there's no 'should be far' contrast."
+    ],
+    "termDefinitions": [
+      {
+        "term": "contrastive loss / 对比损失",
+        "meaning": "把正样本对的向量拉近、负样本对推远的损失，训练信号质量取决于负样本难度。",
+        "meaningEn": "Contrastive loss pulls positive pairs' vectors together and pushes negatives apart; signal quality depends on negative difficulty."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "in-batch-negatives",
+    "scenario": "你想在不额外加载数据的情况下，给一个 batch 里的每个正样本对配上负样本。",
+    "scenario_en": "You want negatives for each positive pair in a batch without loading extra data.",
+    "q": "in-batch negatives 是怎么零成本造出负样本的？",
+    "q_en": "How do in-batch negatives create negatives at zero cost?",
+    "why": "在一个含 B 个正样本对的 batch 里，某用户的正样本视频，对其他每个用户都算负样本 → 每个用户白得 B−1 个负样本，零额外数据加载成本。代价是它近似均匀采样，多是「容易」负样本。",
+    "why_en": "In a batch of B positive pairs, one user's positive video serves as a negative for every other user, giving B-1 negatives at zero data-loading cost.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "tradeoff": "in-batch（零成本 B−1 负样本但偏易） vs 硬负样本（贵但判别力强）",
+    "options": [
+      "额外从库里采样 B 个随机视频当负样本",
+      "batch 里某用户的正样本视频对其他每个用户都是负样本，白得 B−1 个、零加载成本",
+      "把正样本复制一份加噪声当负样本",
+      "让人工逐条标注负样本"
+    ],
+    "options_en": [
+      "Sample B extra random videos from the DB as negatives.",
+      "In a batch, one user's positive video is a negative for every other user, giving B-1 negatives at zero loading cost.",
+      "Copy positives with noise as negatives.",
+      "Have humans label negatives one by one."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当模型已能轻松分开粗类、需要学习「同类里哪个更相关」的细粒度边界时，就该补硬负样本，光靠 in-batch 的易负样本不够。",
+    "whenOtherWins_en": "Once the model easily separates coarse classes and needs fine-grained 'which within a genre' boundaries, add hard negatives — easy in-batch negatives no longer suffice.",
+    "optionExplanations": [
+      "额外采样要多加载数据，正是 in-batch 想省掉的成本。",
+      "对；复用 batch 内其他正样本当负样本，B−1 个负样本零额外成本，是标准做法。",
+      "加噪副本不是真实负样本，学不到有意义的对比。",
+      "人工标注负样本昂贵且不可规模化，与「零成本」相悖。"
+    ],
+    "optionExplanations_en": [
+      "Extra sampling loads more data — exactly the cost in-batch avoids.",
+      "Correct — reusing other positives in the batch as negatives gives B-1 free negatives, the standard trick.",
+      "Noised copies aren't real negatives and teach no meaningful contrast.",
+      "Human-labeled negatives are costly and unscalable, against 'zero cost'."
+    ],
+    "termDefinitions": [
+      {
+        "term": "in-batch negatives / 批内负样本",
+        "meaning": "把同一 batch 里其他用户的正样本视频当作当前用户的负样本，零额外数据成本。",
+        "meaningEn": "In-batch negatives treat other users' positive videos in the same batch as negatives for the current user, at zero extra data cost."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "in-batch-negatives",
+    "scenario": "只用 in-batch negatives 训练，随机 batch 里同一用户对应的负样本大多是完全无关的视频（做饭 vs 游戏）。",
+    "scenario_en": "Training with only in-batch negatives, a user's negatives are mostly totally unrelated videos (cooking vs gaming).",
+    "q": "只用 in-batch negatives 会导致什么问题？",
+    "q_en": "What problem arises from using only in-batch negatives?",
+    "why": "in-batch 近似均匀采样，负样本大多是「容易」的（做饭 vs 游戏一眼可分）。模型只学会分开粗类，学不到细粒度区分——两个相似的游戏视频它分不开，检索精度上不去。修法是掺硬负样本。",
+    "why_en": "In-batch approximates uniform sampling, so negatives are mostly 'easy' (cooking vs gaming), teaching only coarse separation and failing to distinguish two similar gaming videos — fixed by mixing in hard negatives.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "options": [
+      "负样本太容易→只会分粗类、分不开两个相似游戏视频，细粒度检索精度上不去；需掺硬负样本",
+      "毫无问题，随机负样本已足够学到所有细粒度区分",
+      "会让训练变慢，是纯速度问题",
+      "负样本太多导致显存爆炸"
+    ],
+    "options_en": [
+      "Negatives too easy: only coarse classes separate, can't tell two similar gaming videos apart, so fine-grained recall stalls; add hard negatives.",
+      "No problem; random negatives already teach all fine-grained distinctions.",
+      "It slows training — a pure speed issue.",
+      "Too many negatives blow up GPU memory."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；易负样本让边界只到粗类级，相似项分不开，必须补硬负样本逼出细边界。",
+      "随机负样本几乎都是易的，学不到相似项之间的细粒度边界。",
+      "这不是速度问题，是学到的判别粒度太粗。",
+      "in-batch 恰恰省显存（复用 batch），不是显存爆炸。"
+    ],
+    "optionExplanations_en": [
+      "Correct — easy negatives leave the boundary at coarse-class level, so similar items don't separate; hard negatives are needed.",
+      "Random negatives are almost all easy and teach no fine boundary between similar items.",
+      "It's not a speed issue but a too-coarse learned granularity.",
+      "In-batch actually saves memory (reuse), not blows it up."
+    ],
+    "termDefinitions": [
+      {
+        "term": "easy negative / 易负样本",
+        "meaning": "与正样本明显不同、一眼可分的负样本，只能训出粗粒度区分。",
+        "meaningEn": "An easy negative is obviously different from the positive and only trains coarse-grained distinctions."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hard-negatives",
+    "scenario": "你要让双塔学会区分「同一创作者/同一题材、但用户跳过了」的相似视频。",
+    "scenario_en": "You want two-tower to distinguish similar videos from the same creator/genre that the user skipped.",
+    "q": "该用什么样的负样本，为什么？",
+    "q_en": "What kind of negatives should you use, and why?",
+    "why": "用硬负样本（hard negatives）：语义上相似但用户没交互的视频（同创作者/同题材、被跳过）。它们逼模型在相近区域画细粒度边界，正是易负样本给不了的判别力。代价是难挖、且比例过高会不稳。",
+    "why_en": "Use hard negatives — semantically similar videos the user did not engage (same creator/genre, skipped) — forcing fine-grained boundaries that easy negatives can't provide.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "tradeoff": "硬负样本（细边界、判别力强） vs 易负样本（便宜但只分粗类）",
+    "options": [
+      "更多完全无关的随机视频，数量堆够就行",
+      "语义相似但用户没交互的视频（同创作者/同题材、被跳过），逼模型画细粒度边界",
+      "把正样本本身再用一次当负样本",
+      "只用热门视频当负样本"
+    ],
+    "options_en": [
+      "More totally unrelated random videos; just pile up quantity.",
+      "Semantically similar videos the user didn't engage (same creator/genre, skipped), forcing fine-grained boundaries.",
+      "Reuse the positives themselves as negatives.",
+      "Use only popular videos as negatives."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果模型还处于早期、连粗类都分不清，先用便宜的 in-batch 易负样本打基础更合适，等粗边界稳了再上硬负样本。",
+    "whenOtherWins_en": "If the model is early and can't even separate coarse classes, cheap in-batch easy negatives fit better first, adding hard negatives once coarse boundaries stabilize.",
+    "optionExplanations": [
+      "堆无关随机视频还是易负样本，学不到相似项之间的细边界。",
+      "对；相似但没交互的视频是真正的近失手负例，逼出细粒度判别力。",
+      "把正样本当负样本是自相矛盾的错误监督信号。",
+      "只用热门当负样本会引入热度偏置，且不一定语义相似。"
+    ],
+    "optionExplanations_en": [
+      "Piling unrelated randoms are still easy negatives and teach no fine boundary between similar items.",
+      "Correct — similar-but-not-engaged videos are true near-miss negatives that force fine-grained discrimination.",
+      "Using positives as negatives is contradictory, wrong supervision.",
+      "Only-popular negatives introduce popularity bias and aren't necessarily semantically similar."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hard negative / 硬负样本",
+        "meaning": "语义相似但用户没交互的负样本，逼模型在相近区域学出细粒度边界。",
+        "meaningEn": "A hard negative is a semantically similar but non-engaged item that forces the model to learn fine-grained boundaries."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "hard-neg-sources",
+    "scenario": "你要挖硬负样本，有两条来源：ANN 索引里检索出的近失手视频，和展示日志里「展示了但没点」的视频。",
+    "scenario_en": "Two hard-negative sources: near-misses retrieved from the ANN index, and impression-log 'shown-but-not-clicked' videos.",
+    "q": "ANN-mined 和 impression-log 两种硬负样本来源，各自特点是什么？",
+    "q_en": "What characterizes the ANN-mined vs impression-log hard-negative sources?",
+    "why": "ANN-mined：用用户 embedding 查索引取 top-K 里没交互的近失手，代价是周期性 ANN 查询。impression-log：展示了却没点，是真实的拒绝信号、成本低（日志里现成），但带上一个模型策略造成的选择偏置。",
+    "why_en": "ANN-mined pulls top-K non-engaged near-misses by querying the index (cost: periodic ANN queries), while impression-log uses shown-but-not-clicked as a real rejection signal at low cost but with selection bias from the prior model's policy.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "tradeoff": "ANN-mined（近失手、需周期查询） vs impression-log（真实拒绝、便宜但有选择偏置）",
+    "table": {
+      "headers": [
+        "来源",
+        "信号",
+        "成本",
+        "主要风险"
+      ],
+      "rows": [
+        [
+          "ANN-mined",
+          "检索近失手",
+          "周期性 ANN 查询",
+          "依赖当前索引质量"
+        ],
+        [
+          "impression-log",
+          "展示未点=真实拒绝",
+          "低（日志现成）",
+          "上个模型策略的选择偏置"
+        ]
+      ]
+    },
+    "options": [
+      "ANN-mined 取索引 top-K 非交互近失手（需周期查询）；impression-log 用展示未点的真实拒绝（便宜但有选择偏置）",
+      "两者完全一样，只是名字不同",
+      "ANN-mined 是人工标注，impression-log 是随机采样",
+      "两者都零成本、零偏置，任选其一即可"
+    ],
+    "options_en": [
+      "ANN-mined pulls top-K non-engaged near-misses (needs periodic queries); impression-log uses shown-but-not-clicked real rejection (cheap but selection-biased).",
+      "They're identical, just different names.",
+      "ANN-mined is human-labeled; impression-log is random sampling.",
+      "Both are zero-cost and zero-bias; pick either freely."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；一个靠检索近失手（成本在查询），一个靠日志的真实拒绝（成本低但有偏置），各有取舍。",
+      "两者信号来源和偏置都不同，不是叫法差异。",
+      "ANN-mined 是检索出来的、不是人工标注；impression-log 是真实展示拒绝、不是随机。",
+      "impression-log 带上个模型策略的选择偏置，并非零偏置。"
+    ],
+    "optionExplanations_en": [
+      "Correct — one retrieves near-misses (cost in queries), the other uses logged real rejection (cheap but biased); each trades off.",
+      "Their signal source and bias differ; it's not just naming.",
+      "ANN-mined is retrieved, not human-labeled; impression-log is real shown-rejection, not random.",
+      "Impression-log carries the prior model's selection bias — not zero-bias."
+    ],
+    "termDefinitions": [
+      {
+        "term": "impression log / 展示日志",
+        "meaning": "记录哪些内容被展示给用户的日志；展示了却没点=真实拒绝信号。",
+        "meaningEn": "An impression log records what was shown to users; shown-but-not-clicked is a real rejection signal."
+      },
+      {
+        "term": "selection bias / 选择偏置",
+        "meaning": "日志里的负样本受上个推荐模型策略影响，不代表用户对全库的真实偏好。",
+        "meaningEn": "Selection bias means logged negatives are shaped by the prior model's policy, not the user's true preference over the whole catalog."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-012",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "negatives-recipe",
+    "scenario": "你要给双塔训练配负样本比例，团队问「硬负样本掺多少合适」。",
+    "scenario_en": "Setting the negatives mix for two-tower training, the team asks how many hard negatives to include.",
+    "q": "「~70% in-batch + 30% 硬负样本」这个配比在设计上意味着什么？",
+    "q_en": "What does the '~70% in-batch + 30% hard negatives' recipe imply for design?",
+    "why": "这是经验配比不是公式：多数用便宜的 in-batch 打粗边界底子，掺约 30% 硬负样本逼出细粒度判别。硬负样本比例过高会让训练不稳——梯度尖峰、embedding 坍缩。所以 30% 是「判别力 vs 稳定性」的经验平衡点。",
+    "why_en": "It's an empirical mix, not a formula: mostly cheap in-batch for coarse boundaries plus ~30% hard negatives for fine discrimination, since too many hard negatives destabilize training (gradient spikes, embedding collapse).",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "options": [
+      "70/30 是硬性公式，必须精确记住这两个数",
+      "经验配比：多数 in-batch 打底、~30% 硬负样本逼细边界，硬负样本过高会梯度尖峰/embedding 坍缩",
+      "说明硬负样本越多越好，应该冲到 100%",
+      "配比与训练稳定性无关，只影响速度"
+    ],
+    "options_en": [
+      "70/30 is a hard formula to memorize exactly.",
+      "Empirical mix: mostly in-batch for the base plus ~30% hard negatives for fine boundaries, since too many hard negatives cause gradient spikes/embedding collapse.",
+      "The more hard negatives the better; push to 100%.",
+      "The mix is unrelated to stability and only affects speed."
+    ],
+    "answer": [
+      1
+    ],
+    "termDefinitions": [
+      {
+        "term": "embedding collapse / embedding 坍缩",
+        "meaning": "训练不稳时向量塌到很小区域、彼此难区分，检索质量崩溃。",
+        "meaningEn": "Embedding collapse is when unstable training squeezes vectors into a tiny region, making them indistinguishable and wrecking retrieval."
+      },
+      {
+        "term": "gradient spike / 梯度尖峰",
+        "meaning": "硬负样本比例过高时梯度突然变得极大，破坏训练稳定性。",
+        "meaningEn": "A gradient spike is a sudden very large gradient, here from too high a hard-negative ratio, destabilizing training."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "alignment-uniformity",
+    "scenario": "训练双塔时你想及早发现 embedding 是不是在坍缩，需要一个监控指标。",
+    "scenario_en": "Training two-tower, you want an early signal that embeddings are collapsing.",
+    "q": "监控 embedding 的 alignment + uniformity 有什么用？",
+    "q_en": "What do monitoring embedding alignment + uniformity tell you?",
+    "why": "alignment 看正样本对是否靠得够近，uniformity 看整体向量是否均匀铺满空间。uniformity 掉了 = 向量正塌进一小片区域，是 embedding 坍缩的早期信号，提示硬负样本比例太高或训练不稳。",
+    "why_en": "Alignment checks whether positives sit close and uniformity whether vectors spread evenly across the space, so dropping uniformity is an early sign of embedding collapse.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "monitoring"
+    ],
+    "options": [
+      "alignment 看正样本够不够近、uniformity 看向量铺不铺得开；uniformity 掉=坍缩早期信号",
+      "两者只衡量训练速度，与坍缩无关",
+      "两者衡量的是模型参数量大小",
+      "两者只在上线后才有意义"
+    ],
+    "options_en": [
+      "Alignment checks positive closeness, uniformity checks even spread; falling uniformity is an early collapse signal.",
+      "They only measure training speed, unrelated to collapse.",
+      "They measure model parameter count.",
+      "They only matter after launch."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；uniformity 下降说明向量在往一小片塌，提前预警坍缩，好及时调负样本比例。",
+      "它们是 embedding 分布质量指标，不是速度，正是用来抓坍缩。",
+      "与参数量无关，衡量的是向量在空间的分布。",
+      "训练中就该监控，坍缩发生在训练阶段，等上线太晚。"
+    ],
+    "optionExplanations_en": [
+      "Correct — falling uniformity shows vectors collapsing into a small region, an early warning to adjust the negative ratio.",
+      "They're embedding-distribution quality metrics, not speed, and exactly catch collapse.",
+      "Unrelated to parameter count; they measure vector spread in space.",
+      "You monitor them during training, since collapse happens then; after launch is too late."
+    ],
+    "termDefinitions": [
+      {
+        "term": "alignment / 对齐性",
+        "meaning": "对比学习指标，衡量正样本对的 embedding 是否足够接近。",
+        "meaningEn": "Alignment is a contrastive metric measuring whether positive pairs' embeddings are close enough."
+      },
+      {
+        "term": "uniformity / 均匀性",
+        "meaning": "衡量 embedding 是否均匀分布在向量空间，下降预示坍缩。",
+        "meaningEn": "Uniformity measures whether embeddings spread evenly across the space; a drop foreshadows collapse."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-014",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "hnsw-vs-ivfpq",
+    "scenario": "十亿级向量要建 ANN 索引，你在 HNSW 和 IVF+PQ 之间权衡召回和内存。",
+    "scenario_en": "Building an ANN index over billions of vectors, you weigh recall vs memory between HNSW and IVF+PQ.",
+    "q": "HNSW 和 IVF+PQ 在召回和内存上怎么对比？",
+    "q_en": "How do HNSW and IVF+PQ contrast on recall and memory?",
+    "why": "HNSW 是多层邻近图，召回强，但要在内存里存全精度向量、内存大。IVF+PQ 用 Voronoi 分桶+向量压缩，内存大幅下降，代价是可调的召回损失。取舍轴是「召回/内存」。",
+    "why_en": "HNSW is a multi-layer proximity graph with strong recall but stores full-precision vectors in memory, while IVF+PQ uses Voronoi cells plus compression for far less memory at a tunable recall loss.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "tradeoff": "HNSW（召回强、内存大） vs IVF+PQ（内存小、召回可调地损失）",
+    "table": {
+      "headers": [
+        "索引",
+        "结构",
+        "内存",
+        "召回"
+      ],
+      "rows": [
+        [
+          "HNSW",
+          "多层邻近图",
+          "大（全精度）",
+          "强"
+        ],
+        [
+          "IVF+PQ",
+          "Voronoi 桶+压缩",
+          "小",
+          "可调、略损"
+        ]
+      ]
+    },
+    "options": [
+      "HNSW 多层邻近图召回强但存全精度向量内存大；IVF+PQ Voronoi+压缩内存小但召回可调地损失",
+      "两者内存和召回完全一样，选哪个无所谓",
+      "HNSW 内存最省，IVF+PQ 内存最大",
+      "IVF+PQ 召回一定高于 HNSW，且内存也更大"
+    ],
+    "options_en": [
+      "HNSW's multi-layer graph has strong recall but stores full-precision vectors (big memory); IVF+PQ compresses via Voronoi cells for small memory at tunable recall loss.",
+      "Their memory and recall are identical; pick either.",
+      "HNSW is the most memory-efficient; IVF+PQ uses the most memory.",
+      "IVF+PQ always has higher recall than HNSW and also uses more memory."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；一个用图换召回吃内存，一个用压缩省内存损召回，正是这条取舍轴。",
+      "两者在内存/召回上差别明显，不能随意选。",
+      "说反了：HNSW 存全精度内存大，IVF+PQ 压缩内存小。",
+      "IVF+PQ 用压缩换内存，召回通常略低而非更高。"
+    ],
+    "optionExplanations_en": [
+      "Correct — one trades memory for recall via a graph, the other compresses to save memory at recall cost.",
+      "Their memory/recall differ clearly; you can't pick blindly.",
+      "Backwards: HNSW stores full precision (big memory), IVF+PQ compresses (small memory).",
+      "IVF+PQ trades compression for memory, usually slightly lower recall, not higher."
+    ],
+    "termDefinitions": [
+      {
+        "term": "HNSW",
+        "fullName": "Hierarchical Navigable Small World",
+        "meaning": "多层邻近图 ANN 索引，召回强，但在内存里保存全精度向量。",
+        "meaningEn": "HNSW (Hierarchical Navigable Small World) is a multi-layer proximity-graph ANN index with strong recall that stores full-precision vectors in memory."
+      },
+      {
+        "term": "IVF+PQ",
+        "fullName": "Inverted File + Product Quantization",
+        "meaning": "用 Voronoi 分桶（IVF）加向量压缩（PQ）的 ANN 索引，内存小、召回可调。",
+        "meaningEn": "IVF+PQ (Inverted File + Product Quantization) is an ANN index using Voronoi cells plus vector compression for low memory at tunable recall."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ann-choice",
+    "scenario": "向量规模让全精度 HNSW 的内存开销撑爆预算，但你还能接受一点点召回下降。",
+    "scenario_en": "Vector scale blows the memory budget for full-precision HNSW, but you can tolerate a small recall drop.",
+    "q": "这种内存受限的场景该选哪个 ANN 索引？",
+    "q_en": "For this memory-constrained case, which ANN index fits?",
+    "why": "选 IVF+PQ：Voronoi 分桶缩小搜索范围、PQ 压缩把向量从几十字节压到几字节，内存大幅下降，用可调的召回损失换回预算。内存不是瓶颈、只求最高召回时才反过来选 HNSW。",
+    "why_en": "Choose IVF+PQ: Voronoi cells prune the search and PQ compresses vectors to a few bytes, cutting memory sharply at a tunable recall loss that fits the budget.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "tradeoff": "IVF+PQ（省内存、损一点召回） vs HNSW（召回最高但吃满内存）",
+    "options": [
+      "选 HNSW，内存越大越好",
+      "选 IVF+PQ：Voronoi 分桶+PQ 压缩把内存压下来，用可调召回损失换回预算",
+      "两个都不选，直接暴力扫全部向量",
+      "随便选，内存和召回无关"
+    ],
+    "options_en": [
+      "Choose HNSW; bigger memory is better.",
+      "Choose IVF+PQ: Voronoi cells + PQ compression cut memory, trading a tunable recall loss for the budget.",
+      "Choose neither; brute-force scan all vectors.",
+      "Pick anything; memory and recall are unrelated."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果内存充足、且业务对召回极敏感（哪怕 1% 召回损失都不能接受），就该选 HNSW 全精度，用内存换最高召回。",
+    "whenOtherWins_en": "If memory is ample and the business is highly recall-sensitive (even 1% loss unacceptable), choose full-precision HNSW, spending memory for top recall.",
+    "optionExplanations": [
+      "HNSW 全精度正是内存瓶颈的来源，撑爆预算的场景不该选它。",
+      "对；IVF+PQ 用压缩把内存降下来，可调召回损失匹配「能容忍一点下降」的前提。",
+      "十亿量级暴力扫在 <10ms 内不可能，不是选项。",
+      "内存与召回强相关，PQ 压得越狠内存越省、召回越损。"
+    ],
+    "optionExplanations_en": [
+      "HNSW full precision is the memory bottleneck; don't pick it when it blows the budget.",
+      "Correct — IVF+PQ compresses to cut memory, and the tunable recall loss matches 'can tolerate a small drop'.",
+      "Brute-force over billions can't finish in <10ms — not an option.",
+      "Memory and recall are strongly linked; harder PQ saves memory but loses recall."
+    ],
+    "termDefinitions": [
+      {
+        "term": "product quantization / 乘积量化 (PQ)",
+        "meaning": "把向量切成子段、各用码本量化成小码字，大幅压缩存储，代价是精度损失。",
+        "meaningEn": "Product quantization (PQ) splits a vector into sub-segments each quantized to a codebook codeword, sharply compressing storage at a precision cost."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ann-tradeoff",
+    "scenario": "面试官问：ANN 索引在 Staff+ 层面有哪三个互相拉扯的量要一起权衡。",
+    "scenario_en": "The interviewer asks which three tensioned quantities you balance in an ANN index at Staff+ level.",
+    "q": "ANN 索引的三方取舍是哪三个量？",
+    "q_en": "What are the three quantities in the ANN index's three-way tradeoff?",
+    "why": "三方：索引刷新频率（越快内容越新但成本高、还可能服务到半成品索引）、服务延迟（p99 通常 <10ms，越紧就更激进量化/更少探针→召回降）、召回 recall@K（越高越吃算力）。三者互相拉扯，不能同时拉满。",
+    "why_en": "The three are index refresh frequency (fresher but costlier), serving latency (usually <10ms p99, tighter means more quantization/fewer probes and lower recall), and retrieval recall@K (higher costs more compute).",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "options": [
+      "索引刷新频率、服务延迟(p99 <10ms)、召回 recall@K，三者互相拉扯不能同时拉满",
+      "模型参数量、学习率、batch size",
+      "前端配色、日志保留、机房位置",
+      "只有召回一个维度要权衡"
+    ],
+    "options_en": [
+      "Index refresh frequency, serving latency (p99 <10ms), and recall@K — three tensioned, can't all max out.",
+      "Parameter count, learning rate, batch size.",
+      "UI colors, log retention, datacenter location.",
+      "Only recall matters."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；刷新/延迟/召回是索引设计互相牵制的三方，这是 Staff+ 要点出的取舍。",
+      "这些是训练超参，不是索引服务侧的三方取舍。",
+      "全是无关的运维/前端项，答不到索引取舍。",
+      "召回不能孤立看，延迟和刷新频率会直接压它。"
+    ],
+    "optionExplanations_en": [
+      "Correct — refresh/latency/recall are the three mutually-constraining index dimensions to name at Staff+.",
+      "Those are training hyperparameters, not the serving-side three-way tradeoff.",
+      "All unrelated ops/frontend items, missing the index tradeoff.",
+      "Recall can't be viewed alone; latency and refresh directly squeeze it."
+    ],
+    "termDefinitions": [
+      {
+        "term": "recall@K / 召回率@K",
+        "meaning": "ANN 返回的 top-K 里覆盖了多少真正最近邻，衡量近似检索的召回质量。",
+        "meaningEn": "Recall@K measures how many true nearest neighbors appear in the ANN's top-K, gauging approximate-retrieval quality."
+      },
+      {
+        "term": "index refresh / 索引刷新",
+        "meaning": "重建或更新 ANN 索引以纳入新内容，越频繁越新鲜但成本越高。",
+        "meaningEn": "Index refresh rebuilds or updates the ANN index to include new content; more frequent means fresher but costlier."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "index-freshness",
+    "scenario": "全库 ANN 索引一次全量重建要几个小时，但你不能在重建期间让检索停摆或读到半成品索引。",
+    "scenario_en": "A full ANN index rebuild takes hours, but retrieval can't stall or read a half-built index during it.",
+    "q": "该用什么部署方式安全地刷新索引？",
+    "q_en": "How should you safely refresh the index?",
+    "why": "用蓝绿部署：在旁边并行构建新索引，构建期旧索引继续服务，验证 recall@K 通过后原子切换到新索引。这样避免服务停摆和读到部分索引的风险。",
+    "why_en": "Use blue-green: build the new index in parallel while the old one keeps serving, then atomically swap after validating recall@K, avoiding downtime and partial-index reads.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "index-freshness"
+    ],
+    "tradeoff": "蓝绿并行构建+原子切换（无停摆、可验证） vs 原地重建（简单但期间读到半成品/停摆）",
+    "options": [
+      "原地把旧索引删了直接重建，期间检索先停一停",
+      "蓝绿：旁边并行构建新索引，旧索引照常服务，验证 recall@K 后原子切换",
+      "边查边随机改索引，不做验证",
+      "干脆不刷新，永远用第一版索引"
+    ],
+    "options_en": [
+      "Delete the old index in place and rebuild, pausing retrieval meanwhile.",
+      "Blue-green: build the new index in parallel while the old serves, validate recall@K, then atomically swap.",
+      "Randomly mutate the index during queries with no validation.",
+      "Never refresh; keep the first index forever."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果只是往索引里加极少量新向量、且能容忍短暂质量波动，直接增量插入比整套蓝绿重建更省——但增量久了要定期全量重建。",
+    "whenOtherWins_en": "If only a tiny number of vectors are added and brief quality wobble is acceptable, incremental insertion is cheaper than full blue-green — but periodic full rebuilds are still needed.",
+    "optionExplanations": [
+      "原地重建期间检索停摆或读到半成品，几小时的窗口不可接受。",
+      "对；并行构建+验证后原子切换，既不停摆也不读部分索引，是标准安全刷新。",
+      "不验证就切换正是索引迁移出事的根源，召回可能悄悄崩。",
+      "永不刷新会让新视频永远进不了候选，内容严重过时。"
+    ],
+    "optionExplanations_en": [
+      "In-place rebuild stalls retrieval or reads a partial index; an hours-long window is unacceptable.",
+      "Correct — parallel build plus validated atomic swap avoids downtime and partial reads, the standard safe refresh.",
+      "Swapping without validation is exactly how index migrations break, silently tanking recall.",
+      "Never refreshing keeps new videos out of candidates forever, badly stale."
+    ],
+    "termDefinitions": [
+      {
+        "term": "blue-green index swap / 蓝绿索引切换",
+        "meaning": "并行构建新索引，验证后把查询流量原子切到新索引，旧索引作回退。",
+        "meaningEn": "A blue-green index swap builds a new index in parallel, validates it, then atomically routes queries to it with the old one as fallback."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "incremental-insertion",
+    "scenario": "为了省事，团队只往 HNSW 索引里不断增量插入新视频，从不做全量重建。",
+    "scenario_en": "To save effort, the team only incrementally inserts new videos into HNSW and never fully rebuilds.",
+    "q": "长期只做增量插入、不全量重建会怎样？",
+    "q_en": "What happens if you only incrementally insert and never fully rebuild?",
+    "why": "HNSW 支持增量插入，但图的邻近结构会随插入逐渐劣化——新点连不到最优邻居，召回慢慢下滑。所以要周期性全量重建把图重新整理好。增量图快但会累积质量债。",
+    "why_en": "HNSW allows incremental insertion, but the graph's proximity structure degrades over time so recall slowly drops, which is why periodic full rebuilds are needed to restore quality.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "index-freshness"
+    ],
+    "options": [
+      "毫无影响，增量插入的图质量永远和全量重建一样",
+      "图邻近结构随插入劣化→召回慢慢下滑，需周期性全量重建整理",
+      "会让索引内存无限膨胀但召回反而更高",
+      "只影响写入速度，不影响检索召回"
+    ],
+    "options_en": [
+      "No effect; incremental graph quality always equals a full rebuild.",
+      "The graph's proximity structure degrades with insertions, so recall slowly drops, needing periodic full rebuilds.",
+      "It inflates index memory infinitely but raises recall.",
+      "It only affects write speed, not retrieval recall."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "增量图不会保持最优结构，长期质量必然低于全量重建。",
+      "对；增量插入让图逐渐劣化、召回下滑，定期全量重建是必要的维护。",
+      "召回是下降不是上升，内存也不是无限膨胀的核心问题。",
+      "劣化直接体现在检索召回，不只是写入速度。"
+    ],
+    "optionExplanations_en": [
+      "An incremental graph won't keep optimal structure; long-term quality falls below a full rebuild.",
+      "Correct — incremental insertion degrades the graph and drops recall, so periodic full rebuilds are needed maintenance.",
+      "Recall falls, not rises, and infinite memory isn't the core issue.",
+      "Degradation shows up in retrieval recall, not just write speed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "incremental insertion / 增量插入",
+        "meaning": "不重建整个索引，只把新向量插进现有图/桶结构，快但长期质量会劣化。",
+        "meaningEn": "Incremental insertion adds new vectors into the existing graph/cells without a full rebuild — fast but degrading quality over time."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sidecar-index",
+    "scenario": "全库索引每几小时才重建一次，但刚上传几分钟的新视频用户现在就想被推荐到。",
+    "scenario_en": "The main index rebuilds every few hours, but users should already get videos uploaded minutes ago.",
+    "q": "怎么让「几分钟前上传」的最新视频进入候选？",
+    "q_en": "How do you get videos uploaded minutes ago into candidates?",
+    "why": "用实时 sidecar 索引：一个小的、只装最新几分钟视频的索引，实时更新，查询时和主索引并行查再合并。主索引管海量存量、sidecar 补新鲜度，两者查询期合并解决刷新周期的滞后。",
+    "why_en": "Use a real-time sidecar index holding just the last few minutes of videos, updated live and merged with the main index at query time, so the main index covers the bulk while the sidecar supplies freshness.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "index-freshness"
+    ],
+    "tradeoff": "主索引+实时 sidecar 合并（存量+新鲜兼得） vs 只靠主索引（新内容要等下次全量重建）",
+    "options": [
+      "把主索引刷新频率提到每秒一次",
+      "用实时 sidecar 索引只装最新几分钟视频、查询时与主索引合并",
+      "让新视频等下一次几小时后的全量重建",
+      "把新视频直接塞进排序阶段跳过检索"
+    ],
+    "options_en": [
+      "Bump the main index refresh to once per second.",
+      "Use a real-time sidecar index holding just the last few minutes of videos, merged with the main index at query time.",
+      "Make new videos wait for the next full rebuild hours later.",
+      "Inject new videos straight into ranking, skipping retrieval."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果平台新内容极少、几小时的滞后完全可接受（如精编课程库），就不必维护 sidecar，直接等主索引重建更简单。",
+    "whenOtherWins_en": "If new content is rare and hours of lag is fine (a curated course library), skip the sidecar and just wait for the main rebuild.",
+    "optionExplanations": [
+      "每秒全量重建十亿索引成本不可承受，也没必要。",
+      "对；小 sidecar 专供新鲜内容、查询期与主索引合并，是解决刷新滞后的标准做法。",
+      "等几小时新视频就错过了首发流量窗口，不满足即时推荐。",
+      "跳过检索直接进排序破坏两阶段结构，且没解决候选集覆盖。"
+    ],
+    "optionExplanations_en": [
+      "Rebuilding a billion-scale index per second is unaffordable and unnecessary.",
+      "Correct — a small sidecar serves fresh content and merges with the main index at query time, the standard fix for refresh lag.",
+      "Waiting hours misses the launch-traffic window, failing instant recommendation.",
+      "Skipping retrieval into ranking breaks the two-stage structure and doesn't fix candidate coverage."
+    ],
+    "termDefinitions": [
+      {
+        "term": "sidecar index / 边车索引",
+        "meaning": "与主索引并存的小型实时索引，只装最新内容，查询时与主索引合并补新鲜度。",
+        "meaningEn": "A sidecar index is a small real-time index alongside the main one holding only the freshest content, merged at query time for freshness."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-020",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "pq-recall-drop",
+    "scenario": "一次索引配置迁移后，recall@K 明显下降，团队排查原因。",
+    "scenario_en": "After an index config migration, recall@K drops noticeably and the team investigates.",
+    "q": "索引迁移后召回骤降，最常见的元凶是什么，怎么防？",
+    "q_en": "What's the most common culprit for a recall drop after index migration, and how to prevent it?",
+    "why": "最常见元凶是 PQ 压得太狠（over-aggressive PQ）：码本太粗，向量压缩后丢了太多信息，检索找不回真正的近邻，召回骤降。防法是切换配置前，先在留出的查询集上基准测试 recall@K，达标才切。",
+    "why_en": "The most common culprit is over-aggressive PQ — a too-coarse codebook loses too much info so retrieval misses true neighbors — prevented by benchmarking recall@K on a held-out query set before swapping configs.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "options": [
+      "PQ 压得太狠、码本太粗丢信息→召回骤降；防法是切换前在留出查询集基准测 recall@K",
+      "召回下降只可能是网络问题，和索引配置无关",
+      "召回下降是好事，说明索引变快了",
+      "只要 p99 延迟没变，召回就一定不会变"
+    ],
+    "options_en": [
+      "Over-aggressive PQ (too-coarse codebook loses info) tanks recall; prevent by benchmarking recall@K on a held-out set before swapping.",
+      "A recall drop can only be a network issue, unrelated to index config.",
+      "A recall drop is good — it means the index got faster.",
+      "As long as p99 latency is unchanged, recall can't change."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；PQ 过度压缩是迁移后召回崩的头号原因，先基准测 recall@K 就能提前发现。",
+      "召回随索引配置（量化/探针）变化，不是纯网络问题。",
+      "召回下降意味着漏掉真正相关项，是质量退化不是好事。",
+      "延迟和召回是两码事，压 PQ 会降召回却可能让延迟更低。"
+    ],
+    "optionExplanations_en": [
+      "Correct — over-aggressive PQ is the top cause of post-migration recall collapse, caught early by benchmarking recall@K.",
+      "Recall changes with index config (quantization/probes), not a pure network issue.",
+      "A recall drop means missing truly relevant items — degradation, not a benefit.",
+      "Latency and recall differ; heavier PQ can lower latency while dropping recall."
+    ],
+    "termDefinitions": [
+      {
+        "term": "codebook / 码本",
+        "meaning": "PQ 用来量化向量子段的一组代表向量，码本越粗（条目越少）压缩越狠、召回损失越大。",
+        "meaningEn": "A codebook is PQ's set of representative vectors for quantizing sub-segments; a coarser codebook compresses harder at higher recall loss."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "pq-recall-drop",
+    "scenario": "从 HNSW 迁到 IVF+PQ 后：recall@100 掉了 8%，但 p99 从 7ms 降到 3ms。",
+    "scenario_en": "After migrating HNSW to IVF+PQ: recall@100 fell 8% while p99 dropped 7ms to 3ms.",
+    "q": "延迟降了但召回掉 8%，根因和修法是什么？",
+    "q_en": "Latency improved but recall fell 8% — root cause and fix?",
+    "why": "延迟降说明量化/剪枝更狠，召回掉正是 PQ 码本太粗（压缩过度）丢了信息。修法是把 PQ 码本做细：增加子量化器数量或码本大小，用一点延迟换回召回，找回平衡点。",
+    "why_en": "Lower latency means more aggressive quantization, and the recall drop is a too-coarse PQ codebook losing information; the fix is a finer codebook — more sub-quantizers or larger codebook size — trading a little latency to restore recall.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "tradeoff": "细化 PQ 码本（找回召回但延迟略升） vs 保持粗码本（延迟更低但召回不足）",
+    "options": [
+      "根因是网络抖动，修法是加机器",
+      "根因是 PQ 码本太粗丢信息，修法是增加子量化器数量或码本大小，用一点延迟换回召回",
+      "根因是 recall@100 算错了，重算即可",
+      "根因是用户变少了，与索引无关"
+    ],
+    "options_en": [
+      "Root cause is network jitter; add machines.",
+      "Root cause is a too-coarse PQ codebook losing info; fix by increasing sub-quantizers or codebook size, trading a little latency for recall.",
+      "Root cause is a miscomputed recall@100; just recompute.",
+      "Root cause is fewer users, unrelated to the index."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果这 8% 召回损失业务完全能接受、而 3ms 的延迟收益很关键（如极端高 QPS），那就该保留粗码本、不回调，反过来吃下召回换延迟。",
+    "whenOtherWins_en": "If the 8% recall loss is acceptable and the 3ms latency win is critical (extreme QPS), keep the coarse codebook and trade recall for latency instead.",
+    "optionExplanations": [
+      "延迟明显下降指向量化更狠而非网络，加机器解决不了召回。",
+      "对；粗码本是迁移后召回骤降的典型根因，细化码本即可换回召回。",
+      "召回和延迟一起变，是配置换了，不是算错。",
+      "召回随索引配置变，用户数量不是这次变化的原因。"
+    ],
+    "optionExplanations_en": [
+      "The clear latency drop points to heavier quantization, not network; adding machines won't fix recall.",
+      "Correct — a coarse codebook is the classic root cause, and refining it restores recall.",
+      "Recall and latency changed together from the config swap, not a miscount.",
+      "Recall tracks index config; user count isn't the cause of this change."
+    ],
+    "termDefinitions": [
+      {
+        "term": "sub-quantizer / 子量化器",
+        "meaning": "PQ 把向量切成多段，每段一个子量化器；子量化器越多、码字越细，召回越高、压缩率越低。",
+        "meaningEn": "A sub-quantizer quantizes one segment of a PQ-split vector; more sub-quantizers give finer codewords, higher recall, lower compression."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-022",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-path",
+    "q": "把候选检索的服务路径按正确顺序排列：",
+    "q_en": "Order the candidate-retrieval serving path correctly:",
+    "steps": [
+      "user tower 前向一次算出用户 embedding（关键路径上唯一的 NN 计算）",
+      "拉特征：实时会话特征从 Redis、批特征从预计算库",
+      "把 top-K 视频 ID + 分数交给排序阶段",
+      "用用户 embedding 查分片 ANN 索引，返回 top-K 视频 ID"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      3,
+      2
+    ],
+    "why": "顺序：拉特征（Redis 实时+预计算批）→ user tower 前向出用户 embedding（关键路径上唯一的 NN 计算）→ ANN 查索引返回 top-K ID → 交给排序。video tower 永不在此运行，因为视频 embedding 已离线算好。",
+    "why_en": "Order: fetch features (Redis real-time plus precomputed batch), run the user tower for the user embedding, query the sharded ANN index for top-K IDs, then hand off to ranking.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "serving"
+    ],
+    "diagram": "flowchart LR\n  F[\"拉特征<br/>Redis+预计算\"] --> UT[\"user tower<br/>算用户 embedding\"]\n  UT --> A[\"ANN 查索引<br/>top-K ID\"]\n  A --> H[\"交给排序\"]",
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "内存键值存储，这里存实时会话特征（如最近看的几个视频），毫秒级读取。",
+        "meaningEn": "Redis is an in-memory key-value store, here holding real-time session features (recent videos) for millisecond reads."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "feature-fetch",
+    "scenario": "服务时要给 user tower 备齐输入：既有「用户最近看的几个视频」这种实时信号，也有「长期偏好向量」这种慢变量。",
+    "scenario_en": "At serving, the user tower needs both real-time signals (last few videos) and slow ones (long-term preference vector).",
+    "q": "这两类特征分别从哪里取，为什么这样分？",
+    "q_en": "Where does each feature class come from, and why split them?",
+    "why": "实时会话特征（最近几个视频）从 Redis 内存存取，毫秒级、随每次交互更新；长期偏好向量等批特征从预计算库读，离线定期算好。快慢分离：热的实时信号走低延迟内存，冷的重计算离线做好直接查。",
+    "why_en": "Real-time session features (last few videos) come from Redis in-memory for millisecond reads updated per interaction, while batch features (long-term preference vectors) come from a precomputed store built offline.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "features"
+    ],
+    "tradeoff": "实时特征走 Redis（低延迟、随交互更新） vs 批特征走预计算库（离线重算、直接查）",
+    "options": [
+      "两类都实时现算，保证绝对最新",
+      "实时会话特征从 Redis 内存取（毫秒、随交互更新），长期批特征从预计算库读",
+      "两类都从磁盘数据库慢查，不区分冷热",
+      "实时特征离线算、长期特征实时算，正好反过来"
+    ],
+    "options_en": [
+      "Compute both in real time for absolute freshness.",
+      "Real-time session features from Redis in-memory (ms, per-interaction), long-term batch features from a precomputed store.",
+      "Slow-query both from a disk DB, no hot/cold split.",
+      "Compute real-time features offline and long-term ones live — the reverse."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果某个「长期」特征其实需要秒级新鲜（如刚刚爆发的兴趣转移），就得把它从批预计算挪到实时通路，牺牲成本换新鲜。",
+    "whenOtherWins_en": "If a 'long-term' feature actually needs second-level freshness (a just-emerged interest shift), move it from batch precompute to the real-time path, trading cost for freshness.",
+    "optionExplanations": [
+      "长期偏好重算成本高，实时现算撑不住 <10ms 预算。",
+      "对；热实时信号走 Redis 低延迟、冷重计算离线预算好，快慢分离是标准做法。",
+      "冷热不分全走磁盘慢查，达不到毫秒级特征读取。",
+      "反了：实时信号才需要实时取，长期偏好适合离线预计算。"
+    ],
+    "optionExplanations_en": [
+      "Long-term preference is costly to recompute; computing it live can't meet the <10ms budget.",
+      "Correct — hot real-time signals via low-latency Redis, cold heavy computation precomputed offline; hot/cold split is standard.",
+      "Slow-querying everything from disk can't hit millisecond feature reads.",
+      "Reversed: real-time signals need live fetch; long-term preference suits offline precompute."
+    ],
+    "termDefinitions": [
+      {
+        "term": "batch feature / 批特征",
+        "meaning": "离线定期批量算好的慢变量特征（如长期偏好向量），服务时直接查预计算库。",
+        "meaningEn": "A batch feature is a slow-changing feature precomputed offline in bulk (e.g. a long-term preference vector), looked up at serving from a precomputed store."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-024",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "critical-path",
+    "scenario": "有人担心双塔在线检索会被神经网络前向拖慢，你要澄清关键路径上到底跑了多少 NN 计算。",
+    "scenario_en": "Someone worries the neural forward slows online retrieval — clarify how much NN compute is on the critical path.",
+    "q": "服务关键路径上到底有多少神经网络计算？",
+    "q_en": "How much neural-network compute is on the serving critical path?",
+    "why": "关键路径上只有一次 user tower 前向（算当前用户 embedding）。video tower 在服务时永不运行——全库视频 embedding 已离线预计算好，ANN 只是查表。所以在线 NN 计算被压到最小，这是双塔的根本延迟优势。",
+    "why_en": "Only one user-tower forward is on the critical path; the video tower never runs at serving since all video embeddings are precomputed offline, so online NN compute is minimal.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "serving"
+    ],
+    "options": [
+      "关键路径要跑用户塔和视频塔各十亿次前向",
+      "关键路径上只有一次 user tower 前向，video tower 服务时永不运行（视频 embedding 已预计算）",
+      "关键路径没有任何 NN 计算，全靠规则",
+      "关键路径每个候选都要跑一次视频塔"
+    ],
+    "options_en": [
+      "The critical path runs the user and video towers a billion times each.",
+      "Only one user-tower forward is on the critical path; the video tower never runs at serving (video embeddings precomputed).",
+      "No NN compute at all — pure rules.",
+      "The critical path runs the video tower once per candidate."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "视频塔在线跑十亿次不可能，恰恰是预计算要避免的。",
+      "对；只算一次用户塔、视频侧查预计算表，把在线 NN 压到最小是双塔的核心优势。",
+      "用户塔的前向就是 NN 计算，并非纯规则。",
+      "视频塔永不在线跑，每候选跑一次视频塔违背预计算设计。"
+    ],
+    "optionExplanations_en": [
+      "Running the video tower a billion times online is impossible — exactly what precompute avoids.",
+      "Correct — one user-tower forward plus precomputed video-side lookup minimizes online NN, the core advantage.",
+      "The user-tower forward is NN compute, not pure rules.",
+      "The video tower never runs online; per-candidate video-tower runs violate the precompute design."
+    ],
+    "termDefinitions": [
+      {
+        "term": "critical path / 关键路径",
+        "meaning": "一次请求端到端延迟里必须串行完成的步骤链，决定最短可能响应时间。",
+        "meaningEn": "The critical path is the chain of steps that must run serially in a request, setting the minimum possible response time."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-025",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "topk-candidates",
+    "scenario": "ANN 查询返回一批候选交给排序阶段，规模通常在 200–500 个视频 ID。",
+    "scenario_en": "The ANN query returns a candidate batch for ranking, typically 200-500 video IDs.",
+    "q": "「返回 200–500 个候选」这个量级怎么影响两阶段设计？",
+    "q_en": "How does the '200-500 candidates' magnitude shape the two-stage design?",
+    "why": "200–500 是经验级候选数：足够宽以保证召回（相关视频大概率进集合），又足够窄让下游较重的排序模型能在延迟预算内逐个精打分。它是连接检索（宽召回）和排序（精打分）的漏斗口径。",
+    "why_en": "200-500 is an empirical candidate count: wide enough for recall (relevant videos likely make the set) yet narrow enough for the heavier ranking model to fine-score each within budget.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "serving"
+    ],
+    "options": [
+      "200–500 是要死记的硬数字，考点就是背它",
+      "经验漏斗口径：够宽保召回、够窄让下游排序能逐个精打分，连接检索与排序两阶段",
+      "说明排序阶段可以省掉，直接返回这几百个",
+      "候选越多越好，应该返回全部十亿个"
+    ],
+    "options_en": [
+      "200-500 is a hard number to memorize.",
+      "An empirical funnel width: wide enough for recall yet narrow enough for ranking to fine-score each, linking the two stages.",
+      "It means ranking can be skipped and these few hundred returned directly.",
+      "More candidates are always better; return all billions."
+    ],
+    "answer": [
+      1
+    ],
+    "termDefinitions": [
+      {
+        "term": "top-K candidates / top-K 候选",
+        "meaning": "ANN 检索按相似度返回的前 K 个视频（约 200–500），作为排序阶段的输入集合。",
+        "meaningEn": "Top-K candidates are the K most similar videos (about 200-500) returned by ANN, forming the ranking stage's input set."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "multi-source-retrieval",
+    "scenario": "单个双塔检索模型总是偏向某类兴趣，覆盖不到用户的全部意图（新鲜趋势、跨兴趣探索）。",
+    "scenario_en": "A single two-tower model always leans one way and misses parts of user intent (fresh trends, cross-interest exploration).",
+    "q": "怎么提升候选集的覆盖度和多样性？",
+    "q_en": "How do you improve candidate coverage and diversity?",
+    "why": "用多源检索：协同过滤塔、内容塔、趋势源等并行跑，各自召回一批，再合并去重成一个候选集。没有单个检索模型能捕捉全部用户意图，多源互补才能覆盖广、够多样。",
+    "why_en": "Use multi-source retrieval — a collaborative-filtering tower, a content-based tower, and a trending source run in parallel, then merge and dedup — because no single model captures all user intent.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "retrieval"
+    ],
+    "tradeoff": "多源并行+合并去重（覆盖广、多样） vs 单一双塔源（简单但意图覆盖窄）",
+    "options": [
+      "把单个双塔做得更大更深，就能覆盖所有意图",
+      "多源检索：协同过滤塔+内容塔+趋势源并行召回，合并去重成候选集，覆盖广且多样",
+      "只保留最强的一个源，删掉其他所有源",
+      "随机多返回一些视频来凑多样性"
+    ],
+    "options_en": [
+      "Make the single two-tower bigger and deeper to cover all intent.",
+      "Multi-source retrieval: a CF tower + content tower + trending source retrieve in parallel, then merge and dedup for broad, diverse candidates.",
+      "Keep only the single strongest source and drop the rest.",
+      "Randomly return extra videos to fake diversity."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果产品意图非常单一（如纯「同款商品」推荐），一个针对性双塔源就够了，多源合并反而增加复杂度和去重成本。",
+    "whenOtherWins_en": "If product intent is very narrow (pure 'same-item' recommendation), a single targeted two-tower source suffices, and multi-source adds needless complexity and dedup cost.",
+    "optionExplanations": [
+      "单塔再大也偏向它训练的信号，覆盖不了趋势/跨兴趣等异质意图。",
+      "对；多源各擅一类意图，并行召回后合并去重，覆盖度和多样性都上来。",
+      "只留一个源就丢了它覆盖不到的意图，多样性反而更差。",
+      "随机凑数会引入无关内容，不是有依据的多样性。"
+    ],
+    "optionExplanations_en": [
+      "A bigger single tower still leans on its trained signal and misses heterogeneous intent like trends/cross-interest.",
+      "Correct — multi-source each captures one intent type, merged and deduped for coverage and diversity.",
+      "Keeping one source drops the intent it can't cover, worsening diversity.",
+      "Random padding injects irrelevant content, not grounded diversity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "multi-source retrieval / 多源检索",
+        "meaning": "并行运行多个互补的检索源（协同过滤、内容、趋势），合并去重成一个候选集。",
+        "meaningEn": "Multi-source retrieval runs several complementary retrieval sources (CF, content, trending) in parallel, merging and deduping into one candidate set."
+      },
+      {
+        "term": "collaborative filtering / 协同过滤 (CF)",
+        "meaning": "根据行为相似用户群推荐：看过 X 的人也看 Y，需要交互历史。",
+        "meaningEn": "Collaborative filtering (CF) recommends from behaviorally similar users (people who watched X also watched Y), needing interaction history."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-027",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "候选检索的 SLA 是 p99 <10ms，你要把这个预算落实到架构决策上。",
+    "scenario_en": "Candidate retrieval's SLA is p99 <10ms, and you must turn that budget into architecture decisions.",
+    "q": "「<10ms p99」这个预算怎么倒逼检索架构？",
+    "q_en": "How does the '<10ms p99' budget drive the retrieval architecture?",
+    "why": "<10ms 是给定 SLA、不是公式推导。它逼出三件事：视频侧必须离线预计算（在线只算一次用户塔）、检索必须用 ANN 而非暴力扫、量化/探针要在召回和延迟间调到不超预算。数字本身不是考点，它约束的架构路径才是。",
+    "why_en": "The <10ms is a given SLA, not derived, and it forces precomputing the video side, ANN instead of brute force, and quantization/probes tuned to stay under budget.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "latency"
+    ],
+    "options": [
+      "<10ms 是要背的硬指标，记住 10 就行",
+      "给定 SLA：逼出视频侧离线预计算、必须 ANN 而非暴力扫、量化/探针在召回与延迟间调到不超预算",
+      "<10ms 说明不用 ANN，暴力扫十亿也够快",
+      "<10ms 只影响前端加载动画，不影响后端"
+    ],
+    "options_en": [
+      "<10ms is a hard number to memorize.",
+      "A given SLA: forces offline video-side precompute, ANN over brute force, and quantization/probes tuned to stay under budget.",
+      "<10ms means ANN is unnecessary; brute-scanning billions is fast enough.",
+      "<10ms only affects frontend loading animation."
+    ],
+    "answer": [
+      1
+    ],
+    "termDefinitions": [
+      {
+        "term": "p99 SLA / p99 服务目标",
+        "meaning": "承诺 99% 请求延迟低于某值的给定目标，是约束而非计算结果，倒逼检索架构。",
+        "meaningEn": "A p99 SLA is a given commitment that 99% of requests stay below a latency, a constraint that drives the retrieval architecture."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-028",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "retrieval-vs-ranking",
+    "scenario": "面试官想确认你能分清两阶段各自的目标：候选检索求什么、排序求什么。",
+    "scenario_en": "The interviewer checks you separate the two stages' goals: what retrieval optimizes vs what ranking does.",
+    "q": "候选检索和排序两阶段的目标与手段有什么本质区别？",
+    "q_en": "How do candidate retrieval and ranking fundamentally differ in goal and means?",
+    "why": "候选检索求宽召回：从十亿里把相关视频都捞进几百的集合，用轻量双塔+ANN、看 recall@K。排序求精排序：给这几百个候选逐个精打分排位，用较重模型、看 NDCG。一个求「捞得全」，一个求「排得对」。",
+    "why_en": "Retrieval optimizes broad recall — pull relevant videos from billions into a few hundred with light two-tower+ANN, judged by recall@K — while ranking optimizes precise ordering of those hundreds with a heavier model judged by NDCG.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "contrast"
+    ],
+    "tradeoff": "候选检索（宽召回、轻量、recall@K） vs 排序（精排序、重模型、NDCG）",
+    "table": {
+      "headers": [
+        "阶段",
+        "目标",
+        "手段",
+        "指标"
+      ],
+      "rows": [
+        [
+          "候选检索",
+          "宽召回",
+          "双塔+ANN、轻量",
+          "recall@K"
+        ],
+        [
+          "排序",
+          "精排序",
+          "重模型逐个打分",
+          "NDCG"
+        ]
+      ]
+    },
+    "options": [
+      "两阶段目标一样，只是排序更靠后",
+      "检索求宽召回(双塔+ANN、recall@K)；排序求精排序(重模型逐个打分、NDCG)",
+      "检索求精排序、排序求宽召回，正好反过来",
+      "两阶段都只看延迟，与召回排序无关"
+    ],
+    "options_en": [
+      "Same goal; ranking is just later.",
+      "Retrieval optimizes broad recall (two-tower+ANN, recall@K); ranking optimizes precise ordering (heavy per-item scoring, NDCG).",
+      "Retrieval does precise ordering and ranking does recall — reversed.",
+      "Both only care about latency, unrelated to recall/ranking."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "两阶段目标不同：一个求捞全、一个求排对，不只是先后。",
+      "对；宽召回 vs 精排序、轻量 vs 重、recall@K vs NDCG，正好切开两阶段。",
+      "说反了：检索是宽召回，排序才是精排序。",
+      "延迟是约束，但两阶段的核心目标是召回与排序质量。"
+    ],
+    "optionExplanations_en": [
+      "The goals differ: one captures all, one orders correctly — not just sequence.",
+      "Correct — broad recall vs precise ordering, light vs heavy, recall@K vs NDCG cleanly split the stages.",
+      "Backwards: retrieval is broad recall, ranking is precise ordering.",
+      "Latency is a constraint, but the core goals are recall and ranking quality."
+    ],
+    "termDefinitions": [
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "归一化折损累计增益，按排位加权的排序质量指标，排序阶段常用。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) is a rank-weighted ranking-quality metric used at the ranking stage."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-029",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "two-tower",
+    "q": "补全双塔检索的核心机制：",
+    "q_en": "Fill in the core two-tower retrieval mechanism:",
+    "text": "双塔用两条独立编码路径输出同空间 embedding，相关性用 {{点积}} 衡量。因两塔训练后独立，全库 {{视频}} embedding 可离线预计算，服务时只算 {{用户}} embedding，再做 {{ANN}} 检索。",
+    "text_en": "Two-tower emits same-space embeddings from two independent encoders, scoring relevance by {{dot product}}. Since towers are independent post-training, all {{video}} embeddings are precomputed offline, so serving computes only the {{user}} embedding, then runs {{ANN}} search.",
+    "why": "记住双塔四要素：点积打分、视频侧离线预计算、在线只算用户塔、ANN 检索。这四点合起来解释了为什么它能在 <10ms 内检索十亿目录。",
+    "why_en": "The four pieces: dot-product scoring, offline video precompute, online user-only compute, and ANN search — together explaining sub-10ms billion-scale retrieval.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "two-tower"
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-030",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "hard-neg-bias",
+    "scenario": "你从展示日志里挖硬负样本（展示了没点的），但这些展示本身是上一个推荐模型选出来的。",
+    "scenario_en": "You mine hard negatives from impression logs (shown-not-clicked), but those impressions were chosen by the previous model.",
+    "q": "用 impression-log 硬负样本会引入什么偏置，怎么缓解？",
+    "q_en": "What bias do impression-log hard negatives introduce, and how to mitigate?",
+    "why": "选择偏置：日志里能被「展示未点」的视频，全是上个模型愿意展示的那部分，用户从没见过的区域完全缺席。模型只在旧策略的可见范围里学，会自我固化。缓解：掺入 ANN-mined 或随机负样本、做曝光校正，扩大负样本覆盖。",
+    "why_en": "Selection bias: shown-not-clicked negatives only come from what the prior model chose to show, so regions users never saw are absent, and the model self-reinforces within the old policy's visibility.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "options": [
+      "选择偏置：负样本只来自旧模型愿展示的范围、用户没见过的区域缺席，会自我固化；掺 ANN/随机负样本+曝光校正缓解",
+      "毫无偏置，展示日志是对用户偏好的完整无偏采样",
+      "只会让训练变快，是纯优点",
+      "偏置只影响正样本，与负样本无关"
+    ],
+    "options_en": [
+      "Selection bias: negatives only span what the old model showed, missing unseen regions, self-reinforcing; mitigate with ANN/random negatives + exposure correction.",
+      "No bias; impression logs are a complete unbiased sample of preference.",
+      "It only speeds up training — a pure benefit.",
+      "The bias only affects positives, not negatives."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；日志受旧策略过滤，负样本覆盖被框死，掺入其他来源+曝光校正才能破圈。",
+      "日志只覆盖旧模型展示过的内容，天然有偏，不是完整采样。",
+      "偏置会让模型自我固化，是质量隐患不是优点。",
+      "这里偏置恰恰出在负样本来源（展示日志），不是只影响正样本。"
+    ],
+    "optionExplanations_en": [
+      "Correct — logs are filtered by the old policy, boxing in negative coverage; other sources plus exposure correction break out.",
+      "Logs only cover what the old model showed — inherently biased, not a complete sample.",
+      "The bias self-reinforces the model, a quality risk, not a benefit.",
+      "The bias is precisely in the negative source (impression logs), not just positives."
+    ],
+    "termDefinitions": [
+      {
+        "term": "exposure correction / 曝光校正",
+        "meaning": "对负样本按其被展示的概率加权，抵消旧推荐策略造成的选择偏置。",
+        "meaningEn": "Exposure correction reweights negatives by their probability of being shown, offsetting the old policy's selection bias."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-031",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "negatives-table",
+    "scenario": "面试官让你并排比较三种负样本策略：in-batch、ANN 硬负样本、impression 硬负样本，说清代价和风险。",
+    "scenario_en": "The interviewer asks you to compare three negative strategies — in-batch, ANN-hard, impression-hard — on cost and risk.",
+    "q": "三种负样本策略在成本、判别力、风险上怎么对比？",
+    "q_en": "How do the three negative strategies compare on cost, discriminative power, and risk?",
+    "why": "in-batch 免费但只给低-中判别力、带热度偏置；ANN 硬负样本判别力高但需周期 ANN 查询、比例过高不稳；impression 硬负样本判别力高、成本低（日志现成）但有旧策略的选择偏置。选择取决于当前最缺什么。",
+    "why_en": "In-batch is free but low-to-moderate discrimination with popularity bias, ANN-hard is high discrimination at periodic query cost and instability risk, and impression-hard is high discrimination and cheap but carries selection bias.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "negatives"
+    ],
+    "table": {
+      "headers": [
+        "策略",
+        "成本",
+        "判别力",
+        "风险"
+      ],
+      "rows": [
+        [
+          "in-batch",
+          "免费",
+          "低-中",
+          "热度偏置"
+        ],
+        [
+          "ANN 硬负",
+          "中(周期查询)",
+          "高",
+          "比例高则不稳"
+        ],
+        [
+          "impression 硬负",
+          "低(日志)",
+          "高",
+          "选择偏置"
+        ]
+      ]
+    },
+    "options": [
+      "in-batch 免费但判别低+热度偏置；ANN 硬负判别高但周期查询/不稳；impression 硬负便宜判别高但选择偏置",
+      "三者成本判别风险完全相同",
+      "in-batch 判别力最高，硬负样本判别力最低",
+      "三者都零成本零风险，随便选"
+    ],
+    "options_en": [
+      "In-batch free but low discrimination + popularity bias; ANN-hard high but periodic-query/unstable; impression-hard cheap and high but selection-biased.",
+      "All three are identical on cost, discrimination, risk.",
+      "In-batch has the highest discrimination; hard negatives the lowest.",
+      "All three are zero-cost, zero-risk; pick freely."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；三策略在成本/判别/风险上各占一格，正好组成选型的决策矩阵。",
+      "三者差异明显，成本判别风险各不相同。",
+      "说反了：硬负样本判别力最高，in-batch 易负样本最低。",
+      "各自带不同风险（热度/不稳/选择偏置），不是零风险。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the three occupy distinct cells on cost/discrimination/risk, forming the selection matrix.",
+      "They differ clearly across cost, discrimination, and risk.",
+      "Backwards: hard negatives have the highest discrimination, easy in-batch the lowest.",
+      "Each carries a distinct risk (popularity/instability/selection), not zero-risk."
+    ],
+    "termDefinitions": [
+      {
+        "term": "popularity bias / 热度偏置",
+        "meaning": "均匀采样负样本时热门视频更常出现，模型被推着偏向或错误压低热门项。",
+        "meaningEn": "Popularity bias arises when uniform negative sampling over-represents popular videos, skewing the model toward or against them."
+      }
+    ]
+  },
+  {
+    "id": "llm-050-video-recommendation-candidate-retrieval-architecture-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sharding",
+    "scenario": "十亿级向量的 ANN 索引装不进单机内存，且要扛高 QPS 查询。",
+    "scenario_en": "A billion-scale ANN index won't fit one machine's memory and must serve high QPS.",
+    "q": "该怎么部署这个 ANN 索引？",
+    "q_en": "How should you deploy this ANN index?",
+    "why": "分片（sharding）到几十台机器，把索引拆开分摊内存和查询负载，再对每个分片做副本（replication）提高吞吐和可用性。查询时并行打各分片、合并 top-K。单机装不下、单点扛不住高 QPS，分片+副本是标准解。",
+    "why_en": "Shard the index across dozens of machines to spread memory and query load, and replicate each shard for throughput and availability, querying shards in parallel and merging top-K.",
+    "tags": [
+      "llm-sd",
+      "recsys",
+      "ann-index"
+    ],
+    "tradeoff": "分片+副本（可扩容、高可用但要合并/协调） vs 单机索引（简单但内存和 QPS 都撞墙）",
+    "options": [
+      "硬塞进单机，加内存条就行",
+      "分片到几十台分摊内存和查询、每分片加副本提吞吐/可用，查询并行打分片合并 top-K",
+      "只留一份索引不做副本，省机器",
+      "把索引存磁盘，每次查询现读"
+    ],
+    "options_en": [
+      "Cram it onto one machine; just add RAM.",
+      "Shard across dozens of machines to spread memory/queries, replicate each shard for throughput/availability, query in parallel and merge top-K.",
+      "Keep one copy with no replicas to save machines.",
+      "Store the index on disk and read it per query."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "如果索引其实能装进单机内存、QPS 也不高（如内部小规模检索），单机不分片更简单，省掉合并和协调开销。",
+    "whenOtherWins_en": "If the index fits one machine's memory and QPS is low (a small internal search), a single unsharded node is simpler, avoiding merge/coordination overhead.",
+    "optionExplanations": [
+      "十亿全精度向量单机内存放不下，加内存条也有物理上限。",
+      "对；分片分摊内存/负载、副本提吞吐可用，是十亿级索引的标准部署。",
+      "无副本则单点故障、吞吐受限，扛不住高 QPS。",
+      "磁盘现读延迟太高，达不到 <10ms 的检索预算。"
+    ],
+    "optionExplanations_en": [
+      "A billion full-precision vectors won't fit one machine, and RAM has a physical ceiling.",
+      "Correct — sharding spreads memory/load and replicas add throughput/availability, the standard billion-scale deployment.",
+      "No replicas means single points of failure and limited throughput, failing high QPS.",
+      "Per-query disk reads are too slow for the <10ms budget."
+    ],
+    "termDefinitions": [
+      {
+        "term": "sharding / 分片",
+        "meaning": "把大索引拆成多份分布到不同机器，分摊内存和查询负载。",
+        "meaningEn": "Sharding splits a large index across machines to spread memory and query load."
+      },
+      {
+        "term": "replication / 副本",
+        "meaning": "为每个分片保留多份拷贝，提高查询吞吐并在机器故障时保可用。",
+        "meaningEn": "Replication keeps multiple copies of each shard, raising query throughput and preserving availability on machine failure."
+      }
+    ]
+  }
+]

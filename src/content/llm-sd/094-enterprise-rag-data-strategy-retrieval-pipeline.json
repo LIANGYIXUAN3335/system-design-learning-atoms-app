@@ -1,0 +1,1161 @@
+[
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "retrieval-is-the-lever",
+    "scenario": "给 5 万员工做跨法务/工程/财务文档的知识助手(RAG)，答案准不准、引用对不对，主要在 LLM 生成前就已由检索决定。",
+    "scenario_en": "A RAG knowledge assistant for 50,000 employees over legal/engineering/finance docs, where answer accuracy and citation quality are decided by retrieval before the LLM generates a token.",
+    "q": "为什么说「检索质量是答案准确率的最大杠杆」，数据侧要定哪几件事？",
+    "q_en": "Why is retrieval quality the biggest lever on answer accuracy, and what must the data side decide?",
+    "why": "检索决定喂给 LLM 的是不是对的、够不够的证据，答案和引用在 LLM 吐第一个 token 前就已被检索定型。数据侧四个决策——分块、嵌入管线、混合检索、索引重建——直接决定检索质量。",
+    "why_en": "Retrieval decides whether the evidence fed to the LLM is correct and sufficient, so the answer and citations are set before the first token, and four data-side decisions — chunking, embedding pipeline, hybrid retrieval, index rebuild — govern it.",
+    "tags": ["llm-sd", "rag", "retrieval"],
+    "diagram": "flowchart LR\n  D[\"原始文档\"] --> P[\"结构感知解析\"] --> C[\"分块\"] --> E[\"嵌入(带版本)\"] --> I[(\"向量索引+BM25\")]\n  Q[\"用户问题\"] --> H[\"混合检索\"]\n  I --> H --> R[\"重排\"] --> L[\"LLM 生成\"]",
+    "options": [
+      "检索无关紧要，只要 LLM 够强就能答对，重心该放在选更大的模型",
+      "检索质量只影响响应速度，不影响答案对错",
+      "检索决定喂给 LLM 的证据对不对/够不够，答案在生成前已定型；数据侧要定分块/嵌入/混合检索/索引重建",
+      "只要把所有文档一次性塞进超长上下文窗口，就根本不需要检索"
+    ],
+    "options_en": [
+      "Retrieval doesn't matter; a strong enough LLM answers correctly, so focus on a bigger model.",
+      "Retrieval quality only affects latency, not answer correctness.",
+      "Retrieval sets whether the LLM's evidence is correct/sufficient, fixing the answer before generation; the data side decides chunking/embedding/hybrid retrieval/index rebuild.",
+      "Just stuff all documents into a huge context window and you need no retrieval at all."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "喂错证据再强的 LLM 也会答错或幻觉，检索是上游地基，不是靠加大模型能绕过的。",
+      "检索错的是内容不是速度：命中错块直接导致答非所问和错误引用。",
+      "对；生成前检索就定了证据集，四个数据决策决定这套证据的质量，是 RAG 的真正主战场。",
+      "5 万员工的全量语料远超任何上下文窗口，且塞满会触发 lost-in-the-middle，仍需检索先选证据。"
+    ],
+    "optionExplanations_en": [
+      "Feed wrong evidence and even a strong LLM answers wrong or hallucinates; retrieval is the upstream foundation, not something a bigger model bypasses.",
+      "Retrieval errors are about content not speed: hitting wrong chunks directly causes off-topic answers and wrong citations.",
+      "Correct — retrieval fixes the evidence set before generation, and the four data decisions govern its quality, the real battleground of RAG.",
+      "A 50k-employee corpus dwarfs any context window and stuffing triggers lost-in-the-middle, so retrieval must still select evidence first."
+    ],
+    "termDefinitions": [
+      { "term": "RAG", "fullName": "Retrieval-Augmented Generation", "meaning": "检索增强生成：先检索相关文档块，再让 LLM 基于这些块生成有依据的答案。", "meaningEn": "RAG (Retrieval-Augmented Generation) retrieves relevant document chunks first, then has the LLM generate a grounded answer from them." },
+      { "term": "BM25", "fullName": "Okapi BM25 (Best Matching 25)", "meaning": "经典的词法检索排名函数，按词频/逆文档频率给精确关键词匹配打分。", "meaningEn": "BM25 (Okapi Best Matching 25) is a classic lexical ranking function scoring exact keyword matches by term and inverse-document frequency." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "chunking-consequential",
+    "scenario": "团队复盘一个上线后频繁答非所问的 RAG，发现根因出在切分文档的方式。",
+    "scenario_en": "A team debugs a RAG that keeps answering off-topic in prod and traces the root cause to how documents are split.",
+    "q": "为什么说分块(chunking)是最容易搞砸、后果最重的一步？",
+    "q_en": "Why is chunking the easiest step to get wrong and the most consequential?",
+    "why": "分块决定检索的最小单位：切得太碎丢上下文、切在句中造成语义断裂、把表格切散成无意义片段，都会让检索命中错误或不完整的块，是生产 RAG 的头号失效点。所以分块策略要显式选、不能默认。",
+    "why_en": "Chunking sets retrieval's atomic unit: too small loses context, mid-sentence cuts break meaning, and split tables become meaningless fragments, all making retrieval hit wrong or incomplete chunks — the top production failure — so choose the strategy explicitly.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "options": [
+      "分块决定检索最小单位：切碎丢上下文、切在句中断语义、表格切散→检索到错块，是生产头号失效点",
+      "分块只是技术细节，切多大都不影响检索结果",
+      "分块只影响存储成本，与答案质量无关",
+      "分块由 LLM 在生成时自动完成，不用提前设计"
+    ],
+    "options_en": [
+      "Chunking sets the retrieval unit: too small loses context, mid-sentence cuts break meaning, split tables fragment → wrong chunks retrieved, the top production failure.",
+      "Chunking is a mere detail; any chunk size gives the same retrieval result.",
+      "Chunking only affects storage cost, unrelated to answer quality.",
+      "Chunking is done automatically by the LLM at generation time, needing no upfront design."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；块是检索的原子单位，切法直接决定命中的块完不完整、对不对，错在这里下游全错。",
+      "块大小直接改变语义完整性和命中率，绝非无关紧要。",
+      "分块首先影响的是检索到的内容质量，存储成本是次要的。",
+      "分块是摄取期的数据管线设计，LLM 生成时只用已切好的块，不会自己切。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the chunk is retrieval's atomic unit, so how you split directly decides whether the hit chunk is complete and correct; errors here cascade.",
+      "Chunk size directly changes semantic completeness and hit rate, far from irrelevant.",
+      "Chunking primarily affects retrieved content quality; storage cost is secondary.",
+      "Chunking is ingestion-time pipeline design; the LLM uses pre-cut chunks and doesn't split at generation."
+    ],
+    "termDefinitions": [
+      { "term": "chunking / 分块", "meaning": "把文档切成用于嵌入和检索的小片段，切法决定检索的最小单位。", "meaningEn": "Chunking splits documents into small pieces for embedding and retrieval; the method sets retrieval's atomic unit." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "fixed-size-chunking",
+    "scenario": "语料是同质的运维日志和报表，格式统一、段落规整，你要选分块策略。",
+    "scenario_en": "The corpus is homogeneous ops logs and reports with uniform format and regular paragraphs; pick a chunking strategy.",
+    "q": "这种同质规整文本该用哪种分块策略，为什么？",
+    "q_en": "Which chunking strategy fits this homogeneous, regular text, and why?",
+    "why": "用固定大小分块(256-512 token、约 50 overlap)：同质文本没有复杂结构，固定切分实现简单、索引复杂度低，overlap 缓冲少量句中断裂。文本越规整，固定切分的主要风险(句中切断)越小。",
+    "why_en": "Use fixed-size chunking (256-512 tokens, ~50 overlap): homogeneous text has no complex structure, so fixed splitting is simple with low index complexity, and overlap buffers occasional mid-sentence cuts, whose risk shrinks the more regular the text.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "tradeoff": "固定大小(简单、索引轻但可能句中切断) vs 语义/分层(更贵但保结构)",
+    "whenOtherWins": "若语料是混合格式(合同+邮件+表格)，固定切分会把结构切碎，应改用语义或分层分块。",
+    "options": [
+      "分层分块，给每段配 parent/child",
+      "语义分块，按嵌入相似度找边界",
+      "每篇文档整体不切，直接当作一个块",
+      "固定大小分块(256-512 token、约 50 overlap)：同质文本结构简单，切分省事、索引轻"
+    ],
+    "options_en": [
+      "Hierarchical chunking with parent/child per section.",
+      "Semantic chunking, finding boundaries by embedding similarity.",
+      "Don't split at all; treat each document as one chunk.",
+      "Fixed-size chunking (256-512 tokens, ~50 overlap): homogeneous text is simple, so splitting is easy and the index is light."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "分层的 parent/child 是给超长结构化文档保上下文用的，同质日志上是过度设计。",
+      "语义分块要额外 NLP、块大小可变，同质规整文本用不上这份复杂度。",
+      "整篇不切会让块过大、稀释检索信号又挤占 LLM 上下文预算。",
+      "对；同质文本主要风险(句中切断)本来就小，固定切分最省事、索引最轻，是恰当选择。"
+    ],
+    "optionExplanations_en": [
+      "Hierarchical parent/child preserves context for long structured docs; on homogeneous logs it's over-engineering.",
+      "Semantic chunking needs extra NLP and variable sizes, complexity unused on homogeneous regular text.",
+      "Not splitting makes chunks too big, diluting the retrieval signal and eating the LLM's context budget.",
+      "Correct — mid-sentence risk is already small on homogeneous text, so fixed splitting is simplest with the lightest index."
+    ],
+    "termDefinitions": [
+      { "term": "fixed-size chunking / 固定大小分块", "meaning": "按固定 token 数切块并留少量重叠，简单但可能在句中切断。", "meaningEn": "Fixed-size chunking splits by a fixed token count with small overlap — simple but may cut mid-sentence." },
+      { "term": "overlap / 重叠", "meaning": "相邻块共享的一小段文本，用来缓冲被切断的句子。", "meaningEn": "Overlap is a shared span between adjacent chunks that buffers sentences cut at the boundary." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "semantic-chunking",
+    "scenario": "知识库是混合格式(产品手册+FAQ+邮件)，同一库里文档长短和结构差异很大。",
+    "scenario_en": "The KB is mixed-format (product manuals + FAQs + emails) with widely varying document lengths and structures.",
+    "q": "混合格式知识库该用哪种分块策略？",
+    "q_en": "Which chunking strategy fits a mixed-format knowledge base?",
+    "why": "用语义分块：按句子/段落/嵌入相似度找自然边界，让每块语义完整，适配长短不一的混合格式。代价是块大小可变、要额外 NLP 预处理。",
+    "why_en": "Use semantic chunking: find natural boundaries by sentence/paragraph/embedding similarity so each chunk is semantically complete, fitting the varied mixed formats, at the cost of variable chunk sizes and extra NLP preprocessing.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "tradeoff": "语义分块(块语义完整但大小可变、需 NLP) vs 固定大小(简单但易切断)",
+    "whenOtherWins": "若文档是同质规整文本，固定大小更省事；若是超长结构化合同，分层分块的 parent/child 更合适。",
+    "options": [
+      "固定大小分块，一刀切 512 token",
+      "语义分块：按句/段/嵌入相似度找自然边界，每块语义完整，适配混合格式",
+      "完全不分块，整库当一个向量",
+      "随机切分，反正检索会兜底"
+    ],
+    "options_en": [
+      "Fixed-size chunking, a flat 512-token cut.",
+      "Semantic chunking: find natural boundaries by sentence/paragraph/embedding similarity so each chunk is complete, fitting mixed formats.",
+      "Don't chunk at all; make the whole KB one vector.",
+      "Split randomly; retrieval will compensate."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "一刀切 512 会在混合格式里频繁切断结构，短文档被硬拆、长文档丢边界。",
+      "对；按语义边界切让每块自洽，正好吸收混合格式里长短结构的差异，检索命中更完整。",
+      "整库一个向量无法定位到具体证据，检索退化为无。",
+      "随机切分制造大量语义断裂块，检索只会更差，没有兜底一说。"
+    ],
+    "optionExplanations_en": [
+      "A flat 512 cut repeatedly breaks structure across mixed formats, hard-splitting short docs and losing boundaries in long ones.",
+      "Correct — cutting at semantic boundaries makes each chunk self-contained, absorbing the varied lengths and structures for more complete hits.",
+      "One vector for the whole KB can't localize evidence, degrading retrieval to nothing.",
+      "Random splitting creates many broken chunks and only worsens retrieval; there is no fallback."
+    ],
+    "termDefinitions": [
+      { "term": "semantic chunking / 语义分块", "meaning": "按句子/段落/嵌入相似度的自然语义边界切块，块大小可变。", "meaningEn": "Semantic chunking splits at natural semantic boundaries (sentence/paragraph/embedding similarity), giving variable chunk sizes." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hierarchical-chunking",
+    "scenario": "文档是超长结构化的合同和手册，既要检索命中精确到段落，又要给 LLM 足够上下文。",
+    "scenario_en": "Documents are long, structured contracts and manuals; hits must be precise at the paragraph level while giving the LLM enough context.",
+    "q": "这类超长结构化文档该用哪种分块策略？",
+    "q_en": "Which chunking strategy fits long, structured documents?",
+    "why": "用分层分块：parent=章节/页、child=段落；用 child 做检索匹配保证精度，命中后返回 parent 给 LLM 补足上下文。既精确又不丢背景，代价是索引更大、要遍历父子关系。",
+    "why_en": "Use hierarchical chunking: parent = section/page, child = paragraph; match on children for precision, then return the parent for LLM context — precise without losing background — at the cost of a larger index and parent-child traversal logic.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "tradeoff": "分层(精度+上下文兼得但索引大、逻辑复杂) vs 单层(简单但精度与上下文二选一)",
+    "whenOtherWins": "若文档短小或同质，分层的父子结构是过度设计，固定或语义分块就够。",
+    "options": [
+      "固定大小分块，一刀 512",
+      "语义分块，按相似度切",
+      "分层分块：parent=章节/页、child=段落；child 匹配保精度，返回 parent 补上下文",
+      "每页当一块，不分父子"
+    ],
+    "options_en": [
+      "Fixed-size chunking, a flat 512.",
+      "Semantic chunking by similarity.",
+      "Hierarchical chunking: parent = section/page, child = paragraph; match children for precision, return parent for context.",
+      "One chunk per page, no parent/child."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "一刀 512 在长合同里既可能切断条款，又无法在命中后带回整节上下文。",
+      "语义分块保完整但仍是单层，命中一块难同时给出所在章节的完整背景。",
+      "对；child 精确匹配 + 返回 parent 补背景，正好同时满足「命中要准」和「上下文要全」。",
+      "每页一块太粗，段落级的精确命中和引用都做不到。"
+    ],
+    "optionExplanations_en": [
+      "A flat 512 may cut clauses in long contracts and can't bring back the whole section's context on a hit.",
+      "Semantic chunking is complete but still single-level, so one hit can't also supply the full surrounding section.",
+      "Correct — precise child match plus returning the parent satisfies both 'precise hit' and 'full context' at once.",
+      "One chunk per page is too coarse for paragraph-level precise hits and citations."
+    ],
+    "termDefinitions": [
+      { "term": "hierarchical chunking / 分层分块", "meaning": "父块=章节/页、子块=段落；用子块匹配保精度、返回父块补上下文。", "meaningEn": "Hierarchical chunking uses parent = section/page and child = paragraph, matching on children for precision and returning parents for context." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "chunking-strategies",
+    "scenario": "面试官要你比较三种分块策略，想看你能否按语料类型选。",
+    "scenario_en": "The interviewer asks you to compare the three chunking strategies, checking whether you can pick by corpus type.",
+    "q": "固定/语义/分层三种分块在语义完整性、索引复杂度、适用语料上如何对比？",
+    "q_en": "How do fixed/semantic/hierarchical chunking compare on completeness, index complexity, and corpus fit?",
+    "why": "固定简单但语义完整性低；语义保完整但要 NLP、块大小可变；分层最保上下文但索引最重。启发式：同质用固定、混合用语义、超长结构化用分层，面试要显式说出这条映射。",
+    "why_en": "Fixed is simple but low-completeness; semantic preserves completeness but needs NLP with variable sizes; hierarchical best preserves context but has the heaviest index — heuristic: homogeneous → fixed, mixed → semantic, long structured → hierarchical, stated explicitly.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "tradeoff": "语义完整性 vs 索引复杂度：固定轻但碎、分层全但重",
+    "table": {
+      "headers": ["策略", "语义完整性", "索引复杂度", "最适合"],
+      "rows": [
+        ["固定大小", "低", "低", "同质文本(日志/报表)"],
+        ["语义", "高", "中", "混合格式知识库"],
+        ["分层", "最高", "高", "超长结构化文档(合同/手册)"]
+      ]
+    },
+    "options": [
+      "三种没区别，随便选一种就行",
+      "分层最简单、固定最复杂，与语料类型无关",
+      "固定语义完整性最高，分层最低",
+      "固定简单低完整性适合同质；语义高完整性适合混合；分层最高完整性但索引重，适合超长结构化"
+    ],
+    "options_en": [
+      "The three are the same; pick any.",
+      "Hierarchical is simplest and fixed most complex, unrelated to corpus.",
+      "Fixed has the highest completeness and hierarchical the lowest.",
+      "Fixed is simple, low-completeness for homogeneous; semantic is high-completeness for mixed; hierarchical is highest-completeness but index-heavy for long structured docs."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "三者在完整性、索引成本、适用语料上都不同，选错会直接拉低检索质量。",
+      "说反了：固定最简单、分层最复杂，且策略要按语料类型选。",
+      "颠倒了：固定完整性最低、分层最高。",
+      "对；这条「同质固定/混合语义/长结构分层」的映射正是面试要显式说出的启发式。"
+    ],
+    "optionExplanations_en": [
+      "The three differ on completeness, index cost, and corpus fit; choosing wrong directly lowers retrieval quality.",
+      "Backwards: fixed is simplest and hierarchical most complex, and the strategy tracks corpus type.",
+      "Reversed: fixed has the lowest completeness and hierarchical the highest.",
+      "Correct — this 'homogeneous→fixed, mixed→semantic, long-structured→hierarchical' mapping is the heuristic to state explicitly."
+    ],
+    "termDefinitions": [
+      { "term": "index complexity / 索引复杂度", "meaning": "分块方案给索引带来的大小与检索逻辑负担，分层最重。", "meaningEn": "Index complexity is the size and retrieval-logic burden a chunking scheme adds to the index; hierarchical is heaviest." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "structure-aware-parsing",
+    "scenario": "不管选哪种分块策略，都要先做一步文档解析。",
+    "scenario_en": "Whatever chunking strategy you pick, a parsing step must come first.",
+    "q": "为什么「结构感知解析」是所有分块策略的前置必做项？",
+    "q_en": "Why is structure-aware parsing a non-negotiable prerequisite for every chunking strategy?",
+    "why": "结构感知解析先识别表格、嵌套标题、列表等文档结构；不做它就直接按字符切，表格会被切成无意义碎片、嵌套标题错位，后续再好的分块也救不回。它是分块前不可跳过的地基。",
+    "why_en": "Structure-aware parsing first recognizes tables, nested headers, and lists; without it, character-level splitting fragments tables into meaningless pieces and misplaces headers, which no downstream chunking can recover — the non-skippable foundation before chunking.",
+    "tags": ["llm-sd", "rag", "parsing"],
+    "options": [
+      "结构感知解析只是可选优化，跳过也不影响检索",
+      "先识别表格/嵌套标题/列表等结构，否则会被切成无意义碎片，是分块前不可跳过的地基",
+      "它只对固定大小分块有用，语义和分层不需要",
+      "它由 LLM 在生成时完成，不属于数据管线"
+    ],
+    "options_en": [
+      "Structure-aware parsing is optional; skipping it doesn't affect retrieval.",
+      "Recognize tables/nested headers/lists first, else they fragment into meaningless pieces — the non-skippable foundation before chunking.",
+      "It only helps fixed-size chunking; semantic and hierarchical don't need it.",
+      "It's done by the LLM at generation time, not part of the data pipeline."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "跳过它，表格和嵌套标题就被切成碎片，检索命中的块本身就是坏的，影响很大。",
+      "对；先保住结构再切，才不会让表格/标题在源头就变成无意义片段，任何策略都依赖它。",
+      "三种策略都建立在解析出的结构之上，语义和分层反而更依赖正确的结构边界。",
+      "解析是摄取期数据处理，早于嵌入和索引，跟 LLM 生成无关。"
+    ],
+    "optionExplanations_en": [
+      "Skip it and tables and nested headers fragment, so the retrieved chunk is already broken — a big impact.",
+      "Correct — preserving structure before splitting keeps tables/headers from becoming meaningless fragments at the source; every strategy depends on it.",
+      "All three build on parsed structure, and semantic/hierarchical rely even more on correct structural boundaries.",
+      "Parsing is ingestion-time processing before embedding and indexing, unrelated to LLM generation."
+    ],
+    "termDefinitions": [
+      { "term": "structure-aware parsing / 结构感知解析", "meaning": "分块前识别文档的表格、标题、列表等结构，避免它们被切成碎片。", "meaningEn": "Structure-aware parsing recognizes a document's tables, headers, and lists before chunking so they aren't fragmented." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-008",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "chunk-size",
+    "scenario": "固定大小分块常取 256-512 token、约 50 token 的重叠。",
+    "scenario_en": "Fixed-size chunking commonly uses 256-512 tokens with about 50 tokens of overlap.",
+    "q": "「256-512 token、~50 overlap」这些数字在设计里怎么用？",
+    "q_en": "How are the '256-512 tokens, ~50 overlap' numbers used in design?",
+    "why": "这是经验区间不是公式：块太小丢上下文、太大稀释检索信号并挤占 LLM 上下文预算，256-512 是二者的折中；~50 overlap 让相邻块共享边界句，缓冲句中切断导致的语义丢失。",
+    "why_en": "These are empirical ranges, not formulas: too small loses context, too large dilutes the retrieval signal and eats the LLM's context budget, so 256-512 is the compromise, and ~50 overlap shares boundary sentences to buffer mid-sentence cuts.",
+    "tags": ["llm-sd", "rag", "chunking"],
+    "options": [
+      "是经验折中区间：太小丢上下文、太大稀释信号又挤占上下文预算；~50 overlap 缓冲句中切断",
+      "是硬性标准，所有语料必须严格 512、overlap 必须 50",
+      "数字越大越好，应该尽量往 4096 调",
+      "只是要背的数字，没有任何设计含义"
+    ],
+    "options_en": [
+      "An empirical compromise: too small loses context, too large dilutes the signal and eats the context budget; ~50 overlap buffers mid-sentence cuts.",
+      "A hard standard: every corpus must use exactly 512 with overlap exactly 50.",
+      "Bigger is always better; push toward 4096.",
+      "Just numbers to memorize with no design meaning."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "token / 词元", "meaning": "模型处理文本的最小单位，块大小和上下文预算都以 token 计。", "meaningEn": "A token is the model's smallest text unit; chunk size and context budget are both measured in tokens." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-009",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "embedding-tied-to-model",
+    "scenario": "嵌入管线把每个块过嵌入模型，得到一个稠密向量。",
+    "scenario_en": "The embedding pipeline runs each chunk through an embedding model to get a dense vector.",
+    "q": "关于「每个块的嵌入向量」，有个必须从第一天就记住的性质是什么？",
+    "q_en": "What property of each chunk's embedding must you remember from day one?",
+    "why": "每个向量都绑定产生它的嵌入模型——向量空间由模型定义，不同模型产生的向量不可比。所以要从第一天就把嵌入模型版本写进每个块的元数据，否则日后升级模型时无从区分、迁移极痛。",
+    "why_en": "Every vector is tied to the model that produced it — the vector space is defined by the model, so vectors from different models aren't comparable — hence tag each chunk's metadata with the model version from day one, or a later upgrade becomes a painful migration.",
+    "tags": ["llm-sd", "rag", "embedding"],
+    "options": [
+      "向量和模型无关，任何模型的向量都能混在一个索引里比相似度",
+      "向量只跟文本有关，换模型不影响",
+      "每个向量绑定产生它的模型，向量空间由模型定义，必须从第一天给每块打上模型版本标签",
+      "向量维度可以随时改，不用记模型"
+    ],
+    "options_en": [
+      "Vectors are model-independent; any model's vectors can share one index and be compared.",
+      "Vectors depend only on the text; swapping models doesn't matter.",
+      "Each vector is tied to its model, the space is model-defined, so tag every chunk with the model version from day one.",
+      "Dimensionality can change anytime; no need to record the model."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "跨模型的向量空间不同，混在一起比相似度是无意义的，正是要避免的错误。",
+      "同一文本换模型会得到完全不同的向量，模型是决定向量的关键变量。",
+      "对；从第一天打版本标签，日后升级才能区分新旧向量、走平行索引迁移，省下痛苦。",
+      "维度由模型决定，随意改维度等于换了向量空间，必须记录模型。"
+    ],
+    "optionExplanations_en": [
+      "Cross-model spaces differ, so comparing mixed vectors is meaningless — exactly the mistake to avoid.",
+      "The same text yields totally different vectors under a different model; the model is the decisive variable.",
+      "Correct — tagging versions from day one lets a later upgrade distinguish old/new vectors and migrate via a parallel index, avoiding pain.",
+      "Dimensionality is model-defined; changing it arbitrarily changes the space, so the model must be recorded."
+    ],
+    "termDefinitions": [
+      { "term": "embedding / 嵌入", "meaning": "把一段文本映射成的稠密向量，用向量距离衡量语义相似度。", "meaningEn": "An embedding is a dense vector a text maps to, with vector distance measuring semantic similarity." },
+      { "term": "vector space / 向量空间", "meaning": "由某个嵌入模型定义的坐标系；不同模型的空间不可直接比较。", "meaningEn": "A vector space is the coordinate system a given embedding model defines; spaces from different models aren't directly comparable." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-dimensionality",
+    "scenario": "选嵌入维度：是 384 还是 1024，语料规模很大、检索延迟和存储都要算账。",
+    "scenario_en": "Choose embedding dimensionality — 384 or 1024 — for a large corpus where retrieval latency and storage both matter.",
+    "q": "嵌入维度(384-1024)怎么权衡，更高维意味着什么？",
+    "q_en": "How to weigh embedding dimensionality (384-1024), and what does higher mean?",
+    "why": "维度越高能编码越细的语义差别，但索引更大、存储和检索更贵；维度越低更省但表达力弱。按语料语义复杂度和索引成本预算折中，不是越高越好。",
+    "why_en": "Higher dimensionality encodes finer semantic distinctions but makes the index larger and storage/retrieval costlier, while lower is cheaper but less expressive, so compromise by semantic complexity and index budget rather than maxing it out.",
+    "tags": ["llm-sd", "rag", "embedding"],
+    "tradeoff": "高维(语义更细但索引大、更贵) vs 低维(更省但表达力弱)",
+    "whenOtherWins": "若语料语义简单、规模巨大且预算紧，低维(384)更划算；语义细腻、规模可控时才上高维(1024)。",
+    "options": [
+      "维度越高一定越好，直接选最高的",
+      "高维编码更细语义但索引更大更贵，低维更省但表达弱，按语义复杂度+成本折中",
+      "维度和成本无关，随便选一个",
+      "维度必须等于块的 token 数"
+    ],
+    "options_en": [
+      "Higher is always better; just pick the max.",
+      "Higher encodes finer semantics but a larger, costlier index; lower is cheaper but weaker — compromise by semantic complexity and cost.",
+      "Dimensionality is unrelated to cost; pick any.",
+      "Dimensionality must equal the chunk's token count."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "高维在大规模语料上会显著抬高存储和检索成本，未必换来相称的检索收益。",
+      "对；维度是语义分辨率和成本的取舍轴，按语料复杂度和预算选，而非无脑取最高。",
+      "维度直接决定索引大小和检索开销，和成本强相关。",
+      "维度是模型输出属性，和块的 token 数没有关系。"
+    ],
+    "optionExplanations_en": [
+      "High dimensionality sharply raises storage and retrieval cost on a large corpus without necessarily matching retrieval gains.",
+      "Correct — dimensionality trades semantic resolution against cost, chosen by corpus complexity and budget, not blindly maxed.",
+      "Dimensionality directly sets index size and retrieval overhead, strongly tied to cost.",
+      "Dimensionality is a model output property, unrelated to a chunk's token count."
+    ],
+    "termDefinitions": [
+      { "term": "dimensionality / 维度", "meaning": "嵌入向量的长度；越高语义分辨率越细，索引也越大越贵。", "meaningEn": "Dimensionality is the embedding vector's length; higher gives finer semantic resolution but a larger, costlier index." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "domain-relevance",
+    "scenario": "语料是法务/财务专业文档，通用嵌入模型(如 e5-large)在专业术语和条款语义上表现平平。",
+    "scenario_en": "The corpus is legal/finance domain docs, and a general embedding model (e.g. e5-large) underperforms on specialized terms and clause semantics.",
+    "q": "通用嵌入模型在这种专业语料上不够好，该怎么办？",
+    "q_en": "What do you do when a general embedding model underperforms on this domain corpus?",
+    "why": "用领域微调的嵌入模型：通用模型没见够法务/财务术语，语义相近的条款可能被嵌得很远；在领域语料上微调让专业术语的向量更贴合，显著提升检索相关性。代价是要有领域数据和微调成本。",
+    "why_en": "Use a domain-fine-tuned embedding model: a general model hasn't seen enough legal/finance terms and may embed semantically close clauses far apart, whereas fine-tuning on domain data aligns specialized-term vectors and sharply improves retrieval relevance, at the cost of domain data and training.",
+    "tags": ["llm-sd", "rag", "embedding"],
+    "tradeoff": "领域微调(专业检索更准但要数据+训练) vs 通用现成(零成本但专业术语弱)",
+    "whenOtherWins": "若语料就是通用日常文本、没有专业术语壁垒，现成通用模型(e5-large)够用，微调是多余成本。",
+    "options": [
+      "换个更大的通用模型就行，不用管领域",
+      "放弃嵌入，改用纯 BM25 词法检索",
+      "忽略这个问题，反正 reranker 会兜底补回来",
+      "用领域微调的嵌入模型：通用模型没见够专业术语，微调让术语向量更贴合，检索更准"
+    ],
+    "options_en": [
+      "Just switch to a bigger general model, ignore the domain.",
+      "Drop embeddings and use pure BM25 lexical retrieval.",
+      "Ignore it; the reranker will compensate.",
+      "Use a domain-fine-tuned embedding model: the general one hasn't seen enough specialized terms, and fine-tuning aligns their vectors for better retrieval."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "更大的通用模型仍缺领域术语暴露，专业条款的语义关系照样对不齐。",
+      "纯 BM25 丢掉语义匹配，改述和近义查询会大量漏召回，不是对症的修法。",
+      "reranker 只能在检索召回的候选里排序，检索本身漏了就补不回来。",
+      "对；领域微调把专业术语的向量拉到正确的相对位置，是提升领域检索相关性的正解。"
+    ],
+    "optionExplanations_en": [
+      "A bigger general model still lacks domain-term exposure, so clause semantics stay misaligned.",
+      "Pure BM25 drops semantic matching and misses paraphrase/synonym queries — not the right fix.",
+      "A reranker only reorders retrieved candidates; if retrieval already missed it, it can't be recovered.",
+      "Correct — domain fine-tuning pulls specialized-term vectors to correct relative positions, the right fix for domain relevance."
+    ],
+    "termDefinitions": [
+      { "term": "fine-tuning / 微调", "meaning": "在领域数据上继续训练模型，让它更贴合本领域的术语和语义。", "meaningEn": "Fine-tuning continues training a model on domain data so it better fits the domain's terms and semantics." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "mteb-benchmark",
+    "scenario": "你要在候选嵌入模型间做初筛，想有个公开可比的性能参照。",
+    "scenario_en": "You want a public, comparable performance reference to shortlist candidate embedding models.",
+    "q": "选嵌入模型时，常用哪个公开基准作参照？",
+    "q_en": "Which public benchmark is commonly used to reference embedding-model selection?",
+    "why": "用 MTEB 排行榜：它在检索、聚类、分类等多类任务上横向评嵌入模型，给一个可比的起点。但它是通用基准，最终还要在自己领域的 held-out 查询集上验证，不能只看榜。",
+    "why_en": "Use the MTEB leaderboard: it benchmarks embedding models across retrieval, clustering, classification, and more, giving a comparable starting point, but it's general so you still validate on your own domain's held-out query set.",
+    "tags": ["llm-sd", "rag", "embedding"],
+    "options": [
+      "用 MTEB 排行榜：多任务横向评嵌入模型，给可比起点，但最终要在自己领域验证",
+      "用 HumanEval，它是代码生成基准",
+      "直接看模型参数量，越大越好",
+      "没有公开基准可参考，只能靠猜"
+    ],
+    "options_en": [
+      "The MTEB leaderboard: benchmarks embedding models across tasks for a comparable start, but validate on your own domain finally.",
+      "HumanEval, a code-generation benchmark.",
+      "Just look at parameter count; bigger is better.",
+      "There's no public benchmark; you can only guess."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；MTEB 给横向可比的起点，但它是通用榜，领域场景仍要用自己的查询集复核。",
+      "HumanEval 评的是代码功能正确性，跟嵌入检索质量无关。",
+      "参数量大不等于检索强，嵌入质量要看基准和领域表现，不是看规模。",
+      "MTEB 正是这个公开基准，说没有是错的。"
+    ],
+    "optionExplanations_en": [
+      "Correct — MTEB gives a comparable starting point, but it's a general leaderboard, so domain use still needs your own query set.",
+      "HumanEval measures code functional correctness, unrelated to embedding retrieval quality.",
+      "More parameters don't mean better retrieval; embedding quality is judged by benchmarks and domain performance, not size.",
+      "MTEB is exactly that public benchmark, so 'none' is wrong."
+    ],
+    "termDefinitions": [
+      { "term": "MTEB", "fullName": "Massive Text Embedding Benchmark", "meaning": "横向评估嵌入模型在检索/聚类/分类等多任务表现的公开排行榜。", "meaningEn": "MTEB (Massive Text Embedding Benchmark) is a public leaderboard ranking embedding models across retrieval, clustering, classification, and more." },
+      { "term": "held-out query set / 留出查询集", "meaning": "一组不参与训练、用来验证检索质量的代表性查询。", "meaningEn": "A held-out query set is a set of representative queries kept out of training, used to validate retrieval quality." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-013",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "mixing-embedding-versions",
+    "scenario": "团队把嵌入模型从 v1 升到 v2，图省事把 v2 的新向量直接加进 v1 的旧索引里一起检索。",
+    "scenario_en": "A team upgrades the embedding model v1→v2 and, to save effort, adds v2 vectors straight into the v1 index for joint retrieval.",
+    "q": "把 v1 和 v2 的向量混在同一个索引里会怎样？",
+    "q_en": "What happens if you mix v1 and v2 vectors in one index?",
+    "why": "不同模型的向量空间不同→跨模型算余弦相似度没有意义→检索排序变成噪声，新旧向量的「距离」不可比，答案质量悄悄崩坏且难排查。正解是不混：建平行索引、整体切换。",
+    "why_en": "Different models have different vector spaces → cross-model cosine similarity is meaningless → retrieval ranking becomes noise, since old/new distances aren't comparable, silently wrecking answers and hard to diagnose — the fix is not to mix, but build a parallel index and swap wholesale.",
+    "tags": ["llm-sd", "rag", "versioning"],
+    "options": [
+      "没问题，向量就是向量，混着用还能省一次重建",
+      "向量空间不同→跨模型余弦相似度无意义→检索排序变噪声、质量悄悄崩；正解是建平行索引整体切换",
+      "只会让索引变大一点，相似度照常准确",
+      "v2 会自动把 v1 向量转换过来对齐，无需处理"
+    ],
+    "options_en": [
+      "No problem; a vector is a vector, and mixing even saves a rebuild.",
+      "Different spaces → cross-model cosine is meaningless → ranking becomes noise, quality silently breaks; fix is a parallel index swapped wholesale.",
+      "It just enlarges the index a bit; similarity stays accurate.",
+      "v2 auto-converts and aligns the v1 vectors, so nothing to do."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "混用省的是一次重建，赔的是整套检索排序失真，得不偿失。",
+      "对；跨模型距离不可比会让排序变噪声，且退化隐蔽难查，必须平行索引整体切。",
+      "问题不在大小而在相似度失去意义，检索会实质变差。",
+      "没有自动对齐这回事，不同模型的向量空间无法互转。"
+    ],
+    "optionExplanations_en": [
+      "Mixing saves one rebuild but corrupts the whole ranking — a bad trade.",
+      "Correct — cross-model distances aren't comparable, turning ranking into noise, and the degradation is subtle and hard to trace, so swap a parallel index wholesale.",
+      "The issue isn't size but that similarity loses meaning, so retrieval materially worsens.",
+      "There's no auto-alignment; vector spaces from different models can't be interconverted."
+    ],
+    "termDefinitions": [
+      { "term": "cosine similarity / 余弦相似度", "meaning": "用向量夹角衡量语义相近程度，仅在同一向量空间内有意义。", "meaningEn": "Cosine similarity measures semantic closeness by vector angle, meaningful only within one vector space." },
+      { "term": "drift / 漂移", "meaning": "索引里向量因模型不一致而逐渐偏离，导致检索质量悄悄退化。", "meaningEn": "Drift is the gradual divergence of index vectors from model inconsistency, silently degrading retrieval quality." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-versioning",
+    "scenario": "要把生产 RAG 的嵌入模型从 v1 升级到 v2，不能让线上检索质量出问题。",
+    "scenario_en": "You must upgrade a production RAG's embedding model v1→v2 without breaking live retrieval quality.",
+    "q": "嵌入模型升级该怎么安全落地？",
+    "q_en": "How do you safely roll out an embedding-model upgrade?",
+    "why": "每块元数据打上模型版本→用 v2 重嵌整个语料建一个平行索引→在 held-out 查询集上验证召回/相关性达标→原子切换(蓝绿)，旧索引留作回滚。绝不在同一索引里混 v1/v2。",
+    "why_en": "Tag each chunk's version → re-embed the whole corpus with v2 into a parallel index → validate recall/relevance on a held-out query set → swap atomically (blue-green), keeping the old index for rollback, and never mix v1/v2 in one index.",
+    "tags": ["llm-sd", "rag", "versioning"],
+    "tradeoff": "平行索引+蓝绿切换(安全可回滚但要重嵌整库) vs 原地混用(省事但向量空间不一致、质量崩)",
+    "whenOtherWins": "若只是往同版本模型的索引里加新文档(模型没变)，用增量更新即可，不必整体重建。",
+    "options": [
+      "每块打版本标签→v2 重嵌建平行索引→held-out 查询集验证→原子蓝绿切换，旧索引留回滚",
+      "直接把 v2 向量加进旧索引，边跑边替换",
+      "停机几小时，清空重建，期间服务不可用",
+      "让 v1 和 v2 各占一半索引，查询时随机选一个"
+    ],
+    "options_en": [
+      "Tag each chunk's version → re-embed with v2 into a parallel index → validate on a held-out set → atomic blue-green swap, keep old for rollback.",
+      "Add v2 vectors into the old index and replace on the fly.",
+      "Take hours of downtime, wipe and rebuild, unavailable meanwhile.",
+      "Let v1 and v2 each hold half the index, picking one at random per query."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；平行索引 + held-out 验证 + 原子切换 + 保留旧索引回滚，是零风险升级的标准四步。",
+      "边跑边替换就变成 v1/v2 混用，向量空间不一致，检索排序会失真。",
+      "停机违背零停机要求，5 万员工随时在用，不可接受。",
+      "随机选半个索引让结果不可复现、质量抖动，是更糟的做法。"
+    ],
+    "optionExplanations_en": [
+      "Correct — parallel index + held-out validation + atomic swap + keeping the old for rollback is the standard zero-risk upgrade.",
+      "Replacing on the fly mixes v1/v2 with inconsistent spaces, distorting ranking.",
+      "Downtime violates the zero-downtime need with 50k employees always using it — unacceptable.",
+      "Randomly choosing half an index makes results irreproducible and quality jittery — worse."
+    ],
+    "termDefinitions": [
+      { "term": "blue-green deployment / 蓝绿部署", "meaning": "备好两套环境，线上服务一套、后台准备另一套，验证后原子切换、旧的留回滚。", "meaningEn": "Blue-green deployment keeps two environments, one live and one prepared, swapping atomically after validation and keeping the old for rollback." },
+      { "term": "parallel index / 平行索引", "meaning": "用新模型重嵌另建的一套索引，验证达标后整体替换旧索引。", "meaningEn": "A parallel index is a second index re-embedded with the new model, replacing the old one wholesale after validation." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-015",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "ingestion-pipeline",
+    "scenario": "从原始文档到可检索索引，企业 RAG 的摄取管线要按固定顺序走完。",
+    "scenario_en": "From raw documents to a searchable index, the enterprise RAG ingestion pipeline runs in a fixed order.",
+    "q": "把企业 RAG 的摄取管线排成正确顺序：",
+    "q_en": "Order the enterprise RAG ingestion pipeline correctly:",
+    "steps": [
+      "嵌入模型编码每个块(并打上模型版本标签)",
+      "结构感知解析，识别表格/标题/列表",
+      "写入向量索引(同批块也进 BM25 倒排索引)",
+      "分块(按选定策略切)"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "先结构感知解析保住表格/标题→按策略分块→嵌入并打版本标签→写入向量索引(同一批块也建 BM25 倒排索引)。解析时并行抽取 ACL 元数据附到块上，供检索期做权限过滤。",
+    "why_en": "Structure-aware parsing preserves tables/headers first → chunk by strategy → embed and tag the version → write to the vector index (the same chunks also build a BM25 inverted index), while parsing extracts ACL metadata in parallel for query-time permission filtering.",
+    "tags": ["llm-sd", "rag", "pipeline"],
+    "diagram": "flowchart LR\n  R[\"原始文档\"] --> P[\"结构感知解析\"] --> C[\"分块\"] --> E[\"嵌入+版本标签\"] --> I[(\"向量索引 + BM25\")]\n  P -.并行.-> ACL[\"抽取 ACL 元数据\"] --> C",
+    "termDefinitions": [
+      { "term": "inverted index / 倒排索引", "meaning": "从词映射到含该词文档的索引，BM25 词法检索的底层结构。", "meaningEn": "An inverted index maps terms to the documents containing them, the structure underlying BM25 lexical retrieval." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "acl-metadata",
+    "scenario": "5 万员工里，法务文档只有法务能看，检索绝不能把无权限的块返回给其他人。",
+    "scenario_en": "Among 50k employees, legal docs are legal-only, and retrieval must never return unauthorized chunks to others.",
+    "q": "权限(ACL)信息在摄取管线的哪一步、怎么处理？",
+    "q_en": "Where and how is permission (ACL) info handled in the ingestion pipeline?",
+    "why": "解析时并行抽取 ACL 元数据，在建索引前附到每个块上；这样检索期能按用户权限过滤块，restricted 内容不会外泄。权限是数据侧就要埋好的，不能等生成时再补。",
+    "why_en": "Extract ACL metadata in parallel during parsing and attach it to each chunk before indexing, so retrieval can filter chunks by the user's permissions and restricted content never leaks — permissions are baked in on the data side, not patched at generation.",
+    "tags": ["llm-sd", "rag", "security"],
+    "options": [
+      "权限只在 LLM 生成时用 prompt 提醒，不进数据管线",
+      "权限在查询时现算，不用预先附到块上",
+      "解析时并行抽取 ACL 元数据，建索引前附到每个块上，检索期按权限过滤，防越权泄露",
+      "权限交给前端控制，后端索引一律不管"
+    ],
+    "options_en": [
+      "Permissions are only reminded via prompt at generation, not in the data pipeline.",
+      "Permissions are computed live at query time, not pre-attached to chunks.",
+      "Extract ACL metadata in parallel during parsing, attach to each chunk before indexing, filter by permission at retrieval to prevent leakage.",
+      "Permissions are handled by the frontend; the backend index ignores them."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "靠 prompt 提醒挡不住检索层泄露，无权限的块一旦被召回就已经进了上下文。",
+      "现算权限而块上没有 ACL 元数据，就没有可过滤的依据，容易漏过。",
+      "对；ACL 在解析时抽好、随块入库，检索期直接按权限过滤，是防越权泄露的正确位置。",
+      "只靠前端控制形同虚设，后端能召回的就可能泄露，权限必须在检索层强制。"
+    ],
+    "optionExplanations_en": [
+      "A prompt reminder can't stop retrieval-layer leakage; once an unauthorized chunk is retrieved it's already in context.",
+      "Computing permissions live without ACL metadata on the chunk leaves nothing to filter on, so leaks slip through.",
+      "Correct — ACLs are extracted at parsing and stored with chunks, so retrieval filters by permission, the right place to prevent leakage.",
+      "Frontend-only control is hollow; whatever the backend can retrieve may leak, so permissions must be enforced at retrieval."
+    ],
+    "termDefinitions": [
+      { "term": "ACL", "fullName": "Access Control List", "meaning": "访问控制列表：规定谁能访问某资源，附到块上用于检索期权限过滤。", "meaningEn": "An ACL (Access Control List) specifies who may access a resource, attached to chunks for permission filtering at retrieval." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-017",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "dense-vs-bm25",
+    "scenario": "用户查「Section 14.2(b)」这种精确条款号时，稠密向量检索返回一堆语义相关但不是这条的条款；而查「合同能不能提前解约」这种改述，BM25 又抓不到。",
+    "scenario_en": "For an exact clause like 'Section 14.2(b)', dense retrieval returns semantically related but wrong clauses, while for a paraphrase like 'can we terminate early', BM25 misses it.",
+    "q": "稠密 ANN 和 BM25 各自强在哪、弱在哪？",
+    "q_en": "Where do dense ANN and BM25 each excel and fail?",
+    "why": "稠密 ANN 擅长语义相似(改述、近义)但漏精确关键词(产品码、条款号、缩写)；BM25 擅长精确词法匹配但对改述无能为力。两者互补，所以要混合检索同时用。",
+    "why_en": "Dense ANN excels at semantic similarity (paraphrase, synonyms) but misses exact keywords (product codes, clause numbers, acronyms); BM25 nails exact lexical matches but fails on paraphrase — complementary, so use hybrid retrieval.",
+    "tags": ["llm-sd", "rag", "hybrid-retrieval"],
+    "tradeoff": "稠密 ANN(懂语义但漏精确词) vs BM25(精确词法但不懂改述)",
+    "table": {
+      "headers": ["方法", "擅长", "弱点"],
+      "rows": [
+        ["稠密 ANN", "语义相似/改述", "漏精确关键词"],
+        ["BM25", "精确词法匹配", "不懂改述近义"]
+      ]
+    },
+    "diagram": "flowchart LR\n  Q[\"查询\"] --> A[\"稠密ANN<br/>语义\"]\n  Q --> B[\"BM25<br/>精确词法\"]\n  A --> F[\"融合排序\"]\n  B --> F",
+    "options": [
+      "稠密 ANN 精确词法强、BM25 语义强，正好相反",
+      "稠密 ANN 懂语义/改述但漏精确关键词；BM25 精确词法匹配但不懂改述，二者互补",
+      "两者能力一样，选一个用就够",
+      "BM25 已过时，只用稠密 ANN 即可"
+    ],
+    "options_en": [
+      "Dense ANN is strong at exact lexical and BM25 at semantics — the reverse.",
+      "Dense ANN gets semantics/paraphrase but misses exact keywords; BM25 matches exact lexical but misses paraphrase — complementary.",
+      "Both are equivalent; pick one.",
+      "BM25 is obsolete; use dense ANN only."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "说反了：稠密强在语义、BM25 强在精确词法，条款号这种要靠 BM25。",
+      "对；一个懂改述近义、一个抓精确词，正因为盲区互补才要混合检索。",
+      "两者盲区不同，只用一个就会在另一类查询上大量漏召回。",
+      "精确条款号/产品码等场景恰恰要 BM25，稠密单独用会漏这类命中。"
+    ],
+    "optionExplanations_en": [
+      "Backwards: dense is strong at semantics and BM25 at exact lexical; clause numbers need BM25.",
+      "Correct — one handles paraphrase/synonyms, the other exact terms, and their complementary blind spots are why you use hybrid.",
+      "Their blind spots differ, so using one alone misses many hits on the other query type.",
+      "Exact clause numbers/product codes need BM25; dense alone misses those hits."
+    ],
+    "termDefinitions": [
+      { "term": "ANN", "fullName": "Approximate Nearest Neighbor", "meaning": "近似最近邻检索：在海量向量里毫秒级找语义相近的块，牺牲一点精确度。", "meaningEn": "ANN (Approximate Nearest Neighbor) search finds semantically nearby chunks among massive vectors in milliseconds, trading a little exactness." },
+      { "term": "dense retrieval / 稠密检索", "meaning": "把查询和块都嵌成向量，用向量距离找语义相近项。", "meaningEn": "Dense retrieval embeds query and chunks into vectors and finds semantically close items by vector distance." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-018",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "hybrid-retrieval",
+    "scenario": "决定同时用稠密和稀疏两路检索来覆盖语义匹配和精确匹配。",
+    "scenario_en": "You decide to run both dense and sparse retrieval to cover semantic and exact matching.",
+    "q": "混合检索在查询时是怎么工作的？",
+    "q_en": "How does hybrid retrieval work at query time?",
+    "why": "查询时并行搜稠密向量索引和 BM25 倒排索引，各返回一个排序列表，再用融合(RRF 或学习权重)把两个列表合成一个。一路补另一路的盲区，召回既覆盖语义又覆盖精确词。",
+    "why_en": "At query time, search the dense vector index and the BM25 inverted index in parallel, each returning a ranked list, then fuse them (RRF or learned weights) into one, so each covers the other's blind spot for both semantic and exact recall.",
+    "tags": ["llm-sd", "rag", "hybrid-retrieval"],
+    "options": [
+      "先跑 BM25，没结果才跑稠密，串行兜底",
+      "只跑稠密，BM25 仅作备份不参与排序",
+      "把两个索引物理合并成一个再搜",
+      "并行搜稠密向量索引和 BM25 倒排，各出排序列表，用融合合成一个"
+    ],
+    "options_en": [
+      "Run BM25 first, then dense only if empty — serial fallback.",
+      "Run dense only; BM25 is just a backup not in ranking.",
+      "Physically merge the two indexes into one and search that.",
+      "Search the dense vector index and BM25 inverted index in parallel, each returning a ranked list, fused into one."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "串行兜底会漏掉「两路都该贡献」的情况，且加了一次串行延迟，不如并行融合。",
+      "只跑稠密就放弃了精确词法命中，条款号/产品码类查询照样漏。",
+      "两个索引结构不同(向量 vs 倒排)，物理合并不成立，做法上就错。",
+      "对；两路并行各出榜、再融合，是混合检索的标准工作方式，兼顾语义与精确。"
+    ],
+    "optionExplanations_en": [
+      "Serial fallback misses cases where both lists should contribute and adds serial latency, worse than parallel fusion.",
+      "Dense-only abandons exact lexical hits, still missing clause-number/product-code queries.",
+      "The two indexes are structurally different (vectors vs inverted), so physically merging them isn't valid.",
+      "Correct — both search in parallel and their lists are fused, the standard hybrid method covering semantics and exact matches."
+    ],
+    "termDefinitions": [
+      { "term": "hybrid retrieval / 混合检索", "meaning": "并行跑稠密与 BM25 两路检索，再融合两个排序列表取长补短。", "meaningEn": "Hybrid retrieval runs dense and BM25 in parallel and fuses their ranked lists to combine strengths." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "rrf-baseline",
+    "scenario": "RAG 刚上线，还没有任何标注好的查询-文档相关性数据，你要先把两路检索的结果融合起来。",
+    "scenario_en": "A RAG just launched with no labeled query-document relevance data yet, and you need to fuse the two retrieval lists.",
+    "q": "冷启动阶段该用哪种融合方法？",
+    "q_en": "Which fusion method fits the cold-start stage?",
+    "why": "先用 RRF：它无参数、不用训练，靠 1/(k+rank) 把两路排名合并，是没有标注数据时的稳健基线。等积累了点击/相关性反馈，再训学习型融合权重去自适应领域。",
+    "why_en": "Start with RRF: parameter-free and training-free, it merges the two rankings via 1/(k+rank), a robust baseline when there's no labeled data; once you accumulate click/relevance feedback, train learned fusion weights to adapt to the domain.",
+    "tags": ["llm-sd", "rag", "fusion"],
+    "tradeoff": "RRF(无需训练、即插即用但不自适应领域) vs 学习权重(自适应但要标注数据)",
+    "whenOtherWins": "当已有领域标注的查询-文档相关性对时，学习型融合权重能按领域(法务偏 BM25、对话偏稠密)自适应，超过无参数的 RRF。",
+    "options": [
+      "用 RRF：无参数、不用训练，靠 1/(k+rank) 合并两路排名，是无标注数据时的稳健基线",
+      "直接训学习型融合权重，哪怕没有任何标注数据也能训",
+      "只取稠密一路，放弃融合",
+      "人工每次手调两路权重"
+    ],
+    "options_en": [
+      "Use RRF: parameter-free, no training, merges the two rankings via 1/(k+rank) — a robust baseline with no labels.",
+      "Train learned fusion weights right away, even with no labeled data.",
+      "Take only the dense list and drop fusion.",
+      "Manually hand-tune the two weights every time."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；没有标注就无法训权重，RRF 无参数即插即用，是冷启动阶段的稳健默认。",
+      "学习型融合要标注的查询-文档相关性对，没有数据根本训不出可信权重。",
+      "只取稠密丢掉精确词法命中，等于放弃混合检索的一半收益。",
+      "手调权重不可扩展、主观且难复现，不适合作为常规方案。"
+    ],
+    "optionExplanations_en": [
+      "Correct — with no labels you can't train weights, and RRF is parameter-free and plug-and-play, the robust cold-start default.",
+      "Learned fusion needs labeled query-document relevance pairs; without data you can't train trustworthy weights.",
+      "Dense-only drops exact lexical hits, forfeiting half of hybrid retrieval's benefit.",
+      "Hand-tuning weights doesn't scale, is subjective, and isn't reproducible as a standing method."
+    ],
+    "termDefinitions": [
+      { "term": "RRF", "fullName": "Reciprocal Rank Fusion", "meaning": "倒数排名融合：对每路名次取 1/(k+rank) 求和合并多路检索，无需训练。", "meaningEn": "RRF (Reciprocal Rank Fusion) merges retrieval lists by summing 1/(k+rank) across sources, needing no training." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-020",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "rrf-formula",
+    "scenario": "RRF 的融合公式是 score(d) = Σ_r 1/(k + rank_r(d))，k 是个小常数。",
+    "scenario_en": "RRF's fusion formula is score(d) = Σ_r 1/(k + rank_r(d)), with k a small constant.",
+    "q": "RRF 这个公式怎么把多路排名合成一个分数，k 起什么作用？",
+    "q_en": "How does the RRF formula merge multiple rankings into one score, and what does k do?",
+    "why": "对每个文档 d，把它在各路检索里的名次 rank 取 1/(k+rank) 再求和：名次越靠前贡献越大，多路都靠前的分最高。k 是小常数，压平头部名次之间的差距、降低单路极端排名的支配力，让融合更稳。",
+    "why_en": "For each document d, sum 1/(k+rank) of its rank in each retriever: higher ranks contribute more, and items ranked high across lists score highest, while k, a small constant, flattens gaps among top ranks and curbs any single list's extreme rank from dominating.",
+    "tags": ["llm-sd", "rag", "fusion"],
+    "options": [
+      "公式取各路 rank 的最大值，只看最差那一路",
+      "公式把两路的原始分数直接相加，与名次无关",
+      "对每路名次取 1/(k+rank) 求和：越靠前贡献越大；k 是小常数，压平头部差距、防单路支配",
+      "是要背的公式，没有任何设计含义"
+    ],
+    "options_en": [
+      "Take the max rank across lists, using only the worst one.",
+      "Sum the raw scores of the two lists, ignoring rank.",
+      "Sum 1/(k+rank) per list: higher ranks contribute more; k, a small constant, flattens top gaps and prevents single-list dominance.",
+      "A formula to memorize with no design meaning."
+    ],
+    "answer": [2],
+    "termDefinitions": [
+      { "term": "rank / 名次", "meaning": "文档在某一路检索结果里的排位，越靠前(数值越小)越相关。", "meaningEn": "Rank is a document's position in one retriever's result list; higher (smaller number) is more relevant." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "learned-fusion",
+    "scenario": "法务语料里，用户常查精确条款号(如「Section 14.2(b)」)；目前融合总把语义相关但错误的条款排在正确的精确匹配前面。",
+    "scenario_en": "In a legal corpus, users often query exact clause numbers ('Section 14.2(b)'), but fusion keeps ranking semantically related wrong clauses above the exact match.",
+    "q": "该怎么修，让精确条款匹配排上去？",
+    "q_en": "How do you fix this so exact clause matches rank higher?",
+    "why": "在领域标注的查询-文档相关性对上训学习型融合权重：法务这种精确匹配为主的语料要把 BM25 权重调高、稠密调低，让精确词法命中主导排序。RRF 无参数，做不到这种领域自适应。",
+    "why_en": "Train learned fusion weights on domain-labeled query-document relevance pairs: for exact-match-heavy legal corpora, weight BM25 higher and dense lower so exact lexical hits dominate ranking — parameter-free RRF can't adapt like this.",
+    "tags": ["llm-sd", "rag", "fusion"],
+    "tradeoff": "学习权重偏 BM25(精确匹配优先但要标注) vs 均等 RRF(无参数但不偏向精确)",
+    "whenOtherWins": "若是对话式知识库、查询多为改述，应把稠密权重调高；精确匹配没那么重要时，不必偏向 BM25。",
+    "options": [
+      "换个更大的 LLM，让它在生成时自己纠正排序",
+      "在领域查询-文档相关性对上训学习型融合权重，把 BM25 权重调高，让精确匹配主导",
+      "关掉 BM25，只留稠密检索",
+      "把 RRF 的 k 调到很大就行"
+    ],
+    "options_en": [
+      "Switch to a bigger LLM and let it self-correct ranking at generation.",
+      "Train learned fusion weights on domain query-document pairs, weighting BM25 higher so exact matches dominate.",
+      "Turn off BM25 and keep only dense retrieval.",
+      "Just set RRF's k very large."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "LLM 只能用检索给它的候选，排序错了、精确条款没进前列，生成阶段补不回来。",
+      "对；学习型融合能按领域把 BM25 权重抬高，让精确条款号命中主导，这正是 L5→Staff+ 的差别。",
+      "关掉 BM25 会连精确匹配的能力一起丢掉，与目标背道而驰。",
+      "调 k 只是整体压平名次差距，不能让精确匹配相对稠密获得更高权重。"
+    ],
+    "optionExplanations_en": [
+      "The LLM can only use retrieved candidates; if ranking is wrong and the exact clause isn't near the top, generation can't recover it.",
+      "Correct — learned fusion raises BM25's weight for the domain so exact clause hits dominate, the L5-to-Staff+ difference.",
+      "Turning off BM25 discards the exact-match ability entirely, opposite to the goal.",
+      "Tuning k only flattens rank gaps overall; it can't give exact matches higher weight relative to dense."
+    ],
+    "termDefinitions": [
+      { "term": "learned fusion / 学习型融合", "meaning": "用小模型在标注相关性对上学最优的稠密/稀疏权重，按领域自适应。", "meaningEn": "Learned fusion trains a small model on labeled relevance pairs to learn optimal dense/sparse weights, adapting per domain." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-022",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "recall-vs-precision",
+    "scenario": "面试官问检索和重排各优化什么，想看你能否分清 recall 和 precision 的分工。",
+    "scenario_en": "The interviewer asks what retrieval vs reranking each optimize, checking whether you separate recall from precision.",
+    "q": "检索(retrieval)和重排(reranking)分别优化什么？",
+    "q_en": "What do retrieval and reranking each optimize?",
+    "why": "检索优化召回：宽撒网，把可能相关的都捞进候选集(宁多勿漏)；重排优化精度：在候选集里把真正最相关的排到前面(宁精勿滥)。融合后的候选集交给重排(下一课)，两阶段各司其职。",
+    "why_en": "Retrieval optimizes recall: cast a wide net to pull all possibly-relevant chunks into the candidate set; reranking optimizes precision: within that set, push the truly most relevant to the top — the fused candidate set feeds reranking, each stage with its own job.",
+    "tags": ["llm-sd", "rag", "recall-precision"],
+    "tradeoff": "检索(最大化召回、宽撒网) vs 重排(最大化精度、精排前列)",
+    "table": {
+      "headers": ["阶段", "目标", "策略"],
+      "rows": [
+        ["检索", "最大化召回", "宽撒网多召回"],
+        ["重排", "最大化精度", "候选里精排前列"]
+      ]
+    },
+    "options": [
+      "两者都优化召回，重排只是跑得更快",
+      "检索优化精度、重排优化召回，正好相反",
+      "检索优化召回(宽撒网宁多勿漏)，重排优化精度(候选里把最相关的排前)",
+      "两者是同一步，不用分开"
+    ],
+    "options_en": [
+      "Both optimize recall; reranking is just faster.",
+      "Retrieval optimizes precision and reranking recall — the reverse.",
+      "Retrieval optimizes recall (wide net, don't miss), reranking optimizes precision (top-rank the most relevant in the set).",
+      "They're the same step, no need to separate."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "重排优化的是精度不是召回，两阶段目标不同，不是快慢的差别。",
+      "说反了：检索管召回、重排管精度。",
+      "对；先宽召回再精排是两阶段设计的核心分工，一个保不漏、一个保排得准。",
+      "召回和精度目标不同、放一步会互相牵制，所以拆成检索+重排两阶段。"
+    ],
+    "optionExplanations_en": [
+      "Reranking optimizes precision, not recall; the two stages have different goals, not a speed difference.",
+      "Backwards: retrieval handles recall and reranking handles precision.",
+      "Correct — wide recall then precise reranking is the core two-stage split, one ensuring nothing is missed, the other ensuring correct ordering.",
+      "Recall and precision are different goals that fight in one step, which is why retrieval and reranking are split."
+    ],
+    "termDefinitions": [
+      { "term": "recall / 召回率", "meaning": "相关文档中被检索到的比例，检索阶段要最大化它。", "meaningEn": "Recall is the fraction of relevant documents that get retrieved; the retrieval stage maximizes it." },
+      { "term": "precision / 精度", "meaning": "返回结果中真正相关的比例，重排阶段要最大化它。", "meaningEn": "Precision is the fraction of returned results that are truly relevant; the reranking stage maximizes it." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "blue-green-rebuild",
+    "scenario": "索引因嵌入升级或分块变更要重建，但服务不能下线(5 万员工随时在用)。",
+    "scenario_en": "The index must be rebuilt for an embedding upgrade or chunking change, but the service can't go down (50k employees always using it).",
+    "q": "怎么做到零停机重建索引？",
+    "q_en": "How do you rebuild the index with zero downtime?",
+    "why": "蓝绿部署：两个索引槽，线上槽继续服务查询，离线槽在后台重建；新索引在 golden query set 上验证(recall@k、MRR)达标后，流量原子切换过去，旧槽留作回滚。全程不下线。",
+    "why_en": "Blue-green deployment: two index slots, the live one keeps serving while the offline one rebuilds in the background; once the new index passes validation on a golden query set (recall@k, MRR), traffic swaps atomically and the old slot stays for rollback — no downtime.",
+    "tags": ["llm-sd", "rag", "index-rebuild"],
+    "tradeoff": "蓝绿(零停机可回滚但要双份索引资源) vs 原地重建(省资源但要停机)",
+    "whenOtherWins": "若只是日常加几篇新文档、模型没变，增量更新更快更省，不必整套蓝绿重建。",
+    "diagram": "flowchart LR\n  L[\"蓝槽(线上)\"] -->|服务查询| U[\"用户\"]\n  G[\"绿槽(离线重建)\"] --> V{\"golden set 验证<br/>recall@k/MRR\"}\n  V -->|达标| SW[\"原子切流量\"]\n  L -.留作回滚.-> RB[\"旧索引\"]",
+    "options": [
+      "直接在线上索引上原地改，边改边服务",
+      "停机几小时重建，贴公告让员工等",
+      "每次查询实时重新嵌入，不用预建索引",
+      "蓝绿：线上槽服务、离线槽重建，golden set 验证达标后原子切流量，旧槽留回滚"
+    ],
+    "options_en": [
+      "Edit the live index in place, serving while editing.",
+      "Take hours of downtime to rebuild and post a notice for employees to wait.",
+      "Re-embed live on every query, no prebuilt index.",
+      "Blue-green: live slot serves, offline slot rebuilds, atomic swap after golden-set validation, old slot kept for rollback."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "原地改会在重建中途产生不一致状态，查询可能读到半新半旧的索引，质量抖动。",
+      "停机违背零停机硬要求，5 万员工随时依赖它，不可接受。",
+      "每次查询实时嵌入延迟爆炸，且失去索引意义，扛不住规模。",
+      "对；两槽切换让重建全程离线进行，验证达标才切、旧槽可回滚，是零停机重建的标准做法。"
+    ],
+    "optionExplanations_en": [
+      "In-place edits create inconsistent mid-rebuild states, so queries may read a half-new/half-old index with jittery quality.",
+      "Downtime violates the hard zero-downtime need with 50k employees depending on it — unacceptable.",
+      "Re-embedding per query explodes latency and defeats the index, unable to handle scale.",
+      "Correct — two slots let the rebuild happen fully offline, swapping only after validation with the old slot for rollback, the standard zero-downtime rebuild."
+    ],
+    "termDefinitions": [
+      { "term": "golden query set / 黄金查询集", "meaning": "一组人工标好相关文档的代表性查询，用来验证新索引质量再切换。", "meaningEn": "A golden query set is a set of representative queries with hand-labeled relevant docs, used to validate a new index before swapping." },
+      { "term": "MRR", "fullName": "Mean Reciprocal Rank", "meaning": "平均倒数排名：第一条正确结果名次倒数的平均，衡量排序质量。", "meaningEn": "MRR (Mean Reciprocal Rank) averages the reciprocal rank of the first correct result, measuring ranking quality." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-024",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "incremental-vs-full",
+    "scenario": "索引更新有两种：每天加几篇新文档，或换嵌入模型后整体重嵌。",
+    "scenario_en": "Index updates come in two kinds: adding a few new docs daily, or re-embedding everything after an embedding-model change.",
+    "q": "增量更新和全量重建各适合什么，代价是什么？",
+    "q_en": "What do incremental updates and full rebuilds each fit, and at what cost?",
+    "why": "增量更新只把新文档加进现有索引，快、适合每日新增；但若中途换了嵌入模型，新向量来自不同模型，会累积 drift、向量空间不一致。全量重建重嵌整个语料保证所有向量一致，但很贵。",
+    "why_en": "Incremental updates just add new docs to the existing index — fast, for daily additions — but if the embedding model changed, new vectors come from a different model and accumulate drift with an inconsistent space; a full rebuild re-embeds the whole corpus for consistency but is expensive.",
+    "tags": ["llm-sd", "rag", "index-rebuild"],
+    "tradeoff": "增量(快、省但换模型会 drift) vs 全量(一致但重嵌整库、贵)",
+    "table": {
+      "headers": ["方式", "速度", "适合", "风险"],
+      "rows": [
+        ["增量更新", "快", "每日新增文档", "换模型累积 drift"],
+        ["全量重建", "慢/贵", "嵌入或分块变更", "成本高"]
+      ]
+    },
+    "options": [
+      "两者一样，随便用哪种都行",
+      "增量快、适合每日新增，但换模型会累积 drift；全量重嵌整库保一致但贵",
+      "增量最贵、全量最快，正好相反",
+      "增量会重嵌整库，全量只加新文档"
+    ],
+    "options_en": [
+      "They're the same; use either.",
+      "Incremental is fast for daily additions but accumulates drift if the model changes; full re-embeds the whole corpus for consistency but is costly.",
+      "Incremental is costliest and full fastest — the reverse.",
+      "Incremental re-embeds the whole corpus while full only adds new docs."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "两者速度、适用和风险都不同，混用会在换模型时埋下 drift 隐患。",
+      "对；增量便宜但要求模型不变，全量贵但保证一致，选择取决于是否换了嵌入模型。",
+      "说反了：增量快而便宜、全量慢而贵。",
+      "颠倒了：增量只加新文档、全量才重嵌整库。"
+    ],
+    "optionExplanations_en": [
+      "They differ in speed, fit, and risk; mixing them plants drift when the model changes.",
+      "Correct — incremental is cheap but requires an unchanged model, full is costly but consistent, and the choice hinges on whether the embedding model changed.",
+      "Backwards: incremental is fast and cheap, full slow and expensive.",
+      "Reversed: incremental only adds new docs while full re-embeds the whole corpus."
+    ],
+    "termDefinitions": [
+      { "term": "incremental update / 增量更新", "meaning": "只把新文档加进现有索引，快但要求嵌入模型不变。", "meaningEn": "An incremental update only adds new docs to the existing index — fast but requires an unchanged embedding model." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-025",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "incremental-drift",
+    "scenario": "团队一直用增量更新加新文档，期间悄悄把嵌入模型从 v1 换成了 v2，没有做整体重建。",
+    "scenario_en": "A team keeps using incremental updates to add docs while quietly switching the embedding model v1→v2 without a full rebuild.",
+    "q": "这样长期下去会出什么问题？",
+    "q_en": "What problem builds up over time here?",
+    "why": "增量加进来的是 v2 向量、老索引里是 v1 向量→同一索引里向量空间不一致→跨模型相似度失真→检索排序逐渐 drift、质量悄悄退化且难定位。修法是换模型时做全量重嵌，或走平行索引蓝绿切换。",
+    "why_en": "Incrementally-added v2 vectors mix with old v1 vectors → an inconsistent space in one index → distorted cross-model similarity → retrieval ranking drifts and quality silently degrades, hard to trace — fix by full re-embedding on a model change or a parallel-index blue-green swap.",
+    "tags": ["llm-sd", "rag", "drift"],
+    "options": [
+      "新增 v2 向量与老 v1 向量混在一起→向量空间不一致→相似度失真→检索 drift、质量悄悄退化；换模型要全量重嵌",
+      "没问题，增量更新天然会对齐新旧模型",
+      "只会让索引体积变大，检索照常准确",
+      "会自动触发一次全量重建，无需担心"
+    ],
+    "options_en": [
+      "New v2 vectors mix with old v1 → inconsistent space → distorted similarity → retrieval drifts and quality silently degrades; a model change needs a full re-embed.",
+      "No problem; incremental updates naturally align old and new models.",
+      "It just enlarges the index; retrieval stays accurate.",
+      "It auto-triggers a full rebuild, so no worries."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；这正是 drift 的成因，混着 v1/v2 让排序渐坏且隐蔽，换模型必须全量重嵌或平行切换。",
+      "增量更新不做任何跨模型对齐，混用只会累积不一致。",
+      "问题不在体积而在相似度失真，检索会实质变差。",
+      "系统不会自动重建，drift 会一直累积直到有人发现质量下滑。"
+    ],
+    "optionExplanations_en": [
+      "Correct — this is exactly how drift forms; mixing v1/v2 degrades ranking subtly, so a model change demands a full re-embed or parallel swap.",
+      "Incremental updates do no cross-model alignment; mixing only accumulates inconsistency.",
+      "The issue isn't size but distorted similarity, so retrieval materially worsens.",
+      "The system won't auto-rebuild; drift keeps accumulating until someone notices the decline."
+    ],
+    "termDefinitions": [
+      { "term": "drift / 漂移", "meaning": "索引里向量因模型不一致逐渐偏离，导致检索质量悄悄退化。", "meaningEn": "Drift is the gradual divergence of index vectors from model inconsistency, silently degrading retrieval quality." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "full-rebuild-cost",
+    "scenario": "要对 1000 万个块做全量重嵌，GPU 消耗很大，得控制成本。",
+    "scenario_en": "You must fully re-embed 10M chunks with heavy GPU usage, and cost must be controlled.",
+    "q": "大规模全量重建怎么控成本？",
+    "q_en": "How do you control the cost of a large full rebuild?",
+    "why": "放到业务低峰期、用 spot(抢占式)GPU 实例批量跑：全量重嵌是可容忍中断、非实时的离线批作业，spot 实例比按需便宜很多，低峰期跑不抢占在线资源。代价是 spot 可能被回收，作业要能断点续跑。",
+    "why_en": "Run it as an off-peak batch on spot (preemptible) GPU instances: full re-embedding is a non-real-time, interruption-tolerant batch job, and spot is far cheaper than on-demand and off-peak avoids competing with online traffic, at the cost that spot can be reclaimed so the job must checkpoint and resume.",
+    "tags": ["llm-sd", "rag", "index-rebuild"],
+    "tradeoff": "spot + 低峰(便宜但可能被回收) vs 按需实例(贵但不中断)",
+    "whenOtherWins": "若重建有硬性时限、不能被打断(如合规截止)，就得用按需实例保证不被回收，牺牲成本换确定性。",
+    "options": [
+      "用最贵的按需 GPU 实时跑，越快越好",
+      "在业务高峰期跑，反正集群有余力",
+      "低峰期用 spot 抢占式 GPU 批量跑：离线批作业可容忍中断，spot 便宜，作业要能断点续跑",
+      "干脆不重建，一直增量下去"
+    ],
+    "options_en": [
+      "Use the priciest on-demand GPUs in real time, faster is better.",
+      "Run it at peak hours; the cluster has spare capacity.",
+      "Off-peak batch on spot preemptible GPUs: a batch job tolerates interruption, spot is cheap, and the job must checkpoint and resume.",
+      "Just don't rebuild; keep going incrementally forever."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "按需实例最贵，重嵌又不需要实时，用它是白花钱。",
+      "高峰期跑会和在线检索抢 GPU，抬高线上延迟，得不偿失。",
+      "对；离线批作业容忍中断，正好吃 spot 的低价+低峰的闲置，代价是要能断点续跑。",
+      "一直增量会在换模型时累积 drift，最终质量退化，不重建不是省钱是埋雷。"
+    ],
+    "optionExplanations_en": [
+      "On-demand is priciest and re-embedding isn't real-time, so using it wastes money.",
+      "Peak-hour runs steal GPUs from online retrieval, raising live latency — not worth it.",
+      "Correct — a batch job tolerates interruption, exactly fitting spot's low price and off-peak idle capacity, at the cost of checkpoint/resume.",
+      "Forever-incremental accumulates drift on model changes and ultimately degrades quality; not rebuilding buries a landmine rather than saving money."
+    ],
+    "termDefinitions": [
+      { "term": "spot instance / 抢占式实例", "meaning": "云厂商的闲置算力，价格低但可能被随时回收，适合可中断的批作业。", "meaningEn": "A spot instance is a cloud provider's idle capacity at low price that may be reclaimed anytime, fit for interruptible batch jobs." }
+    ]
+  },
+  {
+    "id": "llm-094-enterprise-rag-data-strategy-retrieval-pipeline-027",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "golden-query-set",
+    "scenario": "新重建的索引要切上线前，得先过一道质量关，而不是切了再看。",
+    "scenario_en": "Before a freshly rebuilt index goes live, it must pass a quality gate rather than being swapped in blind.",
+    "q": "索引切换前靠什么判断新索引够好、可以切？",
+    "q_en": "What decides that a new index is good enough to swap in?",
+    "why": "用 golden query set(一组人工标好相关文档的代表性查询)在新索引上跑，量 recall@k 和 MRR 达标才切；这是不停机切换的质量闸门，达不到就不切、留在旧索引。",
+    "why_en": "Run a golden query set (representative queries with hand-labeled relevant docs) against the new index and swap only if recall@k and MRR pass; it's the quality gate for zero-downtime cutover — if it fails, don't swap, stay on the old index.",
+    "tags": ["llm-sd", "rag", "index-rebuild"],
+    "options": [
+      "靠肉眼看几个查询，感觉还行就切",
+      "用 golden query set 跑新索引，量 recall@k 和 MRR 达标才原子切换，是切换的质量闸门",
+      "直接切，出问题再回滚就行",
+      "靠索引大小判断，越大越好"
+    ],
+    "options_en": [
+      "Eyeball a few queries and swap if it feels okay.",
+      "Run a golden query set against the new index and swap only if recall@k and MRR pass — the cutover quality gate.",
+      "Just swap; roll back if something breaks.",
+      "Judge by index size; bigger is better."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "肉眼看几个查询没有量化判据，样本偏差大，挡不住质量回退。",
+      "对；用标好的黄金查询集量 recall@k/MRR，是可复现、可自动化的达标判据，达不到就不切。",
+      "先切再回滚会让用户短暂吃到坏索引，不如切前用黄金集拦住。",
+      "索引大小和检索质量无关，大的索引可能召回更差。"
+    ],
+    "optionExplanations_en": [
+      "Eyeballing a few queries has no quantitative criterion and heavy sampling bias, failing to catch regressions.",
+      "Correct — measuring recall@k/MRR on a labeled golden set is a reproducible, automatable pass criterion; if it fails, don't swap.",
+      "Swapping first and rolling back exposes users to a bad index briefly; better to gate before the swap with the golden set.",
+      "Index size is unrelated to retrieval quality; a bigger index can recall worse."
+    ],
+    "termDefinitions": [
+      { "term": "recall@k", "meaning": "前 k 个结果里覆盖了多少真正相关的文档，衡量检索召回完整性。", "meaningEn": "recall@k is how many truly relevant documents appear in the top-k results, measuring retrieval completeness." },
+      { "term": "MRR", "fullName": "Mean Reciprocal Rank", "meaning": "平均倒数排名：第一条正确结果名次倒数的平均，越接近 1 越好。", "meaningEn": "MRR (Mean Reciprocal Rank) averages the reciprocal rank of the first correct result; closer to 1 is better." }
+    ]
+  }
+]

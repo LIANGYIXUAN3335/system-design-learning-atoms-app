@@ -1,0 +1,1332 @@
+[
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-001",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "loss-as-design",
+    "scenario": "一个 CTR 模型离线 AUC 很高,但输出的 P(click) 系统性偏高,广告竞价按 bid=P(click)×价值出价后开始悄悄超支。",
+    "scenario_en": "A CTR model has high offline AUC but systematically overestimates P(click), and ad bidding at bid=P(click)×value quietly overspends.",
+    "q": "为什么损失函数选择要当成生产设计决策,而非纯理论?",
+    "q_en": "Why treat loss-function choice as a production design decision, not pure theory?",
+    "why": "因为损失直接决定输出的性质:一个只最大化 AUC 但概率不校准的模型,会在二价拍卖里扭曲出价、悄悄流失营收。分类/排序/校准三类损失各服务不同下游需求,选错就算离线指标好看线上照样亏钱。",
+    "why_en": "Loss shapes the output's usable property: an AUC-maximizing but miscalibrated model distorts second-price auction bids and silently loses revenue, so classification/ranking/calibration losses serve different downstream needs.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "diagram": "flowchart TD\n  L[\"损失函数选择\"] --> C[\"分类损失<br/>CE/Focal\"]\n  L --> R[\"排序损失<br/>BPR/Lambda*\"]\n  L --> K[\"校准<br/>Platt/Isotonic\"]",
+    "options": [
+      "损失函数只影响训练收敛速度,不影响业务结果,随便选",
+      "损失决定输出性质:只追 AUC 但概率不校准会扭曲拍卖出价、流失营收,选错线上会亏钱",
+      "只要模型够大,任何损失都收敛到同样结果,选择无关紧要",
+      "损失函数是学术概念,生产系统统一用 MSE 即可"
+    ],
+    "options_en": [
+      "Loss only affects training convergence speed, not business outcomes, so pick any.",
+      "Loss decides the output's property: chasing AUC without calibration distorts auction bids and loses revenue, so wrong choices cost money in production.",
+      "With a big enough model, any loss converges to the same result, so choice is irrelevant.",
+      "Loss is academic; production uses MSE uniformly."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若下游只需相对排序、完全不用概率绝对值(如纯召回排序),那对概率校准的要求可以放松,选排序损失即可。",
+    "optionExplanations": [
+      "损失直接决定输出是否可当概率用,\"只影响收敛\"低估了它的业务影响。",
+      "对;AUC 高不等于概率可用,校准差会在竞价/阈值这些下游悄悄亏钱,这就是它是设计决策的原因。",
+      "不同损失优化不同目标(排序 vs 概率),再大模型也收敛到不同性质的输出。",
+      "MSE 对分类和排序都不合适,统一用它会牺牲概率语义和排序质量。"
+    ],
+    "optionExplanations_en": [
+      "Loss decides whether the output is usable as a probability; 'only affects convergence' underrates its business impact.",
+      "Correct — high AUC doesn't mean usable probabilities, and poor calibration silently loses money downstream, which is why it's a design decision.",
+      "Different losses optimize different goals (ranking vs probability), so even big models converge to differently-shaped outputs.",
+      "MSE suits neither classification nor ranking; using it uniformly sacrifices probability semantics and ranking quality."
+    ],
+    "termDefinitions": [
+      {
+        "term": "AUC",
+        "fullName": "Area Under the ROC Curve",
+        "meaning": "衡量模型排序能力(正样本排在负样本前的概率),但不反映概率是否校准。",
+        "meaningEn": "AUC (Area Under the ROC Curve) measures ranking ability (probability a positive outranks a negative) but not whether probabilities are calibrated."
+      },
+      {
+        "term": "second-price auction / 二价拍卖",
+        "meaning": "赢家按第二高出价付费的拍卖机制,广告竞价常用,出价依赖校准的 P(click)。",
+        "meaningEn": "A second-price auction charges the winner the second-highest bid, common in ad auctions, where bids rely on calibrated P(click)."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "cross-entropy",
+    "scenario": "CTR 预估 head 要一个默认分类损失,类别大致均衡,下游还想直接用输出概率。",
+    "scenario_en": "A CTR head needs a default classification loss with roughly balanced classes, and downstream wants to use the output probability directly.",
+    "q": "二元交叉熵默认好在哪,什么条件下输出接近校准?",
+    "q_en": "Why is binary cross-entropy the default, and when is its output near-calibrated?",
+    "why": "二元交叉熵 L=−[y·log(p)+(1−y)·log(1−p)],向真实标签方向给平滑梯度,是 CTR head 和二/多分类的工业标准。当类别大致均衡时,它的输出近似校准的后验概率,可直接用于下游竞价/阈值。",
+    "why_en": "Binary cross-entropy gives smooth gradients toward the true label and, when classes are roughly balanced, yields approximately calibrated posterior probabilities.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "cross-entropy"
+    ],
+    "options": [
+      "它专为极端不均衡设计,类别越偏越校准",
+      "它给平滑梯度、是工业标准;类别大致均衡时输出近似校准的后验概率",
+      "它只优化排序,不产出可用概率",
+      "它输出的分数没有概率意义,必须再套一层校准才能用"
+    ],
+    "options_en": [
+      "It's designed for extreme imbalance; the more skewed the classes, the better calibrated.",
+      "It gives smooth gradients and is the industry standard; with roughly balanced classes it yields approximately calibrated posterior probabilities.",
+      "It only optimizes ranking and produces no usable probability.",
+      "Its scores have no probability meaning and always need a calibration layer to be usable."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "恰恰相反:极端不均衡下简单 CE 会被易负样本主导,那时才需要 focal loss。",
+      "对;平滑梯度+均衡时近似校准,是它当 CTR 默认损失的原因。",
+      "CE 是分类概率损失不是排序损失,它就产出概率。",
+      "均衡数据上 CE 输出本就近似校准,不是必须再套校准层。"
+    ],
+    "optionExplanations_en": [
+      "The opposite: under extreme imbalance plain CE is dominated by easy negatives, which is when focal loss is needed.",
+      "Correct — smooth gradients plus near-calibration when balanced is why it's the default CTR loss.",
+      "CE is a classification probability loss, not a ranking loss; it does produce probabilities.",
+      "On balanced data CE output is already near-calibrated, so a calibration layer isn't always required."
+    ],
+    "termDefinitions": [
+      {
+        "term": "binary cross-entropy / 二元交叉熵",
+        "meaning": "分类默认损失 L=−[y·log(p)+(1−y)·log(1−p)],向真实标签给平滑梯度。",
+        "meaningEn": "Binary cross-entropy is the default classification loss, giving smooth gradients toward the true label."
+      },
+      {
+        "term": "calibrated posterior / 校准后验概率",
+        "meaning": "输出概率与真实发生频率一致(说 0.3 就约 30% 发生)。",
+        "meaningEn": "A calibrated posterior means predicted probabilities match real frequencies (0.3 means about 30% happen)."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "focal-loss",
+    "scenario": "欺诈检测正样本占比 <1/10,000,用普通交叉熵训练时海量易分负样本主导了梯度,模型学不到稀有正类。",
+    "scenario_en": "Fraud positives are <1 in 10,000, and with plain cross-entropy the flood of easy negatives dominates the gradient so the model can't learn the rare positives.",
+    "q": "极端类别不均衡下该换什么损失?",
+    "q_en": "Under extreme class imbalance, which loss should you switch to?",
+    "why": "用 focal loss:它加一个调制因子 (1−p_t)^γ,把已高置信分对的样本(p_t→1)的梯度压下去,让模型把注意力放到难分的稀有正类上。普通 CE 在 <1/10,000 这种不均衡下会被易负样本淹没。",
+    "why_en": "Use focal loss: its modulating factor down-weights easy, high-confidence examples so the model focuses on hard rare positives, which plain CE drowns out under extreme imbalance.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ],
+    "options": [
+      "继续用普通 CE,再把学习率调大就能学到正类",
+      "focal loss:加调制因子 (1−p_t)^γ 压低易分样本梯度,聚焦难分的稀有正类",
+      "改用 MSE 回归标签,回归对不均衡更鲁棒",
+      "把所有负样本直接删到和正样本一样多,信息损失不重要"
+    ],
+    "options_en": [
+      "Stay with plain CE and just raise the learning rate to learn the positives.",
+      "Focal loss: add a modulating factor (1-p_t)^gamma that down-weights easy examples and focuses on hard rare positives.",
+      "Switch to MSE on the labels; regression is more robust to imbalance.",
+      "Delete negatives down to the positive count; the information loss doesn't matter."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当类别大致均衡、无需压易样本时,普通交叉熵反而更简单、开箱校准更好,不必上 focal loss。",
+    "optionExplanations": [
+      "调大 lr 不改变易负样本主导梯度的结构,稀有正类照样被淹没。",
+      "对;调制因子静默易分样本梯度,把学习信号集中到难分稀有正类,正是极端不均衡的解。",
+      "MSE 不是分类概率损失,对不均衡分类既不校准也不聚焦难例。",
+      "粗暴删负样本丢大量信息且不是损失层面的解,focal 才是在损失里重加权。"
+    ],
+    "optionExplanations_en": [
+      "Raising LR doesn't change easy negatives dominating the gradient; rare positives stay drowned out.",
+      "Correct — the modulating factor silences easy-example gradients and concentrates learning on hard rare positives, the fix for extreme imbalance.",
+      "MSE isn't a classification probability loss; it neither calibrates nor focuses on hard cases under imbalance.",
+      "Bluntly deleting negatives loses information and isn't a loss-level fix, whereas focal reweights within the loss."
+    ],
+    "termDefinitions": [
+      {
+        "term": "focal loss / 焦点损失",
+        "meaning": "在交叉熵上乘调制因子 (1−p_t)^γ,压低易分样本、聚焦难分样本,治极端不均衡。",
+        "meaningEn": "Focal loss multiplies cross-entropy by (1-p_t)^gamma to down-weight easy examples and focus on hard ones, for extreme imbalance."
+      },
+      {
+        "term": "easy negative / 易分负样本",
+        "meaning": "模型已高置信判为负的样本,在不均衡下数量巨大会主导梯度。",
+        "meaningEn": "Easy negatives are samples confidently classified as negative; under imbalance their sheer number dominates the gradient."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "focal-loss",
+    "scenario": "面试官问 focal loss 里 (1−p_t)^γ 这个调制因子具体在干什么。",
+    "scenario_en": "The interviewer asks what focal loss's modulating factor (1-p_t)^gamma actually does.",
+    "q": "focal loss 的调制因子如何改变各样本的梯度?",
+    "q_en": "How does focal loss's modulating factor change per-example gradients?",
+    "why": "L_focal=−α_t·(1−p_t)^γ·log(p_t)。对已分对的高置信样本 p_t→1,(1−p_t)^γ→0,梯度被静默;对难分样本 p_t 小,因子接近 1,梯度基本保留。于是学习信号自动从易样本转移到难样本。",
+    "why_en": "For confident correct examples (p_t to 1) the factor (1-p_t)^gamma goes to 0 and silences the gradient, while hard examples keep near-full gradient, shifting learning to hard cases.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ],
+    "options": [
+      "它放大所有样本的梯度,让训练更快",
+      "对高置信分对样本(p_t→1)静默梯度,对难分样本保留梯度,学习信号转向难例",
+      "它只作用于负样本,对正样本没有任何影响",
+      "它把梯度全部置零,相当于停止训练"
+    ],
+    "options_en": [
+      "It amplifies every example's gradient to train faster.",
+      "It silences gradients for confident correct examples (p_t to 1) and keeps them for hard examples, shifting learning to hard cases.",
+      "It only affects negatives and has no effect on positives.",
+      "It zeros all gradients, effectively stopping training."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "它不是放大所有梯度,而是选择性压低易样本梯度,方向相反。",
+      "对;(1−p_t)^γ 随置信度增大趋零,把梯度预算从易样本挪给难样本。",
+      "它对任何已高置信分对的样本(含正类)都压梯度,不只负样本。",
+      "只有 p_t→1 的样本梯度趋零,难样本梯度保留,训练照常进行。"
+    ],
+    "optionExplanations_en": [
+      "It doesn't amplify all gradients; it selectively down-weights easy examples — the opposite.",
+      "Correct — (1-p_t)^gamma goes to zero as confidence rises, reallocating gradient budget from easy to hard examples.",
+      "It down-weights any confidently correct example including positives, not just negatives.",
+      "Only p_t-to-1 examples have gradients near zero; hard examples keep theirs, so training continues."
+    ],
+    "termDefinitions": [
+      {
+        "term": "modulating factor / 调制因子",
+        "meaning": "focal loss 里的 (1−p_t)^γ,随预测置信度升高而减小,压低易样本贡献。",
+        "meaningEn": "The modulating factor (1-p_t)^gamma in focal loss shrinks as prediction confidence rises, down-weighting easy examples."
+      },
+      {
+        "term": "p_t",
+        "meaning": "模型对真实类别赋予的概率,p_t→1 表示已高置信分对。",
+        "meaningEn": "p_t is the probability the model assigns to the true class; p_t near 1 means a confident correct prediction."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-005",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "focal-gamma",
+    "scenario": "RetinaNet 默认 γ=2;一个 p_t=0.9 的样本损失被压到约原来的 1/100;γ 一般在验证集上调在 1–5。",
+    "scenario_en": "RetinaNet defaults to gamma=2; an example at p_t=0.9 has its loss cut ~100x; gamma is tuned in 1-5 on validation.",
+    "q": "focal loss 的 γ 该怎么理解和调?",
+    "q_en": "How should you understand and tune focal loss's gamma?",
+    "why": "γ 控压制强度:γ=0 退化成普通 CE;γ=2(RetinaNet 默认)时 p_t=0.9 的样本损失约降 100 倍。在验证集上 1–5 之间调,权衡稀有正类召回 vs 多数类精度;太大会连易样本都欠拟合。这是经验超参不是公式常量。",
+    "why_en": "Gamma sets suppression strength: gamma=0 is plain CE, gamma=2 cuts a p_t=0.9 example's loss ~100x, tuned in 1-5 to trade rare-positive recall against majority precision.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ],
+    "options": [
+      "γ 是学习率,越大训练越快",
+      "γ 控压制强度:γ=0 即 CE,γ=2 时 p_t=0.9 损失约降 100 倍,验证集 1–5 调,太大欠拟合易样本",
+      "γ 是类别数量,固定等于正负两类",
+      "γ 越大一定越准,应尽量设到最大"
+    ],
+    "options_en": [
+      "Gamma is the learning rate; larger trains faster.",
+      "Gamma sets suppression strength: gamma=0 is CE, gamma=2 cuts a p_t=0.9 loss ~100x, tuned 1-5 on validation, too high underfits easy examples.",
+      "Gamma is the number of classes, fixed at two for positive/negative.",
+      "Larger gamma is always more accurate, so set it as high as possible."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "γ 不是学习率,它只调易样本的压制强度,与步长无关。",
+      "对;γ 是压制旋钮,γ=0 退回 CE、γ=2 是常用默认,过大反而欠拟合易样本,得验证集上调。",
+      "γ 与类别数无关,它是控制调制因子陡峭度的连续超参。",
+      "γ 太大会把易样本梯度也压没导致欠拟合,不是越大越好。"
+    ],
+    "optionExplanations_en": [
+      "Gamma isn't the learning rate; it only sets easy-example suppression, unrelated to step size.",
+      "Correct — gamma is the suppression knob: gamma=0 reverts to CE, gamma=2 is a common default, and too high underfits easy examples, so tune on validation.",
+      "Gamma is unrelated to class count; it's a continuous hyperparameter controlling the modulating factor's steepness.",
+      "Too-high gamma suppresses easy-example gradients into underfitting, so bigger isn't always better."
+    ],
+    "termDefinitions": [
+      {
+        "term": "gamma (γ) / 聚焦参数",
+        "meaning": "focal loss 里控制易样本压制强度的超参,γ=0 即普通 CE。",
+        "meaningEn": "Gamma is focal loss's focusing hyperparameter controlling easy-example suppression; gamma=0 is plain cross-entropy."
+      },
+      {
+        "term": "RetinaNet",
+        "meaning": "提出 focal loss 的稠密目标检测模型,默认 γ=2。",
+        "meaningEn": "RetinaNet is the dense object-detection model that introduced focal loss, defaulting to gamma=2."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "focal-oversampling",
+    "scenario": "有人以为上了 focal loss 就不必再管数据采样了。",
+    "scenario_en": "Someone assumes adopting focal loss removes any need for data sampling.",
+    "q": "focal loss 能替代过采样/类别加权采样吗?",
+    "q_en": "Does focal loss replace oversampling / class-weighted sampling?",
+    "why": "不能替代:focal 在损失层面重加权,过采样在数据层面平衡分布,两者互补。实践中把 focal loss 与分层小批(每个 batch 保证一定比例正样本)结合,效果最好;只靠 focal 而 batch 里几乎没有正样本,梯度依旧稀薄。",
+    "why_en": "Focal loss reweights at the loss level while oversampling balances at the data level, so combine focal with stratified mini-batches rather than replacing sampling.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ],
+    "options": [
+      "能,focal loss 完全取代采样,数据侧不用再动",
+      "不能,focal 在损失层重加权、采样在数据层平衡,应与分层小批结合",
+      "能,只要 γ 够大就不需要任何采样",
+      "两者冲突,用了 focal 就绝不能再做任何采样"
+    ],
+    "options_en": [
+      "Yes, focal loss fully replaces sampling; the data side needs no change.",
+      "No — focal reweights at the loss level and sampling balances at the data level, so combine focal with stratified mini-batches.",
+      "Yes, as long as gamma is large enough no sampling is needed.",
+      "They conflict; using focal means never doing any sampling."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "focal 不平衡 batch 里的样本构成,若一个 batch 几乎全是负样本,梯度仍稀薄。",
+      "对;损失重加权与数据采样互补,分层小批+ focal 才能同时保证正样本出现和难例聚焦。",
+      "γ 再大也解决不了 batch 里正样本极少的问题,采样管的是分布不是权重。",
+      "两者不冲突而是互补,实践中常一起用。"
+    ],
+    "optionExplanations_en": [
+      "Focal doesn't balance batch composition; if a batch is almost all negatives, gradients stay thin.",
+      "Correct — loss reweighting and data sampling are complementary, so stratified mini-batches plus focal ensure both positive presence and hard-case focus.",
+      "No gamma fixes batches with almost no positives; sampling controls distribution, not weights.",
+      "They don't conflict but complement, and are commonly used together."
+    ],
+    "termDefinitions": [
+      {
+        "term": "stratified mini-batch / 分层小批",
+        "meaning": "构造每个训练 batch 时保证各类别有一定比例,防某类在 batch 中缺席。",
+        "meaningEn": "A stratified mini-batch is built to guarantee each class a share, preventing a class from being absent in the batch."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "focal-gradient",
+    "scenario": "小测:在 γ>0 的 focal loss 下,一个已经分得很好的样本(p_t→1)的梯度会怎样?",
+    "scenario_en": "Quiz: under focal loss with gamma>0, what happens to the gradient of a well-classified example (p_t to 1)?",
+    "q": "γ>0 时,已分好样本的梯度贡献如何变化?",
+    "q_en": "With gamma>0, how does a well-classified example's gradient change?",
+    "why": "显著减小:(1−p_t)^γ 在 p_t→1 时趋近 0,把这些已学会样本的梯度几乎抹掉,好让优化器把力气花在还没学好的难样本上。这正是 focal loss 治不均衡的核心机制。",
+    "why_en": "It is significantly reduced, because (1-p_t)^gamma approaches zero as p_t to 1, nearly erasing well-classified examples' gradients so the optimizer focuses on hard ones.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ],
+    "options": [
+      "显著增大,模型更用力去学已经会的样本",
+      "显著减小,(1−p_t)^γ→0 抹掉已学好样本的梯度,力气转向难样本",
+      "完全不变,与普通 CE 一样",
+      "先增大后减小,取决于 batch 大小"
+    ],
+    "options_en": [
+      "Significantly increased; the model works harder on already-learned examples.",
+      "Significantly reduced; (1-p_t)^gamma to 0 erases well-classified examples' gradients, shifting effort to hard ones.",
+      "Unchanged, same as plain CE.",
+      "First increases then decreases depending on batch size."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "已学会的样本正是要压制的对象,不该增大它们的梯度。",
+      "对;调制因子在高置信处趋零,静默易样本、聚焦难样本,是 focal 的设计目的。",
+      "γ>0 时它明显不同于 CE,易样本梯度被压,不是不变。",
+      "变化只取决于 p_t 和 γ,和 batch 大小无关。"
+    ],
+    "optionExplanations_en": [
+      "Already-learned examples are exactly what to suppress; their gradients shouldn't grow.",
+      "Correct — the modulating factor nears zero at high confidence, silencing easy and focusing on hard examples, focal's design goal.",
+      "With gamma>0 it clearly differs from CE; easy-example gradients are suppressed, not unchanged.",
+      "The change depends only on p_t and gamma, not batch size."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-008",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ranking-units",
+    "scenario": "排序损失按\"一次看多少数据\"分成三类,面试官要你区分。",
+    "scenario_en": "Ranking losses split by 'how much data at once' into three units; the interviewer asks you to distinguish them.",
+    "q": "pointwise / pairwise / listwise 的区别是什么?",
+    "q_en": "What distinguishes pointwise / pairwise / listwise?",
+    "why": "pointwise 给每个物品一个绝对分,忽略它在列表中的相对位置;pairwise 只要求相关项排在不相关项之前(成对比较);listwise 直接优化整张列表的指标(如 NDCG)。粒度从单点→成对→整列,越靠后越贴近最终排序指标但计算越贵。",
+    "why_en": "Pointwise scores each item absolutely, pairwise enforces relevant-over-irrelevant order, and listwise optimizes a whole-list metric like NDCG.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "ranking"
+    ],
+    "table": {
+      "headers": [
+        "单位",
+        "优化对象",
+        "例"
+      ],
+      "rows": [
+        [
+          "pointwise",
+          "单项绝对分",
+          "交叉熵 CTR"
+        ],
+        [
+          "pairwise",
+          "成对相对序",
+          "BPR"
+        ],
+        [
+          "listwise",
+          "整列表指标",
+          "LambdaRank"
+        ]
+      ]
+    },
+    "options": [
+      "三者完全一样,只是叫法不同",
+      "pointwise 单项绝对分;pairwise 成对相对序;listwise 优化整列表指标(如 NDCG)",
+      "pointwise 优化整列表、listwise 单项打分,和实际相反",
+      "三者都只看单个物品,不考虑列表"
+    ],
+    "options_en": [
+      "All three are the same, just different names.",
+      "Pointwise scores single items absolutely; pairwise enforces pairwise relative order; listwise optimizes a whole-list metric like NDCG.",
+      "Pointwise optimizes the whole list and listwise scores single items — reversed from reality.",
+      "All three look only at a single item, ignoring the list."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "三者优化粒度不同(点/对/列),直接影响是否对齐最终排序指标,不是叫法差异。",
+      "对;从单点到成对到整列,粒度递增、越贴近 NDCG 但越贵,是排序损失的分类主轴。",
+      "角色说反了:pointwise 是单项打分,listwise 才优化整列表。",
+      "只有 pointwise 只看单项;pairwise 看成对、listwise 看整列表。"
+    ],
+    "optionExplanations_en": [
+      "They differ in granularity (point/pair/list), which affects alignment to the final ranking metric — not just naming.",
+      "Correct — from point to pair to list, granularity rises, closer to NDCG but costlier, the main axis of ranking losses.",
+      "Roles reversed: pointwise scores single items and listwise optimizes the whole list.",
+      "Only pointwise looks at a single item; pairwise looks at pairs and listwise at the whole list."
+    ],
+    "termDefinitions": [
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "排序质量指标,越靠前的相关项贡献越大,越靠后折扣越多。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) is a ranking-quality metric where relevant items higher up contribute more."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-009",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "bpr",
+    "scenario": "推荐里只有隐式反馈(用户点了什么),没有显式评分,想训一个学相对偏好的模型。",
+    "scenario_en": "A recommender has only implicit feedback (what users clicked), no explicit ratings, and wants to learn relative preference.",
+    "q": "BPR 的优化目标和适用信号是什么?",
+    "q_en": "What is BPR's objective and the feedback it suits?",
+    "why": "BPR 是 pairwise:最大化\"正样本 i 的分高于随机采样负样本 j\"的概率,L_BPR=−log σ(x̂_ui−x̂_uj)。它只需正确的相对排序、不需绝对分,天然适配点击这类隐式反馈,靠负采样能扩到数十亿对,是候选生成的默认损失。",
+    "why_en": "BPR is pairwise: it maximizes the probability a positive scores above a sampled negative, needing only correct ordering, so it suits implicit feedback and scales via negative sampling.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "bpr"
+    ],
+    "options": [
+      "BPR 要求每个物品有精确的绝对评分,只能用显式反馈",
+      "BPR pairwise 最大化正样本分>采样负样本,只需相对序,适配隐式反馈,负采样可扩",
+      "BPR 直接优化 NDCG,是 listwise 损失",
+      "BPR 输出校准的点击概率,专为竞价设计"
+    ],
+    "options_en": [
+      "BPR requires an exact absolute rating per item, usable only with explicit feedback.",
+      "BPR is pairwise, maximizing positive-over-sampled-negative, needing only relative order, suited to implicit feedback, scalable via negative sampling.",
+      "BPR directly optimizes NDCG and is a listwise loss.",
+      "BPR outputs calibrated click probabilities, designed for bidding."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "BPR 恰恰不需要绝对评分,它只比较正负相对高低,专为无评分的隐式反馈设计。",
+      "对;pairwise 相对序+负采样让它便宜可扩,是候选生成阶段的默认损失。",
+      "BPR 是 pairwise 不是 listwise,它不直接优化 NDCG(那是 LambdaRank)。",
+      "BPR 优化排序不保证概率校准,竞价需要校准的概率损失而非 BPR。"
+    ],
+    "optionExplanations_en": [
+      "BPR specifically needs no absolute ratings; it compares positive vs negative order, built for rating-free implicit feedback.",
+      "Correct — pairwise relative order plus negative sampling make it cheap and scalable, the default candidate-generation loss.",
+      "BPR is pairwise not listwise; it doesn't directly optimize NDCG (that's LambdaRank).",
+      "BPR optimizes ranking without guaranteeing calibration; bidding needs a calibrated probability loss, not BPR."
+    ],
+    "termDefinitions": [
+      {
+        "term": "BPR",
+        "fullName": "Bayesian Personalized Ranking",
+        "meaning": "pairwise 排序损失,最大化正样本得分高于采样负样本,适配隐式反馈。",
+        "meaningEn": "BPR (Bayesian Personalized Ranking) is a pairwise ranking loss maximizing a positive scoring above a sampled negative, for implicit feedback."
+      },
+      {
+        "term": "implicit feedback / 隐式反馈",
+        "meaning": "用户行为(点击/购买)隐含的偏好信号,没有显式打分。",
+        "meaningEn": "Implicit feedback is preference inferred from behavior (clicks/purchases) with no explicit ratings."
+      },
+      {
+        "term": "negative sampling / 负采样",
+        "meaning": "从海量未交互项里随机抽负样本与正样本配对,避免全量计算。",
+        "meaningEn": "Negative sampling randomly draws negatives from the vast un-interacted items to pair with positives, avoiding full computation."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "candidate-gen",
+    "scenario": "召回(candidate generation)阶段要从数十亿物品里快速筛出几百个候选,只需近似排序、追求速度和规模。",
+    "scenario_en": "The candidate-generation stage must quickly narrow billions of items to a few hundred, needing only approximate ordering at speed and scale.",
+    "q": "召回阶段的排序损失该选什么?",
+    "q_en": "Which ranking loss fits candidate generation?",
+    "why": "选 BPR:候选生成只需近似正确的相对序、要快要能扩,BPR 的 pairwise+负采样正好又快又能到数十亿对。精细的、按位置加权的 listwise(LambdaRank)留给最终重排,那里指标对齐更值这份算力。",
+    "why_en": "Pick BPR: candidate generation needs fast, scalable approximate ordering, which pairwise-plus-negative-sampling delivers, leaving metric-aligned listwise for final re-ranking.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "candidate-gen"
+    ],
+    "options": [
+      "LambdaRank,直接优化 NDCG 最精确,召回也该用最好的",
+      "BPR,pairwise+负采样又快又可扩,近似排序满足召回的速度/规模需求",
+      "普通 MSE 回归,召回只要回归分数",
+      "focal loss,召回阶段最怕类别不均衡"
+    ],
+    "options_en": [
+      "LambdaRank — it optimizes NDCG most precisely, and recall deserves the best too.",
+      "BPR — pairwise plus negative sampling is fast and scalable, and approximate ordering meets recall's speed/scale needs.",
+      "Plain MSE regression — recall just needs regressed scores.",
+      "Focal loss — recall most fears class imbalance."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "到最终重排阶段,候选只剩几百个、指标对齐比速度更重要时,才换成 LambdaRank/LambdaMART。",
+    "optionExplanations": [
+      "LambdaRank 逐位置加权算得贵,数十亿候选上跑不动,精度换不回召回要的吞吐。",
+      "对;BPR 便宜可扩、近似排序够用,是召回阶段的默认选择。",
+      "MSE 回归不直接优化排序,召回要的是相对序不是绝对回归值。",
+      "focal 是分类不均衡损失,不解决召回的大规模排序问题。"
+    ],
+    "optionExplanations_en": [
+      "LambdaRank's per-position weighting is costly and can't run over billions of candidates; precision doesn't buy back recall's needed throughput.",
+      "Correct — BPR is cheap, scalable, and approximate ordering suffices, the default at the recall stage.",
+      "MSE regression doesn't directly optimize ranking; recall needs relative order, not absolute regressed values.",
+      "Focal is a classification-imbalance loss, not a fix for recall's large-scale ranking."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-011",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "bpr-limitation",
+    "scenario": "用 BPR 训练排序,发现它对\"交换发生在列表哪个位置\"一视同仁。",
+    "scenario_en": "Training ranking with BPR, you notice it treats a swap the same regardless of where in the list it happens.",
+    "q": "BPR 相比 listwise 的关键局限是什么?",
+    "q_en": "What is BPR's key limitation versus listwise?",
+    "why": "BPR 不加权\"交换发生在列表哪里\":把第 1、2 名交换和第 98、99 名交换视为同等,但对用户/指标而言头部错序代价远大。listwise(LambdaRank)正是用 NDCG 变化给不同位置的交换赋不同权重来补上这点。",
+    "why_en": "BPR doesn't weight where a swap occurs, treating top-of-list and bottom swaps equally, whereas listwise weights by NDCG change.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "bpr"
+    ],
+    "options": [
+      "BPR 无法处理隐式反馈,只能用显式评分",
+      "BPR 不加权交换位置:头部错序和尾部错序同等对待,忽略了位置的重要性差异",
+      "BPR 计算太贵,无法扩到大规模",
+      "BPR 会输出过度校准的概率,破坏排序"
+    ],
+    "options_en": [
+      "BPR can't handle implicit feedback and needs explicit ratings.",
+      "BPR doesn't weight swap position: it treats top and bottom mis-orderings equally, ignoring positional importance.",
+      "BPR is too expensive to scale.",
+      "BPR outputs over-calibrated probabilities that break ranking."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "BPR 正是为隐式反馈设计的,这说反了。",
+      "对;不区分交换位置是 BPR 的核心局限,头部排序质量因此得不到重点优化。",
+      "BPR 靠负采样恰恰便宜可扩,不是贵。",
+      "BPR 不优化概率校准,谈不上过度校准,和它的位置局限无关。"
+    ],
+    "optionExplanations_en": [
+      "BPR is designed for implicit feedback — this is reversed.",
+      "Correct — not distinguishing swap position is BPR's core limitation, so top-of-list quality isn't prioritized.",
+      "BPR is cheap and scalable via negative sampling, not expensive.",
+      "BPR doesn't optimize calibration, so over-calibration doesn't apply and is unrelated to its positional limitation."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "lambdarank",
+    "scenario": "最终重排要让头部顺序尽量对,交换排名靠前的两个物品应该比交换靠后的更受重视。",
+    "scenario_en": "Final re-ranking must get the head order right, so swapping two top items should matter more than swapping bottom ones.",
+    "q": "LambdaRank 如何让排序对齐 NDCG?",
+    "q_en": "How does LambdaRank align ranking with NDCG?",
+    "why": "LambdaRank 给每对样本的 pairwise 梯度乘上\"交换这两个位置带来的 NDCG 变化\":交换 1↔2 对 NDCG 影响大、权重大,交换 98↔99 影响小、权重小。这样直接把优化力度对齐到最终排序指标,而无需对不可导的 NDCG 求导。",
+    "why_en": "LambdaRank weights each pairwise gradient by the NDCG change from swapping those two positions, so top swaps get larger gradients aligned to the metric.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "lambdarank"
+    ],
+    "options": [
+      "它对所有位置的交换赋予相同权重,和 BPR 一样",
+      "它给每对梯度乘上交换这两位带来的 NDCG 变化,头部交换权重更大,对齐指标",
+      "它直接对 NDCG 求导来反向传播",
+      "它放弃排序,改成逐项概率回归"
+    ],
+    "options_en": [
+      "It gives all swap positions equal weight, just like BPR.",
+      "It multiplies each pairwise gradient by the NDCG change from swapping those two positions, so top swaps get larger weight aligned to the metric.",
+      "It directly differentiates NDCG for backprop.",
+      "It abandons ranking for per-item probability regression."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "等权正是 BPR 的做法,LambdaRank 的价值恰恰是按位置差异化加权。",
+      "对;用 NDCG 变化加权每对梯度,让优化重点落在头部,是它对齐指标的核心。",
+      "NDCG 不可导,LambdaRank 正是绕开求导、直接用指标变化当梯度权重。",
+      "它仍是排序损失,只是给 pairwise 梯度加了指标权重,不是回归。"
+    ],
+    "optionExplanations_en": [
+      "Equal weighting is BPR's approach; LambdaRank's value is exactly position-differentiated weighting.",
+      "Correct — weighting each pairwise gradient by NDCG change concentrates optimization on the head, its metric-alignment core.",
+      "NDCG is non-differentiable; LambdaRank specifically sidesteps differentiation by using metric change as the gradient weight.",
+      "It remains a ranking loss, just adding a metric weight to pairwise gradients, not regression."
+    ],
+    "termDefinitions": [
+      {
+        "term": "LambdaRank",
+        "meaning": "listwise 排序,用交换两位带来的 NDCG 变化加权每对 pairwise 梯度。",
+        "meaningEn": "LambdaRank is a listwise method weighting each pairwise gradient by the NDCG change from swapping two positions."
+      },
+      {
+        "term": "lambda / λ 梯度",
+        "meaning": "这些经指标加权的梯度,无需对不可导的 NDCG 求导即可得到。",
+        "meaningEn": "The lambdas are these metric-weighted gradients, obtained without differentiating the non-differentiable NDCG."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "lambdamart",
+    "scenario": "特征丰富的搜索排序场景,想要 listwise 的指标对齐,又想用树模型的表达力。",
+    "scenario_en": "A feature-rich search-ranking setting wants listwise metric alignment with the expressiveness of tree models.",
+    "q": "LambdaMART 是怎么构成的,擅长什么?",
+    "q_en": "How is LambdaMART built, and what is it good at?",
+    "why": "LambdaMART = 把 LambdaRank 的 λ 梯度放进 GBDT:每一轮 boosting 用一棵树去拟合这些指标加权的 lambda 梯度。它是 Bing 搜索排序的主力,在特征丰富的场景里与神经排序器不相上下。",
+    "why_en": "LambdaMART puts LambdaRank's lambda gradients inside GBDT, fitting a tree to those metric-weighted gradients each boosting round, the backbone of Bing search ranking.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "lambdamart"
+    ],
+    "options": [
+      "把 LambdaRank 的 λ 梯度塞进神经网络的注意力层",
+      "把 LambdaRank 的 λ 梯度放进 GBDT,每轮树拟合这些指标加权梯度;Bing 搜索排序主力",
+      "一种纯 pointwise 回归损失,与 NDCG 无关",
+      "只是 BPR 的另一个名字,机制完全相同"
+    ],
+    "options_en": [
+      "Put LambdaRank's lambda gradients into a neural attention layer.",
+      "Put LambdaRank's lambda gradients into GBDT, fitting a tree to those metric-weighted gradients each round; the backbone of Bing search ranking.",
+      "A pure pointwise regression loss unrelated to NDCG.",
+      "Just another name for BPR with identical mechanics."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "LambdaMART 用的是梯度提升树 GBDT 不是神经注意力,载体说错了。",
+      "对;λ 梯度 + GBDT 的组合,让树模型也能对齐 NDCG,在特征丰富场景很强。",
+      "它是 listwise 指标对齐的,不是与 NDCG 无关的 pointwise 回归。",
+      "它是 GBDT 载体的 listwise 方法,和 pairwise 的 BPR 机制不同。"
+    ],
+    "optionExplanations_en": [
+      "LambdaMART uses gradient-boosted trees (GBDT), not neural attention — wrong carrier.",
+      "Correct — lambda gradients plus GBDT let trees align to NDCG, strong in feature-rich settings.",
+      "It's listwise metric-aligned, not an NDCG-agnostic pointwise regression.",
+      "It's a GBDT-based listwise method, mechanically different from pairwise BPR."
+    ],
+    "termDefinitions": [
+      {
+        "term": "LambdaMART",
+        "meaning": "把 LambdaRank 的 λ 梯度用在 GBDT 上的 listwise 排序方法。",
+        "meaningEn": "LambdaMART is a listwise ranking method applying LambdaRank's lambda gradients within GBDT."
+      },
+      {
+        "term": "GBDT",
+        "fullName": "Gradient-Boosted Decision Trees",
+        "meaning": "逐轮加树、每棵拟合前一轮残差/梯度的树集成模型。",
+        "meaningEn": "GBDT (Gradient-Boosted Decision Trees) is a tree ensemble adding trees round by round, each fitting the previous round's residual/gradient."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "reranking",
+    "scenario": "最终重排阶段只剩几百个候选,要把头部顺序做到最精,直接对齐 NDCG 换取业务价值。",
+    "scenario_en": "Final re-ranking has a few hundred candidates and must perfect the head order, aligning to NDCG for business value.",
+    "q": "最终重排该用哪类损失?",
+    "q_en": "Which loss family for final re-ranking?",
+    "why": "用 LambdaMART/LambdaRank 这类 listwise:候选少、可承受更高算力,而它们按位置用 NDCG 加权梯度,把头部排序做精,指标对齐直接转成业务价值。BPR 只给近似序、不加权位置,精度不够。",
+    "why_en": "Use listwise LambdaMART/LambdaRank: few candidates afford the compute, and NDCG-weighted gradients perfect the head order for business value.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "reranking"
+    ],
+    "options": [
+      "BPR,pairwise 又快又能扩,重排也该优先速度",
+      "LambdaMART/LambdaRank(listwise),按位置 NDCG 加权把头部排序做精,指标对齐",
+      "focal loss,重排最怕不均衡",
+      "普通交叉熵逐项打分,忽略列表结构"
+    ],
+    "options_en": [
+      "BPR — pairwise is fast and scalable, and re-ranking should prioritize speed too.",
+      "LambdaMART/LambdaRank (listwise) — NDCG-weighted by position to perfect the head order, aligned to the metric.",
+      "Focal loss — re-ranking most fears imbalance.",
+      "Plain cross-entropy per-item scoring, ignoring list structure."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "在召回阶段、候选达数十亿、速度和规模压倒精度时,反而该用 BPR 而非 listwise。",
+    "optionExplanations": [
+      "重排阶段候选已很少,速度不再是瓶颈,BPR 的近似序换不来头部精度。",
+      "对;listwise 按位置加权对齐 NDCG,把头部做精,正是重排追求的价值。",
+      "focal 是分类不均衡损失,与重排的列表排序目标不符。",
+      "逐项 CE 忽略列表结构,得不到 listwise 的位置加权优势。"
+    ],
+    "optionExplanations_en": [
+      "At re-ranking candidates are already few and speed isn't the bottleneck, so BPR's approximate order doesn't buy head precision.",
+      "Correct — listwise weights by position to align with NDCG and perfect the head, exactly re-ranking's goal.",
+      "Focal is a classification-imbalance loss, mismatched to re-ranking's list-ordering objective.",
+      "Per-item CE ignores list structure and misses listwise's positional weighting advantage."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-015",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ranking-losses",
+    "scenario": "面试官要你横向比较 CE、BPR、LambdaRank、LambdaMART 的方法和最佳用途。",
+    "scenario_en": "The interviewer asks you to compare CE, BPR, LambdaRank, and LambdaMART by approach and best use.",
+    "q": "这四个损失的方法与最佳用途分别是什么?",
+    "q_en": "What are each loss's approach and best use?",
+    "why": "CE 是 pointwise 单项概率,做 CTR;BPR pairwise 正负边际,做候选生成(隐式反馈);LambdaRank listwise 用 NDCG 加权 pairwise 梯度,做最终重排;LambdaMART 把 λ 梯度放 GBDT,做大规模搜索排序。粒度和载体决定各自战场。",
+    "why_en": "CE is pointwise for CTR, BPR pairwise for candidate generation, LambdaRank listwise for re-ranking, and LambdaMART lambda-gradients-in-GBDT for search ranking.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "ranking"
+    ],
+    "table": {
+      "headers": [
+        "损失",
+        "方法",
+        "最佳用途"
+      ],
+      "rows": [
+        [
+          "交叉熵",
+          "pointwise",
+          "CTR 预估"
+        ],
+        [
+          "BPR",
+          "pairwise",
+          "候选生成(隐式)"
+        ],
+        [
+          "LambdaRank",
+          "listwise",
+          "最终重排"
+        ],
+        [
+          "LambdaMART",
+          "listwise+GBDT",
+          "大规模搜索排序"
+        ]
+      ]
+    },
+    "options": [
+      "四者用途完全可互换,选哪个都一样",
+      "CE→CTR;BPR→候选生成;LambdaRank→最终重排;LambdaMART→大规模搜索排序",
+      "CE 做重排、LambdaRank 做 CTR,和实际相反",
+      "四者都是 pointwise,只是名字不同"
+    ],
+    "options_en": [
+      "Their uses are fully interchangeable; pick any.",
+      "CE for CTR; BPR for candidate generation; LambdaRank for final re-ranking; LambdaMART for large-scale search ranking.",
+      "CE for re-ranking and LambdaRank for CTR — reversed from reality.",
+      "All four are pointwise, just different names."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "它们粒度和目标不同,用途不可互换,混用会牺牲各自优势。",
+      "对;每个损失对应一个阶段/场景,粒度和载体决定它擅长哪一步。",
+      "角色说反了:CE 做 CTR/pointwise,LambdaRank 做 listwise 重排。",
+      "只有 CE 是 pointwise;BPR pairwise,Lambda 系是 listwise。"
+    ],
+    "optionExplanations_en": [
+      "They differ in granularity and goal, so uses aren't interchangeable and mixing sacrifices each one's strength.",
+      "Correct — each loss maps to a stage/scenario, with granularity and carrier setting what it's good at.",
+      "Roles reversed: CE is for CTR/pointwise and LambdaRank for listwise re-ranking.",
+      "Only CE is pointwise; BPR is pairwise and the Lambda family is listwise."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "calibration-def",
+    "scenario": "面试官问\"模型校准得好\"到底是什么意思。",
+    "scenario_en": "The interviewer asks what 'the model is well-calibrated' actually means.",
+    "q": "校准良好的定义是什么?",
+    "q_en": "What is the definition of well-calibrated?",
+    "why": "校准良好=在所有模型输出 P=0.3 的曝光里,约 30% 真的发生了点击;即预测概率与实际频率一致。它和排序能力(AUC)是两回事:模型可以排序很好但概率系统性偏高/偏低。",
+    "why_en": "Well-calibrated means among all impressions where the model says P=0.3, about 30% actually click — predicted probabilities match observed frequencies.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "模型的 AUC 越高就越校准,两者是一回事",
+      "在所有预测 P=0.3 的样本里约 30% 真的发生,即预测概率与实际频率一致",
+      "校准指模型准确率超过 90%",
+      "校准指模型对每个样本都输出 0 或 1 的确定预测"
+    ],
+    "options_en": [
+      "The higher the AUC the more calibrated; they're the same thing.",
+      "Among all samples predicted P=0.3, about 30% actually occur — predicted probabilities match observed frequencies.",
+      "Calibration means accuracy above 90%.",
+      "Calibration means the model outputs a definite 0 or 1 for every sample."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "AUC 只看排序,不看概率绝对值,高 AUC 也可能概率系统偏差、不校准。",
+      "对;校准是\"预测概率=实际频率\",与排序能力独立,竞价/阈值依赖它。",
+      "校准不是准确率,一个高准确率模型概率也可能不校准。",
+      "输出确定 0/1 反而丢了概率信息,与校准无关。"
+    ],
+    "optionExplanations_en": [
+      "AUC only measures ranking, not absolute probability; high AUC can still be systematically biased and miscalibrated.",
+      "Correct — calibration is 'predicted probability equals observed frequency', independent of ranking, relied on by bidding/thresholds.",
+      "Calibration isn't accuracy; a high-accuracy model can still be miscalibrated.",
+      "Outputting hard 0/1 discards probability information and is unrelated to calibration."
+    ],
+    "termDefinitions": [
+      {
+        "term": "calibration / 校准",
+        "meaning": "预测概率与真实频率一致的程度,说 0.3 就约 30% 会发生。",
+        "meaningEn": "Calibration is how well predicted probabilities match true frequencies, so 0.3 means about 30% occur."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "calibration-auction",
+    "scenario": "广告竞价按 bid=P(click)×出价价值报价,模型的 P(click) 系统性偏高。",
+    "scenario_en": "Ad bidding sets bid=P(click)×bid_value, and the model's P(click) is systematically inflated.",
+    "q": "P(click) 校准偏差在二价拍卖里造成什么后果?",
+    "q_en": "What does miscalibrated P(click) cause in a second-price auction?",
+    "why": "因为出价直接乘以 P(click):高估 P(click)→出价偏高→超支/多花钱;低估→出价偏低→丢掉本该赢的曝光、流失营收。所以竞价系统对校准的敏感度极高,光有高 AUC 不够。",
+    "why_en": "Since bid multiplies by P(click), overestimation overbids and overspends while underestimation underbids and loses winnable impressions and revenue.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "没有后果,拍卖只看排序不看概率绝对值",
+      "高估 P(click)→超支多花钱,低估→丢曝光流失营收,竞价对校准极敏感",
+      "只会影响训练速度,不影响出价",
+      "会让模型 AUC 下降,但出价不受影响"
+    ],
+    "options_en": [
+      "No consequence; auctions only care about ranking, not absolute probability.",
+      "Overestimating P(click) overspends, underestimating loses impressions and revenue; bidding is highly calibration-sensitive.",
+      "It only affects training speed, not bids.",
+      "It lowers AUC but doesn't affect bids."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "出价直接乘 P(click),概率绝对值错就出价错,不只是排序问题。",
+      "对;高估超支、低估丢量,是校准差在竞价里的直接金钱后果。",
+      "校准偏差影响的是出价金额,不是训练速度。",
+      "校准与 AUC 独立,偏差主要害的是出价而非 AUC。"
+    ],
+    "optionExplanations_en": [
+      "The bid multiplies by P(click), so wrong absolute probability means wrong bids, not just ranking.",
+      "Correct — overestimation overspends and underestimation loses volume, the direct monetary cost of poor calibration in bidding.",
+      "Calibration error affects bid amounts, not training speed.",
+      "Calibration is independent of AUC; the error mainly harms bids, not AUC."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "calibration-threshold",
+    "scenario": "欺诈/医疗分诊用固定阈值(如 0.5)决定是否告警,模型对真实概率 0.4 的样本却输出 0.8。",
+    "scenario_en": "Fraud/medical triage uses a fixed threshold (e.g. 0.5) to alert, but the model outputs 0.8 for a case whose true probability is 0.4.",
+    "q": "校准偏差在阈值决策里造成什么问题?",
+    "q_en": "What problem does miscalibration cause in threshold-based decisions?",
+    "why": "阈值决策直接把概率和临界值比:真实 0.4 却报 0.8,会越过 0.5 阈值触发大量本不该有的告警(过多误报),挤占人工复核、侵蚀对系统的信任。这类系统必须概率校准,阈值才有意义。",
+    "why_en": "Threshold decisions compare probability to a cutoff, so reporting 0.8 when true is 0.4 crosses the threshold and triggers excessive false alarms that erode trust.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "没影响,阈值决策不依赖概率数值",
+      "真实 0.4 报 0.8 会越过阈值,产生过多误报、挤占人工复核、侵蚀信任",
+      "只会让模型更保守,减少告警",
+      "会提升召回且没有任何副作用"
+    ],
+    "options_en": [
+      "No effect; threshold decisions don't depend on probability values.",
+      "Reporting 0.8 when true is 0.4 crosses the threshold, producing excessive false alarms that burden review and erode trust.",
+      "It only makes the model more conservative, reducing alerts.",
+      "It boosts recall with no downside."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "阈值决策正是拿概率数值和临界值比,数值错决策就错。",
+      "对;高估越过阈值→误报暴增→人工复核过载、信任下降,这是阈值系统的校准代价。",
+      "高估是更激进而非保守,会增加而不是减少告警。",
+      "误报暴增有明显副作用(信任和人力),不是无副作用的召回提升。"
+    ],
+    "optionExplanations_en": [
+      "Threshold decisions compare the probability value to a cutoff, so a wrong value means a wrong decision.",
+      "Correct — overestimation crosses the threshold, spiking false alarms, overloading review and eroding trust, the calibration cost in threshold systems.",
+      "Overestimation is more aggressive, not conservative, increasing rather than reducing alerts.",
+      "A spike in false alarms has clear downsides (trust and labor), not a free recall boost."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-019",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "calibration-causes",
+    "scenario": "线上模型概率明显不校准,要排查常见成因。",
+    "scenario_en": "A production model is clearly miscalibrated, and you must diagnose common causes.",
+    "q": "以下哪些是常见的概率不校准成因?(多选)",
+    "q_en": "Which are common causes of miscalibration? (multiple)",
+    "why": "常见成因:重正则(把概率往中间压)、focal loss(重塑损失景观、牺牲校准换聚焦难例)、不均衡数据。CE 在均衡数据上开箱校准较好,但生产数据很少均衡。识别成因才能决定是否上后处理校准。",
+    "why_en": "Common causes are heavy regularization, focal loss (reshapes the loss landscape), and imbalanced data.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "过重的正则化",
+      "focal loss(重塑损失景观,牺牲校准换聚焦难例)",
+      "类别不均衡的数据",
+      "使用了 GPU 而非 CPU 训练"
+    ],
+    "options_en": [
+      "Heavy regularization.",
+      "Focal loss (reshapes the loss landscape, trading calibration for hard-example focus).",
+      "Class-imbalanced data.",
+      "Training on GPU instead of CPU."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对;强正则把概率往中间压,削弱与真实频率的对应,导致不校准。",
+      "对;focal 为聚焦难例重塑损失,常以牺牲概率校准为代价。",
+      "对;不均衡数据让 CE 的开箱校准假设失效,概率系统性偏移。",
+      "错;GPU/CPU 只是硬件,不改变模型输出概率的校准性。"
+    ],
+    "optionExplanations_en": [
+      "Correct — heavy regularization squeezes probabilities toward the middle, weakening the match to true frequency.",
+      "Correct — focal reshapes the loss to focus on hard examples, often at the cost of calibration.",
+      "Correct — imbalanced data breaks CE's out-of-the-box calibration assumption, biasing probabilities.",
+      "Wrong — GPU vs CPU is just hardware and doesn't change output calibration."
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ece-vs-brier",
+    "scenario": "要量化模型校准程度,常见两个指标是 ECE 和 Brier score。",
+    "scenario_en": "To quantify calibration, two common metrics are ECE and Brier score.",
+    "q": "ECE 和 Brier score 各衡量什么?",
+    "q_en": "What does each of ECE and Brier score measure?",
+    "why": "ECE 把样本按预测概率分桶,取每桶 |预测−实际| 的加权平均,纯粹衡量校准误差;Brier score 是\"概率 vs 0/1 结果\"的均方误差,同时捕捉校准和区分度。ECE 专测校准,Brier 更综合。",
+    "why_en": "ECE is the weighted average of per-bin |predicted-observed| measuring calibration only, while Brier score is the MSE of probability vs binary outcome capturing both calibration and discrimination.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "table": {
+      "headers": [
+        "指标",
+        "衡量",
+        "特点"
+      ],
+      "rows": [
+        [
+          "ECE",
+          "分桶校准误差",
+          "纯测校准"
+        ],
+        [
+          "Brier",
+          "概率 vs 0/1 的 MSE",
+          "校准+区分度"
+        ]
+      ]
+    },
+    "options": [
+      "两者完全等价,数值总是相同",
+      "ECE=分桶 |预测−实际| 加权平均(纯校准);Brier=概率 vs 0/1 的 MSE(校准+区分度)",
+      "ECE 衡量区分度、Brier 只衡量校准,和实际相反",
+      "两者都只衡量 AUC,与校准无关"
+    ],
+    "options_en": [
+      "They're fully equivalent and always equal.",
+      "ECE is the weighted average of per-bin |predicted-observed| (calibration only); Brier is the MSE of probability vs 0/1 (calibration plus discrimination).",
+      "ECE measures discrimination and Brier only calibration — reversed from reality.",
+      "Both only measure AUC, unrelated to calibration."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "两者衡量的侧重不同(纯校准 vs 校准+区分),数值也不同,不等价。",
+      "对;ECE 分桶纯测校准,Brier 用 MSE 综合校准与区分度,分工清楚。",
+      "角色说反了:ECE 专测校准,Brier 才兼顾区分度。",
+      "两者都直接关乎校准,不是只测 AUC。"
+    ],
+    "optionExplanations_en": [
+      "They emphasize different things (calibration only vs calibration plus discrimination) and differ numerically — not equivalent.",
+      "Correct — ECE bins to measure calibration purely, Brier uses MSE to capture both calibration and discrimination, a clean split.",
+      "Roles reversed: ECE measures calibration and Brier also captures discrimination.",
+      "Both directly concern calibration, not just AUC."
+    ],
+    "termDefinitions": [
+      {
+        "term": "ECE",
+        "fullName": "Expected Calibration Error",
+        "meaning": "按预测概率分桶,各桶 |预测−实际| 的加权平均,衡量整体校准误差。",
+        "meaningEn": "ECE (Expected Calibration Error) bins by predicted probability and takes the weighted average of per-bin |predicted-observed|."
+      },
+      {
+        "term": "Brier score",
+        "meaning": "预测概率与 0/1 结果之间的均方误差,同时反映校准与区分度。",
+        "meaningEn": "Brier score is the mean squared error between predicted probability and the binary outcome, reflecting calibration and discrimination."
+      },
+      {
+        "term": "reliability diagram / 可靠性图",
+        "meaning": "画预测概率 vs 实际频率,曲线在对角线下方=过度自信。",
+        "meaningEn": "A reliability diagram plots predicted vs observed probability; a curve below the diagonal means overconfidence."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "platt-scaling",
+    "scenario": "模型不校准,验证数据有限,可靠性图大致呈 S 形(sigmoid 样),要选一个后处理校准方法。",
+    "scenario_en": "The model is miscalibrated, validation data is limited, and the reliability diagram is roughly sigmoidal; pick a post-hoc calibration method.",
+    "q": "默认该用哪种后处理校准?",
+    "q_en": "Which post-hoc calibration should be the default?",
+    "why": "用 Platt scaling:在 logit 上拟合一个两参数 logistic,P_cal=σ(a·z+b)。它假设可靠性曲线呈 sigmoid(多数神经网络输出成立),参数少、在有限验证数据上不易过拟合,是默认选择。数据有限时比非参的 isotonic 更稳。",
+    "why_en": "Use Platt scaling: a 2-parameter logistic on the logit, which assumes a sigmoidal curve, resists overfitting on limited data, and is the default.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "isotonic regression,非参最灵活,数据少也无所谓",
+      "Platt scaling:logit 上两参数 logistic,假设 sigmoid、少参不易过拟合,数据有限时默认",
+      "直接重训整个模型,不做后处理",
+      "把所有概率都乘 0.5,简单粗暴地压低"
+    ],
+    "options_en": [
+      "Isotonic regression — non-parametric and most flexible, and little data is fine.",
+      "Platt scaling: a 2-parameter logistic on the logit, assumes sigmoidal, few params resist overfitting, the default on limited data.",
+      "Just retrain the whole model, no post-hoc step.",
+      "Multiply all probabilities by 0.5 to bluntly lower them."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当验证数据充足、且可靠性图明显非 sigmoid 时,才换非参的 isotonic regression 去拟合非 S 形模式。",
+    "optionExplanations": [
+      "isotonic 非参更灵活但吃数据,验证数据有限时容易过拟合,不该做默认。",
+      "对;两参数、假设 sigmoid、抗过拟合,数据有限+曲线近 S 形时 Platt 是稳妥默认。",
+      "后处理校准就是为了不重训整模型,重训代价大且未必解决校准。",
+      "统一乘常数不是按可靠性曲线拟合,治不了系统性校准偏差。"
+    ],
+    "optionExplanations_en": [
+      "Isotonic is more flexible but data-hungry, prone to overfit on limited validation data — not the default.",
+      "Correct — two parameters, a sigmoidal assumption, and overfit resistance make Platt the safe default on limited, near-S-shaped data.",
+      "Post-hoc calibration exists to avoid retraining the whole model, which is costly and may not fix calibration.",
+      "Multiplying by a constant isn't fitting the reliability curve and won't fix systematic calibration bias."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Platt scaling",
+        "meaning": "后处理校准:在 logit 上拟合两参数 logistic P=σ(a·z+b),假设 sigmoid 曲线。",
+        "meaningEn": "Platt scaling is post-hoc calibration fitting a 2-parameter logistic P=sigmoid(a*z+b) on the logit, assuming a sigmoidal curve."
+      },
+      {
+        "term": "logit / 对数几率",
+        "meaning": "过 sigmoid 之前的原始分数 z,Platt scaling 直接在它上面做线性变换。",
+        "meaningEn": "The logit is the raw pre-sigmoid score z, on which Platt scaling applies a linear transform."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "isotonic",
+    "scenario": "验证数据非常充足,可靠性图明显不是 S 形(有明显的非 sigmoid 弯折)。",
+    "scenario_en": "Validation data is abundant, and the reliability diagram is clearly non-sigmoidal (with distinct non-sigmoid kinks).",
+    "q": "这种情况下该换哪种校准方法?",
+    "q_en": "Which calibration method should you switch to here?",
+    "why": "换 isotonic regression:它是非参的单调阶梯函数,不假设分布,能拟合 Platt 的 sigmoid 假设抓不住的非 S 形模式。代价是需要大量验证数据才不过拟合——正好本场景数据充足,条件满足。",
+    "why_en": "Switch to isotonic regression: a non-parametric monotonic step function that fits non-sigmoidal patterns Platt can't, given abundant validation data.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "坚持 Platt scaling,sigmoid 假设放哪都成立",
+      "isotonic regression:非参单调阶梯,拟合非 S 形模式,数据充足时可用",
+      "不校准,数据多就自动校准了",
+      "把 γ 调大用 focal loss 来顺便校准"
+    ],
+    "options_en": [
+      "Stick with Platt scaling; the sigmoidal assumption holds everywhere.",
+      "Isotonic regression: a non-parametric monotonic step function fitting non-sigmoidal patterns, usable given abundant data.",
+      "Don't calibrate; more data auto-calibrates.",
+      "Raise gamma with focal loss to calibrate along the way."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若验证数据有限或曲线本就近 sigmoid,Platt scaling 更稳、不易过拟合,不该上 isotonic。",
+    "optionExplanations": [
+      "曲线明显非 S 形时,Platt 的 sigmoid 假设失配,拟合不好非线性弯折。",
+      "对;isotonic 非参能拟合非 sigmoid,且这里数据充足正好满足它的数据需求。",
+      "数据多不会自动校准,不均衡/正则等成因仍在,需显式后处理。",
+      "focal 是训练损失不是校准方法,调 γ 反而可能更不校准。"
+    ],
+    "optionExplanations_en": [
+      "When the curve is clearly non-sigmoidal, Platt's assumption is mismatched and fits the nonlinear kinks poorly.",
+      "Correct — non-parametric isotonic fits non-sigmoidal shapes, and abundant data here meets its data requirement.",
+      "More data doesn't auto-calibrate; causes like imbalance/regularization persist and need explicit post-hoc fixing.",
+      "Focal is a training loss, not a calibration method; raising gamma can worsen calibration."
+    ],
+    "termDefinitions": [
+      {
+        "term": "isotonic regression / 保序回归",
+        "meaning": "非参的单调阶梯校准函数,不假设分布,能拟合非 sigmoid 形状但吃数据。",
+        "meaningEn": "Isotonic regression is a non-parametric monotonic step calibration function that fits non-sigmoidal shapes but needs much data."
+      }
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-023",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "focal-loss",
+    "scenario": "回忆 focal loss 的公式与各因子作用。",
+    "scenario_en": "Recall the focal loss formula and each factor's role.",
+    "q": "补全 focal loss 公式:",
+    "q_en": "Fill in the focal loss formula:",
+    "text": "L_focal = −α_t · {{(1−p_t)^γ}} · log(p_t);其中调制因子在 p_t→1 时趋近 {{0}},静默{{易分}}样本的梯度。",
+    "text_en": "L_focal = −α_t · {{(1−p_t)^γ}} · log(p_t); the modulating factor approaches {{0}} as p_t to 1, silencing {{easy}}-example gradients.",
+    "why": "α_t 平衡正负类权重,(1−p_t)^γ 是聚焦难例的调制因子:置信越高压得越狠,把梯度让给难样本。γ=0 时退化回普通交叉熵。",
+    "why_en": "Alpha balances class weights and (1-p_t)^gamma focuses on hard examples, silencing confident ones, reverting to cross-entropy at gamma=0.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "focal-loss"
+    ]
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-024",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "calibration-flow",
+    "scenario": "线上 CTR 模型概率不校准,要走一遍诊断到修复再监控的完整流程。",
+    "scenario_en": "A production CTR model is miscalibrated; walk the full diagnose-fix-monitor flow.",
+    "q": "把生产环境校准处理流程排成正确顺序:",
+    "q_en": "Order the production calibration workflow correctly:",
+    "steps": [
+      "用可靠性图/ECE 诊断:曲线在对角线下方=过度自信",
+      "在留出验证集上拟合后处理校准(默认 Platt scaling)",
+      "上线后持续监控 ECE,数据漂移时重拟合",
+      "在留出验证集上选方法:近 sigmoid+数据有限用 Platt,非 sigmoid+数据充足用 isotonic"
+    ],
+    "answerOrder": [
+      0,
+      3,
+      1,
+      2
+    ],
+    "why": "先用可靠性图/ECE 诊断偏差方向,再据曲线形状和数据量选方法(Platt vs isotonic),在留出集上拟合,最后上线持续监控 ECE、随漂移重拟合。\"在验证集上做 Platt scaling 并线上监控 ECE\"是资深级信号。",
+    "why_en": "Diagnose with a reliability diagram/ECE, choose the method by curve shape and data, fit on a held-out split, then monitor ECE in production and refit on drift.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "diagram": "flowchart LR\n  D[\"诊断 ECE/可靠性图\"] --> S[\"选方法\"]\n  S --> F[\"验证集拟合\"]\n  F --> M[\"线上监控 ECE\"]"
+  },
+  {
+    "id": "llm-029-loss-functions-and-optimization-choices-025",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "auc-vs-calibration",
+    "scenario": "两个 CTR 模型 AUC 相同,但一个概率校准、一个系统性高估,都要接进二价广告竞价。",
+    "scenario_en": "Two CTR models share AUC, but one is calibrated and one systematically overestimates, both feeding a second-price ad auction.",
+    "q": "为什么\"最大化 AUC\"不足以保证竞价系统赚钱?",
+    "q_en": "Why is maximizing AUC insufficient to make a bidding system profitable?",
+    "why": "AUC 只看排序(谁点击概率更高),不看概率绝对值。竞价 bid=P(click)×价值直接吃概率绝对值,校准差的模型即使 AUC 一样也会扭曲出价、悄悄超支或丢量。所以竞价系统要显式盯校准(ECE),不能只优化 AUC。",
+    "why_en": "AUC only measures ordering, but bidding uses absolute P(click), so an equally-ranked but miscalibrated model distorts bids and loses money.",
+    "tags": [
+      "llm-sd",
+      "loss",
+      "calibration"
+    ],
+    "options": [
+      "AUC 已经包含校准信息,最大化 AUC 就够了",
+      "AUC 只看排序不看概率绝对值,竞价吃绝对值,校准差会扭曲出价、超支或丢量",
+      "两个模型 AUC 相同就一定同样赚钱",
+      "竞价只看排序,概率绝对值无关紧要"
+    ],
+    "options_en": [
+      "AUC already includes calibration, so maximizing AUC is enough.",
+      "AUC only measures ordering not absolute probability, but bidding uses the absolute value, so poor calibration distorts bids and overspends or loses volume.",
+      "Equal AUC guarantees equal profitability.",
+      "Bidding only looks at ranking; absolute probability is irrelevant."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "AUC 不含校准信息,排序一样但概率可系统偏移,AUC 看不出来。",
+      "对;竞价直接乘概率绝对值,AUC 相同校准不同就会一个赚钱一个亏,必须盯 ECE。",
+      "AUC 相同但校准不同,盈利能力可以差很多,不能只看 AUC。",
+      "竞价 bid=P(click)×价值,概率绝对值恰恰是关键,不是无关。"
+    ],
+    "optionExplanations_en": [
+      "AUC carries no calibration info; equal ranking can hide a systematic probability shift AUC can't see.",
+      "Correct — bidding multiplies by absolute probability, so equal AUC with different calibration makes one profitable and one not, requiring ECE monitoring.",
+      "Equal AUC with different calibration can differ greatly in profitability, so AUC alone isn't enough.",
+      "Bidding is bid=P(click)×value, so absolute probability is exactly what matters, not irrelevant."
+    ]
+  }
+]

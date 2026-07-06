@@ -1,0 +1,1109 @@
+[
+  {
+    "id": "llm-089-fraud-detection-model-architecture-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "three-component-architecture",
+    "scenario": "支付平台要在 <50ms p95 内给每笔交易打分，既要抓单笔欺诈，又要抓多账号协同作案的欺诈团伙(fraud ring)。",
+    "scenario_en": "A payments platform must score each transaction within <50ms p95, catching both individual fraud and coordinated multi-account fraud rings.",
+    "q": "生产级欺诈检测为什么不是单一模型，而是三组件架构？",
+    "q_en": "Why is production fraud detection a three-component architecture rather than one model?",
+    "why": "三组件是 defense-in-depth：规则引擎零推理成本秒挡已知坏模式，GBT 用毫秒级 CPU 给单笔交易打分，GraphSAGE 抓 GBT 看不见的跨账号团伙。单个模型既扛不住 <50ms 又覆盖不了这三种互补信号。",
+    "why_en": "The three components form defense-in-depth: a rule engine instantly blocks known patterns at zero inference cost, GBTs score single transactions in milliseconds on CPU, and GraphSAGE catches cross-account rings the GBT can't see.",
+    "tags": ["llm-sd", "fraud", "architecture"],
+    "diagram": "flowchart TB\n  R[\"规则引擎<br/>已知模式·零推理\"] --> D[\"批准/拒绝/复核\"]\n  G[\"GBT<br/>单笔表格打分\"] --> D\n  S[\"GraphSAGE<br/>跨账号团伙\"] -.嵌入作特征.-> G",
+    "options": [
+      "单个大型深度模型端到端打分，靠容量同时覆盖单笔欺诈和团伙欺诈，省去多组件运维",
+      "规则引擎(秒挡已知模式)+ 梯度提升树(实时表格打分)+ GraphSAGE(图上抓欺诈团伙)三层互补盲区",
+      "只用规则引擎穷举所有欺诈模式，规则写得够多就不需要任何 ML",
+      "只用 GraphSAGE 图模型，既能抓单笔又能抓团伙，一个图模型全包"
+    ],
+    "options_en": [
+      "One large deep model scores end to end, using capacity to cover both individual and ring fraud, avoiding multi-component ops.",
+      "A rule engine (instant known patterns) + gradient boosted trees (real-time tabular scoring) + GraphSAGE (graph-level ring detection), each covering the others' blind spots.",
+      "Just a rule engine enumerating every fraud pattern; with enough rules you need no ML.",
+      "Just GraphSAGE, since one graph model can handle both individual and ring fraud."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "一个深度模型 10-20ms 推理就吃满预算，还得 GPU，且在稀有欺诈的表格数据上通常打不过树模型。",
+      "对；规则、GBT、图模型三种信号各补对方盲区，是延迟预算下同时抓单笔与团伙的标准解法。",
+      "规则只能覆盖已知、能显式写出的模式，抓不到会随数据演化的新型行为欺诈，仍需会学习的 ML。",
+      "GraphSAGE 的嵌入要异步预计算、有 5-15 分钟滞后，不能实时给每一笔单独打分，扛不了热路径。"
+    ],
+    "optionExplanations_en": [
+      "One deep model's 10-20ms inference eats the whole budget, needs a GPU, and usually loses to trees on rare-positive tabular data.",
+      "Correct — rules, GBTs, and a graph model each cover the others' gaps, the standard way to catch both individual and ring fraud under a latency budget.",
+      "Rules only cover known, explicitly-writable patterns and miss evolving behavioral fraud, so learning ML is still needed.",
+      "GraphSAGE embeddings are precomputed asynchronously with a 5-15 min lag, so they can't score every single transaction in real time on the hot path."
+    ],
+    "termDefinitions": [
+      { "term": "GBT", "fullName": "Gradient Boosted Trees", "meaning": "梯度提升树：顺序建树、每棵纠正前面误差的集成模型，表格数据的主力。", "meaningEn": "GBT (Gradient Boosted Trees) is an ensemble that builds trees sequentially, each correcting prior errors, the workhorse for tabular data." },
+      { "term": "GraphSAGE", "fullName": "Graph SAmple and aggreGatE", "meaning": "一种归纳式图神经网络，聚合邻居特征生成节点嵌入，用来抓账号间的团伙结构。", "meaningEn": "GraphSAGE (Graph SAmple and aggreGatE) is an inductive graph neural network that aggregates neighbor features into node embeddings to detect ring structure." },
+      { "term": "defense-in-depth / 纵深防御", "meaning": "多层各自独立的防线，每层覆盖别层的盲点，任一层失效仍有兜底。", "meaningEn": "Defense-in-depth stacks independent layers so each covers the others' blind spots and one failing layer still leaves a fallback." },
+      { "term": "fraud ring / 欺诈团伙", "meaning": "多个账号协同作案、常共享设备或支付工具的欺诈网络。", "meaningEn": "A fraud ring is a network of accounts committing fraud together, often sharing devices or payment instruments." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "gbt-vs-dl",
+    "scenario": "欺诈特征是表格数据(交易金额、MCC 类别、二元风控标志)，正样本极稀有(<0.1%)，要在 <50ms 内 CPU 出分、还要能向监管解释拒付原因。",
+    "scenario_en": "Fraud features are tabular (amount, MCC category, binary flags), positives are rare (<0.1%), scoring must run on CPU within <50ms, and declines must be explainable to regulators.",
+    "q": "实时表格欺诈打分该选梯度提升树还是深度神经网络？",
+    "q_en": "For real-time tabular fraud scoring, GBTs or a deep neural network?",
+    "why": "选 GBT：顺序建树在 <0.1% 稀有正类上依然有效，CPU 1-5ms 出分不用 GPU，原生吃异构表格特征，还自带特征重要性能向监管解释拒付。深度网络要 GPU、要 one-hot/归一化，且在表格数据上通常不占优。",
+    "why_en": "Choose GBTs: sequential boosting stays effective on the <0.1% positive class, scores in 1-5ms on CPU with no GPU, natively ingests heterogeneous tabular features, and exposes feature importance to explain declines.",
+    "tags": ["llm-sd", "fraud", "model-choice"],
+    "tradeoff": "GBT(毫秒级 CPU、原生表格、可解释) vs DNN(需 GPU、要特征预处理、黑箱)",
+    "whenOtherWins": "若输入是高维非结构化数据(原始文本、图像、行为序列)且有 GPU 预算，深度模型的表示学习才反超 GBT。",
+    "table": {
+      "headers": ["模型", "p95延迟", "可解释性", "需GPU"],
+      "rows": [
+        ["GBT(LightGBM)", "~3ms", "高", "否"],
+        ["逻辑回归", "~1ms", "很高", "否"],
+        ["DNN(MLP)", "~10-20ms", "低", "是"],
+        ["随机森林", "~8ms", "中", "否"]
+      ]
+    },
+    "options": [
+      "深度神经网络(MLP)：容量大，认为在表格数据上也一定更准，值得上 GPU",
+      "逻辑回归：最可解释，为了合规牺牲一点精度也要用它",
+      "梯度提升树(XGBoost/LightGBM)：毫秒级 CPU 出分、原生吃异构表格特征、自带特征重要性满足合规",
+      "随机森林：同为树模型但各树独立并行，精度天然高于顺序提升的 GBT"
+    ],
+    "options_en": [
+      "A deep neural network (MLP): high capacity, assumed more accurate even on tabular data, worth the GPU.",
+      "Logistic regression: most interpretable, so use it even at some accuracy cost for compliance.",
+      "Gradient boosted trees (XGBoost/LightGBM): millisecond CPU scoring, native heterogeneous tabular features, built-in feature importance for compliance.",
+      "Random forest: also trees but with independent parallel trees, so inherently more accurate than sequential boosting."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "深度模型在表格数据上通常打不过 GBT，还要 GPU 和 one-hot/归一化预处理，10-20ms 推理也吃满延迟预算。",
+      "逻辑回归线性、表达力弱抓不住特征交互；可解释不该以牺牲欺诈召回为代价。",
+      "对；GBT 在稀有正类上有效、CPU 1-5ms 出分、原生表格特征、特征重要性可向监管解释拒付，四项全中。",
+      "随机森林可并行但精度通常不及顺序纠错的 boosting，且 ~8ms 推理比 LightGBM 慢。"
+    ],
+    "optionExplanations_en": [
+      "Deep models usually lose to GBTs on tabular data, need a GPU and one-hot/normalization, and 10-20ms inference eats the latency budget.",
+      "Logistic regression is linear and weak at feature interactions; interpretability shouldn't cost fraud recall.",
+      "Correct — GBTs stay effective on rare positives, score in 1-5ms on CPU, ingest tabular features natively, and expose feature importance for declines.",
+      "Random forest parallelizes but usually trails error-correcting boosting on accuracy, and ~8ms inference is slower than LightGBM."
+    ],
+    "termDefinitions": [
+      { "term": "GBT", "fullName": "Gradient Boosted Trees", "meaning": "顺序建树、每棵纠正前面误差的树集成，表格数据主力(XGBoost/LightGBM)。", "meaningEn": "GBT (Gradient Boosted Trees) sequentially builds trees each correcting prior errors, the tabular workhorse (XGBoost/LightGBM)." },
+      { "term": "MCC", "fullName": "Merchant Category Code", "meaning": "商户类别码，标记交易商户类型的类别型特征。", "meaningEn": "MCC (Merchant Category Code) is a categorical feature tagging the merchant type of a transaction." },
+      { "term": "MLP", "fullName": "Multi-Layer Perceptron", "meaning": "多层感知机，最基础的前馈深度网络，需数值化输入。", "meaningEn": "MLP (Multi-Layer Perceptron) is the basic feedforward deep network, requiring numeric inputs." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-003",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "gbt-inference-cost",
+    "scenario": "LightGBM 在 CPU 上单笔交易推理约 1-5ms，全程不需要 GPU。",
+    "scenario_en": "LightGBM scores one transaction in roughly 1-5ms on CPU, with no GPU needed.",
+    "q": "「GBT 推理 1-5ms 且不用 GPU」这个数字对架构意味着什么？",
+    "q_en": "What does 'GBT inference in 1-5ms with no GPU' imply for the architecture?",
+    "why": "这是给定的经验量级(不是公式推导)：1-5ms 说明模型推理不是 50ms 预算里的瓶颈，可以在纯 CPU 上水平扩展、不必为 GPU 集群买单；真正吃预算的是特征库查询(~8ms)。",
+    "why_en": "This is an empirical order of magnitude, not a formula: 1-5ms means inference is not the bottleneck in the 50ms budget, so you scale horizontally on plain CPU and skip a GPU cluster, while feature lookups (~8ms) dominate.",
+    "tags": ["llm-sd", "fraud", "latency"],
+    "options": [
+      "说明必须上 GPU 集群才能压到 1-5ms，模型推理是关键路径瓶颈",
+      "1-5ms 是给定经验量级：推理不是 50ms 预算的瓶颈，可纯 CPU 水平扩展省掉 GPU，瓶颈在特征查询",
+      "说明可以换成更大的深度网络，反正推理已经很快了",
+      "1-5ms 是要背下来的硬指标，考点就是记住这个数字本身"
+    ],
+    "options_en": [
+      "It means a GPU cluster is required to hit 1-5ms, and inference is the critical-path bottleneck.",
+      "1-5ms is a given empirical magnitude: inference isn't the 50ms budget's bottleneck, so scale on plain CPU without GPUs; the bottleneck is feature lookups.",
+      "It means you can swap in a bigger deep network since inference is already fast.",
+      "1-5ms is a hard number to memorize; the point is recalling the value itself."
+    ],
+    "answer": [1],
+    "termDefinitions": [
+      { "term": "GBT", "fullName": "Gradient Boosted Trees", "meaning": "梯度提升树，CPU 上毫秒级推理、无需 GPU。", "meaningEn": "GBT (Gradient Boosted Trees) run millisecond CPU inference with no GPU." },
+      { "term": "p95 / 95分位延迟", "meaning": "95% 的请求延迟低于这个值，衡量尾部延迟而非平均值。", "meaningEn": "p95 latency is the value below which 95% of requests fall, measuring tail latency rather than the mean." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "heterogeneous-features",
+    "scenario": "欺诈特征混杂：类别型 MCC、连续型金额、二元风控标志，全都要喂进模型。",
+    "scenario_en": "Fraud features are mixed: categorical MCC, continuous amount, binary risk flags, all fed to the model.",
+    "q": "为什么 GBT 能直接吃这些异构特征，而深度网络要额外预处理？",
+    "q_en": "Why can GBTs ingest these heterogeneous features directly while deep nets need preprocessing?",
+    "why": "树的分裂在每个特征上找阈值或分组，天然处理类别、连续、二元的混合，不用 one-hot 或归一化。深度网络要求数值化输入，得先 one-hot 编码类别、归一化连续值，多一层预处理还会维度膨胀。",
+    "why_en": "Tree splits find a threshold or grouping on each feature, natively handling categorical, continuous, and binary together with no one-hot or normalization, whereas deep nets require numeric inputs, adding a one-hot/normalization step and dimension blow-up.",
+    "tags": ["llm-sd", "fraud", "features"],
+    "options": [
+      "GBT 内部也会自动做 one-hot 和归一化，本质与深度网络的预处理没区别",
+      "深度网络能直接吃类别/连续混合，反而是 GBT 需要先归一化",
+      "两者都要求先把类别特征 embedding 成向量才能训练",
+      "树分裂在每个特征上找阈值或分组，原生处理类别+连续+二元，无需 one-hot 或归一化"
+    ],
+    "options_en": [
+      "GBTs internally also do one-hot and normalization, so it's no different from deep-net preprocessing.",
+      "Deep nets ingest mixed categorical/continuous directly; it's actually GBTs that need normalization first.",
+      "Both require embedding categorical features into vectors before training.",
+      "Tree splits find a threshold or grouping per feature, natively handling categorical + continuous + binary with no one-hot or normalization."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "GBT 的分裂直接在原始特征上比较，不需要 one-hot/归一化这类深度网络才要的预处理。",
+      "说反了：深度网络才要数值化输入，GBT 原生就能吃类别与连续混合。",
+      "embedding 是深度网络处理高基数类别的做法，树模型不需要它就能分裂类别。",
+      "对；树按特征找分裂点，异构混合直接可用，这正是它在表格数据上省事又强的原因。"
+    ],
+    "optionExplanations_en": [
+      "GBT splits compare on raw features and don't need the one-hot/normalization that deep nets require.",
+      "Backwards: deep nets need numeric inputs, while GBTs natively ingest mixed categorical and continuous.",
+      "Embedding is how deep nets handle high-cardinality categories; trees split categories without it.",
+      "Correct — trees find split points per feature, so heterogeneous mixes work directly, which is why they're both easy and strong on tabular data."
+    ],
+    "termDefinitions": [
+      { "term": "one-hot encoding / 独热编码", "meaning": "把类别特征展开成一堆 0/1 列，深度网络吃类别时的常见预处理。", "meaningEn": "One-hot encoding expands a categorical feature into many 0/1 columns, a common preprocessing step for deep nets." },
+      { "term": "MCC", "fullName": "Merchant Category Code", "meaning": "商户类别码，一种类别型交易特征。", "meaningEn": "MCC (Merchant Category Code) is a categorical transaction feature for merchant type." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "interpretability",
+    "scenario": "监管要求：拒付一笔交易时，要能解释「为什么这笔被判为欺诈」。",
+    "scenario_en": "Regulators require that when a transaction is declined, you can explain why it was flagged as fraud.",
+    "q": "GBT 的哪个特性满足这条监管可解释性要求？",
+    "q_en": "Which GBT property satisfies this regulatory interpretability requirement?",
+    "why": "GBT 自带特征重要性(每个特征对分裂增益的贡献)，能指出哪些特征把这笔交易推向欺诈，可审计地解释拒付。一个不透明的欺诈概率满足不了「解释拒付」的合规要求。",
+    "why_en": "GBTs come with feature importance (each feature's contribution to split gain), so you can name which features pushed a transaction toward fraud and auditably justify the decline, which an opaque probability cannot.",
+    "tags": ["llm-sd", "fraud", "compliance"],
+    "options": [
+      "GBT 自带特征重要性，能指出哪些特征把这笔交易推向欺诈，可审计地解释拒付",
+      "GBT 输出的是黑箱概率，可解释性和深度网络一样差，要另训解释模型",
+      "GBT 靠更快的推理速度满足可解释性(速度快=透明)",
+      "GBT 参数量小所以自动可解释，与特征重要性无关"
+    ],
+    "options_en": [
+      "GBTs expose feature importance, naming which features pushed the transaction toward fraud to auditably justify the decline.",
+      "GBTs output a black-box probability, as opaque as a deep net, needing a separate explainer model.",
+      "GBTs satisfy interpretability through faster inference (fast = transparent).",
+      "GBTs are auto-interpretable due to small parameter count, unrelated to feature importance."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；特征重要性把「哪些特征驱动了这次判定」摊开，监管要的可审计解释正落在这里。",
+      "GBT 恰恰比深度网络透明，特征重要性天然可读，无需事后再训解释模型。",
+      "推理快是延迟属性，跟能不能解释一次判定毫无关系。",
+      "可解释来自树结构与特征重要性，不是参数少就自动可解释。"
+    ],
+    "optionExplanations_en": [
+      "Correct — feature importance lays out which features drove the decision, exactly the auditable explanation regulators want.",
+      "GBTs are more transparent than deep nets; feature importance is readable, needing no post-hoc explainer.",
+      "Fast inference is a latency property, unrelated to explaining a decision.",
+      "Interpretability comes from tree structure and feature importance, not from having few parameters."
+    ],
+    "termDefinitions": [
+      { "term": "feature importance / 特征重要性", "meaning": "衡量每个特征对模型分裂增益/预测的贡献，用来解释一次判定。", "meaningEn": "Feature importance measures each feature's contribution to split gain or prediction, used to explain a decision." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-006",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "boosting-rare-class",
+    "scenario": "欺诈是极端不平衡问题：正样本(欺诈)常 <0.1% 的交易量。",
+    "scenario_en": "Fraud is extremely imbalanced: positive (fraud) samples are often <0.1% of volume.",
+    "q": "boosting「顺序建树、每棵纠正前面错误」为什么特别适合这种稀有正类？",
+    "q_en": "Why does boosting's 'sequential trees, each correcting prior errors' suit this rare positive class?",
+    "why": "boosting 顺序建树，每棵新树重点拟合前面分错的样本——多是被淹没的稀有欺诈，逐步把弱学习器叠成强学习器。这种「聚焦难例」机制正好放大 <0.1% 的欺诈信号，比一次性拟合更能抓住稀有正类。",
+    "why_en": "Boosting builds trees sequentially, each new tree focusing on previously misclassified samples — often the drowned-out rare fraud — stacking weak learners into a strong one, which amplifies the <0.1% fraud signal better than a single fit.",
+    "tags": ["llm-sd", "fraud", "boosting"],
+    "options": [
+      "boosting 并行训练很多独立树再投票，靠数量压过稀有类噪声",
+      "boosting 随机丢弃大部分多数类样本来强行平衡，本质是欠采样",
+      "顺序建树、每棵新树聚焦前面分错的样本(多为稀有欺诈)，弱学习器叠成强学习器",
+      "boosting 只是把逻辑回归跑很多遍取平均，和树无关"
+    ],
+    "options_en": [
+      "Boosting trains many independent trees in parallel and votes, using count to overpower rare-class noise.",
+      "Boosting randomly drops most majority samples to force balance — essentially undersampling.",
+      "Sequential trees, each new one focusing on prior misclassifications (often rare fraud), stacking weak learners into a strong one.",
+      "Boosting just runs logistic regression many times and averages, unrelated to trees."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "并行独立投票是随机森林(bagging)的做法，boosting 恰恰是顺序、后一棵依赖前一棵。",
+      "boosting 不靠丢样本平衡，它靠对分错样本加权/聚焦，稀有欺诈正好被重点学习。",
+      "对；聚焦难例让每一轮都补上被淹没的欺诈，稀有正类的信号被逐步放大。",
+      "boosting 的弱学习器一般就是树，不是重复的逻辑回归取平均。"
+    ],
+    "optionExplanations_en": [
+      "Parallel independent voting is random forest (bagging); boosting is sequential with each tree depending on the last.",
+      "Boosting doesn't balance by dropping samples; it reweights/focuses on misclassifications, so rare fraud gets emphasized.",
+      "Correct — focusing on hard cases lets each round pick up drowned-out fraud, amplifying the rare positive signal.",
+      "Boosting's weak learners are typically trees, not repeated logistic regressions averaged."
+    ],
+    "termDefinitions": [
+      { "term": "boosting / 提升", "meaning": "顺序训练弱学习器，每个纠正前一个的错误，叠成强学习器的集成方法。", "meaningEn": "Boosting sequentially trains weak learners, each correcting the previous one's errors, into a strong ensemble." },
+      { "term": "rare positive class / 稀有正类", "meaning": "正样本占比极低(如欺诈 <0.1%)的不平衡分类问题。", "meaningEn": "A rare positive class is an imbalanced problem where positives are a tiny fraction (e.g. fraud <0.1%)." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-007",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "lightgbm-vs-xgboost",
+    "scenario": "在 50ms 预算下调 GBT，你在 LightGBM 和 XGBoost 的树生长策略之间权衡。",
+    "scenario_en": "Tuning a GBT under a 50ms budget, you weigh LightGBM's and XGBoost's tree-growth strategies.",
+    "q": "LightGBM 的 leaf-wise 与 XGBoost 的 level-wise 生长有何不同，对延迟意味着什么？",
+    "q_en": "How do LightGBM's leaf-wise and XGBoost's level-wise growth differ, and what does it mean for latency?",
+    "why": "LightGBM 按叶(leaf-wise)生长，优先分裂增益最大的叶，树更浅、推理更快；XGBoost 按层(level-wise)生长，每层全展开，树更平衡但更深、推理略慢。延迟敏感的欺诈打分常选 LightGBM。",
+    "why_en": "LightGBM grows leaf-wise, splitting the highest-gain leaf first for shallower, faster trees; XGBoost grows level-wise, expanding every level for more balanced but deeper, slightly slower trees, so latency-sensitive scoring often picks LightGBM.",
+    "tags": ["llm-sd", "fraud", "gbt-tuning"],
+    "tradeoff": "LightGBM leaf-wise(树浅、推理快、易过拟合) vs XGBoost level-wise(层展开、更稳、略慢)",
+    "table": {
+      "headers": ["框架", "生长方式", "树深", "推理速度"],
+      "rows": [
+        ["LightGBM", "按叶(leaf-wise)", "更浅", "更快"],
+        ["XGBoost", "按层(level-wise)", "更深", "略慢"]
+      ]
+    },
+    "options": [
+      "leaf-wise 和 level-wise 只是命名不同，生长方式和速度其实完全一样",
+      "LightGBM 按叶生长(优先分裂高增益叶)→树更浅推理更快；XGBoost 按层生长→更平衡但更深略慢",
+      "XGBoost 按叶生长所以更快，LightGBM 按层生长所以更慢，正好相反",
+      "两者都必须用 GPU 才能达到毫秒级，差别只在显存占用"
+    ],
+    "options_en": [
+      "leaf-wise and level-wise are just different names; growth and speed are identical.",
+      "LightGBM grows leaf-wise (splitting high-gain leaves) → shallower, faster; XGBoost grows level-wise → more balanced but deeper, slightly slower.",
+      "XGBoost grows leaf-wise so it's faster and LightGBM grows level-wise so it's slower — the reverse.",
+      "Both require a GPU to reach millisecond latency; the only difference is memory footprint."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "两者生长策略确实不同，导致树深和推理速度不同，不是同一回事。",
+      "对；leaf-wise 更贪心、树更浅更快但更易过拟合，level-wise 更平衡更稳，延迟敏感选前者。",
+      "说反了：leaf-wise 是 LightGBM、更快，level-wise 是 XGBoost、略慢。",
+      "两者都能在 CPU 上毫秒级推理，不是必须 GPU，差别在生长策略而非显存。"
+    ],
+    "optionExplanations_en": [
+      "Their growth strategies genuinely differ, driving different depth and speed — not the same thing.",
+      "Correct — leaf-wise is greedier and shallower/faster but more prone to overfit; level-wise is more balanced, so latency-sensitive work picks the former.",
+      "Backwards: leaf-wise is LightGBM (faster) and level-wise is XGBoost (slower).",
+      "Both run millisecond CPU inference without a GPU; the difference is growth strategy, not memory."
+    ],
+    "termDefinitions": [
+      { "term": "leaf-wise growth / 按叶生长", "meaning": "每次只分裂当前增益最大的叶子，树更不平衡但更浅、推理更快(LightGBM)。", "meaningEn": "Leaf-wise growth splits the single highest-gain leaf each time, giving less balanced but shallower, faster trees (LightGBM)." },
+      { "term": "level-wise growth / 按层生长", "meaning": "逐层把所有叶子一起分裂，树更平衡但更深、推理略慢(XGBoost)。", "meaningEn": "Level-wise growth splits all leaves of a level together, giving more balanced but deeper, slightly slower trees (XGBoost)." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "gbt-blind-spot",
+    "scenario": "GBT 逐笔独立打分：15 个账号共用同一台设备指纹和 IP，每笔单看都正常，于是全部放行。",
+    "scenario_en": "GBTs score each transaction independently: 15 accounts share one device fingerprint and IP, each looks normal alone, so all pass.",
+    "q": "GBT「逐笔独立评估」漏掉了什么，后果链是什么？",
+    "q_en": "What does GBT's independent per-transaction scoring miss, and what is the consequence chain?",
+    "why": "GBT 只看单笔交易的特征、不看账号之间的连接，所以共享设备/IP 的团伙每笔单看都正常→全部放行→协同欺诈得逞。要补上图模型(GraphSAGE)从网络结构里发现这种密集互连。",
+    "why_en": "GBTs see only a transaction's own features, not links between accounts, so a ring sharing a device/IP looks normal per transaction → all pass → coordinated fraud succeeds, which is why a graph model (GraphSAGE) is added to spot the dense interconnection.",
+    "tags": ["llm-sd", "fraud", "ring-detection"],
+    "diagram": "flowchart TB\n  D[\"同一设备指纹+IP\"] --- A1[\"账号1\"]\n  D --- A2[\"账号2\"]\n  D --- A3[\"...账号15\"]\n  A1 -.单看正常.-> P[\"GBT 逐笔放行\"]\n  A2 -.单看正常.-> P\n  A3 -.单看正常.-> P",
+    "options": [
+      "没有后果，GBT 逐笔打分已经足够，共享设备会体现在单笔特征里",
+      "会让 GBT 推理变慢，是个性能问题",
+      "会导致 GBT 过拟合多数类，需要更多正样本",
+      "看不到账号间连接→共享设备/IP 的团伙每笔都正常放行→协同欺诈得逞，需图模型补网络信号"
+    ],
+    "options_en": [
+      "No consequence; per-transaction GBT scoring suffices, and shared devices show up in single-transaction features.",
+      "It makes GBT inference slower — a performance problem.",
+      "It makes the GBT overfit the majority class, needing more positives.",
+      "No visibility into account links → a ring sharing a device/IP passes each time → coordinated fraud succeeds, needing a graph model for network signal."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "共享设备本身可以是一个特征，但一堆账号之间的连接结构单笔看不到，团伙照样溜过去。",
+      "这不是速度问题，是覆盖盲区问题：逐笔模型压根看不到跨账号结构。",
+      "过拟合是训练问题，与「看不看得到账号间连接」这个结构盲区无关。",
+      "对；盲区在网络结构，必须用聚合邻居的图模型(GraphSAGE)把团伙的密集互连暴露出来。"
+    ],
+    "optionExplanations_en": [
+      "A shared device can be a feature, but the link structure among many accounts is invisible per transaction, so the ring slips through.",
+      "It's not a speed issue but a coverage blind spot: a per-transaction model can't see cross-account structure.",
+      "Overfitting is a training issue, unrelated to the structural blind spot of not seeing account links.",
+      "Correct — the blind spot is network structure, so a neighbor-aggregating graph model (GraphSAGE) is needed to expose the ring's dense interconnection."
+    ],
+    "termDefinitions": [
+      { "term": "device fingerprint / 设备指纹", "meaning": "由设备特征拼出的近似唯一标识，用来发现多账号共用同一设备。", "meaningEn": "A device fingerprint is a near-unique identifier built from device attributes, used to spot multiple accounts sharing one device." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-009",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "entity-graph",
+    "scenario": "GraphSAGE 跑在一张「实体图」上，图里的账号需要先被连成网络。",
+    "scenario_en": "GraphSAGE runs on an 'entity graph' where accounts must first be linked into a network.",
+    "q": "欺诈实体图里，账号是靠什么被连起来的？",
+    "q_en": "In the fraud entity graph, what links accounts together?",
+    "why": "账号通过共享实体连边：同一设备指纹、同一 IP、同一支付工具(卡/银行账户)。这些共享揭示单笔模型看不到的密集互连——一堆账号共用一台设备，就是团伙的强信号。",
+    "why_en": "Accounts are linked by shared entities: the same device fingerprint, IP, or payment instrument (card/bank account), revealing dense interconnection a per-transaction model can't see — many accounts on one device is a strong ring signal.",
+    "tags": ["llm-sd", "fraud", "entity-graph"],
+    "options": [
+      "靠账号注册时间接近来连边",
+      "靠交易金额相似来连边",
+      "靠共享实体连边：同一设备指纹、同一 IP、同一支付工具",
+      "靠账号名字拼写相似来连边"
+    ],
+    "options_en": [
+      "Linked by close registration times.",
+      "Linked by similar transaction amounts.",
+      "Linked by shared entities: the same device fingerprint, IP, or payment instrument.",
+      "Linked by similar account-name spelling."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "注册时间接近噪声大、误连一片正常用户，不是团伙的可靠连边依据。",
+      "金额相似跨大量正常交易都成立，连出来的图无区分度。",
+      "对；共享设备/IP/支付工具是团伙复用资源的直接证据，连出的密集子图正是欺诈网络。",
+      "名字拼写相似既易伪造又误连，不能作为图的边。"
+    ],
+    "optionExplanations_en": [
+      "Close registration times are noisy and wrongly link many normal users — not a reliable ring edge.",
+      "Similar amounts hold across many normal transactions, giving a non-discriminative graph.",
+      "Correct — shared devices/IPs/payment instruments are direct evidence of resource reuse, and the dense subgraph they form is the fraud network.",
+      "Name-spelling similarity is easy to fake and wrongly links accounts, unfit as a graph edge."
+    ],
+    "termDefinitions": [
+      { "term": "entity graph / 实体图", "meaning": "以账号为节点、共享设备/IP/支付工具为边的图，用来暴露团伙结构。", "meaningEn": "An entity graph has accounts as nodes and shared devices/IPs/payment instruments as edges, exposing ring structure." },
+      { "term": "payment instrument / 支付工具", "meaning": "用于付款的卡或银行账户，多账号共用同一支付工具是团伙线索。", "meaningEn": "A payment instrument is the card or bank account used to pay; multiple accounts sharing one is a ring clue." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "graphsage-choice",
+    "scenario": "要抓「欺诈团伙」：多个账号通过共享设备、IP、支付工具相互连接，形成 GBT 看不见的密集互连。",
+    "scenario_en": "You must catch fraud rings: accounts interlinked via shared devices, IPs, and payment instruments in dense clusters invisible to the GBT.",
+    "q": "抓这种网络级欺诈团伙该上什么模型，为什么？",
+    "q_en": "Which model catches this network-level ring fraud, and why?",
+    "why": "用 GraphSAGE 这类图神经网络：它在实体图上聚合邻居特征，把「账号周围的连接结构」压成嵌入，正好暴露单笔模型看不见的密集互连团伙。GBT 逐笔独立，天然抓不到跨账号结构。",
+    "why_en": "Use a graph neural network like GraphSAGE: it aggregates neighbor features on the entity graph, compressing an account's surrounding structure into an embedding that exposes dense rings a per-transaction model misses.",
+    "tags": ["llm-sd", "fraud", "graph-model"],
+    "tradeoff": "图模型(抓跨账号结构但要建图+异步算嵌入) vs 逐笔模型(简单低延迟但盲于团伙)",
+    "whenOtherWins": "若欺诈基本是孤立的单账号行为、账号之间没有可建图的共享实体，图模型收益不大，GBT 逐笔打分就够。",
+    "options": [
+      "再训一个更大的 GBT，喂更多单笔特征就能抓团伙",
+      "用规则引擎枚举所有共享设备组合，规则够多就能覆盖团伙",
+      "用 GraphSAGE 图神经网络：在实体图上聚合邻居特征，把局部连接结构压成嵌入暴露团伙",
+      "用聚类把相似交易分组，组一大就整组判欺诈"
+    ],
+    "options_en": [
+      "Train a bigger GBT; more single-transaction features will catch rings.",
+      "Use a rule engine enumerating all shared-device combinations; enough rules cover rings.",
+      "Use GraphSAGE (a graph neural network): aggregate neighbor features on the entity graph, compressing local structure into an embedding that exposes rings.",
+      "Cluster similar transactions; flag a whole cluster as fraud once it grows large."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "GBT 再大也只看单笔特征，看不到账号间连接，加特征补不了结构盲区。",
+      "组合爆炸且共享模式会变，规则穷举既写不全又易过时，抓不住演化的团伙。",
+      "对；图模型聚合邻居把连接结构编码进嵌入，密集互连的团伙一目了然，是网络级欺诈的正解。",
+      "按金额聚类误伤大批正常相似交易，无区分度，也不利用账号间的真实连接。"
+    ],
+    "optionExplanations_en": [
+      "A bigger GBT still sees only single-transaction features, not account links; more features can't fix the structural blind spot.",
+      "Combinations explode and sharing patterns shift, so enumerated rules are incomplete and stale, missing evolving rings.",
+      "Correct — a graph model encodes link structure into embeddings, making dense rings visible, the right answer for network-level fraud.",
+      "Clustering by amount wrongly groups many normal transactions, is non-discriminative, and ignores real account links."
+    ],
+    "termDefinitions": [
+      { "term": "GNN / 图神经网络", "fullName": "Graph Neural Network", "meaning": "在图上通过聚合邻居信息学习节点表示的模型家族，GraphSAGE 是其一。", "meaningEn": "A GNN (Graph Neural Network) learns node representations by aggregating neighbor information on a graph; GraphSAGE is one." },
+      { "term": "GraphSAGE", "fullName": "Graph SAmple and aggreGatE", "meaning": "归纳式图神经网络，聚合采样到的邻居特征生成节点嵌入。", "meaningEn": "GraphSAGE (Graph SAmple and aggreGatE) is an inductive GNN that aggregates sampled neighbor features into node embeddings." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "inductive-vs-transductive",
+    "scenario": "新账号持续不断注册进来，打分时图里天天出现训练时没见过的节点。",
+    "scenario_en": "New accounts register continuously, so scoring time constantly sees nodes unseen at training.",
+    "q": "为什么欺诈图模型要用归纳式的 GraphSAGE，而不是转导式的 GCN？",
+    "q_en": "Why use inductive GraphSAGE rather than transductive GCN for the fraud graph?",
+    "why": "GraphSAGE 是归纳式：学的是「如何聚合邻居特征」的函数，遇到训练时没见过的新账号也能现场算出嵌入。GCN 是转导式，嵌入绑定训练时的固定图，新节点得整图重训。欺诈里新账号源源不断，必须用归纳式。",
+    "why_en": "GraphSAGE is inductive: it learns a function for aggregating neighbor features, so it computes embeddings on the fly for accounts unseen at training, while GCN is transductive with embeddings tied to the fixed training graph, needing a full retrain for new nodes.",
+    "tags": ["llm-sd", "fraud", "inductive"],
+    "tradeoff": "归纳式 GraphSAGE(泛化到新节点、可在线) vs 转导式 GCN(绑定固定图、新节点需重训)",
+    "table": {
+      "headers": ["模型", "类型", "遇到新节点"],
+      "rows": [
+        ["GraphSAGE", "归纳式", "现场算嵌入"],
+        ["GCN", "转导式", "需整图重训"]
+      ]
+    },
+    "options": [
+      "GCN 也是归纳式，两者对新节点都能直接算嵌入，没区别",
+      "GraphSAGE 学的是聚合邻居的函数→新账号现场可算嵌入；GCN 转导式绑定训练图→新节点要重训",
+      "GraphSAGE 更慢但更准，选它只是为了精度，与新节点无关",
+      "GCN 归纳式、GraphSAGE 转导式，欺诈这种场景应该选 GCN"
+    ],
+    "options_en": [
+      "GCN is also inductive; both compute embeddings for new nodes directly, no difference.",
+      "GraphSAGE learns a neighbor-aggregation function → new accounts get embeddings on the fly; GCN is transductive, tied to the training graph → new nodes need retraining.",
+      "GraphSAGE is slower but more accurate; you pick it purely for accuracy, unrelated to new nodes.",
+      "GCN is inductive and GraphSAGE transductive, so fraud should use GCN."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "GCN 是转导式，新节点不重训就没有嵌入，两者对新节点的处理完全不同。",
+      "对；归纳式学的是聚合函数而非固定嵌入表，正好匹配新账号不断出现、要在线算分的欺诈场景。",
+      "关键不是快慢，而是归纳式能给训练时没见过的新账号算嵌入，这才是选它的原因。",
+      "说反了：GraphSAGE 归纳式、GCN 转导式，欺诈要选归纳式的 GraphSAGE。"
+    ],
+    "optionExplanations_en": [
+      "GCN is transductive; without retraining, new nodes have no embedding, so the two differ sharply on new nodes.",
+      "Correct — inductive learns an aggregation function, not a fixed embedding table, matching fraud where new accounts appear and must be scored online.",
+      "The point isn't speed but that inductive can embed accounts unseen at training, which is why you pick it.",
+      "Backwards: GraphSAGE is inductive and GCN transductive, so fraud picks inductive GraphSAGE."
+    ],
+    "termDefinitions": [
+      { "term": "inductive / 归纳式", "meaning": "学习一个可泛化的函数，能对训练时未见过的新节点直接生成嵌入。", "meaningEn": "Inductive learning fits a generalizable function that produces embeddings for nodes unseen at training." },
+      { "term": "transductive / 转导式", "meaning": "只对训练时图里的固定节点学嵌入，新节点需重新训练整图。", "meaningEn": "Transductive learning fixes embeddings for nodes in the training graph, requiring a retrain for new nodes." },
+      { "term": "GCN", "fullName": "Graph Convolutional Network", "meaning": "转导式图卷积网络，嵌入绑定训练图，不便处理持续新增的节点。", "meaningEn": "GCN (Graph Convolutional Network) is a transductive graph model whose embeddings bind to the training graph, awkward for continuously arriving nodes." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "neighbor-aggregation",
+    "scenario": "GraphSAGE 要给每个账号算一个反映其网络位置的固定维度嵌入，喂给下游 GBT。",
+    "scenario_en": "GraphSAGE must give each account a fixed-dimension embedding reflecting its network position, fed to the downstream GBT.",
+    "q": "GraphSAGE 怎么把一个账号的局部网络结构变成固定维度的嵌入？",
+    "q_en": "How does GraphSAGE turn an account's local network structure into a fixed-dimension embedding?",
+    "why": "它聚合该账号 1-hop(直接邻居)和 2-hop(邻居的邻居)的特征，逐层汇总成一个固定维度向量，这个嵌入编码了「账号周围连了谁、结构多密」。固定维度才能当额外特征喂进下游 GBT。",
+    "why_en": "It aggregates the account's 1-hop (direct neighbors) and 2-hop (neighbors' neighbors) features, summarizing layer by layer into a fixed-length vector that encodes who it connects to and how dense the structure is, so it can feed the GBT as an extra feature.",
+    "tags": ["llm-sd", "fraud", "embedding"],
+    "options": [
+      "聚合 1-hop 和 2-hop 邻居特征，逐层汇总成固定维嵌入，编码局部连接结构",
+      "直接把账号 ID 做 one-hot 当嵌入，完全不看邻居",
+      "把整张图所有节点特征平均成一个全局向量，每个账号共用同一个",
+      "只用账号自己的交易特征，不聚合任何邻居"
+    ],
+    "options_en": [
+      "Aggregate 1-hop and 2-hop neighbor features, summarizing layer by layer into a fixed-dim embedding encoding local structure.",
+      "One-hot the account ID as the embedding, ignoring neighbors entirely.",
+      "Average all node features into one global vector shared by every account.",
+      "Use only the account's own transaction features, aggregating no neighbors."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；多跳邻居聚合把「周围连了谁、多密」编码进定长向量，正好捕捉团伙的局部结构。",
+      "ID one-hot 不含结构信息、维度还爆炸，学不到团伙的连接模式。",
+      "全局平均抹掉了个体差异，每个账号一样的嵌入没有区分度。",
+      "只用自身特征就退化成 GBT 的逐笔视角，看不到网络结构，等于没上图模型。"
+    ],
+    "optionExplanations_en": [
+      "Correct — multi-hop aggregation encodes who it connects to and how dense into a fixed vector, capturing the ring's local structure.",
+      "ID one-hot carries no structure and explodes in dimension, learning no ring connectivity.",
+      "Global averaging erases individual differences, giving every account the same, non-discriminative embedding.",
+      "Using only own features collapses back to the GBT's per-transaction view, seeing no network structure."
+    ],
+    "termDefinitions": [
+      { "term": "1-hop / 2-hop 邻居", "meaning": "1-hop 是直接相连的邻居，2-hop 是邻居的邻居，越多跳看得越远。", "meaningEn": "1-hop neighbors are directly connected; 2-hop are neighbors of neighbors — more hops see further." },
+      { "term": "node embedding / 节点嵌入", "meaning": "把一个节点的特征与局部结构压成的固定维度向量。", "meaningEn": "A node embedding is a fixed-dimension vector compressing a node's features and local structure." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "two-pass-serving",
+    "scenario": "图上做 2-hop 邻居聚合很重，若放进打分热路径会加 50-200ms，直接吃光 50ms 的整个预算。",
+    "scenario_en": "2-hop neighbor aggregation on the graph is heavy; inline in the hot path it adds 50-200ms, the entire 50ms budget.",
+    "q": "GraphSAGE 嵌入该怎么服务，才能既用上团伙信号又不炸延迟预算？",
+    "q_en": "How should GraphSAGE embeddings be served to use the ring signal without blowing the latency budget?",
+    "why": "两趟(two-pass)：异步小批量每 5-15 分钟随图更新重算嵌入、写进特征库；打分时只做一次 KV 查询取预计算好的嵌入喂给 GBT。把 50-200ms 的重计算移出热路径，在线只留毫秒级查表。",
+    "why_en": "Two passes: an async mini-batch job re-embeds every 5-15 minutes as the graph updates and writes to the feature store; scoring does a single KV lookup of the precomputed embedding for the GBT, keeping the 50-200ms recompute off the hot path.",
+    "tags": ["llm-sd", "fraud", "serving"],
+    "tradeoff": "异步预计算嵌入(在线毫秒查表但有 5-15 分钟滞后) vs 实时内联聚合(最新但 +50-200ms 炸预算)",
+    "whenOtherWins": "若团伙形成极快、5-15 分钟滞后完全不可接受，且延迟预算宽松，才考虑把更轻量的实时图计算搬进热路径。",
+    "diagram": "flowchart LR\n  GR[\"图更新\"] --> EMB[\"每5-15min重算<br/>GraphSAGE嵌入\"]\n  EMB --> FS[(\"特征库\")]\n  Q[\"打分请求\"] --> KV[\"KV查预计算嵌入\"]\n  FS --> KV\n  KV --> GBT[\"GBT打分\"]",
+    "options": [
+      "打分时实时跑 2-hop 聚合拿最新嵌入，反正只多几毫秒",
+      "干脆不用 GraphSAGE 嵌入，太重了，只留 GBT",
+      "每次打分都对整张图重算所有账号嵌入，再取本账号那个",
+      "两趟：异步每 5-15min 重算嵌入写特征库，打分时只做一次 KV 查表取预计算嵌入喂 GBT"
+    ],
+    "options_en": [
+      "Compute 2-hop aggregation live at scoring time for the freshest embedding — it's only a few ms.",
+      "Just drop GraphSAGE embeddings; they're too heavy, keep only the GBT.",
+      "Recompute all account embeddings over the whole graph on every scoring call, then take this account's.",
+      "Two passes: an async job re-embeds every 5-15 min into the feature store; scoring does one KV lookup of the precomputed embedding for the GBT."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "内联 2-hop 聚合是 50-200ms，不是几毫秒，直接吃光整个 50ms 预算。",
+      "放弃图嵌入就丢了团伙信号，等于回到 GBT 的盲区，不是好取舍。",
+      "整图重算比单账号还贵，每次打分都做完全不可能满足 <50ms。",
+      "对；把重计算异步化、在线只留毫秒查表，是热路径用上团伙信号的标准解，代价是 5-15 分钟滞后。"
+    ],
+    "optionExplanations_en": [
+      "Inline 2-hop aggregation is 50-200ms, not a few ms, eating the entire 50ms budget.",
+      "Dropping embeddings loses the ring signal, back to the GBT's blind spot — a bad trade.",
+      "Recomputing the whole graph is even costlier than one account and can't meet <50ms per call.",
+      "Correct — async recompute plus a millisecond online lookup is the standard way to use ring signal on the hot path, at the cost of a 5-15 min lag."
+    ],
+    "termDefinitions": [
+      { "term": "two-pass serving / 两趟服务", "meaning": "重计算异步预跑写存储，在线只做轻量查表，把慢步骤移出热路径。", "meaningEn": "Two-pass serving precomputes the heavy step asynchronously into storage and does only a light lookup online, moving the slow work off the hot path." },
+      { "term": "KV / 键值查询", "fullName": "Key-Value lookup", "meaning": "按键(账号)直接取值(预计算嵌入)的毫秒级查询。", "meaningEn": "A KV (Key-Value) lookup fetches a value (the precomputed embedding) by key (the account) in milliseconds." },
+      { "term": "feature store / 特征库", "meaning": "存放预计算特征供在线打分低延迟读取的存储系统。", "meaningEn": "A feature store holds precomputed features for low-latency reads during online scoring." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-014",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "embedding-cadence",
+    "scenario": "GraphSAGE 嵌入每 5-15 分钟异步重算一次，而不是实时更新。",
+    "scenario_en": "GraphSAGE embeddings are re-computed asynchronously every 5-15 minutes, not in real time.",
+    "q": "「每 5-15 分钟重算嵌入」这个节奏对检测能力意味着什么？",
+    "q_en": "What does the '5-15 minute re-embed cadence' imply for detection?",
+    "why": "这是工程取舍的给定节奏(不是公式推导)：它把 50-200ms 的重计算挪出热路径，代价是新形成的团伙有 5-15 分钟检测滞后——窗口内作案时嵌入还是旧的。这段缺口由实时的规则引擎兜底。",
+    "why_en": "It's a chosen engineering cadence, not a formula: it moves the 50-200ms recompute off the hot path, at the cost of a 5-15 minute detection lag for new rings whose embeddings are stale within the window, a gap the real-time rule engine covers.",
+    "tags": ["llm-sd", "fraud", "detection-lag"],
+    "options": [
+      "5-15 分钟是模型的训练周期，和线上检测滞后无关",
+      "说明团伙一形成就立刻被抓到，没有任何滞后",
+      "重算节奏=新团伙有 5-15 分钟检测滞后，窗口内作案用旧嵌入，缺口由规则引擎兜底",
+      "5-15 分钟是要背的硬指标，考点是记住这个数字"
+    ],
+    "options_en": [
+      "5-15 min is the model's training cycle, unrelated to online detection lag.",
+      "It means a ring is caught the instant it forms, with no lag.",
+      "The cadence means new rings have a 5-15 min detection lag, act on stale embeddings within the window, and the gap is covered by the rule engine.",
+      "5-15 min is a hard number to memorize; the point is recalling the value."
+    ],
+    "answer": [2],
+    "termDefinitions": [
+      { "term": "detection lag / 检测滞后", "meaning": "从欺诈发生到系统能察觉之间的时间差，这里由异步重算周期造成。", "meaningEn": "Detection lag is the delay between fraud occurring and the system noticing it, here caused by the async recompute cycle." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-015",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "lag-fallback",
+    "scenario": "一个刚在 5 分钟内组建、马上就作案的欺诈团伙，此刻 GraphSAGE 嵌入还是旧的、根本看不出它。",
+    "scenario_en": "A ring formed within the last 5 minutes strikes immediately; its GraphSAGE embedding is still stale and doesn't reveal it.",
+    "q": "新团伙的检测滞后会漏掉这波攻击吗，架构靠什么兜底？",
+    "q_en": "Will the new-ring detection lag miss this attack, and what covers it?",
+    "why": "异步嵌入有 5-15 分钟滞后→窗口内新团伙嵌入是旧的→图信号暂时失效；但规则引擎(共享设备阈值、可疑 BIN 等确定性规则)在热路径实时兜住这段缺口。这正是 defense-in-depth 让各组件互补盲区。",
+    "why_en": "Async embeddings lag 5-15 min → a new ring's embedding is stale in that window → graph signal is temporarily blind; but the rule engine (shared-device thresholds, suspicious BINs) covers the gap in real time on the hot path, defense-in-depth where components cover each other.",
+    "tags": ["llm-sd", "fraud", "defense-in-depth"],
+    "options": [
+      "会直接漏掉，架构没有任何补救，只能等下一次重算",
+      "图信号暂时失效，但规则引擎用确定性规则实时兜住这 5-15 分钟缺口，组件互补盲区",
+      "不会漏，GBT 单笔打分本来就能独立抓住新团伙",
+      "靠把重算频率提到每秒一次来彻底消除滞后，代价可以接受"
+    ],
+    "options_en": [
+      "It's simply missed; the architecture has no remedy, just wait for the next recompute.",
+      "Graph signal is temporarily blind, but the rule engine covers the 5-15 min gap in real time with deterministic rules — components cover each other.",
+      "It won't be missed; per-transaction GBT already catches new rings alone.",
+      "Push recompute to once per second to eliminate the lag entirely, at acceptable cost."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "架构恰恰为这个缺口准备了兜底，不是无补救，纵深防御的意义就在这里。",
+      "对；某一层暂时失效时，另一层(实时规则)顶上，这就是三组件互补盲区的价值。",
+      "GBT 逐笔独立，看不到账号间连接，抓不住刚形成的团伙，正是它的盲区。",
+      "每秒整图重算成本爆炸也未必赶得上，滞后靠架构兜底而非硬提频率解决。"
+    ],
+    "optionExplanations_en": [
+      "The architecture is built to cover this gap, not helpless — that's the point of defense-in-depth.",
+      "Correct — when one layer is briefly blind, another (real-time rules) takes over, the value of three complementary components.",
+      "The GBT is per-transaction and can't see account links, so a just-formed ring is exactly its blind spot.",
+      "Per-second full recompute explodes cost and may still lag; the fix is architectural fallback, not brute-force frequency."
+    ],
+    "termDefinitions": [
+      { "term": "BIN", "fullName": "Bank Identification Number", "meaning": "银行卡号前几位，标识发卡行；失陷/高风险 BIN 可被规则直接拦。", "meaningEn": "A BIN (Bank Identification Number) is the leading card digits identifying the issuer; compromised/high-risk BINs can be blocked by rules." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "rule-engine-blocking",
+    "scenario": "有些交易来自受制裁国家或已知被盗的 BIN(银行卡号前缀)，判定是确定性的、根本不需要概率模型。",
+    "scenario_en": "Some transactions come from sanctioned countries or known-compromised BINs (card prefixes); the decision is deterministic and needs no probabilistic model.",
+    "q": "这类「已知必拦」的交易该用什么处理，为什么不走 ML？",
+    "q_en": "How should these 'known must-block' transactions be handled, and why not ML?",
+    "why": "用规则引擎确定性硬拦：受制裁国家/失陷 BIN 是布尔判定，零推理成本、即时、可审计。给它跑 ML 算概率既浪费算力，又不如显式规则可解释。",
+    "why_en": "Use the rule engine to hard-block deterministically: sanctioned countries and compromised BINs are boolean checks — zero inference cost, instant, auditable — whereas running ML on them wastes compute and is less explainable than an explicit rule.",
+    "tags": ["llm-sd", "fraud", "rule-engine"],
+    "tradeoff": "规则引擎(确定性、零成本、可审计，但只覆盖已知模式) vs ML(能学新模式但有推理成本、不透明)",
+    "whenOtherWins": "当模式是模糊的、会随数据演化的(如新型行为欺诈)，确定性规则写不出来，就该交给会从数据学习的 GBT。",
+    "options": [
+      "用规则引擎确定性硬拦：布尔判定、零推理成本、即时且可审计",
+      "交给 GBT 算欺诈概率，概率高再拦，统一走一条路径最简单",
+      "交给 GraphSAGE 先看它是不是团伙的一部分再决定",
+      "先放行并记录，等异步嵌入更新后再回溯拦截"
+    ],
+    "options_en": [
+      "Hard-block with the rule engine: a boolean check, zero inference cost, instant and auditable.",
+      "Send it to the GBT for a fraud probability and block if high — one unified path is simplest.",
+      "Send it to GraphSAGE to check ring membership first, then decide.",
+      "Approve and log first, then retro-block once the async embedding updates."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；已知坏模式是布尔判定，规则零成本即时拦，还能审计，比给它跑 ML 更省更透明。",
+      "对已经确定要拦的交易还去跑 ML，白付一次推理成本，且概率不如显式规则可解释。",
+      "图模型有异步滞后、也不针对制裁/失陷 BIN 这类确定性名单，用它属于杀鸡用牛刀且慢。",
+      "已知必拦的却先放行，等回溯就晚了，钱已经出去，风险敞口不可接受。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a known-bad pattern is a boolean check the rule engine blocks instantly at zero cost and auditably, cheaper and clearer than ML.",
+      "Running ML on an already-certain block wastes an inference and a probability is less explainable than an explicit rule.",
+      "The graph model lags asynchronously and isn't aimed at deterministic sanction/compromised-BIN lists, so it's overkill and slow.",
+      "Approving a must-block first and retro-blocking is too late — the money is gone; the exposure is unacceptable."
+    ],
+    "termDefinitions": [
+      { "term": "BIN", "fullName": "Bank Identification Number", "meaning": "银行卡号前缀，标识发卡行；失陷 BIN 属于确定性拦截名单。", "meaningEn": "A BIN (Bank Identification Number) is the card prefix identifying the issuer; compromised BINs go on deterministic block lists." },
+      { "term": "rule engine / 规则引擎", "meaning": "按显式布尔条件即时判定的组件，零模型推理、可审计。", "meaningEn": "A rule engine decides instantly on explicit boolean conditions, with no model inference and full auditability." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-017",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "why-rules-stay",
+    "scenario": "面试官问：都有 GBT 和 GraphSAGE 了，规则引擎为什么不是遗留包袱，还留着？",
+    "scenario_en": "Interviewer: with GBTs and GraphSAGE in place, why isn't the rule engine legacy baggage — why keep it?",
+    "q": "规则引擎在 ML 之外承担哪些 ML 干不了的职责？(多选)",
+    "q_en": "What jobs does the rule engine do that ML can't? (multiple)",
+    "why": "规则做 ML 做不到的三件事：即时确定性硬拦已知坏模式(零推理)、在模型重训/服务出错时兜住基线欺诈、提供可审计的显式逻辑满足监管。降低训练 GPU 成本不是规则的职责。",
+    "why_en": "Rules do three things ML can't: instantly hard-block known bad patterns at zero inference cost, act as a safety net for baseline fraud during retraining/serving errors, and provide auditable explicit logic for compliance — lowering GPU training cost is not their job.",
+    "tags": ["llm-sd", "fraud", "rule-engine"],
+    "options": [
+      "即时硬拦已知坏模式(受制裁国家/失陷 BIN)，零推理成本",
+      "模型重训或服务出错时兜住基线欺诈的安全网",
+      "可审计的显式逻辑，满足监管合规",
+      "降低训练 GPU 集群的成本"
+    ],
+    "options_en": [
+      "Instantly hard-block known bad patterns (sanctioned countries/compromised BINs) at zero inference cost.",
+      "A safety net catching baseline fraud during model retraining or serving errors.",
+      "Auditable explicit logic satisfying regulatory compliance.",
+      "Lowering the cost of the training GPU cluster."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；已知坏模式是布尔判定，规则零成本即时拦，还省下给这些交易跑 ML 的算力。",
+      "对；模型下线/漂移/推理报错时，规则是不依赖模型的最后防线，守住基线欺诈。",
+      "对；监管要能审计「为什么拒付」，显式规则可读可查，不透明概率满足不了。",
+      "错；GPU 成本是训练侧的事，和规则引擎在推理路径上的职责无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — known bad patterns are boolean checks the rule engine blocks instantly at zero cost, saving ML compute on them.",
+      "Correct — when the model is down, drifting, or erroring, rules are the model-independent last line holding baseline fraud.",
+      "Correct — regulators must audit why a decline happened; explicit rules are readable, which opaque probabilities aren't.",
+      "Incorrect — GPU cost is a training-side concern, unrelated to the rule engine's role on the inference path."
+    ],
+    "termDefinitions": [
+      { "term": "safety net / 安全网", "meaning": "模型失效期间仍能拦住基线欺诈的独立防线，不依赖 ML。", "meaningEn": "A safety net is a model-independent line that keeps blocking baseline fraud while the model is unavailable." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "execution-order",
+    "scenario": "打分管线里，规则引擎放在 GBT 之前作为预过滤器先跑。",
+    "scenario_en": "In the scoring pipeline, the rule engine runs first as a pre-filter before the GBT.",
+    "q": "为什么规则引擎要排在 ML 之前，而不是之后？",
+    "q_en": "Why does the rule engine run before ML, not after?",
+    "why": "规则先跑当预过滤：命中硬拦规则的交易直接拒掉、不再调用 ML→省下这些交易的推理算力、拉低平均延迟；剩下需要判断的才进 GBT。若放在 ML 之后，每笔都得先付一次推理成本，白算。",
+    "why_en": "Rules run first as a pre-filter: transactions hitting a hard-block rule are rejected without invoking ML → saving their inference compute and lowering average latency, and only those needing judgment reach the GBT; after ML, every transaction would pay an inference first for nothing.",
+    "tags": ["llm-sd", "fraud", "execution-order"],
+    "options": [
+      "顺序无所谓，规则放前放后结果和成本都一样",
+      "规则该放最后，等 ML 拿不准时再用规则复核",
+      "规则先当预过滤：硬拦命中直接拒不调 ML，省推理算力+降平均延迟，剩下的才进 GBT",
+      "规则放前面是为了给 ML 攒更多训练数据"
+    ],
+    "options_en": [
+      "Order doesn't matter; rules before or after give the same result and cost.",
+      "Rules should be last, used to review only when ML is uncertain.",
+      "Rules first as a pre-filter: hard-block hits are rejected without ML, saving inference compute and lowering average latency; the rest reach the GBT.",
+      "Rules go first to accumulate more training data for the ML."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "顺序影响成本：放前面能省掉被硬拦交易的推理，放后面每笔都白付一次，结果不等价。",
+      "复核确实有用，但把规则整体放最后就失去了预过滤省算力、降延迟的主要好处。",
+      "对；把确定的坏交易先便宜地拦掉，只让不确定的付更贵的 ML 推理，省算力又降平均延迟。",
+      "预过滤的目的是省算力和降延迟，不是攒训练数据，这个说法答非所问。"
+    ],
+    "optionExplanations_en": [
+      "Order affects cost: first, it saves inference on blocked transactions; last, every transaction pays for nothing — not equivalent.",
+      "Review is useful, but putting all rules last loses the main pre-filter benefit of saving compute and cutting latency.",
+      "Correct — cheaply block certain-bad transactions first so only uncertain ones pay costlier ML inference, saving compute and average latency.",
+      "The pre-filter's purpose is saving compute and latency, not accumulating training data — this misses the point."
+    ],
+    "termDefinitions": [
+      { "term": "pre-filter / 预过滤", "meaning": "在昂贵步骤之前用便宜判定先剔除一部分输入，省下下游算力。", "meaningEn": "A pre-filter cheaply removes some inputs before an expensive step, saving downstream compute." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "tiered-thresholds",
+    "scenario": "GBT 给一笔通过规则的交易输出欺诈概率后，系统按概率分档处置。",
+    "scenario_en": "After the GBT outputs a fraud probability for a rule-passing transaction, the system acts by probability band.",
+    "q": "GBT 概率输出后的分层阈值处置是怎样的？",
+    "q_en": "What is the tiered-threshold handling after the GBT probability?",
+    "why": "分三档：<0.1 自动批准、>0.9 自动拒绝、0.1-0.9 送人工复核。阈值按业务对误报(FP)/漏报(FN)的容忍度调——怕打扰好客户就抬高拒绝线，怕漏欺诈就压低。",
+    "why_en": "Three bands: <0.1 auto-approve, >0.9 auto-reject, 0.1-0.9 to manual review, with thresholds tuned to the business's tolerance for false positives (FP) and false negatives (FN).",
+    "tags": ["llm-sd", "fraud", "thresholds"],
+    "diagram": "flowchart TB\n  P[\"GBT 欺诈概率 p\"] --> A{\"分档\"}\n  A -->|p<0.1| Y[\"自动批准\"]\n  A -->|p>0.9| N[\"自动拒绝\"]\n  A -->|0.1≤p≤0.9| M[\"人工复核\"]",
+    "options": [
+      "只有一个 0.5 阈值：高于就拒、低于就批，没有人工环节",
+      "所有交易一律送人工复核，模型只做参考",
+      "<0.9 自动批准、>0.9 才人工复核，没有自动拒绝档",
+      "<0.1 自动批准、>0.9 自动拒绝、0.1-0.9 送人工复核，阈值按业务 FP/FN 容忍度调"
+    ],
+    "options_en": [
+      "A single 0.5 threshold: above rejects, below approves, no human step.",
+      "Every transaction goes to manual review; the model is only advisory.",
+      "<0.9 auto-approve, >0.9 to manual review, with no auto-reject band.",
+      "<0.1 auto-approve, >0.9 auto-reject, 0.1-0.9 to manual review, thresholds tuned to business FP/FN tolerance."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "单一硬阈值把不确定的边界样本也强行二分，误报漏报都升高，不如留一个人工带。",
+      "全量人工复核既贵又慢，模型的价值就是自动处理掉两头确定的大多数。",
+      "缺了自动拒绝档，高置信欺诈还要人工，白白拖慢并放大风险敞口。",
+      "对；两头自动、中间交人工，且阈值随 FP/FN 业务容忍度可调，是标准的分层处置。"
+    ],
+    "optionExplanations_en": [
+      "A single hard threshold forces uncertain borderline cases into a binary, raising both FP and FN — worse than a review band.",
+      "Reviewing everything is costly and slow; the model's value is auto-handling the certain majority at both ends.",
+      "Without an auto-reject band, high-confidence fraud still waits for humans, slowing things and widening exposure.",
+      "Correct — auto at both ends, humans in the middle, thresholds tunable to FP/FN business tolerance — the standard tiered handling."
+    ],
+    "termDefinitions": [
+      { "term": "FP / 误报", "fullName": "False Positive", "meaning": "把正常交易误判为欺诈，代价是打扰或流失好客户。", "meaningEn": "A false positive (FP) flags a legitimate transaction as fraud, costing you good-customer friction or churn." },
+      { "term": "FN / 漏报", "fullName": "False Negative", "meaning": "把欺诈交易误判为正常放过，代价是直接的欺诈损失。", "meaningEn": "A false negative (FN) lets a fraudulent transaction through as legitimate, costing direct fraud loss." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "manual-review-band",
+    "scenario": "GBT 给某笔交易打出 0.55 的欺诈概率——既不敢自动放行，也不敢自动拒付。",
+    "scenario_en": "The GBT scores a transaction at 0.55 fraud probability — too risky to auto-approve, too risky to auto-reject.",
+    "q": "0.1-0.9 这个中间档为什么送人工复核，而不是强行二选一？",
+    "q_en": "Why send the 0.1-0.9 middle band to manual review instead of forcing a binary?",
+    "why": "中间档模型不确定：自动批准会放欺诈、自动拒付会误伤好客户，两种错都贵。送人工复核用人的判断换取更低的 FP+FN，代价是人工有成本、有延迟，所以只把不确定的窄区间交给人。",
+    "why_en": "In the middle band the model is uncertain: auto-approve lets fraud through and auto-reject hurts good customers, both costly, so manual review trades human judgment for lower FP+FN, at the cost of headcount and latency — hence only the narrow uncertain band goes to humans.",
+    "tags": ["llm-sd", "fraud", "manual-review"],
+    "tradeoff": "人工复核中间档(降 FP/FN 但有人力成本+延迟) vs 纯阈值二分(快省钱但边界样本易错)",
+    "whenOtherWins": "若人工复核产能有限、或交易额极小(误判成本很低)，可收窄中间档、直接按阈值二分，少打扰人工。",
+    "options": [
+      "中间档一律自动放行，先做成生意再说",
+      "中间档一律自动拒付，宁可错杀不放过",
+      "把 0.5 当硬边界二分，中间档根本不需要人工",
+      "模型不确定的窄区间交人工判断，换更低的 FP+FN，代价是人力成本与延迟"
+    ],
+    "options_en": [
+      "Auto-approve the whole middle band — close the sale first.",
+      "Auto-reject the whole middle band — better to over-block than miss.",
+      "Treat 0.5 as a hard cutoff; the middle band needs no humans.",
+      "Send the uncertain narrow band to humans for lower FP+FN, at the cost of headcount and latency."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "全放行等于对不确定的都赌不是欺诈，漏报和损失上升，风险敞口失控。",
+      "全拒付会大量误伤好客户，误报飙升、体验受损，把不确定当确定处理。",
+      "0.5 硬边界把边界样本强行二分，正是误报漏报最集中的区间，不该省掉人工。",
+      "对；只把最不确定的窄带交人工，两头确定的仍自动，是成本与准确的平衡。"
+    ],
+    "optionExplanations_en": [
+      "Approving all bets every uncertain case isn't fraud, raising false negatives and losses, exposure out of control.",
+      "Rejecting all hurts many good customers, spiking false positives and damaging experience by treating uncertain as certain.",
+      "A hard 0.5 cutoff forces borderline cases — exactly where FP and FN concentrate — so you shouldn't drop the human step.",
+      "Correct — sending only the most uncertain narrow band to humans while auto-handling the ends balances cost and accuracy."
+    ],
+    "termDefinitions": [
+      { "term": "manual review / 人工复核", "meaning": "把模型不确定的样本交人工判定，牺牲吞吐换更低的误报漏报。", "meaningEn": "Manual review routes model-uncertain cases to humans, trading throughput for lower false positives and negatives." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "defense-in-depth",
+    "scenario": "Stripe 跑数百条规则，它们能抓到 ML 因训练滞后漏掉的约 10-15% 欺诈。",
+    "scenario_en": "Stripe runs hundreds of rules that catch roughly 10-15% of fraud the ML misses due to training lag.",
+    "q": "规则能抓到 ML 漏网的欺诈，根因是什么，体现了什么设计原则？",
+    "q_en": "Why do rules catch fraud ML misses, and what principle does it show?",
+    "why": "根因是训练滞后：新攻击手法还没进训练数据，ML 一时学不到，但人可以立刻写一条规则挡住→规则补上了模型的时间盲区。这就是 defense-in-depth：每个组件覆盖别人的盲点。",
+    "why_en": "The root cause is training lag: a new attack vector isn't in the training data yet so the ML can't learn it, but a human can write a rule to block it immediately, filling the model's time blind spot — that's defense-in-depth, each component covering the others.",
+    "tags": ["llm-sd", "fraud", "defense-in-depth"],
+    "options": [
+      "因为规则比 ML 更准，本质上可以取代 ML",
+      "训练滞后：新攻击还没进训练集 ML 学不到，人能立刻写规则挡住，体现 defense-in-depth 互补盲区",
+      "因为 ML 只在夜间运行，白天全靠规则顶着",
+      "纯属巧合，规则和 ML 抓的其实是完全同一批欺诈"
+    ],
+    "options_en": [
+      "Because rules are more accurate than ML and can essentially replace it.",
+      "Training lag: a new attack isn't in the training set so ML can't learn it, but a human writes a rule instantly — defense-in-depth covering blind spots.",
+      "Because the ML only runs at night and rules carry the day.",
+      "Pure coincidence; rules and ML catch exactly the same fraud."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "规则不是更准而是更及时，它补的是模型学不到新模式的时间差，取代不了会学习的 ML。",
+      "对；规则能立刻编码新攻击、绕开训练滞后，正是纵深防御让各层互补盲区的体现。",
+      "模型是实时在线的，不存在只在夜间运行，这个前提就是错的。",
+      "两者恰恰抓不同的：ML 抓学过的模式，规则抓刚出现、还没进训练集的新攻击。"
+    ],
+    "optionExplanations_en": [
+      "Rules are timelier, not more accurate; they fill the model's lag on new patterns and can't replace learning ML.",
+      "Correct — rules encode new attacks instantly, bypassing training lag, exactly how defense-in-depth covers blind spots.",
+      "The model runs online in real time, not only at night, so the premise is false.",
+      "They catch different things: ML catches learned patterns, rules catch just-emerged attacks not yet in the training set."
+    ],
+    "termDefinitions": [
+      { "term": "training lag / 训练滞后", "meaning": "新攻击出现到进入训练数据、被模型学到之间的时间差。", "meaningEn": "Training lag is the delay between a new attack appearing and it entering the training data for the model to learn." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-022",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "50ms p95 预算拆解：入口解析~2、规则~2、特征库查询~8(并行:行为3/速度2/设备2/图3)、GBT 推理~3、后处理~2、出口~2，共~19ms。",
+    "scenario_en": "50ms p95 budget: ingress parse ~2, rules ~2, feature-store lookup ~8 (parallel: behavioral 3, velocity 2, device 2, graph 3), GBT inference ~3, post-processing ~2, egress ~2, total ~19ms.",
+    "q": "这份延迟预算里，真正的关键路径瓶颈是什么？",
+    "q_en": "In this latency budget, what is the real critical-path bottleneck?",
+    "why": "加总约 19ms、留约 31ms 余量。瓶颈不是模型推理(~3ms)，而是特征库查询(~8ms)——这是常见面试误区。所以优化重心在特征检索，而不是换更快的模型。",
+    "why_en": "The total is about 19ms with ~31ms headroom, and the bottleneck is not model inference (~3ms) but the feature-store lookup (~8ms) — a common interview misconception — so optimization focuses on feature retrieval, not a faster model.",
+    "tags": ["llm-sd", "fraud", "latency"],
+    "options": [
+      "瓶颈是 GBT 推理(~3ms)，该去优化模型、换更快的",
+      "瓶颈是网络出入口，该去优化传输层",
+      "瓶颈是特征库查询(~8ms)，不是模型推理(~3ms)——优化重心在特征检索，是常见误区",
+      "每一档耗时都一样，根本没有主瓶颈"
+    ],
+    "options_en": [
+      "The bottleneck is GBT inference (~3ms); optimize the model for speed.",
+      "The bottleneck is network ingress/egress; optimize the transport layer.",
+      "The bottleneck is the feature-store lookup (~8ms), not model inference (~3ms) — the focus is feature retrieval, a common misconception.",
+      "Every stage costs the same, so there's no main bottleneck."
+    ],
+    "answer": [2],
+    "termDefinitions": [
+      { "term": "critical path / 关键路径", "meaning": "决定端到端延迟的最耗时步骤链，优化这里才真正降延迟。", "meaningEn": "The critical path is the chain of steps that dictates end-to-end latency; optimizing it is what actually cuts latency." },
+      { "term": "p95 / 95分位延迟", "meaning": "95% 请求的延迟低于此值，衡量尾部延迟。", "meaningEn": "p95 is the latency below which 95% of requests fall, measuring tail latency." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-023",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "feature-store-mitigations",
+    "scenario": "特征库查询占了关键路径(~8ms)，你要在不炸 50ms 预算的前提下压住它的尾部延迟。",
+    "scenario_en": "The feature-store lookup dominates the critical path (~8ms), and you must contain its tail latency without blowing the 50ms budget.",
+    "q": "有哪些手段压低特征库查询的延迟与尾部风险？(多选)",
+    "q_en": "Which techniques cut feature-store lookup latency and tail risk? (multiple)",
+    "why": "三招：跨特征族并行查询(行为/速度/设备/图同时发，总延迟≈最慢一族而非之和)、连接池复用(免去每次 TCP 握手)、激进超时+回退默认值(某查询 >10ms 就用默认值，不让单点拖垮整体)。",
+    "why_en": "Three moves: query feature families in parallel (total ≈ the slowest family, not the sum), reuse pooled connections (skip the per-call TCP handshake), and use aggressive timeouts with fallback defaults (if a lookup exceeds 10ms, use a default so one slow point doesn't drag the whole request).",
+    "tags": ["llm-sd", "fraud", "feature-store"],
+    "options": [
+      "跨特征族并行查询(行为/速度/设备/图同时发)，不串行等待",
+      "连接池复用连接，避免每次新建连接的 TCP 握手开销",
+      "激进超时+回退：某查询 >10ms 就用默认值，不让单点拖垮整体",
+      "把 GBT 换成更大的深度模型来补偿特征查询延迟"
+    ],
+    "options_en": [
+      "Query feature families in parallel (behavioral/velocity/device/graph at once), not serially.",
+      "Reuse pooled connections to avoid a per-call TCP handshake.",
+      "Aggressive timeout + fallback: if a lookup exceeds 10ms, use a default so one slow point doesn't drag the request.",
+      "Swap the GBT for a bigger deep model to compensate for feature-lookup latency."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；并行让总延迟约等于最慢的一族而非各族之和，这是把 8ms 压在预算内的主力。",
+      "对；连接池省掉每次新建连接的 TCP 握手往返，去掉一笔固定开销。",
+      "对；超时回退防止某个慢查询把 p95 拖爆，用默认值换取可控的尾延迟。",
+      "错；换更大模型只会加重推理延迟，与特征库查询这个瓶颈南辕北辙。"
+    ],
+    "optionExplanations_en": [
+      "Correct — parallelism makes total ≈ the slowest family, not the sum, the main way to fit 8ms in budget.",
+      "Correct — pooling removes the per-call TCP handshake round-trip, cutting a fixed overhead.",
+      "Correct — timeout fallback stops one slow lookup from blowing p95, trading a default value for bounded tail latency.",
+      "Incorrect — a bigger model only worsens inference latency, opposite to the feature-lookup bottleneck."
+    ],
+    "termDefinitions": [
+      { "term": "connection pooling / 连接池", "meaning": "预建并复用一批连接，避免每次请求都做 TCP 握手。", "meaningEn": "Connection pooling pre-builds and reuses connections to avoid a TCP handshake per request." },
+      { "term": "TCP handshake / TCP 握手", "meaning": "建立 TCP 连接的三次往返，每次新建连接都要付这笔延迟。", "meaningEn": "The TCP handshake is the round-trips to set up a TCP connection, a latency paid on every new connection." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-024",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "scoring-pipeline",
+    "scenario": "一笔交易进入欺诈打分服务，要在 50ms 内走完主路径给出处置。",
+    "scenario_en": "A transaction enters the fraud-scoring service and must traverse the main path within 50ms to a decision.",
+    "q": "把一笔交易的欺诈打分主路径排成正确顺序：",
+    "q_en": "Order the fraud-scoring main path correctly:",
+    "steps": [
+      "GBT 输出欺诈概率",
+      "规则引擎先跑：命中硬拦规则直接拒、不调用 ML",
+      "按阈值分档：<0.1 批准 / >0.9 拒绝 / 0.1-0.9 人工复核",
+      "并行查特征库(含预计算的 GraphSAGE 嵌入)"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "规则引擎先当预过滤挡掉已知坏交易→通过的并行拉取特征(含预计算图嵌入)→GBT 算欺诈概率→按阈值分档处置。把确定性、便宜的步骤放前面，只让需要判断的交易付更贵的计算。",
+    "why_en": "The rule engine pre-filters known-bad transactions first → passing ones fetch features in parallel (including precomputed graph embeddings) → the GBT scores fraud probability → tiered thresholds decide, putting cheap deterministic steps first so only uncertain transactions pay costlier compute.",
+    "tags": ["llm-sd", "fraud", "pipeline"],
+    "diagram": "flowchart LR\n  R[\"规则引擎预过滤\"] --> F[\"并行查特征库<br/>含GraphSAGE嵌入\"]\n  F --> G[\"GBT出欺诈概率\"]\n  G --> T[\"阈值分档<br/>批准/拒绝/复核\"]",
+    "termDefinitions": [
+      { "term": "hot path / 热路径", "meaning": "每笔请求实时必经的低延迟处理链，重计算要尽量移出这里。", "meaningEn": "The hot path is the low-latency chain every request must traverse in real time; heavy compute should be moved off it." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-025",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-headroom",
+    "scenario": "主路径实测约 19ms，而 p95 预算是 50ms，刻意留了约 31ms 余量。",
+    "scenario_en": "The main path measures ~19ms while the p95 budget is 50ms, deliberately leaving ~31ms of headroom.",
+    "q": "为什么要刻意留这 ~31ms 余量，而不是把预算用满？",
+    "q_en": "Why deliberately keep ~31ms of headroom instead of using the full budget?",
+    "why": "p95 预算是给定 SLO、不是算出来的；~31ms 余量留给尾部尖峰、重试、以及某个特征查询超时后回退的兜底动作。p95 下真实分布有长尾，留白才不会在抖动时集体超标。",
+    "why_en": "The p95 budget is a given SLO, not derived, and the ~31ms headroom absorbs tail spikes, retries, and fallback after a feature-lookup timeout, since the real distribution has a long tail that would otherwise breach the SLO under jitter.",
+    "tags": ["llm-sd", "fraud", "latency"],
+    "options": [
+      "p95 是给定 SLO；余量留给尾部尖峰、重试、特征超时回退，防长尾抖动集体超标",
+      "余量是浪费，应该把预算用满去上更大的模型",
+      "31ms 是网络固定延迟，本来就改不了，不算余量",
+      "余量只是要背的数字，没有任何设计含义"
+    ],
+    "options_en": [
+      "p95 is a given SLO; the headroom absorbs tail spikes, retries, and feature-timeout fallback, preventing long-tail jitter from breaching it.",
+      "Headroom is waste; use the full budget for a bigger model.",
+      "31ms is fixed network latency you can't change, not real headroom.",
+      "The headroom is just a number to memorize with no design meaning."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "SLO", "fullName": "Service Level Objective", "meaning": "给定的延迟/可用性目标，是约束而非公式结果，用来倒逼架构与留余量。", "meaningEn": "An SLO (Service Level Objective) is a given latency/availability target — a constraint, not a formula result — that drives architecture and headroom." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-026",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "two-pass-serving",
+    "scenario": "复述 GraphSAGE 在欺诈打分里的两趟服务方式。",
+    "scenario_en": "Recall how GraphSAGE is served in two passes for fraud scoring.",
+    "q": "补全 GraphSAGE 两趟服务的关键参数：",
+    "q_en": "Fill in the key parameters of GraphSAGE two-pass serving:",
+    "text": "GraphSAGE 上线用两趟：异步每 {{5-15 分钟}} 重算嵌入写入{{特征库}}，打分时只做一次 {{KV}} 查询取预计算嵌入喂给 GBT，把 {{50-200ms}} 的重计算移出热路径。",
+    "text_en": "GraphSAGE serves in two passes: an async job re-embeds every {{5-15 minutes}} into the {{feature store}}, and scoring does a single {{KV}} lookup of the precomputed embedding for the GBT, keeping the {{50-200ms}} recompute off the hot path.",
+    "why": "两趟把重的 2-hop 聚合(50-200ms)挪到异步预计算、在线只留毫秒查表；代价是新团伙有 5-15 分钟检测滞后，由规则引擎兜底。",
+    "why_en": "The two passes move the heavy 2-hop aggregation offline and leave only a millisecond lookup online, at the cost of a 5-15 minute detection lag for new rings, covered by the rule engine.",
+    "tags": ["llm-sd", "fraud", "serving"],
+    "termDefinitions": [
+      { "term": "KV / 键值查询", "fullName": "Key-Value lookup", "meaning": "按键取值的毫秒级查询，这里按账号取预计算的图嵌入。", "meaningEn": "A KV (Key-Value) lookup fetches a value by key in milliseconds, here the precomputed graph embedding by account." }
+    ]
+  },
+  {
+    "id": "llm-089-fraud-detection-model-architecture-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "gbt-tuning-latency",
+    "scenario": "调 LightGBM 时，你可以加树的深度和棵数换离线精度，但每加一点都吃进 50ms 的在线预算。",
+    "scenario_en": "Tuning LightGBM, adding tree depth and count buys offline accuracy, but each increment eats into the 50ms online budget.",
+    "q": "该按什么来调 GBT 的深度和树数量？",
+    "q_en": "What should govern tuning the GBT's depth and number of trees?",
+    "why": "按延迟预算调、不是只看离线精度：深度和棵数越多离线 AUC 越高但推理越慢，要在 50ms 预算内选能跑完的最优点。为多 0.1% 离线精度而超时，线上反而更糟。",
+    "why_en": "Tune against the latency budget, not just offline accuracy: more depth and trees raise offline AUC but slow inference, so pick the best point that still finishes within 50ms — chasing 0.1% more accuracy at the cost of a timeout is worse in production.",
+    "tags": ["llm-sd", "fraud", "gbt-tuning"],
+    "tradeoff": "深/多树(离线精度高但推理慢) vs 浅/少树(推理快但精度略低)",
+    "whenOtherWins": "若是离线批处理欺诈复核(没有实时延迟约束)，就该纯按精度堆深度和棵数，延迟不再是约束。",
+    "options": [
+      "只按离线精度调，深度和棵数越多越好，延迟根本不用管",
+      "按延迟预算调：在 50ms 内选能跑完的最优深度/棵数，别为 0.1% 离线精度超时",
+      "固定深度不调，只调学习率就够",
+      "按 GPU 显存调，显存越大就把树设得越深"
+    ],
+    "options_en": [
+      "Tune by offline accuracy only; more depth and trees is always better, ignore latency.",
+      "Tune against the latency budget: pick the best depth/trees that finish within 50ms, don't time out for 0.1% offline gain.",
+      "Fix depth and only tune the learning rate.",
+      "Tune by GPU memory — the more memory, the deeper the trees."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "只看离线精度会调出跑不进 50ms 的模型，上线超时比那点精度损失严重得多。",
+      "对；离线精度和推理延迟是一对取舍，实时服务必须在预算内选最优点，而非无脑堆深度。",
+      "只调学习率放弃深度/棵数这两个主要旋钮，既控不住延迟也调不到最优。",
+      "GBT 在 CPU 上跑、跟 GPU 显存无关，用显存来定树深是错误依据。"
+    ],
+    "optionExplanations_en": [
+      "Optimizing offline accuracy alone yields a model that misses 50ms; a production timeout dwarfs that accuracy gain.",
+      "Correct — offline accuracy and inference latency trade off, so real-time serving picks the best point within budget, not blind depth.",
+      "Tuning only the learning rate abandons depth/count, the main knobs, controlling neither latency nor the optimum.",
+      "GBTs run on CPU and don't depend on GPU memory, so sizing tree depth by VRAM is the wrong basis."
+    ],
+    "termDefinitions": [
+      { "term": "AUC", "fullName": "Area Under the ROC Curve", "meaning": "ROC 曲线下面积，衡量分类器区分正负样本能力的离线指标。", "meaningEn": "AUC (Area Under the ROC Curve) is an offline metric of how well a classifier separates positives from negatives." }
+    ]
+  }
+]

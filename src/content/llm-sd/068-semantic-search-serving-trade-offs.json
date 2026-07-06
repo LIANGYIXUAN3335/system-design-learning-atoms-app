@@ -1,0 +1,1368 @@
+[
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-pipeline",
+    "scenario": "在 <200ms 端到端 p99 预算下（Google/Spotify 量级），为十亿级向量搭一条语义搜索在线服务链路。",
+    "scenario_en": "Under a <200ms end-to-end p99 budget (Google/Spotify scale), you serve semantic search over billions of vectors.",
+    "q": "这条在线服务链路的三个阶段依次是什么？",
+    "q_en": "What are the three stages of this online serving pipeline, in order?",
+    "why": "三阶段：查询理解（把 query 编码成稠密向量）→ ANN 召回（近似最近邻拿一批候选）→ cross-encoder 重排（精排 top 候选）。前面用便宜快的召回缩小候选集，最后用贵而准的 cross-encoder 只精排少量，是「漏斗式」延迟-精度权衡。",
+    "why_en": "Query understanding encodes the query, ANN retrieval fetches candidates cheaply, then a cross-encoder re-ranks the top few accurately — a funnel trading cost for precision.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "serving-pipeline"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query\"] --> U[\"查询理解<br/>编码成稠密向量\"]\n  U --> A[\"ANN 召回<br/>近似最近邻\"]\n  A --> R[\"cross-encoder 重排<br/>精排 top 候选\"]\n  R --> O[\"结果\"]",
+    "options": [
+      "cross-encoder 重排 → ANN 召回 → 查询理解，先精排再召回",
+      "查询理解（编码 query）→ ANN 召回（近似最近邻）→ cross-encoder 重排（精排 top 候选）",
+      "查询理解 → 全量暴力打分整个语料 → 返回，不需要召回和重排两级",
+      "ANN 召回 → 查询理解 → BM25 关键词过滤，最后不做任何重排"
+    ],
+    "options_en": [
+      "Cross-encoder re-ranking then ANN retrieval then query understanding — re-rank before retrieving.",
+      "Query understanding (encode the query) then ANN retrieval (approximate nearest neighbors) then cross-encoder re-ranking of the top candidates.",
+      "Query understanding then brute-force scoring of the whole corpus then return, with no separate retrieval and re-ranking stages.",
+      "ANN retrieval then query understanding then BM25 keyword filtering, with no re-ranking at all."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "顺序反了：没先编码 query、没先召回候选，就无从谈重排，重排永远在最后一级。",
+      "对；编码→近似召回缩候选→cross-encoder 精排少量，构成延迟-精度漏斗，撑住 <200ms p99。",
+      "全量暴力打分十亿向量每查约 10^9 次点积，根本跑不进 200ms，正是要用 ANN 绕开的。",
+      "查询理解必须在召回前（要先有 query 向量才能找近邻），且缺了重排精度不够。"
+    ],
+    "optionExplanations_en": [
+      "Order reversed: without encoding the query and retrieving candidates first, there is nothing to re-rank; re-ranking is always last.",
+      "Correct — encode, approximate-retrieve to shrink candidates, then cross-encoder re-rank a few, forming a latency-precision funnel under 200ms p99.",
+      "Brute-force scoring a billion vectors is ~10^9 dot products per query, impossible within 200ms — exactly what ANN avoids.",
+      "Query understanding must precede retrieval (you need the query vector to find neighbors), and dropping re-ranking loses precision."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "把 query 和候选文档拼在一起一起过模型打相关分，比双塔准但每对都要算一次、贵。",
+        "meaningEn": "A cross-encoder scores a query-document pair jointly in one pass — more accurate than a dual encoder but costs one forward pass per pair."
+      },
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻：牺牲少量召回率换数量级检索加速。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) trades a little recall for orders-of-magnitude faster retrieval."
+      },
+      {
+        "term": "p99 latency / p99 延迟",
+        "meaning": "99% 的请求都比这个延迟快；衡量尾部延迟而非平均。",
+        "meaningEn": "p99 latency is the value 99% of requests come in under, measuring tail latency rather than the average."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-002",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "brute-force-cost",
+    "scenario": "语料 10 亿(1B)篇文档、每篇 768 维向量，你在考虑要不要直接对每个 query 暴力比对全库。",
+    "scenario_en": "A corpus of 1B documents, each a 768-dim vector, and you consider brute-force comparing every query against the whole library.",
+    "q": "为什么必须用 ANN 而不能对十亿向量暴力打分？",
+    "q_en": "Why must you use ANN instead of brute-force scoring a billion vectors?",
+    "why": "暴力检索每个 query 要对 10 亿个向量各做一次 768 维点积 ≈ 10^9 次向量运算/查询，在 <200ms p99 下根本跑不完。ANN 用图或聚类结构只看极少一部分候选，牺牲一点召回换数量级加速，是十亿级检索唯一可行路。",
+    "why_en": "Brute force is ~10^9 dot products per query over a billion 768-dim vectors, impossible under 200ms, so ANN inspects only a tiny fraction, trading a little recall for orders-of-magnitude speedup.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "brute-force-cost"
+    ],
+    "options": [
+      "暴力检索每查约 10^9 次点积、跑不进 200ms；ANN 只看极少候选，牺牲少量召回换数量级加速",
+      "暴力检索其实很快，用 ANN 纯粹是为了省存储，跟延迟无关",
+      "暴力检索召回率不如 ANN，所以要用 ANN 来提高召回",
+      "10 亿向量暴力检索约 10^3 次运算，完全能跑进 200ms，用 ANN 只是习惯"
+    ],
+    "options_en": [
+      "Brute force is ~10^9 dot products per query and cannot fit 200ms; ANN inspects few candidates, trading a little recall for orders-of-magnitude speedup.",
+      "Brute force is actually fast; ANN is purely to save storage and has nothing to do with latency.",
+      "Brute force has lower recall than ANN, so ANN is used to improve recall.",
+      "Brute force over a billion vectors is ~10^3 operations and easily fits 200ms; ANN is just habit."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "brute-force search / 暴力检索",
+        "meaning": "对每个 query 与库中每个向量都算一次相似度，精确但 O(N) 太慢。",
+        "meaningEn": "Brute-force search computes similarity between the query and every vector — exact but O(N) and too slow at scale."
+      },
+      {
+        "term": "recall / 召回率",
+        "meaning": "真正相关的结果里被检索到的比例；ANN 用少量召回损失换速度。",
+        "meaningEn": "Recall is the fraction of truly relevant items that are retrieved; ANN sacrifices a little recall for speed."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "召回质量是第一优先（漏检代价很高），语料规模中等、内存预算充裕能放下全部未压缩向量，追求 95%+ recall。",
+    "scenario_en": "Recall is the top priority (misses are costly), the corpus is moderate, memory budget is ample to hold all uncompressed vectors, and you target 95%+ recall.",
+    "q": "ANN 索引该选 HNSW 还是 IVF-PQ？",
+    "q_en": "Should the ANN index be HNSW or IVF-PQ?",
+    "why": "选 HNSW：多层可导航图、贪心由粗到细遍历，recall 能到 95%+，但它存完整 float32 向量 + 图边，吃内存（约每向量 4× 于 IVF-PQ）。当召回至上且内存放得下时正合适。IVF-PQ 用压缩省内存，但 recall 更低，是内存紧时的选择。",
+    "why_en": "Pick HNSW: its multi-layer navigable graph hits 95%+ recall but stores full float32 vectors plus edges (~4x the RAM of IVF-PQ), which fits when recall is paramount and memory is available.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ann-index-choice"
+    ],
+    "tradeoff": "HNSW（recall 95%+·吃内存·图） vs IVF-PQ（省内存·recall 更低·聚类+压缩）",
+    "options": [
+      "选 IVF-PQ：把向量压缩到最省内存，即使召回掉一些也无所谓",
+      "选 HNSW：多层可导航图、recall 95%+，代价是存完整向量吃内存，正合「召回至上且内存够」",
+      "两个都不选，直接暴力检索，中等规模暴力也能进 200ms",
+      "选 BM25：用稀疏关键词检索替代向量索引，召回天然最高"
+    ],
+    "options_en": [
+      "Pick IVF-PQ: compress vectors to minimal memory, and losing some recall is fine.",
+      "Pick HNSW: a multi-layer navigable graph at 95%+ recall, at the cost of storing full vectors and high RAM, fitting 'recall paramount and memory available'.",
+      "Pick neither and brute-force; at moderate scale brute force also fits 200ms.",
+      "Pick BM25: replace the vector index with sparse keyword retrieval for naturally highest recall."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当语料到十亿级、内存预算吃紧时改用 IVF-PQ——它用乘积量化把每向量压到约 1/4 内存，代价是 recall 降到 85–95%。",
+    "whenOtherWins_en": "When the corpus reaches billion-scale and memory is tight, switch to IVF-PQ — product quantization cuts per-vector RAM to about a quarter at 85-95% recall.",
+    "optionExplanations": [
+      "题目明说召回至上、内存够，此时为省内存牺牲召回（IVF-PQ）方向不对。",
+      "对；HNSW 图检索 recall 95%+ 正好满足召回至上，内存充裕又扛得住它的高 RAM 开销。",
+      "暴力检索是 O(N)，即便中等规模也难稳定进 200ms p99，且无法随增长扩展。",
+      "BM25 是稀疏关键词匹配，抓不到语义近义，召回并非天然最高，替代不了稠密向量召回。"
+    ],
+    "optionExplanations_en": [
+      "The prompt says recall is paramount and memory is ample, so trading recall for memory (IVF-PQ) is the wrong direction.",
+      "Correct — HNSW graph search hits 95%+ recall, meeting recall-paramount, and ample memory absorbs its high RAM cost.",
+      "Brute force is O(N) and hard to keep under 200ms p99 even at moderate scale, and does not scale with growth.",
+      "BM25 is sparse keyword matching that misses semantic synonyms, so its recall is not naturally highest and cannot replace dense retrieval."
+    ],
+    "termDefinitions": [
+      {
+        "term": "HNSW",
+        "fullName": "Hierarchical Navigable Small World",
+        "meaning": "分层可导航小世界图：多层图上贪心由粗到细找近邻，recall 高但存完整向量+图边、吃内存。",
+        "meaningEn": "HNSW (Hierarchical Navigable Small World) greedily traverses a multi-layer graph coarse-to-fine for high recall, storing full vectors plus edges at high RAM cost."
+      },
+      {
+        "term": "IVF-PQ",
+        "fullName": "Inverted File index + Product Quantization",
+        "meaning": "先聚类成倒排单元、再用乘积量化压缩每个向量残差，省内存、召回略低。",
+        "meaningEn": "IVF-PQ (Inverted File + Product Quantization) clusters vectors into cells then compresses residuals via product quantization, saving memory at slightly lower recall."
+      },
+      {
+        "term": "recall@10 / recall@10",
+        "meaning": "前 10 个返回结果里包含真正相关文档的比例，衡量 ANN 漏检程度。",
+        "meaningEn": "Recall@10 is the fraction of truly relevant docs captured in the top 10, gauging how much an ANN index misses."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "语料十亿(1B)级、768 维，内存预算很紧（HNSW 约需 3TB 放不下），能接受 recall 从 95%+ 降到 85–95%。",
+    "scenario_en": "A billion-scale, 768-dim corpus with a tight memory budget (HNSW's ~3TB won't fit), and 85-95% recall is acceptable.",
+    "q": "这种内存受限的十亿级检索该选哪个 ANN 索引？",
+    "q_en": "For this memory-constrained billion-scale retrieval, which ANN index?",
+    "why": "选 IVF-PQ：先把向量聚成 Voronoi 单元、查询只搜 nprobe 个相关单元，再用乘积量化压缩每个向量残差，内存降到约 HNSW 的 1/4（约 0.7–1TB vs 3TB）。代价是 recall 更低（85–95%），题目已接受。",
+    "why_en": "Pick IVF-PQ: cluster into Voronoi cells searched via nprobe, then product-quantize residuals to about a quarter of HNSW's RAM (~0.7-1TB vs 3TB), accepting 85-95% recall.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ann-index-choice"
+    ],
+    "tradeoff": "IVF-PQ（内存约 1/4·recall 85–95%） vs HNSW（recall 95%+·内存约 4×）",
+    "options": [
+      "选 HNSW：无论内存预算，召回越高越好，3TB 挤一挤总能放下",
+      "选 IVF-PQ：聚类 + 乘积量化把内存压到约 HNSW 的 1/4，代价 recall 85–95%，匹配内存紧的十亿级",
+      "选暴力检索：十亿级也能靠多机并行进 200ms，不用近似索引",
+      "把维度从 768 砍到 64 再上 HNSW，靠降维省内存即可"
+    ],
+    "options_en": [
+      "Pick HNSW: regardless of memory, higher recall is always better, and 3TB can be squeezed in.",
+      "Pick IVF-PQ: clustering plus product quantization cuts RAM to about a quarter of HNSW at 85-95% recall, matching tight-memory billion-scale.",
+      "Pick brute force: billion-scale can still fit 200ms with enough parallel machines, no approximate index needed.",
+      "Slash dimensions from 768 to 64 and use HNSW, saving memory purely by dimensionality reduction."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若内存预算充裕、且漏检代价极高需要 95%+ recall，就该反过来选 HNSW，用 4× 内存换更高召回。",
+    "whenOtherWins_en": "If memory is ample and misses are very costly (needing 95%+ recall), flip back to HNSW, spending 4x RAM for higher recall.",
+    "optionExplanations": [
+      "内存明说放不下 3TB，硬上 HNSW 就是不看约束，会 OOM 或被迫大量分片。",
+      "对；IVF-PQ 的聚类 + 压缩正是为内存紧的十亿级设计，recall 85–95% 已被接受。",
+      "暴力检索是 O(N)，十亿级堆机器成本爆炸也难稳进 200ms，不是替代近似索引的正解。",
+      "粗暴砍维到 64 会显著损失语义信息、掉召回，比 IVF-PQ 的可控压缩差得多。"
+    ],
+    "optionExplanations_en": [
+      "Memory explicitly cannot hold 3TB; forcing HNSW ignores the constraint and would OOM or require heavy sharding.",
+      "Correct — IVF-PQ's clustering plus compression is built for tight-memory billion-scale, and 85-95% recall is accepted.",
+      "Brute force is O(N); billion-scale explodes machine cost and still struggles to hit 200ms — not a substitute for an approximate index.",
+      "Crudely cutting dimensions to 64 loses semantic information and recall, far worse than IVF-PQ's controlled compression."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Voronoi cell / Voronoi 单元",
+        "meaning": "IVF 聚类把向量空间划成若干单元，每个单元由一个质心代表，查询只搜相关单元。",
+        "meaningEn": "A Voronoi cell is one cluster of the vector space around a centroid; IVF searches only the relevant cells."
+      },
+      {
+        "term": "nprobe",
+        "meaning": "IVF 查询时实际搜索的单元数；越大 recall 越高但越慢。",
+        "meaningEn": "nprobe is the number of cells an IVF query actually searches; higher gives more recall but more latency."
+      },
+      {
+        "term": "product quantization / 乘积量化",
+        "meaning": "把向量切成子向量分别量化成小码本索引，大幅压缩存储，代价是有损。",
+        "meaningEn": "Product quantization splits a vector into sub-vectors, each quantized to a small codebook index, heavily compressing storage at some loss."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "hnsw-vs-ivfpq",
+    "scenario": "面试官要你一句话说清 HNSW 和 IVF-PQ 的核心取舍，好按内存/召回预算选型。",
+    "scenario_en": "The interviewer asks you to crisply contrast HNSW and IVF-PQ so you can choose by memory/recall budget.",
+    "q": "HNSW 与 IVF-PQ 的核心取舍轴是什么？",
+    "q_en": "What is the core tradeoff axis between HNSW and IVF-PQ?",
+    "why": "取舍轴是「内存 vs 召回」：HNSW 存完整向量 + 图边，recall 95%+ 但每向量约 4× 内存（1B 768 维约 3TB）；IVF-PQ 聚类 + 乘积量化压缩，内存约 0.7–1TB 但 recall 降到 85–95%、查询略慢（1–5ms，随 nprobe）。谁赢看你的内存预算和漏检容忍度。",
+    "why_en": "The axis is memory vs recall: HNSW stores full vectors plus edges for 95%+ recall at ~4x RAM, while IVF-PQ compresses to a quarter of the memory at 85-95% recall.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hnsw-vs-ivfpq"
+    ],
+    "tradeoff": "HNSW（高 recall·高内存·亚毫秒） vs IVF-PQ（省内存·recall 略低·1–5ms）",
+    "table": {
+      "headers": [
+        "索引",
+        "结构",
+        "recall@10",
+        "内存/1B·768维",
+        "查询延迟"
+      ],
+      "rows": [
+        [
+          "HNSW",
+          "图",
+          "95–99%",
+          "~3TB",
+          "亚毫秒"
+        ],
+        [
+          "IVF-PQ",
+          "聚类+量化",
+          "85–95%",
+          "~0.7–1TB",
+          "1–5ms"
+        ]
+      ]
+    },
+    "options": [
+      "取舍轴是「构建速度 vs 查询速度」，两者内存占用其实一样",
+      "取舍轴是「内存 vs 召回」：HNSW 高 recall 但吃内存，IVF-PQ 省内存但 recall 略低",
+      "取舍轴是「稠密 vs 稀疏」，HNSW 是稀疏索引、IVF-PQ 是稠密索引",
+      "两者没有实质取舍，IVF-PQ 在所有维度都优于 HNSW"
+    ],
+    "options_en": [
+      "The axis is build speed vs query speed, and their memory footprints are actually the same.",
+      "The axis is memory vs recall: HNSW gives high recall at high RAM, IVF-PQ saves memory at slightly lower recall.",
+      "The axis is dense vs sparse — HNSW is a sparse index and IVF-PQ is a dense index.",
+      "There is no real tradeoff; IVF-PQ dominates HNSW on every dimension."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "构建速度确有差异（HNSW 更慢），但主轴是内存/召回，且两者内存差约 4×、并不相同。",
+      "对；HNSW 存完整向量换 95%+ recall 但内存约 4×，IVF-PQ 压缩省内存换 85–95% recall，这就是选型主轴。",
+      "两者都是稠密向量索引；BM25 才是稀疏，这个划分错了。",
+      "IVF-PQ 在 recall 上明显逊于 HNSW，并非全面占优，取舍真实存在。"
+    ],
+    "optionExplanations_en": [
+      "Build speed does differ (HNSW is slower), but the main axis is memory/recall, and their memory differs ~4x, not equal.",
+      "Correct — HNSW stores full vectors for 95%+ recall at ~4x RAM, IVF-PQ compresses to save memory at 85-95% recall — the selection axis.",
+      "Both are dense vector indexes; BM25 is the sparse one, so this split is wrong.",
+      "IVF-PQ is clearly worse on recall than HNSW, so it does not dominate and a real tradeoff exists."
+    ],
+    "termDefinitions": [
+      {
+        "term": "HNSW",
+        "fullName": "Hierarchical Navigable Small World",
+        "meaning": "分层图索引，recall 高但存完整向量吃内存。",
+        "meaningEn": "HNSW (Hierarchical Navigable Small World) is a layered graph index with high recall but high memory from storing full vectors."
+      },
+      {
+        "term": "IVF-PQ",
+        "fullName": "Inverted File index + Product Quantization",
+        "meaning": "聚类倒排 + 乘积量化压缩，省内存、召回略低。",
+        "meaningEn": "IVF-PQ (Inverted File + Product Quantization) clusters and compresses to save memory at slightly lower recall."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-006",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "memory-footprint",
+    "scenario": "为 1B×768 维语料估内存：HNSW 约需 3TB，IVF-PQ 约 0.7–1TB。",
+    "scenario_en": "Estimating memory for a 1B×768-dim corpus: HNSW needs ~3TB, IVF-PQ ~0.7-1TB.",
+    "q": "HNSW 相比 IVF-PQ 大约多用几倍内存，为什么？",
+    "q_en": "Roughly how many times more RAM does HNSW use than IVF-PQ, and why?",
+    "why": "约 4×。HNSW 每个向量都存未压缩的 float32（768×4B≈3KB）外加图边邻接表；IVF-PQ 用乘积量化把每向量压成几十字节的码。3TB vs 0.7–1TB 的差就来自「存完整向量+图 vs 存压缩码」，这直接决定十亿级能不能塞进内存。",
+    "why_en": "About 4x, because HNSW stores uncompressed float32 vectors plus graph edges while IVF-PQ stores tens-of-bytes quantized codes, which decides whether billion-scale fits in RAM.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "memory-footprint"
+    ],
+    "options": [
+      "约 4×：HNSW 存完整 float32 向量 + 图边，IVF-PQ 存压缩码，故内存约 4 倍",
+      "约 1×：两者内存基本相同，差别只在查询速度",
+      "约 100×：HNSW 要给每个向量存一份全语料副本",
+      "约 0.25×：HNSW 反而更省内存，因为图结构本身就是压缩"
+    ],
+    "options_en": [
+      "About 4x: HNSW stores full float32 vectors plus graph edges while IVF-PQ stores compressed codes, so ~4x RAM.",
+      "About 1x: memory is essentially the same, differing only in query speed.",
+      "About 100x: HNSW keeps a full corpus copy per vector.",
+      "About 0.25x: HNSW actually uses less memory because the graph structure is itself compression."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "float32 vector / float32 向量",
+        "meaning": "每维用 4 字节浮点存的未压缩向量，768 维约 3KB。",
+        "meaningEn": "A float32 vector stores each dimension in 4 uncompressed bytes; 768 dims is about 3KB."
+      },
+      {
+        "term": "graph edges / 图边",
+        "meaning": "HNSW 每个节点到邻居的连接，额外占内存但支撑快速导航。",
+        "meaningEn": "Graph edges are HNSW's per-node links to neighbors, extra memory that enables fast navigation."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "hnsw-mechanism",
+    "scenario": "面试官追问 HNSW 到底怎么在图上找近邻。",
+    "scenario_en": "The interviewer probes how HNSW actually finds neighbors on its graph.",
+    "q": "HNSW 的检索机制是怎样的？",
+    "q_en": "How does HNSW's retrieval mechanism work?",
+    "why": "多层可导航小世界图：上层稀疏、长边负责「粗定位」，逐层下沉到密集底层做「精定位」，每层都贪心地走向离 query 更近的邻居。这种由粗到细的贪心遍历只访问极少节点就逼近最近邻，换来亚毫秒查询和 95%+ recall。",
+    "why_en": "A multi-layer navigable graph: sparse upper layers do coarse positioning and dense lower layers refine, greedily hopping toward closer neighbors, reaching near-neighbors in sub-ms at 95%+ recall.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hnsw-mechanism"
+    ],
+    "options": [
+      "把向量随机分桶，查询时扫描全部桶再合并，靠桶数控制速度",
+      "多层图上贪心由粗到细遍历：上层长边粗定位、逐层下沉精定位，只访问极少节点逼近最近邻",
+      "把每个向量压成码本索引，查询时对全库码做一次线性扫描",
+      "对整库做一次排序，二分查找 query 落点即为最近邻"
+    ],
+    "options_en": [
+      "Randomly bucket vectors, scan all buckets per query and merge, controlling speed by bucket count.",
+      "Greedy coarse-to-fine traversal on a multi-layer graph: long upper-layer edges position coarsely, lower layers refine, visiting few nodes to reach near-neighbors.",
+      "Compress each vector to a codebook index and linearly scan all codes per query.",
+      "Sort the whole library once and binary-search where the query lands as the nearest neighbor."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "随机分桶扫全部桶是 LSH 式思路，不是 HNSW；HNSW 靠图导航只走极少节点。",
+      "对；分层图 + 贪心由粗到细正是 HNSW，长边跳大步、下层精修，访问节点极少故亚毫秒。",
+      "压码本 + 线性扫描是 IVF-PQ/PQ 的机制，不是 HNSW 的图导航。",
+      "向量是高维的，无法像标量那样一维排序后二分查找最近邻。"
+    ],
+    "optionExplanations_en": [
+      "Random-bucket-and-scan is LSH-style, not HNSW; HNSW navigates a graph visiting very few nodes.",
+      "Correct — a layered graph with greedy coarse-to-fine traversal is HNSW: long edges take big hops, lower layers refine, few nodes visited so sub-ms.",
+      "Codebook compression plus linear scan is IVF-PQ/PQ's mechanism, not HNSW's graph navigation.",
+      "Vectors are high-dimensional and cannot be one-dimensionally sorted and binary-searched for nearest neighbor."
+    ],
+    "termDefinitions": [
+      {
+        "term": "navigable small world graph / 可导航小世界图",
+        "meaning": "节点连着近邻也有少量长边，能几步跳到目标区域，支撑贪心近邻搜索。",
+        "meaningEn": "A navigable small-world graph links near neighbors plus a few long edges so a few greedy hops reach the target region."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ivfpq-mechanism",
+    "scenario": "面试官追问 IVF-PQ 为什么又快又省内存。",
+    "scenario_en": "The interviewer probes why IVF-PQ is both fast and memory-thrifty.",
+    "q": "IVF-PQ 的两段机制（IVF 和 PQ）各做什么？",
+    "q_en": "What do IVF-PQ's two parts (IVF and PQ) each do?",
+    "why": "IVF（倒排/聚类）把向量分到若干 Voronoi 单元，查询只搜 nprobe 个相关单元、跳过绝大多数——这是省时间。PQ（乘积量化）把每个向量的残差切成子向量、各自量化成小码本索引，把存储压到几十字节——这是省内存。两者叠加实现十亿级低内存检索。",
+    "why_en": "IVF clusters vectors into Voronoi cells so a query searches only nprobe cells (saves time), and PQ splits each residual into sub-vectors quantized to small codebooks (saves memory).",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ivfpq-mechanism"
+    ],
+    "options": [
+      "IVF 负责压缩存储、PQ 负责聚类路由，两者职责正好互换",
+      "IVF 聚类成 Voronoi 单元、查询只搜 nprobe 个（省时间）；PQ 把残差子向量量化成小码（省内存）",
+      "IVF 和 PQ 都只做压缩，检索仍要暴力扫全库",
+      "IVF 建图做贪心遍历、PQ 存完整 float32，跟 HNSW 一样吃内存"
+    ],
+    "options_en": [
+      "IVF does storage compression and PQ does clustering/routing — their roles are exactly swapped.",
+      "IVF clusters into Voronoi cells so a query searches only nprobe cells (saves time); PQ quantizes residual sub-vectors into small codes (saves memory).",
+      "IVF and PQ both only compress, and retrieval still brute-force scans the whole library.",
+      "IVF builds a graph for greedy traversal and PQ stores full float32, so it is as RAM-hungry as HNSW."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "职责说反了：聚类路由是 IVF、压缩是 PQ，互换就错了。",
+      "对；IVF 用 nprobe 缩小搜索范围省时间，PQ 量化残差省内存，合起来支撑低内存十亿检索。",
+      "IVF 的聚类恰恰让查询跳过大多数单元，不再暴力扫全库，这正是它省时间的来源。",
+      "建图贪心是 HNSW；IVF-PQ 存的是压缩码不是完整 float32，内存远低于 HNSW。"
+    ],
+    "optionExplanations_en": [
+      "Roles reversed: clustering/routing is IVF and compression is PQ, so swapping them is wrong.",
+      "Correct — IVF narrows the search via nprobe to save time, PQ quantizes residuals to save memory, together enabling low-memory billion-scale retrieval.",
+      "IVF's clustering lets a query skip most cells rather than brute-scan everything — that is where its time savings come from.",
+      "Greedy graph traversal is HNSW; IVF-PQ stores compressed codes, not full float32, using far less RAM than HNSW."
+    ],
+    "termDefinitions": [
+      {
+        "term": "IVF",
+        "fullName": "Inverted File index",
+        "meaning": "把向量按聚类归入倒排单元，查询只访问少数相关单元。",
+        "meaningEn": "IVF (Inverted File index) assigns vectors to clustered cells so a query visits only a few relevant cells."
+      },
+      {
+        "term": "residual / 残差",
+        "meaning": "向量减去其所属单元质心后的差，PQ 量化的是这个残差而非原向量，更精。",
+        "meaningEn": "A residual is a vector minus its cell centroid; PQ quantizes the residual rather than the raw vector for better precision."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-009",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hybrid-retrieval",
+    "scenario": "搜索里既有语义型查询（「适合下雨天的鞋」），又有精确关键词/型号（「Air Max 270」「错误码 E-4302」），稠密向量常漏掉精确匹配。",
+    "scenario_en": "Search mixes semantic queries ('shoes for rainy days') with exact keywords/SKUs ('Air Max 270', 'error code E-4302'), and dense vectors often miss exact matches.",
+    "q": "怎么让系统同时抓住语义相似和精确关键词？",
+    "q_en": "How do you capture both semantic similarity and exact keywords?",
+    "why": "用混合检索：稠密 ANN 抓语义近义，稀疏 BM25 抓精确词/型号/罕见 token，两路召回融合后再进重排。稠密擅长语义但会漏精确匹配，BM25 正好补这块盲区（Bing、Airbnb 都两路融合）。",
+    "why_en": "Use hybrid retrieval: dense ANN for semantics plus sparse BM25 for exact terms/SKUs, fusing both before re-ranking, since dense misses exact matches and BM25 covers them.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "hybrid-retrieval"
+    ],
+    "tradeoff": "混合(稠密+BM25)（语义+精确都覆盖·两路成本） vs 纯稠密（语义强但漏精确关键词）",
+    "options": [
+      "只用稠密 ANN，把关键词也编码进向量就够，BM25 是多余的",
+      "混合检索：稠密 ANN 抓语义 + 稀疏 BM25 抓精确关键词/型号，两路融合后再重排",
+      "只用 BM25 关键词检索，语义查询也能靠同义词词典硬凑",
+      "把 query 拆成两次独立搜索让用户自己选，系统不做融合"
+    ],
+    "options_en": [
+      "Use only dense ANN; encoding keywords into the vector suffices and BM25 is redundant.",
+      "Hybrid retrieval: dense ANN for semantics plus sparse BM25 for exact keywords/SKUs, fused before re-ranking.",
+      "Use only BM25 keyword retrieval; semantic queries can be forced with a synonym dictionary.",
+      "Split the query into two separate searches and let the user pick, with no fusion by the system."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若查询几乎全是自然语言语义型、极少精确关键词/型号，纯稠密 ANN 就够，省掉维护 BM25 一路的复杂度。",
+    "whenOtherWins_en": "If queries are almost entirely natural-language semantic with rare exact keywords, pure dense ANN suffices and you skip maintaining a BM25 path.",
+    "optionExplanations": [
+      "稠密向量对罕见精确 token（型号、错误码）泛化差、常漏检，光靠它编码补不上这块。",
+      "对；稠密管语义、BM25 管精确匹配，融合两路正好覆盖各自盲区，是主流做法。",
+      "纯 BM25 抓不到「下雨天的鞋」这类无字面重合的语义近义，同义词典维护不动且覆盖不全。",
+      "让用户手动二选一是把系统的融合责任甩给用户，体验差且并未解决召回问题。"
+    ],
+    "optionExplanations_en": [
+      "Dense vectors generalize poorly to rare exact tokens (SKUs, error codes) and often miss them; encoding alone cannot fix that.",
+      "Correct — dense handles semantics, BM25 handles exact matches, and fusing both covers each other's blind spots — the mainstream approach.",
+      "Pure BM25 misses semantic synonyms like 'shoes for rainy days' with no literal overlap, and synonym dictionaries are unmaintainable and incomplete.",
+      "Making users manually choose offloads the system's fusion job onto them, hurting UX without solving recall."
+    ],
+    "termDefinitions": [
+      {
+        "term": "BM25",
+        "fullName": "Best Matching 25",
+        "meaning": "经典稀疏关键词排序函数，按词频/逆文档频率打分，擅长精确词匹配。",
+        "meaningEn": "BM25 (Best Matching 25) is a classic sparse keyword ranking function using term and inverse-document frequency, strong at exact matches."
+      },
+      {
+        "term": "hybrid retrieval / 混合检索",
+        "meaning": "同时跑稠密向量召回和稀疏关键词召回，再融合两路候选。",
+        "meaningEn": "Hybrid retrieval runs dense vector and sparse keyword retrieval together and fuses both candidate sets."
+      },
+      {
+        "term": "dense vs sparse retrieval / 稠密 vs 稀疏检索",
+        "meaning": "稠密用向量近邻抓语义；稀疏用关键词倒排抓字面匹配。",
+        "meaningEn": "Dense retrieval uses vector neighbors for semantics; sparse uses keyword inverted indexes for literal matches."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sharding",
+    "scenario": "十亿向量放不进单机，要分片。你担心分片后有的 query 的近邻散落在多个分片、漏检；召回质量是硬要求。",
+    "scenario_en": "A billion vectors won't fit one machine, so you shard. You worry a query's neighbors scatter across shards and get missed; recall is a hard requirement.",
+    "q": "追求不损召回，分片该用文档分片(scatter-gather)还是聚类路由？",
+    "q_en": "For no recall loss, use document sharding (scatter-gather) or cluster routing?",
+    "why": "用文档分片 + scatter-gather：按 doc ID/随机分片，每个 query 并行扇出到全部 N 个分片、协调器合并去重。因为不预设近邻在哪个分片，不会漏检，召回不受影响。代价是扇出随分片数线性增长（每查都打全部分片）。",
+    "why_en": "Use document sharding with scatter-gather: partition by doc ID, fan every query out to all N shards in parallel, and merge, preserving recall at the cost of fan-out growing linearly with shard count.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "sharding"
+    ],
+    "tradeoff": "文档分片/scatter-gather（不损召回·扇出线性增长） vs 聚类路由（扇出小·可能漏跨簇近邻、热分片）",
+    "options": [
+      "聚类路由：按簇分片、只查相关簇，召回天然更高且扇出最小",
+      "文档分片 + scatter-gather：随机分片、每查扇出到全部分片再合并去重，不预设近邻位置故不漏检",
+      "把全部向量复制到每台机器，各自独立查，反正不用分片",
+      "按查询时间分片，早上的查询走一批分片、晚上走另一批"
+    ],
+    "options_en": [
+      "Cluster routing: shard by cluster and query only relevant clusters — naturally higher recall and minimal fan-out.",
+      "Document sharding with scatter-gather: random shards, fan every query to all shards then merge/dedup, presuming nothing about neighbor location so nothing is missed.",
+      "Replicate all vectors to every machine and query independently, avoiding sharding altogether.",
+      "Shard by query time — morning queries hit one set of shards, evening queries another."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当扇出成本随分片数增长到扛不住、且能接受一点召回损失时，改用聚类路由只查相关簇来砍扇出（但要处理热分片和跨簇漏检）。",
+    "whenOtherWins_en": "When fan-out cost grows unbearable with shard count and a little recall loss is acceptable, switch to cluster routing to cut fan-out (but handle hot shards and cross-cluster misses).",
+    "optionExplanations": [
+      "聚类路由只查相关簇，恰恰会漏掉跨簇近邻，召回不升反降，与「不损召回」的硬要求冲突。",
+      "对；随机分片 + 全扇出保证不遗漏任何分片里的近邻，召回不受影响，代价是扇出线性增长。",
+      "全量复制到每台机器内存根本放不下十亿向量，且不解决单机容量问题。",
+      "按时间分片与近邻分布无关，会把同一 query 的近邻切散，纯属乱分。"
+    ],
+    "optionExplanations_en": [
+      "Cluster routing queries only relevant clusters and can miss cross-cluster neighbors, lowering recall — conflicting with the hard no-loss requirement.",
+      "Correct — random sharding plus full fan-out guarantees no near-neighbor in any shard is missed, preserving recall at linear fan-out cost.",
+      "Full replication cannot fit a billion vectors in each machine's RAM and does not solve single-node capacity.",
+      "Time-based sharding is unrelated to neighbor distribution and scatters a query's neighbors — arbitrary partitioning."
+    ],
+    "termDefinitions": [
+      {
+        "term": "scatter-gather / 扇出-归并",
+        "meaning": "查询并行发到所有分片(scatter)，各分片返回局部结果，协调器合并去重(gather)。",
+        "meaningEn": "Scatter-gather fans a query to all shards in parallel, then a coordinator merges and dedups their partial results."
+      },
+      {
+        "term": "fan-out / 扇出",
+        "meaning": "一次查询要打到的下游分片数；扇出越大协调和尾延迟压力越大。",
+        "meaningEn": "Fan-out is the number of downstream shards one query hits; larger fan-out raises coordination and tail-latency pressure."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-011",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cluster-routing",
+    "scenario": "为砍掉 scatter-gather 的扇出成本，你改成聚类路由：按簇归属分片，query 只发给它所属的少数簇。",
+    "scenario_en": "To cut scatter-gather fan-out cost, you switch to cluster routing: shard by cluster membership and send a query only to its few clusters.",
+    "q": "聚类路由省了扇出，代价是哪两个风险？",
+    "q_en": "Cluster routing saves fan-out, but at what two risks?",
+    "why": "两个代价：(1)召回损失——若 query 的真实近邻落在没被选中的簇里就漏检；(2)热分片——流量在簇上分布不均时，热门簇过载，负载均衡必须处理这种倾斜。省扇出是拿召回稳定性和负载均衡复杂度换的。",
+    "why_en": "Two costs: recall loss when true neighbors fall in unselected clusters, and hot shards when traffic skews toward popular clusters, so the load balancer must handle skew.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cluster-routing"
+    ],
+    "tradeoff": "聚类路由（扇出小·省成本） vs 代价（跨簇近邻漏检 + 热分片倾斜）",
+    "options": [
+      "会显著增加内存占用，并让构建索引变慢",
+      "召回损失（近邻落在未选中的簇就漏检）+ 热分片（流量倾斜使热门簇过载）",
+      "会破坏 embedding 版本兼容性，触发跨空间失真",
+      "没有真正代价，聚类路由在所有维度都优于 scatter-gather"
+    ],
+    "options_en": [
+      "It significantly raises memory usage and slows index building.",
+      "Recall loss (neighbors in unselected clusters get missed) plus hot shards (skewed traffic overloads popular clusters).",
+      "It breaks embedding version compatibility and triggers cross-space distortion.",
+      "There is no real cost; cluster routing beats scatter-gather on every dimension."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "聚类路由不改变向量存储量，内存/构建不是它的主要代价，跑偏了。",
+      "对；只查部分簇会漏跨簇近邻（掉召回），且流量倾斜会造出热分片，负载均衡要专门抗倾斜。",
+      "分片路由与 embedding 版本无关，不会引发跨空间失真，那是另一类问题。",
+      "它明确用召回稳定性换扇出，代价真实存在，并非全面占优。"
+    ],
+    "optionExplanations_en": [
+      "Cluster routing does not change how many vectors are stored, so memory/build is not its main cost — off target.",
+      "Correct — querying only some clusters misses cross-cluster neighbors (recall drop), and skewed traffic creates hot shards the load balancer must counter.",
+      "Shard routing is unrelated to embedding versions and does not cause cross-space distortion — a different problem.",
+      "It explicitly trades recall stability for less fan-out, so the cost is real and it does not dominate."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hot shard / 热分片",
+        "meaning": "承接远超均值流量的分片，易过载，需负载均衡抗倾斜或再分裂。",
+        "meaningEn": "A hot shard takes far above-average traffic and risks overload, needing load-balancing against skew or further splitting."
+      },
+      {
+        "term": "cluster routing / 聚类路由",
+        "meaning": "按簇归属分片，query 只路由到相关簇，扇出小但可能漏跨簇近邻。",
+        "meaningEn": "Cluster routing shards by cluster and routes a query only to relevant clusters, cutting fan-out but risking cross-cluster misses."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "replication",
+    "scenario": "每个向量分片都可能被单点故障拖垮，且单副本吞吐不够。",
+    "scenario_en": "Each vector shard risks a single point of failure, and one replica's throughput is insufficient.",
+    "q": "为什么每个分片通常复制 R=3 份？",
+    "q_en": "Why is each shard typically replicated R=3?",
+    "why": "R=3 同时买到两样：吞吐——三个副本可并行分摊查询流量；容错——挂一个还剩两个继续服务、不丢分片。3 是常见经验值，在冗余成本和可用性间取平衡。",
+    "why_en": "R=3 buys both throughput (three replicas share query load in parallel) and fault tolerance (one can die and two keep serving), a common balance of redundancy cost and availability.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "replication"
+    ],
+    "options": [
+      "为了把索引构建速度提升三倍",
+      "为了同时获得吞吐（副本并行分摊流量）和容错（挂一个仍有两个可服务）",
+      "为了让每个副本各存三分之一数据，省内存",
+      "为了让 recall 提高到三倍"
+    ],
+    "options_en": [
+      "To triple index build speed.",
+      "To get both throughput (replicas share load in parallel) and fault tolerance (one dies, two still serve).",
+      "To let each replica store a third of the data and save memory.",
+      "To triple recall."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "复制不加速构建；每个副本都得各自建一遍索引，构建量反而更多。",
+      "对；R=3 让三副本并行扛流量（吞吐）又留冗余（容错），是可用性与成本的常见折中。",
+      "副本是完整拷贝不是分片，每份都存全量，不省内存。",
+      "复制不改变检索算法，recall 由索引类型决定，不会因副本数变化。"
+    ],
+    "optionExplanations_en": [
+      "Replication does not speed builds; each replica must build its own index, so build work increases.",
+      "Correct — R=3 lets three replicas share load (throughput) while leaving redundancy (fault tolerance), a common availability-cost tradeoff.",
+      "Replicas are full copies, not shards; each stores everything, so no memory is saved.",
+      "Replication does not change the retrieval algorithm; recall depends on index type, not replica count."
+    ],
+    "termDefinitions": [
+      {
+        "term": "replication factor R / 副本数 R",
+        "meaning": "每个分片保留的完整副本数；R=3 表示 3 份，用于吞吐和容错。",
+        "meaningEn": "Replication factor R is how many full copies each shard keeps; R=3 means three, for throughput and fault tolerance."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "caching",
+    "scenario": "同一批热门/趋势查询反复打进来，编码器每次都重编 query 很浪费，且很多完全相同的查询本可复用最终结果。",
+    "scenario_en": "The same hot/trending queries hit repeatedly; re-encoding each query wastes the encoder, and many identical queries could reuse the final results.",
+    "q": "两级缓存分别缓存什么、各自失效节奏怎么定？",
+    "q_en": "What do the two cache levels store, and how is each invalidated?",
+    "why": "两级：query embedding 缓存（缓存 query→向量，跳过编码器，因编码器很少变、可长驻）；result 缓存（缓存最终 top-K，Bing 量级能吸收 30–40% 流量，但结果依赖索引，TTL 要绑索引重建节奏）。一个缓存计算、一个缓存结果，失效节奏跟着各自的变化频率走。",
+    "why_en": "A query-embedding cache (query to vector, skipping the encoder, long-lived since encoders rarely change) and a result cache (final top-K, absorbing 30-40% of traffic at Bing scale, with TTL tied to index rebuild cadence).",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "caching"
+    ],
+    "tradeoff": "embedding 缓存（编码器稳·可长驻） vs result 缓存（依赖索引·TTL 绑重建节奏）",
+    "options": [
+      "两级都缓存最终结果，只是一个存内存一个存磁盘，失效节奏一样",
+      "embedding 缓存存 query→向量、可长驻（编码器少变）；result 缓存存最终 top-K、TTL 绑索引重建节奏",
+      "embedding 缓存存最终结果、result 缓存存 query 向量，两者职责互换",
+      "只需一级 result 缓存，query embedding 每次重算即可，缓存向量没意义"
+    ],
+    "options_en": [
+      "Both levels cache final results, one in memory and one on disk, with identical invalidation.",
+      "The embedding cache stores query-to-vector, long-lived (encoders rarely change); the result cache stores final top-K with TTL tied to index rebuild cadence.",
+      "The embedding cache stores final results and the result cache stores query vectors — roles swapped.",
+      "One result cache suffices; recompute query embeddings each time, since caching vectors is pointless."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "索引重建很频繁（近实时更新）时，result 缓存 TTL 必须缩得很短甚至基本失效，此时更依赖 embedding 缓存和扩容而非结果缓存。",
+    "whenOtherWins_en": "When the index rebuilds very frequently (near-real-time), the result cache TTL must shrink to near-useless, so you lean on the embedding cache and scaling rather than result caching.",
+    "optionExplanations": [
+      "两级缓存的失效节奏不同：编码器稳→embedding 可长驻，索引常变→result 要短 TTL，说成一样就错了。",
+      "对；embedding 缓存省编码、可长驻；result 缓存省整条链路但要随索引重建失效，两者失效节奏不同。",
+      "职责说反了：embedding 缓存存的是向量、result 缓存存的是最终结果。",
+      "热门/趋势查询反复重编 query 很浪费，缓存 query 向量能直接跳过编码器，绝非没意义。"
+    ],
+    "optionExplanations_en": [
+      "The two caches invalidate differently: encoders stable so embeddings persist, index changes often so results need short TTL — calling them identical is wrong.",
+      "Correct — the embedding cache saves encoding and persists; the result cache saves the whole pipeline but must expire with index rebuilds — different invalidation cadences.",
+      "Roles reversed: the embedding cache stores vectors and the result cache stores final results.",
+      "Repeatedly re-encoding hot/trending queries wastes the encoder; caching query vectors skips it — far from pointless."
+    ],
+    "termDefinitions": [
+      {
+        "term": "query embedding cache / 查询向量缓存",
+        "meaning": "缓存 query→向量，命中即跳过编码器；编码器少变故可长驻。",
+        "meaningEn": "A query-embedding cache stores query-to-vector so hits skip the encoder; it persists long since encoders rarely change."
+      },
+      {
+        "term": "result cache / 结果缓存",
+        "meaning": "缓存某 query 的最终 top-K 结果，命中省整条链路，但依赖索引、需按重建节奏失效。",
+        "meaningEn": "A result cache stores a query's final top-K, saving the whole pipeline on a hit but tied to the index and invalidated per rebuild."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存条目的存活时长，到期即失效重取。",
+        "meaningEn": "TTL (Time To Live) is how long a cache entry stays valid before it expires and is refetched."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-014",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "cache-hit-rate",
+    "scenario": "Bing 量级的搜索流量里，很大一部分是重复/趋势查询。",
+    "scenario_en": "At Bing-scale search traffic, a large share is repeated/trending queries.",
+    "q": "result 缓存在 Bing 量级大约能吸收多少比例的流量，意味着什么？",
+    "q_en": "About what share of traffic does the result cache absorb at Bing scale, and what does it imply?",
+    "why": "约 30–40%（经验值，源于查询分布长尾但头部集中）。含义是：三到四成请求直接命中结果缓存、不走编码+召回+重排的完整链路，等于把后端算力和尾延迟压力砍掉三四成，是撑住 <200ms p99 和控成本的关键杠杆。",
+    "why_en": "About 30-40%, meaning three to four in ten requests skip the full encode-retrieve-rerank pipeline, cutting backend compute and tail latency by that much.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "cache-hit-rate"
+    ],
+    "options": [
+      "约 30–40%：这部分请求直接命中缓存、不走完整链路，大幅减轻后端算力与尾延迟",
+      "约 1%：缓存基本没用，主要靠扩容扛流量",
+      "约 99%：几乎所有查询都相同，后端几乎不用工作",
+      "约 30–40%，但只减少存储成本、不影响延迟"
+    ],
+    "options_en": [
+      "About 30-40%: these requests hit cache directly, skipping the full pipeline, greatly easing backend compute and tail latency.",
+      "About 1%: caching barely helps, and scaling carries the load.",
+      "About 99%: nearly all queries are identical, so the backend hardly works.",
+      "About 30-40%, but it only cuts storage cost, not latency."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "cache hit rate / 缓存命中率",
+        "meaning": "命中缓存、无需走完整计算链路的请求占比；越高越省算力和延迟。",
+        "meaningEn": "Cache hit rate is the share of requests served from cache without the full pipeline; higher saves compute and latency."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-015",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "200ms p99 端到端预算要拆给四个阶段：查询理解、ANN 召回、cross-encoder 重排、网络/序列化。",
+    "scenario_en": "A 200ms p99 end-to-end budget must be split across query understanding, ANN retrieval, cross-encoder re-ranking, and network/serialization.",
+    "q": "四个阶段里哪个通常吃掉最大一块预算，为什么？",
+    "q_en": "Which stage usually takes the biggest slice of the budget, and why?",
+    "why": "cross-encoder 重排最贵（约 50–80ms），因为它把 query 和每个候选拼在一起逐对过大模型、最准也最重。其余：查询理解 20–30ms（蒸馏/ONNX 编码器）、ANN 召回 30–50ms、网络/序列化 20–30ms。所以要用漏斗把进重排的候选数压小。",
+    "why_en": "Cross-encoder re-ranking (~50-80ms), because it runs a heavy model per query-candidate pair — the most accurate and most expensive stage, so the funnel keeps its candidate count small.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "latency-budget"
+    ],
+    "options": [
+      "cross-encoder 重排（约 50–80ms）：逐对拼 query+候选过大模型，最准也最贵",
+      "网络/序列化（约 120ms）：gRPC 和 protobuf 是最大瓶颈",
+      "查询理解（约 100ms）：编码 query 比其它阶段都慢",
+      "ANN 召回（约 90ms）：近似检索是整条链路里最重的一步"
+    ],
+    "options_en": [
+      "Cross-encoder re-ranking (~50-80ms): a heavy model per query-candidate pair, the most accurate and most expensive.",
+      "Network/serialization (~120ms): gRPC and protobuf are the biggest bottleneck.",
+      "Query understanding (~100ms): encoding the query is slower than any other stage.",
+      "ANN retrieval (~90ms): approximate retrieval is the heaviest step in the pipeline."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "latency budget / 延迟预算",
+        "meaning": "把端到端目标延迟拆成各阶段可用时间，用来约束每步的模型/深度选择。",
+        "meaningEn": "A latency budget splits the end-to-end target across stages, constraining each step's model and depth choices."
+      },
+      {
+        "term": "ONNX",
+        "fullName": "Open Neural Network Exchange",
+        "meaning": "跨框架模型格式，配运行时可加速推理，常用于压缩查询编码器延迟。",
+        "meaningEn": "ONNX (Open Neural Network Exchange) is a cross-framework model format whose runtime speeds inference, often used to shrink query-encoder latency."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "rerank-depth",
+    "scenario": "重排深度 k 是最影响质量的旋钮。k=20 会漏掉 ANN top-20 之外的好文档；但 cross-encoder 耗时随 k 线性增长。",
+    "scenario_en": "Re-rank depth k is the most impactful knob. k=20 misses good docs just outside ANN's top-20, but cross-encoder cost grows linearly in k.",
+    "q": "为什么说重排深度 k 是最关键的旋钮？",
+    "q_en": "Why is re-rank depth k the most critical knob?",
+    "why": "k 直接卡在「召回覆盖 vs 延迟成本」的交叉点：k 太小（20）漏掉刚好排在 ANN top-20 之外的相关文档、质量受损；k 太大（500）让 cross-encoder 逐对打分的耗时线性膨胀、爆预算。所以调 k 就是在精度和 200ms 预算之间找平衡点。",
+    "why_en": "k sits exactly on the recall-coverage vs latency-cost tradeoff: too small misses relevant docs just outside ANN's top-k, too large blows the budget since cross-encoder cost is linear in k.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rerank-depth"
+    ],
+    "tradeoff": "k 小（省延迟·漏 ANN 边缘好文档） vs k 大（覆盖广·cross-encoder 耗时线性爆预算）",
+    "options": [
+      "因为 k 决定索引占多少内存，与延迟无关",
+      "因为 k 卡在召回覆盖与延迟成本的交叉点：太小漏好文档、太大让 cross-encoder 线性爆预算",
+      "因为 k 越大 recall 一定越差，所以必须设成最小",
+      "因为 k 只影响缓存命中率，不影响重排质量"
+    ],
+    "options_en": [
+      "Because k sets how much memory the index uses, unrelated to latency.",
+      "Because k sits on the recall-coverage vs latency-cost crossover: too small misses good docs, too large makes cross-encoder blow the budget linearly.",
+      "Because larger k always worsens recall, so it must be set to the minimum.",
+      "Because k only affects cache hit rate, not re-ranking quality."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当 ANN top-k 已经稳定覆盖真实相关文档（召回很高）时，把 k 调大只会白烧 cross-encoder 算力，此时该保持小 k。",
+    "whenOtherWins_en": "When ANN's top-k already reliably covers the relevant docs (high recall), enlarging k just wastes cross-encoder compute, so keep k small.",
+    "optionExplanations": [
+      "k 是重排送进 cross-encoder 的候选数，直接决定重排耗时，跟索引内存无关。",
+      "对；k 太小漏 ANN 边缘好文档、太大让逐对打分线性膨胀爆 200ms，正是精度-延迟的关键旋钮。",
+      "k 大通常提高覆盖（召回），不是变差；问题在延迟成本，不是召回下降。",
+      "k 改变的是进入 cross-encoder 的候选深度，直接影响重排质量而非仅缓存。"
+    ],
+    "optionExplanations_en": [
+      "k is the number of candidates fed to the cross-encoder, directly setting re-rank cost, unrelated to index memory.",
+      "Correct — too-small k misses ANN-edge docs, too-large k blows 200ms via linear pairwise scoring — the key precision-latency knob.",
+      "Larger k usually improves coverage (recall), not worsens it; the issue is latency cost, not recall drop.",
+      "k changes the candidate depth into the cross-encoder, directly affecting re-rank quality, not just caching."
+    ],
+    "termDefinitions": [
+      {
+        "term": "re-rank depth k / 重排深度 k",
+        "meaning": "从 ANN 候选里取前 k 个送 cross-encoder 精排；cross-encoder 成本随 k 线性增长。",
+        "meaningEn": "Re-rank depth k is how many ANN candidates go to the cross-encoder; its cost grows linearly with k."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "two-stage-reranker",
+    "scenario": "200ms 预算下，你想把重排深度从 100 提到 300 拿更高覆盖，但整段 300 都过完整 cross-encoder 会爆预算。",
+    "scenario_en": "Within 200ms, you want to raise re-rank depth from 100 to 300 for more coverage, but running all 300 through the full cross-encoder blows the budget.",
+    "q": "怎么在不爆预算的前提下把重排漏斗从 100 拓宽到 300？",
+    "q_en": "How do you widen the re-rank funnel from 100 to 300 without blowing the budget?",
+    "why": "两段式重排：先用轻量蒸馏模型给 300 个候选粗打分（约 15ms）、剪到 50；再用完整 cross-encoder 精排这 50 个（约 40ms）。这样漏斗入口拓宽到 300、拿到覆盖，但进最贵那一段的只有 50 个，延迟没有随深度成比例增长。",
+    "why_en": "A two-stage re-ranker: a light distilled model coarse-scores 300 in ~15ms and prunes to 50, then the full cross-encoder scores those 50 in ~40ms, widening the funnel without proportional latency.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "two-stage-reranker"
+    ],
+    "tradeoff": "两段式（拓宽覆盖·延迟不随深度线性涨·多一个模型） vs 单段 full cross-encoder（简单·深度一大就爆预算）",
+    "options": [
+      "直接把 300 个全过完整 cross-encoder，超预算就调大机器",
+      "两段式：轻量蒸馏模型粗排 300→50（约 15ms），再用完整 cross-encoder 精排 50（约 40ms）",
+      "把重排深度砍回 20 来省时间，放弃拿更高覆盖",
+      "跳过重排，直接返回 ANN 的 top-300，靠召回顺序当最终排序"
+    ],
+    "options_en": [
+      "Run all 300 through the full cross-encoder and add machines when over budget.",
+      "Two-stage: a light distilled model coarse-ranks 300 to 50 (~15ms), then the full cross-encoder scores those 50 (~40ms).",
+      "Cut re-rank depth back to 20 to save time, giving up the higher coverage.",
+      "Skip re-ranking and return ANN's top-300, using retrieval order as the final ranking."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当目标深度本就很小（如 50 以内）、单段 full cross-encoder 已能在预算内跑完时，就没必要加蒸馏预筛这层复杂度。",
+    "whenOtherWins_en": "When the target depth is already small (say ≤50) and a single full cross-encoder fits the budget, the distilled pre-filter layer is unnecessary complexity.",
+    "optionExplanations": [
+      "300 全过 full cross-encoder 耗时线性爆 200ms，靠加机器压不下单请求的串行延迟。",
+      "对；蒸馏预筛把最贵一段的输入从 300 压到 50，漏斗拓宽拿覆盖、延迟不随深度线性涨。",
+      "砍回 20 是放弃覆盖目标，与「想提到 300」的诉求相反。",
+      "ANN 顺序不够精，跳过重排会直接损失精度，违背要更高质量的初衷。"
+    ],
+    "optionExplanations_en": [
+      "Running all 300 through the full cross-encoder blows 200ms linearly, and machines cannot compress one request's serial latency.",
+      "Correct — the distilled pre-filter cuts the expensive stage's input from 300 to 50, widening the funnel for coverage without linear latency growth.",
+      "Cutting back to 20 abandons the coverage goal, opposite to wanting 300.",
+      "ANN order is not precise enough; skipping re-ranking loses accuracy, defeating the goal of higher quality."
+    ],
+    "termDefinitions": [
+      {
+        "term": "distilled model / 蒸馏模型",
+        "meaning": "用大模型指导训练出的小模型，精度略降但推理快得多，适合做粗排预筛。",
+        "meaningEn": "A distilled model is a small model trained under a large one's guidance, slightly less accurate but much faster, ideal for coarse pre-filtering."
+      },
+      {
+        "term": "two-stage re-ranker / 两段式重排",
+        "meaning": "先用轻量模型粗排一大批剪枝，再用重型 cross-encoder 精排剩下少量。",
+        "meaningEn": "A two-stage re-ranker coarse-ranks a large set with a light model then finely re-ranks the small remainder with a heavy cross-encoder."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-018",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "dual-vs-cross-encoder",
+    "scenario": "召回阶段用双塔编码器、重排阶段用 cross-encoder，面试官问二者为何分工。",
+    "scenario_en": "Retrieval uses a dual encoder and re-ranking uses a cross-encoder; the interviewer asks why they split the work.",
+    "q": "双塔编码器和 cross-encoder 在「精度 vs 成本」上如何分工？",
+    "q_en": "How do dual encoder and cross-encoder split on the precision-vs-cost axis?",
+    "why": "双塔各自把 query 和文档独立编码成向量，可离线预算文档向量、在线只算一次 query 编码 + 近邻，便宜、能扫十亿库但精度有限；cross-encoder 把 query 和候选拼在一起联合打分，逐对一次前向、贵，但能建模细粒度交互、最准。所以便宜的双塔做海量召回、贵的 cross-encoder 只精排少量候选。",
+    "why_en": "A dual encoder embeds query and doc separately (docs precomputed, cheap, scales to billions, limited precision), while a cross-encoder scores each pair jointly (one forward pass per pair, expensive, most accurate).",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "dual-vs-cross-encoder"
+    ],
+    "tradeoff": "双塔（可预算·便宜·扫十亿·精度有限） vs cross-encoder（逐对·贵·最准·只用于少量重排）",
+    "table": {
+      "headers": [
+        "编码器",
+        "query-doc 交互",
+        "文档向量可预算",
+        "成本",
+        "用在哪"
+      ],
+      "rows": [
+        [
+          "双塔",
+          "独立编码",
+          "可",
+          "低",
+          "海量召回"
+        ],
+        [
+          "cross-encoder",
+          "联合打分",
+          "否",
+          "高",
+          "少量重排"
+        ]
+      ]
+    },
+    "options": [
+      "双塔逐对联合打分最准、cross-encoder 独立编码最便宜，分工正好相反",
+      "双塔独立编码可预算文档向量、便宜、扫十亿但精度有限；cross-encoder 逐对联合打分、贵但最准",
+      "两者精度和成本都一样，选哪个纯看个人习惯",
+      "cross-encoder 也能预算文档向量，所以召回和重排都该用它"
+    ],
+    "options_en": [
+      "A dual encoder scores pairs jointly (most accurate) and a cross-encoder encodes independently (cheapest) — roles reversed.",
+      "A dual encoder embeds independently, precomputes doc vectors, is cheap and scales to billions but limited precision; a cross-encoder scores pairs jointly, expensive but most accurate.",
+      "Their precision and cost are identical; the choice is pure habit.",
+      "A cross-encoder can also precompute doc vectors, so use it for both retrieval and re-ranking."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "说反了：联合打分是 cross-encoder、独立编码是双塔，角色互换即错。",
+      "对；双塔便宜可预算故扫十亿召回，cross-encoder 贵而准故只精排少量，这就是分工逻辑。",
+      "二者精度-成本差异明显，正因如此才分召回/重排两段，不是习惯问题。",
+      "cross-encoder 需要 query 才能和文档联合打分，无法离线预算文档向量，扫不了十亿库。"
+    ],
+    "optionExplanations_en": [
+      "Reversed: joint scoring is the cross-encoder, independent encoding is the dual encoder — swapping is wrong.",
+      "Correct — dual is cheap and precomputable so it retrieves over billions, cross-encoder is costly and accurate so it re-ranks a few — the division of labor.",
+      "Their precision-cost differ sharply, which is exactly why retrieval and re-ranking are split — not habit.",
+      "A cross-encoder needs the query to jointly score with a doc, so it cannot precompute doc vectors or scan a billion-doc library."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dual encoder / 双塔编码器",
+        "meaning": "query 与文档各用一塔独立编码成向量，文档向量可离线预算，召回便宜。",
+        "meaningEn": "A dual encoder embeds query and doc with separate towers; doc vectors precompute offline, making retrieval cheap."
+      },
+      {
+        "term": "cross-encoder / 交叉编码器",
+        "meaning": "把 query 与候选拼一起联合打相关分，最准但每对都要一次前向、贵。",
+        "meaningEn": "A cross-encoder jointly scores a query-candidate pair — most accurate but one forward pass per pair, expensive."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-019",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "nprobe-tradeoff",
+    "scenario": "Staff 级答题：你想量化 IVF-PQ 的 nprobe 旋钮对召回和延迟的影响，而不是只说「调大更准」。",
+    "scenario_en": "Staff-level answer: you want to quantify how IVF-PQ's nprobe knob trades recall for latency, not just say 'higher is more accurate'.",
+    "q": "把 nprobe 从 32 调到 64，大致付出和换回什么？",
+    "q_en": "Raising nprobe from 32 to 64 roughly costs and buys what?",
+    "why": "大致「多约 3ms 延迟、换回约 2% recall」（示例量级）。nprobe 是 IVF 查询实际搜索的单元数，调大就多搜几个 Voronoi 单元，覆盖更多候选、召回升，但逐单元扫描的时间也上去。能报出这种「+3ms 换 +2% recall」的数量级，就是 Staff 级的量化取舍。",
+    "why_en": "Roughly +3ms latency for about +2% recall (illustrative), because larger nprobe searches more Voronoi cells, covering more candidates at more scan time.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "nprobe-tradeoff"
+    ],
+    "options": [
+      "多约 3ms 延迟、换回约 2% recall：多搜几个 Voronoi 单元覆盖更多候选",
+      "延迟和召回都不变，nprobe 只影响内存占用",
+      "召回翻倍、延迟不变，几乎是免费的提升",
+      "延迟降一半、召回升一半，调大 nprobe 有百利无一害"
+    ],
+    "options_en": [
+      "About +3ms latency for about +2% recall: searching more Voronoi cells covers more candidates.",
+      "Neither latency nor recall changes; nprobe only affects memory usage.",
+      "Recall doubles with no latency change — essentially free.",
+      "Latency halves and recall rises by half, so raising nprobe is pure upside."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "nprobe",
+        "meaning": "IVF 查询时实际搜索的 Voronoi 单元数；调大提高召回但增加扫描延迟。",
+        "meaningEn": "nprobe is how many Voronoi cells an IVF query searches; raising it lifts recall but adds scan latency."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-020",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "面试速记：200ms p99 预算在四个阶段的大致分配。",
+    "scenario_en": "Interview cheat: roughly how the 200ms p99 budget splits across four stages.",
+    "q": "补全 200ms 端到端预算的阶段分配：",
+    "q_en": "Fill in the stage allocation of the 200ms end-to-end budget:",
+    "text": "查询理解（编码）约 {{20–30}} ms（蒸馏/ONNX 编码器）；ANN 召回约 {{30–50}} ms；cross-encoder 重排约 {{50–80}} ms（最准最贵）；网络/序列化（gRPC、protobuf、合并）约 {{20–30}} ms。",
+    "text_en": "Query understanding (encode) ~{{20–30}} ms (distilled/ONNX encoder); ANN retrieval ~{{30–50}} ms; cross-encoder re-ranking ~{{50–80}} ms (most accurate, most expensive); network/serialization (gRPC, protobuf, merge) ~{{20–30}} ms.",
+    "why": "记住形状：重排吃最大一块（50–80ms），召回其次（30–50ms），编码和网络各 20–30ms。这不是硬公式而是把 200ms 目标拆到各阶段的经验分配，用来倒逼每步选多重的模型、多深的 k。",
+    "why_en": "Remember the shape: re-ranking takes the biggest slice, then retrieval, with encoding and network at 20-30ms each, an empirical split that drives model and depth choices.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "latency-budget"
+    ],
+    "termDefinitions": [
+      {
+        "term": "gRPC / protobuf",
+        "meaning": "高性能 RPC 框架与二进制序列化格式，用于分片间低延迟通信。",
+        "meaningEn": "gRPC is a high-performance RPC framework and protobuf its binary serialization, used for low-latency inter-shard communication."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "query-encoder-latency",
+    "scenario": "查询理解阶段只分到 20–30ms 预算，但把 query 编码成稠密向量默认要过一个大 transformer。",
+    "scenario_en": "The query-understanding stage gets only a 20-30ms budget, yet encoding the query to a dense vector defaults to a large transformer.",
+    "q": "怎么让 query 编码在 20–30ms 预算内跑完？",
+    "q_en": "How do you fit query encoding inside a 20-30ms budget?",
+    "why": "用蒸馏后的小编码器 + ONNX 运行时加速推理，把在线编码压进 20–30ms。full-size 编码器精度略高但太慢，放不进预算；召回阶段对编码精度的容忍度也高（后面还有 cross-encoder 精排兜底），所以在线用轻量编码器是对的取舍。",
+    "why_en": "Use a distilled small encoder plus an ONNX runtime to fit encoding into 20-30ms, since the full encoder is too slow and the cross-encoder later compensates for the small precision loss.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "query-encoder-latency"
+    ],
+    "tradeoff": "蒸馏/ONNX 编码器（快·进预算·精度略降） vs full transformer（更准·太慢·爆 20–30ms）",
+    "options": [
+      "在线直接用最大号 transformer 编码，精度优先、延迟其次",
+      "用蒸馏小编码器 + ONNX 运行时把在线编码压进 20–30ms，精度损失由后面 cross-encoder 兜底",
+      "跳过编码，直接把 query 原文送进 ANN 索引",
+      "把 query 编码放到离线批处理里预算，在线不编码"
+    ],
+    "options_en": [
+      "Use the largest transformer online for encoding, prioritizing precision over latency.",
+      "Use a distilled small encoder plus an ONNX runtime to fit encoding into 20-30ms, with the cross-encoder later covering the small precision loss.",
+      "Skip encoding and feed the raw query text straight into the ANN index.",
+      "Precompute query encoding offline in batch, encoding nothing online."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若延迟预算宽松（如离线/近线批量检索，无 200ms 约束），可用 full-size 编码器换更高编码精度。",
+    "whenOtherWins_en": "If the latency budget is loose (offline/near-line batch retrieval with no 200ms cap), a full-size encoder buys higher encoding precision.",
+    "optionExplanations": [
+      "最大号 transformer 在线编码通常远超 20–30ms，直接爆掉查询理解的预算。",
+      "对；蒸馏 + ONNX 让编码进预算，且召回阶段精度容忍高、后有 cross-encoder 精排兜底。",
+      "ANN 索引比的是向量，query 必须先编码成向量，送原文没法做近邻检索。",
+      "query 是在线才来的，无法离线预算它的编码，这条不成立。"
+    ],
+    "optionExplanations_en": [
+      "A largest transformer online usually far exceeds 20-30ms, blowing the query-understanding budget outright.",
+      "Correct — distillation plus ONNX fits encoding in budget, and retrieval tolerates small precision loss with the cross-encoder compensating later.",
+      "The ANN index compares vectors, so the query must be encoded first; raw text cannot do neighbor search.",
+      "Queries arrive online and cannot be precomputed offline, so this option is invalid."
+    ],
+    "termDefinitions": [
+      {
+        "term": "distilled encoder / 蒸馏编码器",
+        "meaning": "从大编码器蒸馏出的小模型，在线编码快、精度略降。",
+        "meaningEn": "A distilled encoder is a small model distilled from a large one, encoding fast online at slightly lower precision."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-022",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "seniority-signal",
+    "scenario": "两位候选人都画出了「编码→ANN→cross-encoder 重排」的三段架构，但一个被评 L5、一个被评 Staff+。",
+    "scenario_en": "Two candidates both draw the encode→ANN→cross-encoder pipeline, but one is rated L5 and the other Staff+.",
+    "q": "从 Senior 到 Staff+ 的差别主要体现在哪里？",
+    "q_en": "Where does the Senior-to-Staff+ difference mainly show?",
+    "why": "差别不在多画几个组件，而在「量化取舍并把选择绑到可测结果」：比如「nprobe 32→64 加 3ms 换 2% recall」「result 缓存吃 30–40% 流量」「两段重排把最贵段输入从 300 压到 50」。能把每个决定挂到 p99 延迟、recall@10、每查成本上，才是 Staff 信号。",
+    "why_en": "Not more components but quantifying tradeoffs and tying choices to measurable outcomes — p99 latency, recall@10, cost per query — like 'nprobe 32 to 64 adds 3ms for 2% recall'.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "seniority-signal"
+    ],
+    "options": [
+      "Staff+ 会画更多组件、更复杂的架构图",
+      "Staff+ 把取舍量化、绑到可测结果（p99、recall@10、每查成本），而非只多堆组件",
+      "Staff+ 只是术语用得更多、名词更高级",
+      "Staff+ 会避免提任何数字，保持架构抽象干净"
+    ],
+    "options_en": [
+      "Staff+ draws more components and a more complex architecture diagram.",
+      "Staff+ quantifies tradeoffs and ties choices to measurable outcomes (p99, recall@10, cost per query), rather than stacking components.",
+      "Staff+ just uses more jargon and fancier terms.",
+      "Staff+ avoids all numbers to keep the architecture abstract and clean."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "多堆组件不是资深信号，反而可能是过度设计；关键是取舍是否量化。",
+      "对；把 nprobe/缓存命中/重排深度这些决定挂到 p99、recall、成本上，才是 Staff+ 的区分点。",
+      "堆术语不等于深度，Staff+ 靠的是可测量的取舍论证不是词汇量。",
+      "Staff+ 恰恰更爱给数字（+3ms 换 2% recall），回避数字反而显得空。"
+    ],
+    "optionExplanations_en": [
+      "More components is not a seniority signal and may be over-engineering; the key is whether tradeoffs are quantified.",
+      "Correct — tying nprobe/cache-hit/rerank-depth decisions to p99, recall, and cost is the Staff+ differentiator.",
+      "Piling jargon is not depth; Staff+ relies on measurable tradeoff arguments, not vocabulary.",
+      "Staff+ favors numbers (+3ms for 2% recall); avoiding numbers reads as hand-waving."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cost per query / 每查成本",
+        "meaning": "服务一次查询消耗的算力/金钱，随重排深度、编码器大小、缓存命中率变化。",
+        "meaningEn": "Cost per query is the compute/money to serve one query, varying with re-rank depth, encoder size, and cache hit rate."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-023",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "serving-flow",
+    "q": "把一次语义搜索请求在 <200ms 预算下流经的阶段排成正确顺序：",
+    "q_en": "Order the stages one semantic-search request flows through under the <200ms budget:",
+    "steps": [
+      "查询理解：蒸馏编码器把 query 编成稠密向量（约 20–30ms）",
+      "ANN 召回：scatter-gather 扇出到各分片取 top-k 候选（约 30–50ms）",
+      "两段式重排：蒸馏粗排剪枝 + full cross-encoder 精排（约 50–80ms）",
+      "网络/序列化：合并去重、protobuf 打包返回（约 20–30ms）"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "顺序是编码→召回→重排→网络返回，每段吃掉 200ms 里的一块。前段用便宜快的模型缩候选，最贵的 cross-encoder 只精排少量，靠这个漏斗把总延迟压进 p99 预算。",
+    "why_en": "Encode, retrieve, re-rank, then serialize back, each taking a slice of 200ms, with cheap early stages shrinking candidates so the costly cross-encoder handles only a few.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "serving-flow"
+    ],
+    "diagram": "flowchart LR\n  E[\"编码 query<br/>20–30ms\"] --> A[\"ANN 召回<br/>30–50ms\"]\n  A --> R[\"两段式重排<br/>50–80ms\"]\n  R --> N[\"合并+序列化<br/>20–30ms\"]",
+    "termDefinitions": [
+      {
+        "term": "scatter-gather / 扇出-归并",
+        "meaning": "查询并行发到所有分片，协调器合并去重各分片的局部结果。",
+        "meaningEn": "Scatter-gather fans a query to all shards and a coordinator merges/dedups their partial results."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-024",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "result-cache-ttl",
+    "scenario": "你给 result 缓存设 TTL。索引每季度全量重建一次、每天还有小幅增量更新，你担心缓存返回已过期的旧结果。",
+    "scenario_en": "You set the result cache TTL. The index rebuilds fully quarterly with small daily increments, and you worry the cache serves stale results.",
+    "q": "result 缓存的 TTL 该按什么来定？",
+    "q_en": "What should the result cache's TTL be tied to?",
+    "why": "result 缓存的 TTL 要绑索引重建/更新节奏：结果是基于某版索引算出来的，索引一变旧结果就可能过期，所以 TTL 不能长过更新周期。相反 embedding 缓存缓存的是 query→向量，编码器很少变，可以驻留久得多。",
+    "why_en": "Tie the result cache TTL to index rebuild/update cadence, because results are computed against a specific index version and go stale when it changes, whereas the embedding cache persists far longer.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "result-cache-ttl"
+    ],
+    "tradeoff": "TTL 绑索引节奏（结果不过期·命中率受更新频率限制） vs 长 TTL（命中率高·返回过期结果）",
+    "options": [
+      "按编码器更新节奏定，编码器很少变所以 TTL 可以设很长",
+      "按索引重建/更新节奏定，索引一变旧结果就过期，TTL 不能长过更新周期",
+      "设成永不过期，靠手动清缓存来更新",
+      "按用户会话时长定，会话结束就清空全部结果缓存"
+    ],
+    "options_en": [
+      "Tie it to encoder update cadence; encoders rarely change so the TTL can be very long.",
+      "Tie it to index rebuild/update cadence; when the index changes old results go stale, so TTL must not exceed the update period.",
+      "Set it to never expire and update by manually clearing the cache.",
+      "Tie it to user session length, clearing all result cache when a session ends."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "对 query→向量的 embedding 缓存才该按编码器节奏设长 TTL——那一层只随编码器换版失效，与索引更新无关。",
+    "whenOtherWins_en": "The embedding cache (query to vector) is what gets a long, encoder-cadence TTL — it only invalidates on encoder version changes, not index updates.",
+    "optionExplanations": [
+      "编码器节奏管的是 embedding 缓存；result 缓存依赖索引，用编码器节奏会返回过期结果。",
+      "对；结果基于某版索引，索引更新后旧结果失真，TTL 必须跟着重建/更新周期收。",
+      "永不过期 + 手动清理易漏清、返回过期结果，规模化下不可靠。",
+      "会话时长与索引新鲜度无关，热门查询跨会话共享缓存才有价值。"
+    ],
+    "optionExplanations_en": [
+      "Encoder cadence governs the embedding cache; the result cache depends on the index, so encoder cadence would serve stale results.",
+      "Correct — results are built on an index version, so after updates old results are wrong and TTL must follow the rebuild/update period.",
+      "Never-expire plus manual clearing risks missed purges and stale results — unreliable at scale.",
+      "Session length is unrelated to index freshness; hot queries sharing cache across sessions is where the value is."
+    ],
+    "termDefinitions": [
+      {
+        "term": "stale result / 过期结果",
+        "meaning": "基于旧版索引算出、索引更新后已不再准确的缓存结果。",
+        "meaningEn": "A stale result is a cached answer computed on an old index version that is no longer accurate after an update."
+      }
+    ]
+  },
+  {
+    "id": "llm-068-semantic-search-serving-trade-offs-025",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "面试速记：ANN 选型不能只报索引名，要报判据。",
+    "scenario_en": "Interview cheat: never just name an ANN index — state the selection criteria.",
+    "q": "补全 ANN 选型的三条判据与两索引定位：",
+    "q_en": "Fill in the three ANN selection criteria and where each index fits:",
+    "text": "选 ANN 索引别只报名字，要给三条判据：{{语料规模}}、{{内存预算}}、目标 {{recall}}。召回至上且内存够 → {{HNSW}}；十亿级且内存紧 → {{IVF-PQ}}。",
+    "text_en": "Don't just name an ANN index — state three criteria: {{corpus size}}, {{memory budget}}, and target {{recall}}. Recall paramount with ample memory → {{HNSW}}; billion-scale under tight memory → {{IVF-PQ}}.",
+    "why": "面试加分点是把选型挂到判据上：规模决定能不能单机、内存预算决定压不压缩、目标 recall 决定容不容忍近似损失。三者一说，HNSW/IVF-PQ 的取舍就自然落地。",
+    "why_en": "The interview signal is tying the choice to criteria: scale, memory budget, and target recall, which naturally lands the HNSW vs IVF-PQ tradeoff.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ann-index-choice"
+    ],
+    "termDefinitions": [
+      {
+        "term": "HNSW",
+        "fullName": "Hierarchical Navigable Small World",
+        "meaning": "高 recall、吃内存的图索引，适合召回至上且内存够。",
+        "meaningEn": "HNSW (Hierarchical Navigable Small World) is a high-recall, memory-heavy graph index for recall-paramount, ample-memory cases."
+      },
+      {
+        "term": "IVF-PQ",
+        "fullName": "Inverted File index + Product Quantization",
+        "meaning": "省内存、召回略低的聚类+量化索引，适合内存紧的十亿级。",
+        "meaningEn": "IVF-PQ (Inverted File + Product Quantization) is a memory-thrifty, slightly-lower-recall index for tight-memory billion-scale."
+      }
+    ]
+  }
+]

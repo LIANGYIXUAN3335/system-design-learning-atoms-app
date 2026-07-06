@@ -1,0 +1,1046 @@
+[
+  {
+    "id": "llm-084-visual-search-serving-indexing-001",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "why-ann",
+    "scenario": "10 亿商品目录，每个商品是一个 512 维 CLIP 向量，上传一张图要在 50ms 内返回最相似的商品。",
+    "scenario_en": "A billion-item catalog where each item is a 512-dim CLIP vector; an uploaded photo must return the most similar products within 50ms.",
+    "q": "为什么不能用暴力精确最近邻(brute-force exact NN)？",
+    "q_en": "Why can't you use brute-force exact nearest-neighbor search here?",
+    "why": "暴力精确 NN 是 O(n·d)：每次查询要和 10 亿个 512 维向量各算一次点积 ≈ 5120 亿次浮点运算，单机 50ms 内根本算不完。生产上改用 ANN 近似检索，用一点召回损失换回几毫秒延迟。",
+    "why_en": "Brute-force exact NN is O(n·d), roughly 512 billion FLOPs per query over a billion 512-dim vectors, far too slow for 50ms, so production uses ANN to trade a little recall for milliseconds.",
+    "tags": ["llm-sd", "visual-search", "ann"],
+    "options": [
+      "每次查询要做约 5120 亿次浮点运算(10 亿 × 512 维点积)，50ms 内算不完，只能改用 ANN 近似检索",
+      "10 亿向量装不进任何单机内存，精确 NN 在物理上无法加载所有向量",
+      "精确 NN 的召回率比 ANN 低，ANN 反而能找回更多相关商品，所以更优先",
+      "512 维触发维度灾难让欧氏距离失效，只有 ANN 才能在高维空间正确算距离"
+    ],
+    "options_en": [
+      "Each query needs about 512 billion FLOPs (a billion 512-dim dot products), impossible within 50ms, so you must switch to ANN.",
+      "A billion vectors cannot fit in any single machine's memory, so exact NN physically cannot load them all.",
+      "Exact NN has lower recall than ANN, and ANN retrieves more relevant products, so ANN is preferred.",
+      "512 dimensions trigger the curse of dimensionality that breaks Euclidean distance, and only ANN can measure high-dim distance correctly."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；瓶颈是每次查询的计算量——n·d = 10 亿 × 512，50ms 内做不完，ANN 通过只搜候选子集把它降到毫秒级。",
+      "内存确实是压力(后面靠分片/量化解决)，但即便向量都在内存，逐一算距离的时间仍然爆表——瓶颈是算力不是容量。",
+      "反了：精确 NN 召回率是 100%，ANN 是用召回换速度，恰恰更低一点(如 0.85-0.95)。",
+      "维度灾难影响的是距离区分度，不是能不能算；ANN 并没有解决高维距离本身，它只是少算一些候选。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the bottleneck is compute per query, n·d = 1e9 × 512, undoable in 50ms; ANN searches only a candidate subset to bring it down to milliseconds.",
+      "Memory is a real pressure (solved later by sharding/quantization), but even if all vectors were in RAM, distance to each still blows the budget — the bottleneck is compute, not capacity.",
+      "Backwards: exact NN has 100% recall; ANN trades recall for speed, so it is slightly lower (about 0.85-0.95).",
+      "The curse of dimensionality affects distance separability, not whether you can compute it; ANN does not fix high-dim distance, it just evaluates fewer candidates."
+    ],
+    "termDefinitions": [
+      { "term": "ANN", "fullName": "Approximate Nearest Neighbor", "meaning": "近似最近邻检索：不保证找到最优，但只搜候选子集，用少量召回损失换巨大速度提升。", "meaningEn": "ANN (Approximate Nearest Neighbor) search returns near-best matches by scanning only a candidate subset, trading a little recall for large speedups." },
+      { "term": "CLIP", "fullName": "Contrastive Language-Image Pre-training", "meaning": "把图片和文本映射到同一向量空间的模型，这里用它给每个商品生成 512 维向量。", "meaningEn": "CLIP (Contrastive Language-Image Pre-training) maps images and text into a shared vector space; here it encodes each product into a 512-dim vector." },
+      { "term": "FLOPs", "fullName": "Floating Point Operations", "meaning": "浮点运算次数，衡量一次查询的计算量。", "meaningEn": "FLOPs (Floating Point Operations) count the arithmetic a query performs, a measure of compute cost." },
+      { "term": "brute-force exact NN", "meaning": "把 query 和库里每个向量都算一遍距离取最近的，结果精确但慢，O(n·d)。", "meaningEn": "Brute-force exact NN computes distance to every stored vector and takes the closest — exact but slow, O(n·d)." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-002",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-path",
+    "q": "把一次视觉搜索查询在 serving 链路上的处理顺序排好：",
+    "q_en": "Order the stages a visual-search query passes through in the serving path:",
+    "steps": [
+      "聚合器(aggregator)把各分片的局部 top-k 合并成全局 top-k",
+      "用 CLIP 把上传图片编码成 512 维 query 向量",
+      "对返回的 top-k 做 NSFW 过滤后返回结果",
+      "把 query 向量广播到所有分片，每个分片做 ANN 检索返回局部 top-k"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "核心链路是：编码 query → 广播到分片并各自 ANN 检索 → 聚合器合并全局 top-k → NSFW 过滤 → 返回。检索在前、安全过滤在后，因为过滤只对已召回的少量候选做，省算力。",
+    "why_en": "The path is: encode the query, broadcast to shards for ANN retrieval, merge to a global top-k in the aggregator, then NSFW-filter and return, with safety filtering last so it runs only on the few retrieved candidates.",
+    "tags": ["llm-sd", "visual-search", "serving-path"],
+    "diagram": "flowchart LR\n  I[\"上传图片\"] --> E[\"CLIP 编码<br/>512 维向量\"]\n  E --> S[\"广播到各分片<br/>ANN 检索\"]\n  S --> A[\"聚合器<br/>合并全局 top-k\"]\n  A --> N[\"NSFW 过滤\"]\n  N --> R[\"返回结果\"]",
+    "termDefinitions": [
+      { "term": "top-k", "meaning": "相似度最高的前 k 个候选，检索的返回结果。", "meaningEn": "Top-k is the k highest-similarity candidates returned by retrieval." },
+      { "term": "aggregator / 聚合器", "meaning": "一个轻量组件，把各分片各自返回的局部 top-k 归并成一个全局 top-k。", "meaningEn": "The aggregator is a lightweight component that merges each shard's local top-k into one global top-k." },
+      { "term": "NSFW", "fullName": "Not Safe For Work", "meaning": "不适宜内容(色情/暴力等)，视觉相似可能召回这类图，需要单独过滤。", "meaningEn": "NSFW (Not Safe For Work) content like explicit imagery, which visual similarity can surface and must be filtered out." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-003",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "faiss-ivf",
+    "scenario": "用 FAISS IVF+PQ 做十亿级 ANN 索引，需要向面试官解释 IVF 部分到底怎么加速检索。",
+    "scenario_en": "Using FAISS IVF+PQ for billion-scale ANN, you must explain to the interviewer how the IVF part speeds up search.",
+    "q": "FAISS 里的 IVF(倒排文件)是怎么加速检索的？",
+    "q_en": "How does FAISS's IVF (inverted file) speed up retrieval?",
+    "why": "IVF 先用 k-means 把向量空间切成很多 Voronoi 单元(每个有一个中心)；查询时只算 query 落在哪几个单元、只搜最近的 nprobe 个单元里的向量，而不是全库扫。nprobe 越大召回越高但越慢。",
+    "why_en": "IVF partitions the space into Voronoi cells with k-means centroids, and a query only searches the nprobe nearest cells instead of the whole database, with larger nprobe raising recall but latency.",
+    "tags": ["llm-sd", "visual-search", "faiss"],
+    "options": [
+      "把每个向量压成 8-bit 整数再逐一比较，靠低精度加快每次距离计算",
+      "建一个多层图，每个节点连若干近邻，查询时贪心地沿边跳到更近的点",
+      "用 k-means 把空间切成 Voronoi 单元，查询只搜最近的 nprobe 个单元而非全库",
+      "按商品 ID 区间把向量分到不同机器，查询广播到所有机器并行扫描"
+    ],
+    "options_en": [
+      "Compress each vector to 8-bit integers and compare them one by one, speeding distance math via low precision.",
+      "Build a multi-layer graph where each node links to some near neighbors, and greedily hop along edges toward closer points.",
+      "Use k-means to carve the space into Voronoi cells; a query searches only the nprobe nearest cells, not the whole database.",
+      "Split vectors across machines by item-ID range and broadcast the query to all machines for parallel scanning."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "这是 PQ(乘积量化)在做的事，负责压内存；IVF 负责剪枝搜索空间，两者在 FAISS 里配合但职责不同。",
+      "这是 HNSW 的图遍历机制，不是 IVF；IVF 靠单元划分做剪枝，不建图。",
+      "对；IVF 把全库搜索变成'只搜 query 附近几个单元'，nprobe 是召回-延迟的旋钮。",
+      "这是数据并行分片(部署层)，跟 IVF 索引结构无关；IVF 是单机内部的剪枝方法。"
+    ],
+    "optionExplanations_en": [
+      "That is what PQ (Product Quantization) does for memory; IVF prunes the search space — they cooperate in FAISS but do different jobs.",
+      "That is HNSW's graph traversal, not IVF; IVF prunes via cell partitioning and builds no graph.",
+      "Correct — IVF turns a full scan into 'search only a few cells near the query', with nprobe as the recall-latency knob.",
+      "That is data-parallel sharding at the deployment layer, unrelated to the IVF index structure, which is an in-machine pruning method."
+    ],
+    "termDefinitions": [
+      { "term": "FAISS", "fullName": "Facebook AI Similarity Search", "meaning": "Meta 开源的向量相似检索库，支持 IVF、PQ 等多种 ANN 索引。", "meaningEn": "FAISS (Facebook AI Similarity Search) is Meta's open-source vector-similarity library supporting IVF, PQ, and other ANN indexes." },
+      { "term": "IVF", "fullName": "Inverted File index", "meaning": "用 k-means 把空间分成 Voronoi 单元，查询只搜最近的若干单元来剪枝。", "meaningEn": "IVF (Inverted File index) partitions space into Voronoi cells via k-means so a query searches only the nearest cells." },
+      { "term": "Voronoi 单元 / nprobe", "meaning": "Voronoi 单元是离某个 k-means 中心最近的那片空间；nprobe 是查询时要搜的最近单元个数。", "meaningEn": "A Voronoi cell is the region closest to a k-means centroid; nprobe is how many nearest cells a query scans." },
+      { "term": "PQ", "fullName": "Product Quantization", "meaning": "把向量切成子段分别量化压缩，大幅降内存，是 IVF+PQ 里管内存的部分。", "meaningEn": "PQ (Product Quantization) splits a vector into subvectors and quantizes each to shrink memory — the memory half of IVF+PQ." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-004",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "product-quantization",
+    "scenario": "10 亿个 512 维 float32 向量，每个原始占 512×4=2048 字节，全放内存约 2TB，单机放不下。",
+    "scenario_en": "A billion 512-dim float32 vectors take 512×4 = 2048 bytes each, about 2TB total — too big for one machine's RAM.",
+    "q": "PQ(乘积量化)把每个向量压到约 64 字节，带来什么设计后果？",
+    "q_en": "PQ compresses each vector to about 64 bytes — what is the design consequence?",
+    "why": "2048B → ~64B 是约 32× 压缩，10 亿向量从 ~2TB 降到 ~64GB，从而能整个索引塞进单机内存做毫秒级检索。代价是量化有损，召回略降(FAISS IVF+PQ ≈ 0.85 recall@10)。",
+    "why_en": "2048B to about 64B is roughly 32x compression, dropping a billion vectors from about 2TB to about 64GB so the whole index fits in RAM for millisecond search, at the cost of lossy quantization lowering recall to about 0.85 recall@10.",
+    "tags": ["llm-sd", "visual-search", "quantization"],
+    "options": [
+      "压缩后精度无损，召回率和暴力精确 NN 完全一致，是纯赚不亏的优化",
+      "约 32× 压缩把 10 亿向量从 ~2TB 降到 ~64GB，能塞进单机内存，代价是量化有损、召回略降",
+      "压缩主要为了省网络带宽，让 query 向量在分片间传输更快，跟内存无关",
+      "压缩后向量维度从 512 降到 64，模型需要重新训练 CLIP 编码器"
+    ],
+    "options_en": [
+      "Compression is lossless, recall matches brute-force exact NN exactly, a pure win with no downside.",
+      "About 32x compression drops a billion vectors from about 2TB to about 64GB to fit in one machine's RAM, at the cost of lossy quantization lowering recall.",
+      "Compression mainly saves network bandwidth so query vectors travel faster between shards, unrelated to memory.",
+      "Compression reduces vector dimensionality from 512 to 64, so the CLIP encoder must be retrained."
+    ],
+    "answer": [1],
+    "termDefinitions": [
+      { "term": "PQ", "fullName": "Product Quantization", "meaning": "把 512 维向量切成若干子向量，各自量化成小码本索引，2048B 压到约 64B。", "meaningEn": "PQ (Product Quantization) splits a 512-dim vector into subvectors and quantizes each into a small codebook index, shrinking 2048B to about 64B." },
+      { "term": "recall@10", "meaning": "返回的前 10 个里含多少真正相关项的比例，衡量 ANN 近似质量。", "meaningEn": "Recall@10 is the fraction of truly relevant items among the top 10 returned, gauging ANN approximation quality." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "同样 10 亿 × 512 维、50ms SLO，要在 FAISS IVF+PQ、ScaNN、HNSW 三种 ANN 索引里对比取舍。",
+    "scenario_en": "Same billion × 512-dim under a 50ms SLO, comparing three ANN indexes: FAISS IVF+PQ, ScaNN, and HNSW.",
+    "q": "这三种 ANN 索引在召回、延迟、内存上的核心差异是什么？",
+    "q_en": "How do these three ANN indexes differ on recall, latency, and memory?",
+    "why": "三者是一条帕累托曲线：FAISS IVF+PQ 内存最省(~64GB)、召回最低(~0.85)；ScaNN 用各向异性量化在同延迟拿更高召回(~0.90，~80GB)；HNSW 召回最高(~0.95)但存全精度向量+图边，内存约 10×(~600GB)、延迟也更高(~5ms)。",
+    "why_en": "They form a Pareto curve: FAISS IVF+PQ is cheapest on memory (about 64GB) and lowest recall (about 0.85), ScaNN gets higher recall at the same latency via anisotropic quantization (about 0.90, 80GB), and HNSW has the highest recall (about 0.95) but stores full-precision vectors plus graph edges for about 10x memory (about 600GB) and higher latency.",
+    "tags": ["llm-sd", "visual-search", "ann"],
+    "tradeoff": "FAISS(省内存低召回) vs ScaNN(平衡) vs HNSW(高召回但内存~10×、延迟更高)",
+    "options": [
+      "三者召回和内存几乎相同，只有延迟略有差别，选哪个基本无所谓",
+      "HNSW 内存最省因为它压缩得最狠，FAISS 内存最大因为它存全精度向量",
+      "FAISS 召回最高、HNSW 召回最低，ScaNN 介于两者之间",
+      "FAISS 最省内存(~64GB)但召回最低，HNSW 召回最高(~0.95)但内存约 10×，ScaNN 居中平衡"
+    ],
+    "options_en": [
+      "All three have nearly identical recall and memory with only slight latency differences, so the choice barely matters.",
+      "HNSW uses the least memory because it compresses the hardest, and FAISS uses the most because it stores full-precision vectors.",
+      "FAISS has the highest recall and HNSW the lowest, with ScaNN in between.",
+      "FAISS is cheapest on memory (about 64GB) but lowest recall, HNSW has the highest recall (about 0.95) but about 10x memory, and ScaNN sits in the balanced middle."
+    ],
+    "answer": [3],
+    "table": {
+      "headers": ["索引", "recall@10", "延迟", "内存/10亿", "何时选"],
+      "rows": [
+        ["FAISS IVF+PQ", "~0.85", "~2ms", "~64GB", "内存受限十亿级"],
+        ["ScaNN", "~0.90", "~2ms", "~80GB", "召回-延迟平衡"],
+        ["HNSW", "~0.95", "~5ms", "~600GB", "召回关键、亚十亿"]
+      ]
+    },
+    "optionExplanations": [
+      "差异恰恰很大：内存从 64GB 到 600GB 差约 10×，召回从 0.85 到 0.95，这正是选型的核心。",
+      "反了：HNSW 存全精度向量+图边所以内存最大(~600GB)，FAISS 靠 PQ 量化最省(~64GB)。",
+      "反了：HNSW 召回最高(~0.95)，FAISS 最低(~0.85)——图索引比量化损失小。",
+      "对；这是一条帕累托曲线，按内存预算和召回要求在三点里选，没有普适最优解。"
+    ],
+    "optionExplanations_en": [
+      "The differences are large: memory spans about 10x from 64GB to 600GB and recall from 0.85 to 0.95 — the crux of the choice.",
+      "Backwards: HNSW stores full-precision vectors plus graph edges so it uses the most memory (about 600GB); FAISS is cheapest via PQ (about 64GB).",
+      "Backwards: HNSW has the highest recall (about 0.95) and FAISS the lowest (about 0.85) — a graph index loses less than quantization.",
+      "Correct — it is a Pareto curve; pick among the three by memory budget and recall need, with no universally correct answer."
+    ],
+    "termDefinitions": [
+      { "term": "ScaNN", "fullName": "Scalable Nearest Neighbors", "meaning": "Google 的 ANN 库，用各向异性量化在同延迟下比 FAISS 拿更高召回。", "meaningEn": "ScaNN (Scalable Nearest Neighbors) is Google's ANN library that gets higher recall than FAISS at the same latency via anisotropic quantization." },
+      { "term": "HNSW", "fullName": "Hierarchical Navigable Small World", "meaning": "多层近邻图索引，贪心跳边检索，召回高但存全精度向量+边、内存大。", "meaningEn": "HNSW (Hierarchical Navigable Small World) is a multi-layer neighbor-graph index with greedy traversal — high recall but heavy memory from storing full vectors plus edges." },
+      { "term": "帕累托曲线 / Pareto", "meaning": "一组'各有取舍、谁也不全面碾压谁'的方案，改善一维必牺牲另一维。", "meaningEn": "A Pareto curve is a set of options where improving one dimension costs another, with no single dominating choice." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-006",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "10 亿商品、内存预算紧、要求 50ms 内返回，召回率 0.85 已能满足业务，索引要能整个放进单机内存。",
+    "scenario_en": "A billion products, tight memory budget, 50ms return; recall of 0.85 already satisfies the business, and the index must fit in one machine's RAM.",
+    "q": "内存受限的十亿级检索，该选哪种 ANN 索引？",
+    "q_en": "For memory-constrained billion-scale retrieval, which ANN index fits?",
+    "why": "内存是硬约束时选 FAISS IVF+PQ：PQ 把每向量压到 ~64B，10 亿只占 ~64GB，能塞进单机，~2ms、~0.85 召回够用。HNSW 召回更高但要 ~600GB，内存预算直接否掉它。",
+    "why_en": "When memory is the hard constraint, pick FAISS IVF+PQ: PQ shrinks each vector to about 64B so a billion fit in about 64GB on one machine at about 2ms and 0.85 recall, while HNSW's higher recall needs about 600GB and is ruled out by budget.",
+    "tags": ["llm-sd", "visual-search", "faiss"],
+    "tradeoff": "FAISS IVF+PQ(省内存、召回够用) vs HNSW(召回更高但内存~10×)",
+    "options": [
+      "FAISS IVF+PQ——PQ 压到 ~64GB 能进单机内存，~2ms、0.85 召回满足业务",
+      "HNSW——召回 0.95 最高，无论内存多少都应优先追求最高召回",
+      "暴力精确 NN——既然要省内存就别建索引，直接线性扫描最省空间",
+      "ScaNN——不管内存预算多紧都比 FAISS 好，因为召回更高一点"
+    ],
+    "options_en": [
+      "FAISS IVF+PQ — PQ shrinks it to about 64GB to fit one machine's RAM at about 2ms and 0.85 recall, which meets the business.",
+      "HNSW — its 0.95 recall is highest, and you should always chase maximum recall regardless of memory.",
+      "Brute-force exact NN — to save memory skip the index and linear-scan, which uses the least space.",
+      "ScaNN — it beats FAISS no matter how tight the memory budget because its recall is a bit higher."
+    ],
+    "answer": [0],
+    "whenOtherWins": "如果召回是硬指标(如医疗/安全检索不能漏)且规模在亚十亿、内存预算充足，就该选 HNSW 换那 ~0.95 的召回。",
+    "whenOtherWins_en": "If recall is a hard requirement (medical/safety search that can't miss) at sub-billion scale with ample memory, pick HNSW for its about 0.95 recall.",
+    "optionExplanations": [
+      "对；PQ 的 32× 压缩正是为内存受限场景设计的，0.85 召回满足业务时它是最省的落点。",
+      "召回不是免费的：HNSW 要 ~600GB，内存预算是硬约束时它直接放不下，追最高召回反而落地不了。",
+      "线性扫描才最费时间：10 亿×512 维每查询 5120 亿次运算，50ms 内做不完，省内存但违反 SLO。",
+      "ScaNN 内存(~80GB)比 FAISS 大、召回只高一点点，内存紧时 FAISS 才是更贴约束的落点。"
+    ],
+    "optionExplanations_en": [
+      "Correct — PQ's 32x compression is built for memory-constrained cases, and 0.85 recall meeting the business makes it the cheapest fit.",
+      "Recall is not free: HNSW needs about 600GB and simply will not fit when memory is the hard constraint, so chasing max recall fails to ship.",
+      "Linear scan is the slowest: a billion 512-dim dot products is 512 billion FLOPs per query, undoable in 50ms — it saves memory but breaks the SLO.",
+      "ScaNN uses more memory (about 80GB) for only slightly higher recall, so under tight memory FAISS is the closer fit to the constraint."
+    ],
+    "termDefinitions": [
+      { "term": "FAISS IVF+PQ", "meaning": "FAISS 的组合索引：IVF 剪枝搜索空间，PQ 量化压内存，适合内存受限的十亿级检索。", "meaningEn": "FAISS IVF+PQ combines IVF pruning with PQ compression, suited to memory-constrained billion-scale search." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ann-index-choice",
+    "scenario": "一个 8000 万(亚十亿)的高价值目录，漏检代价很高、要求 ~0.95 召回，内存预算充足、可接受 ~5ms 检索。",
+    "scenario_en": "An 80M (sub-billion) high-value catalog where misses are costly, requiring about 0.95 recall, with ample memory and about 5ms retrieval acceptable.",
+    "q": "召回关键、亚十亿规模、内存不紧张，该选哪种索引？",
+    "q_en": "Recall-critical, sub-billion scale, ample memory — which index?",
+    "why": "召回是硬指标且规模不到十亿时选 HNSW：多层图检索给 ~0.95 召回，代价是存全精度向量+图边、内存约 10×、延迟 ~5ms。规模没到十亿，600GB 级内存可承受，值得用内存换召回。",
+    "why_en": "When recall is a hard requirement at sub-billion scale, pick HNSW: its multi-layer graph gives about 0.95 recall at the cost of about 10x memory and about 5ms, and at sub-billion scale that memory is affordable, trading memory for recall.",
+    "tags": ["llm-sd", "visual-search", "hnsw"],
+    "tradeoff": "HNSW(高召回但内存~10×、延迟高) vs FAISS(省内存但召回~0.85)",
+    "options": [
+      "FAISS IVF+PQ——任何场景都该优先省内存，召回 0.85 也能凑合用",
+      "逻辑回归重排——先粗召回再用简单模型补召回率，不需要换索引",
+      "HNSW——多层图给 ~0.95 召回，亚十亿规模下 ~600GB 内存可承受，值得用内存换召回",
+      "把 nprobe 调到最大的 FAISS——强行提升召回，效果和 HNSW 等价且更省内存"
+    ],
+    "options_en": [
+      "FAISS IVF+PQ — always prioritize saving memory, and 0.85 recall is good enough anywhere.",
+      "Logistic-regression re-ranking — coarse-retrieve then patch recall with a simple model, no index change needed.",
+      "HNSW — its multi-layer graph gives about 0.95 recall, and at sub-billion scale about 600GB is affordable, worth trading memory for recall.",
+      "FAISS with nprobe cranked to max — force recall up to match HNSW while using less memory."
+    ],
+    "answer": [2],
+    "whenOtherWins": "如果目录涨到十亿级或内存预算收紧，HNSW 的 ~600GB 变得昂贵，就该退回 FAISS IVF+PQ 用召回换内存。",
+    "whenOtherWins_en": "If the catalog grows to billions or memory tightens, HNSW's about 600GB gets expensive and you fall back to FAISS IVF+PQ, trading recall for memory.",
+    "optionExplanations": [
+      "召回是这题的硬指标，0.85 会漏掉高价值命中；内存充足时不该为省内存牺牲召回。",
+      "重排只能重排已召回的结果，补不回检索阶段就漏掉的项——召回瓶颈在索引，不在重排。",
+      "对；亚十亿规模让 HNSW 的大内存代价可控，此时它的 0.95 召回正好贴住'不能漏'的约束。",
+      "调大 nprobe 能提点召回但要牺牲延迟，且量化损失的上限摆在那，追不平 HNSW 的图索引精度。"
+    ],
+    "optionExplanations_en": [
+      "Recall is the hard requirement here, and 0.85 drops high-value hits; with ample memory you should not sacrifice recall to save it.",
+      "Re-ranking only reorders already-retrieved results and cannot recover items missed at retrieval — the recall bottleneck is the index, not re-ranking.",
+      "Correct — sub-billion scale keeps HNSW's memory cost manageable, so its 0.95 recall matches the 'must not miss' constraint.",
+      "Raising nprobe lifts recall a little but costs latency, and the quantization-loss ceiling still can't match HNSW's graph-index accuracy."
+    ],
+    "termDefinitions": [
+      { "term": "HNSW", "fullName": "Hierarchical Navigable Small World", "meaning": "多层近邻图索引，召回高但存全精度向量+边、内存大，适合亚十亿的召回关键场景。", "meaningEn": "HNSW (Hierarchical Navigable Small World) is a high-recall neighbor-graph index with heavy memory, suited to recall-critical sub-billion cases." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "scann-anisotropic",
+    "scenario": "ScaNN 号称在与 FAISS 相同延迟下拿到更高召回(~0.90 vs ~0.85)，要解释它凭什么。",
+    "scenario_en": "ScaNN claims higher recall than FAISS at the same latency (about 0.90 vs 0.85); explain what enables it.",
+    "q": "ScaNN 靠什么在同延迟下比 FAISS 拿到更高召回？",
+    "q_en": "What lets ScaNN achieve higher recall than FAISS at the same latency?",
+    "why": "ScaNN 用各向异性(anisotropic)量化：量化误差不是各方向一视同仁，而是更保护对内积/相似度影响大的方向。相比 FAISS PQ 的各向同性量化，同样码本预算下相似度排序更准，所以同延迟召回更高。",
+    "why_en": "ScaNN uses anisotropic quantization that shapes error to protect directions that matter most for the inner product, so with the same codebook budget its similarity ranking is more accurate than FAISS's isotropic PQ, giving higher recall at equal latency.",
+    "tags": ["llm-sd", "visual-search", "scann"],
+    "options": [
+      "它用 GPU 加速暴力精确检索，所以召回天然是 100%",
+      "它用各向异性量化，优先保护对相似度影响大的方向，同延迟下排序更准",
+      "它把向量维度从 512 升到 1024，信息更多所以召回更高",
+      "它建了和 HNSW 一样的多层图，本质是图索引换皮"
+    ],
+    "options_en": [
+      "It uses GPUs for brute-force exact search, so recall is naturally 100%.",
+      "It uses anisotropic quantization that protects directions most affecting similarity, giving more accurate ranking at equal latency.",
+      "It raises vectors from 512 to 1024 dimensions for more information and higher recall.",
+      "It builds the same multi-layer graph as HNSW, essentially a re-skinned graph index."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "ScaNN 仍是近似检索、不是暴力精确，它的召回是 ~0.90 而非 100%。",
+      "对；关键是量化误差按方向加权——保护相似度敏感方向，等于把有限码本花在刀刃上。",
+      "升维不是 ScaNN 做的事，也不会凭空增加信息；它优化的是量化方式不是维度。",
+      "ScaNN 是量化型索引(像 FAISS 一族)，不是图索引；它和 HNSW 是不同技术路线。"
+    ],
+    "optionExplanations_en": [
+      "ScaNN is still approximate, not brute-force exact, so its recall is about 0.90, not 100%.",
+      "Correct — the key is direction-weighted quantization error that protects similarity-sensitive directions, spending a limited codebook where it counts.",
+      "Raising dimensions is not what ScaNN does and adds no information; it optimizes the quantization method, not dimensionality.",
+      "ScaNN is a quantization index (FAISS family), not a graph index, so it is a different route from HNSW."
+    ],
+    "termDefinitions": [
+      { "term": "各向异性量化 / anisotropic quantization", "meaning": "量化误差按方向区别对待，重点压小对相似度/内积影响大的方向的误差。", "meaningEn": "Anisotropic quantization weights error by direction, minimizing it most along directions that affect the inner product / similarity." },
+      { "term": "各向同性量化 / isotropic", "meaning": "对所有方向一视同仁地量化(FAISS PQ)，不区分哪个方向对相似度更关键。", "meaningEn": "Isotropic quantization (FAISS PQ) treats all directions equally, ignoring which matter most for similarity." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "hnsw-memory",
+    "scenario": "同样 10 亿向量，HNSW 索引占约 600GB，是 FAISS IVF+PQ(~64GB)的约 10 倍。",
+    "scenario_en": "For the same billion vectors, an HNSW index takes about 600GB, roughly 10x FAISS IVF+PQ's about 64GB.",
+    "q": "HNSW 内存为什么比 FAISS 大约 10 倍？",
+    "q_en": "Why does HNSW use roughly 10x the memory of FAISS?",
+    "why": "HNSW 不量化，存的是全精度向量(每个 512×4=2048B)，还额外存每个节点到近邻的图边。FAISS IVF+PQ 把向量压到 ~64B 且不建图。全精度+图边 vs 量化+无图，就是这 ~10× 差距的来源。",
+    "why_en": "HNSW keeps full-precision vectors (512×4 = 2048B each) plus per-node graph edges, while FAISS IVF+PQ quantizes vectors to about 64B and builds no graph; full-precision-plus-edges versus quantized-no-graph is the source of the roughly 10x gap.",
+    "tags": ["llm-sd", "visual-search", "hnsw"],
+    "options": [
+      "HNSW 把每个向量存了 10 份副本做冗余，所以内存翻 10 倍",
+      "HNSW 存全精度向量(2048B)外加每节点的图边，而 FAISS 量化到 ~64B 且不建图",
+      "HNSW 需要为每个查询缓存中间结果，内存随并发线性增长",
+      "HNSW 用更高维的向量(5120 维)所以占更多空间"
+    ],
+    "options_en": [
+      "HNSW stores 10 replicas of each vector for redundancy, so memory is 10x.",
+      "HNSW keeps full-precision vectors (2048B) plus per-node graph edges, while FAISS quantizes to about 64B and builds no graph.",
+      "HNSW must cache per-query intermediate results, so memory grows linearly with concurrency.",
+      "HNSW uses higher-dimensional vectors (5120-dim), so it takes more space."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "副本是部署层的容错策略(2-3 副本)，跟单个索引的结构无关，也解释不了 ~10× 的量级。",
+      "对；不量化 = 每向量大 32×，再加图边开销，两项叠加就是 ~10× 内存的来源。",
+      "查询期中间结果是临时栈内存，不是索引常驻内存，不会造成 10× 的索引体积。",
+      "HNSW 用的还是 512 维原向量，没升维；差别在'存原始精度'不是'维度更高'。"
+    ],
+    "optionExplanations_en": [
+      "Replicas are a deployment fault-tolerance strategy (2-3 copies), unrelated to a single index's structure and too small to explain the roughly 10x.",
+      "Correct — no quantization makes each vector about 32x larger, and graph edges add more; together they explain the roughly 10x memory.",
+      "Per-query intermediate results are transient stack memory, not resident index memory, and don't create 10x index size.",
+      "HNSW still uses the 512-dim original vectors with no dimensionality increase; the difference is storing full precision, not higher dimensions."
+    ],
+    "termDefinitions": [
+      { "term": "全精度向量 / full-precision", "meaning": "未经量化压缩的原始 float32 向量，每 512 维占 2048 字节。", "meaningEn": "A full-precision vector is the original uncompressed float32 vector, 2048 bytes for 512 dims." },
+      { "term": "图边 / graph edges", "meaning": "HNSW 每个节点连向若干近邻的连接，检索时沿边贪心跳转，额外占内存。", "meaningEn": "Graph edges are HNSW's per-node links to near neighbors used for greedy traversal, adding memory overhead." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sharding",
+    "scenario": "FAISS IVF+PQ 索引已压到 ~64GB，理论上单机内存放得下，但要对外稳定服务十亿级检索。",
+    "scenario_en": "The FAISS IVF+PQ index fits in about 64GB, technically loadable on one machine, but must reliably serve billion-scale retrieval in production.",
+    "q": "既然 64GB 单机装得下，为什么还要分片(sharding)？",
+    "q_en": "If 64GB fits on one machine, why still shard?",
+    "why": "装得下不等于服务得了：单机受并发、OS 开销、单点故障限制，扛不住生产 QPS 也没有容错。分片把索引摊到多机(吞吐线性扩展)，每片配 2-3 副本(容错+负载均衡)。",
+    "why_en": "Fitting is not serving: a single node is limited by concurrency, OS overhead, and single-point failure, so you shard across machines for linear throughput and add 2-3 replicas per shard for fault tolerance and load balancing.",
+    "tags": ["llm-sd", "visual-search", "sharding"],
+    "tradeoff": "分片+副本(吞吐可扩、容错) vs 单机(装得下但并发/容错受限)",
+    "options": [
+      "为了省内存——分片后每片更小，总内存占用会显著下降",
+      "为了提高召回率——把索引拆开后每片的近似误差会变小",
+      "单机受并发/OS 开销/单点故障限制，扛不住生产 QPS 也无容错，分片摊到多机并配副本",
+      "分片纯粹是行业惯例，技术上单机完全够用，只是为了看起来更专业"
+    ],
+    "options_en": [
+      "To save memory — smaller shards mean total memory usage drops significantly.",
+      "To improve recall — splitting the index reduces each shard's approximation error.",
+      "A single node is limited by concurrency, OS overhead, and single-point failure with no fault tolerance, so shard across machines and add replicas.",
+      "Sharding is purely industry convention; one machine is technically enough, it just looks more professional."
+    ],
+    "answer": [2],
+    "whenOtherWins": "如果只是内部低 QPS 的原型或离线批量检索，没有实时 SLO 和高可用要求，单机不分片反而更简单省事。",
+    "whenOtherWins_en": "For a low-QPS internal prototype or offline batch retrieval with no real-time SLO or HA requirement, a single unsharded node is simpler.",
+    "optionExplanations": [
+      "分片不省内存：总数据量不变，反而因副本(2-3×)和每机 OS 开销让总内存上升。",
+      "分片不改召回：每片仍是同样的 ANN 近似，合并后召回和单机相当，分片解决的是吞吐/容错。",
+      "对；核心是可服务性——并发压力、OS 开销、单点故障，都要靠多机分片+副本解决。",
+      "不是面子工程：单机确实扛不住生产并发也没容错，分片是可用性硬需求。"
+    ],
+    "optionExplanations_en": [
+      "Sharding does not save memory: total data is unchanged and replicas (2-3x) plus per-machine OS overhead raise total memory.",
+      "Sharding does not change recall: each shard runs the same ANN approximation and merged recall matches a single node — sharding solves throughput and fault tolerance.",
+      "Correct — the core is serviceability: concurrency pressure, OS overhead, and single-point failure all require multi-machine shards plus replicas.",
+      "Not vanity: one node genuinely cannot handle production concurrency and has no fault tolerance, so sharding is a hard availability requirement."
+    ],
+    "termDefinitions": [
+      { "term": "sharding / 分片", "meaning": "把大索引拆到多台机器上，每台只存一部分，靠并行扩展吞吐。", "meaningEn": "Sharding splits a large index across machines, each holding a slice, to scale throughput in parallel." },
+      { "term": "replica / 副本", "meaning": "同一分片的多份拷贝，用于容错和负载均衡，一片挂了别的顶上。", "meaningEn": "A replica is a copy of a shard for fault tolerance and load balancing, so one failing shard is covered by another." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "sharding-strategy",
+    "scenario": "十亿索引要分片，在'数据并行分片'和'IVF-aware 分片'之间选一种做默认策略。",
+    "scenario_en": "The billion-vector index must be sharded; choose a default between data-parallel sharding and IVF-aware sharding.",
+    "q": "数据并行分片 vs IVF-aware 分片，核心差异和默认选择是什么？",
+    "q_en": "Data-parallel vs IVF-aware sharding: what is the core difference and default choice?",
+    "why": "数据并行按 ID 区间切、每查询广播到所有分片各取局部 top-k 再聚合，扇出大但简单、吞吐线性扩、无热点，是更安全的默认。IVF-aware 把 Voronoi 单元分到特定分片、只路由到最近 nprobe 单元所在分片，扇出小但要路由层且数据倾斜会造成热点分片。",
+    "why_en": "Data-parallel splits by ID range and broadcasts every query to all shards for local top-k then aggregates — high fan-out but simple, linearly scalable, no hotspots, the safer default; IVF-aware assigns Voronoi cells to shards and routes only to the nprobe-nearest ones — less fan-out but needs a routing layer and skew creates hot shards.",
+    "tags": ["llm-sd", "visual-search", "sharding-strategy"],
+    "tradeoff": "数据并行(扇出大但简单无热点) vs IVF-aware(扇出小但需路由层、易热点)",
+    "options": [
+      "IVF-aware 是更安全的默认，因为扇出小所以永远更快也更稳",
+      "两者完全等价，随便选一个都行，性能和运维成本没差别",
+      "数据并行按 ID 广播到所有分片再聚合，简单无热点、是更安全默认；IVF-aware 只路由到最近单元所在分片，省扇出但需路由层、易热点",
+      "数据并行要求每台机器存全量索引副本，所以内存开销比 IVF-aware 大得多"
+    ],
+    "options_en": [
+      "IVF-aware is the safer default because less fan-out always means faster and more stable.",
+      "The two are fully equivalent; pick either, with no difference in performance or ops cost.",
+      "Data-parallel broadcasts by ID to all shards then aggregates — simple, no hotspots, the safer default; IVF-aware routes only to shards holding the nearest cells — less fan-out but needs a routing layer and risks hot shards.",
+      "Data-parallel requires every machine to store a full index replica, so its memory overhead far exceeds IVF-aware."
+    ],
+    "answer": [2],
+    "table": {
+      "headers": ["策略", "扇出", "路由层", "热点风险", "何时选"],
+      "rows": [
+        ["数据并行", "全分片广播", "不需要", "无", "默认/倾斜目录"],
+        ["IVF-aware", "仅最近单元", "需要", "倾斜易热点", "分布均匀省扇出"]
+      ]
+    },
+    "optionExplanations": [
+      "扇出小不等于更稳：IVF-aware 在真实倾斜目录下会把查询挤到少数热点分片，反而更不稳。",
+      "两者运维和风险差别很大：一个无需路由层无热点，一个要路由层且怕倾斜。",
+      "对；数据并行简单、吞吐线性、无热点是它成为安全默认的原因，IVF-aware 省扇出但引入路由和热点风险。",
+      "反了：数据并行按 ID 区间切分,每片只存一部分,不是全量副本;它的代价是扇出大不是内存大。"
+    ],
+    "optionExplanations_en": [
+      "Less fan-out is not more stable: on a real skewed catalog IVF-aware funnels queries into a few hot shards, making it less stable.",
+      "Their ops and risk differ a lot: one needs no routing layer and has no hotspots, the other needs routing and fears skew.",
+      "Correct — data-parallel's simplicity, linear throughput, and no hotspots make it the safe default, while IVF-aware saves fan-out but adds routing and hotspot risk.",
+      "Backwards: data-parallel splits by ID range so each shard holds only a slice, not a full replica; its cost is fan-out, not memory."
+    ],
+    "termDefinitions": [
+      { "term": "数据并行分片 / data-parallel sharding", "meaning": "按商品 ID 区间把索引切到 N 个分片,查询广播到全部,各返回局部 top-k 由聚合器合并。", "meaningEn": "Data-parallel sharding splits the index by item-ID range across N shards, broadcasts every query, and merges each shard's local top-k in an aggregator." },
+      { "term": "IVF-aware 分片", "meaning": "把 IVF 的 Voronoi 单元分配到特定分片,查询只路由到最近 nprobe 单元所在的分片,减少扇出。", "meaningEn": "IVF-aware sharding assigns IVF Voronoi cells to specific shards and routes a query only to the shards holding its nearest nprobe cells, cutting fan-out." },
+      { "term": "扇出 / fan-out", "meaning": "一次查询要发给多少个分片,扇出大意味着更多机器参与、聚合成本更高。", "meaningEn": "Fan-out is how many shards a single query hits; higher fan-out means more machines involved and higher merge cost." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-012",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "sharding-hotspot",
+    "scenario": "真实时尚目录里,黑色连衣裙这类商品的向量高度聚集在少数 Voronoi 单元里(embedding 聚簇)。",
+    "scenario_en": "In a real fashion catalog, items like black dresses cluster their vectors into a few Voronoi cells (embedding clustering).",
+    "q": "为什么这种数据倾斜会让 IVF-aware 分片的扇出优势落空?",
+    "q_en": "Why does this data skew negate IVF-aware sharding's fan-out advantage?",
+    "why": "IVF-aware 靠'把单元分到不同分片'来省扇出,但真实目录里向量在少数热门单元聚簇,这些单元所在分片被大量查询集中命中→热点分片过载。倾斜抹掉了省扇出的收益,所以数据并行更安全。",
+    "why_en": "IVF-aware saves fan-out by mapping cells to shards, but real catalogs cluster vectors into a few popular cells, so the shards holding them get hammered by most queries into hot shards, erasing the fan-out savings and making data-parallel safer.",
+    "tags": ["llm-sd", "visual-search", "sharding-strategy"],
+    "options": [
+      "倾斜让某些 Voronoi 单元被大量查询集中命中→对应分片成热点过载,省扇出的收益被抹掉",
+      "倾斜会让索引召回率直接掉到 0,和分片策略无关",
+      "倾斜让向量维度变高,超出单机内存,必须换 HNSW",
+      "倾斜其实对 IVF-aware 有利:聚簇越紧,路由越准,扇出越小越好"
+    ],
+    "options_en": [
+      "Skew makes some Voronoi cells absorb most queries, so their shards become overloaded hotspots, erasing the fan-out savings.",
+      "Skew drops index recall straight to 0, unrelated to the sharding strategy.",
+      "Skew raises vector dimensionality beyond single-machine memory, forcing a switch to HNSW.",
+      "Skew actually helps IVF-aware: tighter clustering means more accurate routing and even smaller fan-out."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对;热点分片是倾斜的直接后果——负载压到少数分片上,吞吐和尾延迟都被拖垮,数据并行把负载均摊反而稳。",
+      "倾斜影响的是负载分布不是召回;召回由 ANN 近似质量决定,不会因分布倾斜归零。",
+      "倾斜不改变向量维度,512 维还是 512 维;这跟内存和 HNSW 无关。",
+      "反了:聚簇让流量挤向少数分片造成热点,不是让扇出更优——这正是 IVF-aware 的软肋。"
+    ],
+    "optionExplanations_en": [
+      "Correct — hot shards are the direct result of skew: load concentrates on a few shards, dragging down throughput and tail latency, while data-parallel spreads it evenly.",
+      "Skew affects load distribution, not recall; recall comes from ANN approximation quality and won't hit zero from skew.",
+      "Skew does not change vector dimensionality — 512 stays 512 — so this is unrelated to memory or HNSW.",
+      "Backwards: clustering funnels traffic into a few shards creating hotspots, not smaller fan-out — this is exactly IVF-aware's weakness."
+    ],
+    "termDefinitions": [
+      { "term": "热点分片 / hot shard", "meaning": "被远超均值的查询量集中命中的分片,过载后拖垮吞吐和尾延迟。", "meaningEn": "A hot shard receives far above-average query load, overloading it and hurting throughput and tail latency." },
+      { "term": "embedding 聚簇 / clustering", "meaning": "语义相近的商品(如黑裙)向量在空间里挤成一团,落进少数 Voronoi 单元。", "meaningEn": "Embedding clustering is when semantically similar items pack their vectors together into a few Voronoi cells." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-013",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "shard-replica-count",
+    "scenario": "生产部署要定分片数、副本数,并且聚合器合并 top-k 会占用一部分 50ms 延迟预算。",
+    "scenario_en": "Production must set shard and replica counts, and the aggregator's top-k merge consumes part of the 50ms budget.",
+    "q": "十亿视觉检索的分片/副本数量与聚合延迟的典型量级是多少,对 SLO 意味着什么?",
+    "q_en": "What are typical shard/replica counts and aggregation latency for billion-scale visual retrieval, and what does it mean for the SLO?",
+    "why": "经验量级:20-50 个分片、每片 2-3 副本(容错+负载均衡);聚合器合并各分片 top-k 加 1-3ms。1-3ms 不大但要计入 50ms 预算——它是尾延迟里实打实的一块,选分片数时得留出这份合并开销。",
+    "why_en": "Rules of thumb: 20-50 shards with 2-3 replicas each for fault tolerance and load balancing, and the aggregator's merge adds 1-3ms that counts against the 50ms budget, so it must be budgeted when choosing shard count.",
+    "tags": ["llm-sd", "visual-search", "sharding"],
+    "options": [
+      "20-50 分片、每片 2-3 副本;聚合合并加 1-3ms,要计入 50ms 预算",
+      "1 个分片、100 个副本;聚合零开销,不占延迟预算",
+      "1000+ 分片、无副本;分片越多聚合越快、越省预算",
+      "分片和副本数量对延迟毫无影响,聚合合并可以忽略不计"
+    ],
+    "options_en": [
+      "20-50 shards with 2-3 replicas each; the merge adds 1-3ms that counts against the 50ms budget.",
+      "1 shard with 100 replicas; aggregation has zero overhead and no latency budget.",
+      "1000+ shards with no replicas; more shards make aggregation faster and cheaper.",
+      "Shard and replica counts have no latency impact, and the merge is negligible."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "SLO", "fullName": "Service Level Objective", "meaning": "服务级目标,这里是 50ms 内返回结果的延迟承诺。", "meaningEn": "SLO (Service Level Objective) is the latency promise, here returning results within 50ms." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-014",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "embedding-versioning",
+    "scenario": "升级了 CLIP 编码器到 v2,但索引里存的还是 v1 编码器生成的旧 embedding。查询用 v2 编码,库里是 v1。",
+    "scenario_en": "The CLIP encoder is upgraded to v2, but the index still holds v1 embeddings; queries are v2-encoded while stored vectors are v1.",
+    "q": "v2 query 打到 v1 embedding 索引上,会发生什么、为什么?",
+    "q_en": "What happens when a v2 query hits a v1-embedding index, and why?",
+    "why": "召回质量崩坏:v1 和 v2 是两个不同的向量空间,同一张图在两个空间坐标不同,跨空间算余弦相似度不再反映真实相关性→检索出一堆无关结果。这是 embedding 检索最常见的生产事故,所以换编码器必须整库重建。",
+    "why_en": "Recall collapses because v1 and v2 are different vector spaces where the same image lands at different coordinates, so cross-space cosine similarity no longer reflects relevance and retrieval returns junk — the most common embedding-retrieval production incident, which is why re-encoding requires a full rebuild.",
+    "tags": ["llm-sd", "visual-search", "embedding-versioning"],
+    "options": [
+      "没影响:embedding 版本不同也能正常比相似度,余弦相似度对版本免疫",
+      "召回质量崩坏:v1/v2 是不同向量空间,跨空间余弦相似度不再反映相关性,返回大量无关结果",
+      "延迟翻倍但结果正确:系统会自动把 v2 query 转回 v1 空间再检索",
+      "索引直接报错拒绝服务,不会返回任何结果"
+    ],
+    "options_en": [
+      "No effect: different embedding versions still compare fine, cosine similarity is immune to version.",
+      "Recall collapses: v1/v2 are different vector spaces, so cross-space cosine similarity no longer reflects relevance and returns lots of junk.",
+      "Latency doubles but results stay correct: the system auto-converts the v2 query back to v1 space before searching.",
+      "The index errors out and refuses service, returning nothing."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "余弦相似度不对版本免疫:它假设两向量在同一空间,v1/v2 坐标系不同,相似度就失去意义。",
+      "对;这是空间错配(space misalignment)——同一图在两版编码器里位置不同,跨版本比距离直接失真。",
+      "没有自动回转这回事:v1→v2 是重训出来的非线性映射,无法在查询期廉价逆变换。",
+      "系统不会报错:向量维度一样(512),相似度照算不误,只是算出来的相关性是错的——这种'静默错误'更危险。"
+    ],
+    "optionExplanations_en": [
+      "Cosine similarity is not version-immune: it assumes both vectors share a space, and v1/v2 use different coordinate systems, so similarity loses meaning.",
+      "Correct — this is space misalignment: the same image sits at different positions across encoder versions, so cross-version distance is distorted.",
+      "There is no auto-conversion: v1 to v2 is a retrained nonlinear mapping that can't be cheaply inverted at query time.",
+      "The system does not error: dimensions match (512) so similarity still computes — but the relevance it computes is wrong, and this silent failure is more dangerous."
+    ],
+    "termDefinitions": [
+      { "term": "embedding 空间错配 / space misalignment", "meaning": "不同版本编码器生成的向量处于不同坐标系,跨版本算距离/相似度失去意义。", "meaningEn": "Embedding space misalignment: vectors from different encoder versions live in different coordinate systems, so cross-version distance is meaningless." },
+      { "term": "余弦相似度 / cosine similarity", "meaning": "用两向量夹角衡量相似度,前提是它们在同一向量空间。", "meaningEn": "Cosine similarity measures similarity by the angle between two vectors, assuming they share the same space." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-015",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "blue-green-rebuild",
+    "q": "把 CLIP 编码器升级时的蓝绿(blue-green)零停机重建步骤排好序:",
+    "q_en": "Order the blue-green zero-downtime rebuild steps when upgrading the CLIP encoder:",
+    "steps": [
+      "路由层原子切换:把全部流量切到 v2,排空并下线 v1",
+      "在独立节点上用新编码器离线构建 v2 索引,v1 继续对外服务",
+      "用 golden set 评估 v2 的 recall@k,确认不劣于 v1 再放行"
+    ],
+    "answerOrder": [1, 2, 0],
+    "why": "先离线建 v2(v1 不受影响照常服务)→用 golden set 验证 v2 质量达标→路由层原子切换全部流量到 v2 再排空 v1。这样查询期永远只打到一个自洽版本的索引,零停机且可回滚。",
+    "why_en": "Build v2 offline while v1 keeps serving, validate v2 against a golden set, then atomically flip all traffic to v2 and drain v1, so queries always hit one self-consistent index version with zero downtime and rollback safety.",
+    "tags": ["llm-sd", "visual-search", "blue-green-rebuild"],
+    "diagram": "flowchart LR\n  B[\"1. 离线构建 v2 索引<br/>v1 继续服务\"] --> V[\"2. golden set 验证<br/>recall@k 达标\"]\n  V --> S[\"3. 路由层原子切换<br/>全流量→v2, 排空 v1\"]",
+    "termDefinitions": [
+      { "term": "blue-green / 蓝绿部署", "meaning": "并行跑新旧两套(v1/v2),验证新套达标后路由层一次性切过去,实现零停机替换和快速回滚。", "meaningEn": "Blue-green runs old and new (v1/v2) in parallel and flips the router once the new one is validated, giving zero-downtime swaps and fast rollback." },
+      { "term": "golden set / 黄金评估集", "meaning": "人工标注的查询-结果对,用来在切流前离线验证新索引召回是否达标。", "meaningEn": "A golden set is human-labeled query-result pairs used to validate a new index's recall offline before cutover." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-016",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "blue-green-cost",
+    "scenario": "蓝绿重建期间 v1 和 v2 索引要同时在线(一个服务、一个构建/验证),各占约 64GB × 分片 × 副本。",
+    "scenario_en": "During a blue-green rebuild, v1 and v2 indexes are both online (one serving, one building/validating), each taking about 64GB × shards × replicas.",
+    "q": "蓝绿重建的主要代价是什么,导致了什么运维决策?",
+    "q_en": "What is the main cost of blue-green rebuilds, and what ops decision does it force?",
+    "why": "代价是重建窗口内要双份基础设施(v1+v2 同时在线,约 2× 硬件)。因为太贵,全量重建被攒成每周/两周批量做一次;两次重建之间新增商品先进小 sidecar 索引,不为每个新品触发整库重建。",
+    "why_en": "The cost is 2x infrastructure during the rebuild window (v1 and v2 both online), so full rebuilds are batched weekly or biweekly, and new items between rebuilds go into a small sidecar index instead of triggering a full rebuild each time.",
+    "tags": ["llm-sd", "visual-search", "blue-green-rebuild"],
+    "options": [
+      "代价是查询期延迟翻倍,所以要在夜间低峰重建",
+      "代价是重建期间召回归零,所以只能停机重建",
+      "代价是双份基础设施(~2× 硬件),所以全量重建攒成每周/两周批量做,期间新品进 sidecar 索引",
+      "几乎没代价,可以对每个新增商品实时触发一次全量重建"
+    ],
+    "options_en": [
+      "The cost is doubled query latency, so rebuild during off-peak night hours.",
+      "The cost is recall dropping to zero during rebuild, so you must take downtime.",
+      "The cost is 2x infrastructure, so full rebuilds are batched weekly/biweekly and new items go into a sidecar index in between.",
+      "There is almost no cost, so you can trigger a full rebuild in real time for each new item."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "延迟不翻倍:查询只打 v1(切换后只打 v2),不会同时查两套;代价在硬件成本不在延迟。",
+      "蓝绿的全部意义就是零停机:v1 一直服务到 v2 验证通过才切,召回不会归零。",
+      "对;2× 硬件太贵→批量重建→sidecar 承接增量,这条因果链是蓝绿方案的运维精髓。",
+      "全量重建构建成本高(重编码整库),不可能每来一个新品就重建;增量交给 sidecar。"
+    ],
+    "optionExplanations_en": [
+      "Latency does not double: queries hit only v1 (only v2 after cutover), never both, so the cost is hardware, not latency.",
+      "The whole point of blue-green is zero downtime: v1 serves until v2 passes validation, so recall never hits zero.",
+      "Correct — 2x hardware is expensive, so batch rebuilds and let a sidecar absorb increments — the ops essence of blue-green.",
+      "Full rebuilds are costly (re-encode the whole catalog), so you cannot rebuild per new item; increments go to the sidecar."
+    ],
+    "termDefinitions": [
+      { "term": "sidecar 索引", "meaning": "一个小的旁路索引,承接两次全量重建之间的新增商品;查询时聚合器同时查主索引+sidecar 再合并。", "meaningEn": "A sidecar index is a small side index holding new items between full rebuilds; the aggregator queries the main index plus the sidecar and merges." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sidecar-index",
+    "scenario": "全量重建每周才做一次,但目录每天新增几千商品,这些新品必须尽快可被搜到,又不能为它们触发整库重建。",
+    "scenario_en": "Full rebuilds run weekly, but thousands of new products arrive daily and must be searchable soon without triggering a full rebuild for them.",
+    "q": "两次全量重建之间,怎么让新增商品尽快可搜?",
+    "q_en": "Between full rebuilds, how do you make new products searchable quickly?",
+    "why": "把新品写进一个小 sidecar 索引,查询时聚合器同时查主索引+sidecar 再合并 top-k,对用户透明。这样增量近实时可搜,又把昂贵的全量重建保持在低频批量节奏。",
+    "why_en": "Write new items into a small sidecar index and have the aggregator query the main index plus the sidecar and merge top-k transparently, so increments are near-real-time searchable while expensive full rebuilds stay low-frequency.",
+    "tags": ["llm-sd", "visual-search", "sidecar-index"],
+    "tradeoff": "sidecar 增量索引(近实时可搜、不触发重建) vs 每次都全量重建(新鲜但太贵)",
+    "options": [
+      "每来一批新品就立刻做一次全量蓝绿重建,保证索引始终最新",
+      "新品先放着不管,等下次每周全量重建时一起进索引,期间搜不到",
+      "把新品写进小 sidecar 索引,聚合器同时查主索引+sidecar 合并,增量近实时可搜",
+      "把新品直接插进正在服务的主索引里,边服务边原地增量更新"
+    ],
+    "options_en": [
+      "Trigger a full blue-green rebuild for each batch of new items to keep the index always fresh.",
+      "Leave new items until the next weekly full rebuild folds them in, unsearchable in the meantime.",
+      "Write new items into a small sidecar index and have the aggregator query main plus sidecar and merge, making increments near-real-time searchable.",
+      "Insert new items directly into the live serving main index, updating it in place while serving."
+    ],
+    "answer": [2],
+    "whenOtherWins": "如果新增频率极低(如目录基本静态、每月才加几个),不值得维护 sidecar,直接等下次全量重建更简单。",
+    "whenOtherWins_en": "If new items are very rare (a near-static catalog adding a few per month), a sidecar isn't worth maintaining and waiting for the next full rebuild is simpler.",
+    "optionExplanations": [
+      "全量重建要 2× 硬件、很贵,为每批新品都重建成本爆炸,正是 sidecar 要避免的。",
+      "等一周才可搜对新品体验太差(尤其时尚/上新场景),索引新鲜度滞后不可接受。",
+      "对;sidecar 用一个小索引承接增量,查询透明合并,兼顾新鲜度和重建成本。",
+      "原地更新在服务中的 ANN 索引风险高(并发、结构一致性),生产上更稳的是旁路 sidecar+定期批量并回主索引。"
+    ],
+    "optionExplanations_en": [
+      "Full rebuilds need 2x hardware and are costly, so rebuilding per batch explodes cost — exactly what the sidecar avoids.",
+      "Waiting a week to be searchable is a poor experience for new items (especially fashion/new arrivals), an unacceptable freshness lag.",
+      "Correct — the sidecar holds increments in a small index with transparent merge, balancing freshness and rebuild cost.",
+      "In-place updates to a live ANN index are risky (concurrency, structural consistency); production prefers a side sidecar plus periodic batch merge into the main index."
+    ],
+    "termDefinitions": [
+      { "term": "sidecar 索引", "meaning": "承接增量新品的小旁路索引,查询期与主索引一起被查询并合并结果。", "meaningEn": "A sidecar index is a small side index for incremental new items, queried alongside the main index at query time." },
+      { "term": "索引新鲜度滞后 / freshness lag", "meaning": "新商品从入库到可被搜到之间的时间差,滞后越大越搜不到最新品。", "meaningEn": "Freshness lag is the delay between an item entering the catalog and becoming searchable; larger lag means newer items are missed." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-018",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "version-registry",
+    "scenario": "系统里 embedding、预计算属性标签、文本相关性分数都是随编码器版本生成的,查询期必须保证它们版本一致。",
+    "scenario_en": "Embeddings, precomputed attribute labels, and text-relevance scores are all generated per encoder version, and query time must keep them version-consistent.",
+    "q": "embedding version registry(版本注册表)在系统里起什么作用?",
+    "q_en": "What role does an embedding version registry play?",
+    "why": "版本注册表记录当前生效的编码器版本,并保证 embedding、属性标签、文本相关性分数在查询期用的是同一版本,避免 v2 query 打到 v1 派生数据上的空间错配。它是零停机切换和一致性对齐的控制点。",
+    "why_en": "The registry records the active encoder version and ensures embeddings, attribute labels, and text-relevance scores are all read at the same version at query time, preventing v2-query-on-v1-data misalignment, and it is the control point for consistent cutover.",
+    "tags": ["llm-sd", "visual-search", "version-registry"],
+    "options": [
+      "它缓存热门查询结果,用来降低重复查询的延迟",
+      "它记录生效编码器版本,保证 embedding/属性标签/文本分数查询期版本一致,避免空间错配",
+      "它存储用户历史行为,用于个性化排序",
+      "它是一个限流器,防止查询 QPS 打爆索引"
+    ],
+    "options_en": [
+      "It caches popular query results to cut latency on repeated queries.",
+      "It records the active encoder version and keeps embeddings, attribute labels, and text scores version-consistent at query time, avoiding space misalignment.",
+      "It stores user behavior history for personalized ranking.",
+      "It is a rate limiter preventing query QPS from overwhelming the index."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "版本注册表不是查询缓存;它管的是'当前用哪版编码器'的元数据,不缓存结果。",
+      "对;它的核心职责是把所有随版本派生的数据锁在同一版本,这是防空间错配、支撑蓝绿切换的一致性基石。",
+      "它不存用户行为,也不做个性化;那是排序/推荐层的事,不是版本管理。",
+      "它不做限流;它管的是数据版本一致性,和 QPS 保护无关。"
+    ],
+    "optionExplanations_en": [
+      "The registry is not a query cache; it holds metadata about which encoder version is active and caches no results.",
+      "Correct — its core job is locking all version-derived data to one version, the consistency backbone that prevents misalignment and supports blue-green cutover.",
+      "It does not store user behavior or do personalization; that is the ranking/recsys layer, not version management.",
+      "It does no rate limiting; it governs data version consistency, unrelated to QPS protection."
+    ],
+    "termDefinitions": [
+      { "term": "embedding version registry / 版本注册表", "meaning": "记录当前生效编码器版本并保证所有派生数据(向量、标签、分数)查询期版本一致的元数据服务。", "meaningEn": "An embedding version registry records the active encoder version and keeps all derived data (vectors, labels, scores) version-consistent at query time." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "nsfw-placement",
+    "scenario": "视觉相似会把'红裙'这类无辜查询匹配到不当图片(靠颜色/形状撞上 NSFW)。要在索引期做 NSFW 过滤。",
+    "scenario_en": "Visual similarity can match an innocent query like 'red dress' to inappropriate images (color/shape collisions). Consider filtering NSFW at index time.",
+    "q": "把 NSFW 过滤放在索引期(pre-retrieval)的利弊是什么?",
+    "q_en": "What are the pros and cons of NSFW filtering at index time (pre-retrieval)?",
+    "why": "索引期用离线分类器给每张图打标、直接把违规项排除在索引外,serving 零延迟。但不灵活:阈值一变就要整库重建,且误判会把合法商品永久移除、无法在查询期挽回。",
+    "why_en": "At index time an offline classifier flags every image and excludes violations from the index, adding zero serving latency, but it is inflexible: changing the threshold needs a full rebuild, and false positives permanently remove valid products with no query-time recovery.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "tradeoff": "索引期过滤(serving 零延迟) vs 阈值僵化+误判永久移除合法品",
+    "options": [
+      "优点是 serving 零延迟;缺点是阈值一变要整库重建、误判永久移除合法商品",
+      "优点是阈值可实时动态调整;缺点是每次查询都要多花 2-5ms",
+      "优点是既零延迟又能动态调阈值;几乎没有缺点,是唯一正确做法",
+      "缺点是会拖慢检索延迟,优点是可以随时恢复被误删的商品"
+    ],
+    "options_en": [
+      "Pro: zero serving latency; con: changing the threshold needs a full rebuild and false positives permanently remove valid products.",
+      "Pro: the threshold can be tuned dynamically in real time; con: each query costs an extra 2-5ms.",
+      "Pro: both zero latency and dynamic threshold tuning; almost no downside, the only correct approach.",
+      "Con: it slows retrieval latency; pro: you can restore mistakenly removed products anytime."
+    ],
+    "answer": [0],
+    "whenOtherWins": "对高置信度、明确违规的内容,索引期永久排除是对的——这类项没有翻案需要,零延迟排除最省事(混合方案正是这么用它的)。",
+    "whenOtherWins_en": "For high-confidence clear violations, permanent index-time exclusion is right — such items need no reversal, so zero-latency removal is simplest (the hybrid approach uses it exactly this way).",
+    "optionExplanations": [
+      "对;索引期把过滤成本挪到离线,serving 零延迟,但代价是僵化——调阈值=重建,误判=永久丢商品。",
+      "动态调阈值和 +2-5ms 是 post-retrieval(查询期)的特征,不是索引期;这项张冠李戴。",
+      "没有'既零延迟又可动态调'的免费午餐:索引期换来的正是灵活性的丧失,所以才有混合方案。",
+      "索引期恰恰不拖延迟(离线做完了),也无法随时恢复(已被排除在索引外);描述反了。"
+    ],
+    "optionExplanations_en": [
+      "Correct — index-time moves filtering cost offline for zero serving latency, but the price is rigidity: retuning means rebuild, false positives mean permanently lost products.",
+      "Dynamic thresholds and +2-5ms are post-retrieval (query-time) traits, not index-time; this misattributes them.",
+      "There is no free lunch of both zero latency and dynamic tuning: index-time trades away flexibility, which is why the hybrid approach exists.",
+      "Index-time specifically does not slow latency (done offline) and cannot restore anytime (already excluded from the index); this is reversed."
+    ],
+    "termDefinitions": [
+      { "term": "pre-retrieval NSFW 过滤", "meaning": "索引构建时用离线分类器给每张图打标,把违规图直接排除在索引外,serving 期零成本。", "meaningEn": "Pre-retrieval NSFW filtering runs an offline classifier at index build to exclude flagged images from the index, at zero serving cost." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "nsfw-placement",
+    "scenario": "希望能随时动态调 NSFW 阈值、且绝不永久删除任何合法商品,愿意在查询期为过滤付出一点延迟。",
+    "scenario_en": "You want to tune the NSFW threshold dynamically anytime and never permanently delete valid products, accepting a little query-time latency.",
+    "q": "把 NSFW 过滤放在查询期(post-retrieval)的利弊是什么?",
+    "q_en": "What are the pros and cons of NSFW filtering at serving time (post-retrieval)?",
+    "why": "查询期对检索/重排后的 top-k(约 50 个候选)跑一个轻量分类器,批处理加 2-5ms。好处是阈值可动态调、不永久删商品;代价是每次查询都付这份延迟,吃进 50ms 预算。",
+    "why_en": "At serving time a lightweight classifier runs on the top-k (about 50 candidates) after retrieval/re-rank, batched at 2-5ms, so the threshold is tunable and no product is permanently removed, at the cost of paying that latency on every query against the 50ms budget.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "tradeoff": "查询期过滤(阈值可动态调、不永久删) vs 每查询付 2-5ms 延迟",
+    "options": [
+      "优点是 serving 零延迟;缺点是调阈值要整库重建",
+      "优点是可动态调阈值、不永久删合法品;缺点是每查询付 2-5ms(对 ~50 候选批处理)",
+      "优点是完全不占延迟预算且阈值可调;没有任何缺点",
+      "缺点是会降低召回率,优点是能压缩索引内存占用"
+    ],
+    "options_en": [
+      "Pro: zero serving latency; con: retuning the threshold needs a full rebuild.",
+      "Pro: dynamic threshold and no permanent removal; con: 2-5ms per query (batched over about 50 candidates).",
+      "Pro: no latency budget used and tunable threshold; no downside at all.",
+      "Con: it lowers recall; pro: it shrinks index memory usage."
+    ],
+    "answer": [1],
+    "whenOtherWins": "当过滤成本必须为零、且违规判定稳定不需要频繁调阈值时,应把过滤前移到索引期,省掉查询期这 2-5ms。",
+    "whenOtherWins_en": "When filtering cost must be zero and the violation rule is stable with no frequent retuning, move filtering to index time to save the 2-5ms per query.",
+    "optionExplanations": [
+      "零延迟和重建阈值是索引期(pre-retrieval)的特征,不是查询期;这项写反了。",
+      "对;查询期在少量候选上过滤,换来灵活性和'不永久删商品',代价就是这 2-5ms 延迟。",
+      "查询期一定占延迟预算(2-5ms 实打实),说'完全不占'不成立。",
+      "查询期过滤发生在检索之后,不影响召回,也不改索引内存;这项张冠李戴。"
+    ],
+    "optionExplanations_en": [
+      "Zero latency and rebuild-to-retune are index-time (pre-retrieval) traits, not serving-time; this is reversed.",
+      "Correct — filtering a few candidates at serving time buys flexibility and no permanent removal, at the cost of that 2-5ms.",
+      "Serving-time always uses the latency budget (a real 2-5ms), so 'no budget used' is false.",
+      "Serving-time filtering happens after retrieval, so it doesn't affect recall or change index memory; this misattributes."
+    ],
+    "termDefinitions": [
+      { "term": "post-retrieval NSFW 过滤", "meaning": "在检索/重排后对 top-k 候选跑轻量分类器过滤,阈值可动态调、不永久删商品,代价是查询期 2-5ms。", "meaningEn": "Post-retrieval NSFW filtering runs a lightweight classifier on the top-k after retrieval, with a tunable threshold and no permanent removal, costing 2-5ms per query." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-021",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "nsfw-placement",
+    "scenario": "既想 serving 尽量低延迟,又想保留动态调阈值的灵活性,还不想永久误删太多合法商品。要给出 Staff+ 级的 NSFW 方案。",
+    "scenario_en": "You want low serving latency, dynamic threshold flexibility, and to avoid permanently deleting too many valid products — give a Staff+-level NSFW answer.",
+    "q": "综合延迟和运维灵活性,NSFW 过滤的推荐放置方式是什么?",
+    "q_en": "Balancing latency and ops flexibility, what is the recommended NSFW placement?",
+    "why": "混合(hybrid):索引期先把高置信度违规永久排除(减少查询期要过滤的候选量),对边界情形放到查询期用可调阈值过滤。既压低了 serving 开销(候选更少),又保住了不重建就能调阈值的灵活性。面试里主动提 hybrid 展示两个维度的权衡。",
+    "why_en": "Hybrid: exclude high-confidence violations at index time (fewer candidates to filter later) and handle borderline cases at serving time with an adjustable threshold, minimizing serving overhead while keeping the flexibility to retune without a rebuild — raise hybrid unprompted to show both dimensions.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "tradeoff": "hybrid(索引期排明确违规+查询期调边界) vs 纯前置(僵化) / 纯后置(每查询全量过滤)",
+    "options": [
+      "纯索引期过滤:一次性离线搞定,serving 零延迟就够了",
+      "纯查询期过滤:每次对全部候选过滤,灵活性最重要,延迟次要",
+      "混合:索引期永久排除高置信违规、查询期用可调阈值过滤边界情形,兼顾低延迟与灵活性",
+      "干脆不做 NSFW 过滤:视觉相似很少真的撞上不当内容,不值得投入"
+    ],
+    "options_en": [
+      "Pure index-time: do it offline once for zero serving latency, that's enough.",
+      "Pure serving-time: filter all candidates every query, flexibility matters most and latency is secondary.",
+      "Hybrid: exclude high-confidence violations at index time and filter borderline cases at serving time with an adjustable threshold, balancing low latency and flexibility.",
+      "Skip NSFW filtering: visual similarity rarely truly hits inappropriate content, not worth the effort."
+    ],
+    "answer": [2],
+    "whenOtherWins": "若违规判定简单稳定、几乎无边界灰区,纯索引期就够;若必须绝不永久误删任何合法品且延迟极宽松,纯查询期更保险。",
+    "whenOtherWins_en": "If the violation rule is simple and stable with no gray zone, pure index-time suffices; if you must never permanently drop any valid item and latency is very loose, pure serving-time is safer.",
+    "optionExplanations": [
+      "纯索引期僵化:调阈值要重建、误判永久丢商品,面对边界灰区不够用。",
+      "纯查询期要对更多候选逐个过滤,serving 开销高;混合先在索引期减负更省。",
+      "对;hybrid 用索引期减少候选量、用查询期保住阈值灵活性,是同时照顾延迟和运维两维的 Staff+ 答案。",
+      "不做过滤会让无辜查询召回不当内容(红裙撞色),是安全事故,必须做。"
+    ],
+    "optionExplanations_en": [
+      "Pure index-time is rigid: retuning needs a rebuild and false positives lose products permanently, inadequate for gray zones.",
+      "Pure serving-time filters more candidates one by one for high overhead; hybrid pre-trims at index time to save cost.",
+      "Correct — hybrid trims candidates at index time and keeps threshold flexibility at serving time, the Staff+ answer covering both latency and ops.",
+      "Skipping filtering lets innocent queries surface inappropriate content (red-dress color collision), a safety incident, so it is mandatory."
+    ],
+    "termDefinitions": [
+      { "term": "hybrid NSFW 过滤", "meaning": "索引期永久排除高置信违规、查询期用可调阈值过滤边界项,兼顾低延迟与阈值灵活性。", "meaningEn": "Hybrid NSFW filtering permanently excludes high-confidence violations at index time and filters borderline items with an adjustable threshold at serving time." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-022",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "nsfw-false-positive",
+    "scenario": "只在索引期做 NSFW 过滤,分类器把一批合法商品误判为违规,直接排除在索引之外。",
+    "scenario_en": "With index-time-only NSFW filtering, the classifier misjudges a batch of valid products as violations and excludes them from the index.",
+    "q": "索引期误判(false positive)带来的独有后果是什么?",
+    "q_en": "What unique consequence do index-time false positives cause?",
+    "why": "被误判的合法商品被永久排除在索引外,查询期再也搜不到、无法挽回,除非改分类器再整库重建。这就是纯索引期方案的致命软肋:误删不可逆,且纠错要付整库重建的代价。",
+    "why_en": "Misjudged valid products are permanently excluded from the index and can never be retrieved at query time or recovered, short of fixing the classifier and doing a full rebuild — the fatal weakness of index-time-only: irreversible removal with a full-rebuild cost to fix.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "options": [
+      "误判只是暂时的,下次查询会自动重新评估并召回该商品",
+      "误判的合法商品被永久排除在索引外、搜不到,纠错要整库重建",
+      "误判会拖慢 serving 延迟,但商品本身不受影响",
+      "误判会降低索引内存占用,反而是个意外的好处"
+    ],
+    "options_en": [
+      "False positives are temporary; the next query re-evaluates and re-includes the item automatically.",
+      "Misjudged valid products are permanently excluded and unsearchable, and fixing it needs a full rebuild.",
+      "False positives slow serving latency, but the products themselves are unaffected.",
+      "False positives reduce index memory usage, an accidental benefit."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "不会自动召回:商品根本不在索引里,查询无从命中,除非重建把它放回去。",
+      "对;永久移除+需重建纠错正是索引期误判的独有代价,也是为什么边界情形要留到查询期。",
+      "索引期过滤在离线,不占 serving 延迟;误删的后果是商品消失不是变慢。",
+      "把合法商品丢出索引是业务损失(少了可售商品),不是好处。"
+    ],
+    "optionExplanations_en": [
+      "It won't auto-recover: the item simply isn't in the index, so no query can hit it unless a rebuild restores it.",
+      "Correct — permanent removal plus rebuild-to-fix is the unique cost of index-time false positives, and why borderline cases belong at serving time.",
+      "Index-time filtering is offline and doesn't use serving latency; the cost is disappeared products, not slowdown.",
+      "Dropping valid products from the index is a business loss (fewer sellable items), not a benefit."
+    ],
+    "termDefinitions": [
+      { "term": "false positive / 误判", "meaning": "分类器把本来合法/正常的样本错判成违规,这里导致合法商品被排除。", "meaningEn": "A false positive is when the classifier wrongly flags a legitimate item as a violation, here dropping valid products." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-023",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "nsfw-placement",
+    "scenario": "要在 pre-retrieval(索引期)、post-retrieval(查询期)、hybrid 三种 NSFW 放置方式间对比取舍。",
+    "scenario_en": "Compare three NSFW placements: pre-retrieval (index time), post-retrieval (serving time), and hybrid.",
+    "q": "三种 NSFW 过滤放置方式在延迟、灵活性、误删风险上怎么权衡?",
+    "q_en": "How do the three NSFW placements trade off latency, flexibility, and false-removal risk?",
+    "why": "pre 零延迟但阈值僵化+误删永久;post 灵活可调、不永久删但每查询付 2-5ms;hybrid 索引期排明确违规(减候选)+查询期调边界,兼顾两头,是推荐默认。",
+    "why_en": "Pre is zero-latency but rigid with permanent removal; post is flexible and non-destructive but costs 2-5ms per query; hybrid excludes clear violations at index time and tunes borderline at serving time, balancing both — the recommended default.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "tradeoff": "延迟(pre 最低) vs 灵活性(post 最高) vs 综合(hybrid)",
+    "options": [
+      "三种方式在延迟和灵活性上完全一样,只是命名不同",
+      "pre 灵活可调、post 零延迟,hybrid 两者都最差",
+      "pre 零延迟但僵化+误删永久;post 灵活但每查询付 2-5ms;hybrid 索引期减候选+查询期调边界,兼顾两头",
+      "hybrid 延迟最高又最不灵活,只是听起来复杂,实践中没人用"
+    ],
+    "options_en": [
+      "The three are identical in latency and flexibility, differing only in name.",
+      "Pre is flexible and tunable, post is zero-latency, and hybrid is worst on both.",
+      "Pre is zero-latency but rigid with permanent removal; post is flexible but costs 2-5ms per query; hybrid trims candidates at index time and tunes borderline at serving time, balancing both.",
+      "Hybrid has the highest latency and least flexibility, just sounds complex, and nobody uses it in practice."
+    ],
+    "answer": [2],
+    "table": {
+      "headers": ["放置", "serving 延迟", "阈值灵活性", "误删风险"],
+      "rows": [
+        ["pre(索引期)", "零", "僵化(需重建)", "永久移除"],
+        ["post(查询期)", "+2-5ms", "可动态调", "不永久删"],
+        ["hybrid", "少量(候选更少)", "边界可调", "仅排明确违规"]
+      ]
+    },
+    "optionExplanations": [
+      "差别很大:延迟从零到 2-5ms、灵活性从僵化到可调,正是选型的核心维度。",
+      "反了:pre 才零延迟且僵化,post 才灵活;这项把两者对调了。",
+      "对;三者是延迟-灵活性的取舍谱,hybrid 用索引期减负+查询期调阈值落在综合最优点。",
+      "hybrid 恰是生产推荐:它延迟低于纯 post、灵活性高于纯 pre,不是最差。"
+    ],
+    "optionExplanations_en": [
+      "They differ a lot: latency from zero to 2-5ms and flexibility from rigid to tunable — the crux of the choice.",
+      "Backwards: pre is the zero-latency rigid one and post is the flexible one; this swaps them.",
+      "Correct — the three form a latency-flexibility spectrum, and hybrid lands at the balanced optimum via index-time trimming plus serving-time tuning.",
+      "Hybrid is exactly the production recommendation: lower latency than pure post and more flexible than pure pre, not the worst."
+    ],
+    "termDefinitions": [
+      { "term": "NSFW 过滤放置 / placement", "meaning": "决定在索引期、查询期还是两者混合运行不当内容分类器,权衡延迟与运维灵活性。", "meaningEn": "NSFW filter placement decides whether the classifier runs at index time, serving time, or both, trading latency against ops flexibility." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-024",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "nsfw-classifier-cost",
+    "scenario": "post-retrieval NSFW 过滤对检索出的 top-k(约 50 个候选)批量跑一个分类器,要放进 50ms 预算里。",
+    "scenario_en": "Post-retrieval NSFW filtering batches a classifier over the retrieved top-k (about 50 candidates), fitting into the 50ms budget.",
+    "q": "这个 NSFW 分类器用什么模型、开销多大,为何能放进预算?",
+    "q_en": "What model is the NSFW classifier, how costly, and why does it fit the budget?",
+    "why": "用小 CNN 或蒸馏模型,对约 50 个候选批量推理约 3ms/批。之所以放得进 50ms,是因为它只跑在检索后的少量候选上(不是全库),批处理又摊薄了单张开销——这是把重活留在小集合上的典型设计。",
+    "why_en": "A small CNN or distilled model runs about 3ms per batch over roughly 50 candidates, and it fits the 50ms budget because it only runs on the few post-retrieval candidates (not the whole catalog) with batching amortizing per-image cost.",
+    "tags": ["llm-sd", "visual-search", "nsfw"],
+    "options": [
+      "用小 CNN/蒸馏模型,对 ~50 个候选批量推理约 3ms/批;只跑在少量检索结果上所以放得进预算",
+      "用和 CLIP 同规模的大模型,对全库 10 亿图逐张分类,靠 GPU 硬扛",
+      "用一个 5 秒/张的高精度大模型,精度优先、延迟不重要",
+      "分类器开销为零,不占任何延迟预算"
+    ],
+    "options_en": [
+      "A small CNN/distilled model, about 3ms per batch over roughly 50 candidates; it fits because it runs only on the few retrieved results.",
+      "A CLIP-sized large model classifying all billion catalog images one by one, brute-forced on GPUs.",
+      "A high-accuracy model at 5 seconds per image, prioritizing accuracy over latency.",
+      "The classifier has zero cost and uses no latency budget."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "CNN", "fullName": "Convolutional Neural Network", "meaning": "卷积神经网络,图像分类常用结构,这里用小型/蒸馏版做 NSFW 判定。", "meaningEn": "CNN (Convolutional Neural Network) is a standard image-classification architecture, here a small/distilled version for NSFW detection." },
+      { "term": "蒸馏模型 / distilled model", "meaning": "用大模型的输出训练出的小模型,精度接近但推理更快更省,适合放进延迟预算。", "meaningEn": "A distilled model is a small model trained to mimic a large one, near its accuracy but faster and cheaper to fit a latency budget." }
+    ]
+  },
+  {
+    "id": "llm-084-visual-search-serving-indexing-025",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "composed-architecture",
+    "scenario": "把 ANN 选型、数据并行分片+副本、蓝绿重建+版本注册表、hybrid NSFW 组合成完整 serving 系统。",
+    "scenario_en": "Compose ANN choice, data-parallel sharding + replicas, blue-green rebuild + version registry, and hybrid NSFW into a full serving system.",
+    "q": "这套组合架构产出哪些可度量的系统属性?",
+    "q_en": "What measurable system properties does this composed architecture produce?",
+    "why": "四块各自贡献一个可度量属性:ANN 选型定 recall@k;分片+副本给吞吐与 p99 延迟;蓝绿+sidecar 决定索引新鲜度滞后(index freshness lag);hybrid NSFW 定安全过滤开销。这些量化指标正是评估篇要监控的对象。",
+    "why_en": "Each block yields one measurable property: ANN choice sets recall@k, sharding plus replicas give throughput and p99 latency, blue-green plus sidecar govern index freshness lag, and hybrid NSFW sets safety overhead — the quantitative metrics the evaluation lesson monitors.",
+    "tags": ["llm-sd", "visual-search", "architecture"],
+    "options": [
+      "只有一个属性:模型准确率,其余都是实现细节不必度量",
+      "recall@k、p99 延迟、索引新鲜度滞后等可度量属性,分别由 ANN 选型、分片/副本、重建策略决定",
+      "只有训练时长和 GPU 利用率,和 serving 无关",
+      "架构组合不产生任何可度量属性,好坏只能靠主观判断"
+    ],
+    "options_en": [
+      "Only one property: model accuracy; everything else is an implementation detail not worth measuring.",
+      "Measurable properties like recall@k, p99 latency, and index freshness lag, set respectively by ANN choice, sharding/replicas, and rebuild strategy.",
+      "Only training time and GPU utilization, unrelated to serving.",
+      "The composition produces no measurable properties; quality can only be judged subjectively."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "recall@k、延迟、新鲜度都是可量化的 serving 属性,不能只看准确率、更不该说其余不必度量。",
+      "对;每个设计块映射到一个可监控指标,这种'设计→可度量属性'的对应是评估和 A/B 的基础。",
+      "训练指标是离线的,这题问的是 serving 端属性(召回/延迟/新鲜度),对象不同。",
+      "恰恰相反:整套设计就是为了产出可度量属性,才能被评估篇的 A/B 和监控接住。"
+    ],
+    "optionExplanations_en": [
+      "Recall@k, latency, and freshness are all quantifiable serving properties, so you can't look at accuracy alone or claim the rest need no measurement.",
+      "Correct — each design block maps to a monitorable metric, and this design-to-measurable-property mapping underpins evaluation and A/B testing.",
+      "Training metrics are offline; this asks about serving-side properties (recall/latency/freshness), a different scope.",
+      "Quite the opposite: the whole design exists to produce measurable properties so the evaluation lesson's A/B and monitoring can consume them."
+    ],
+    "termDefinitions": [
+      { "term": "p99 延迟", "meaning": "99% 的请求延迟都低于该值,衡量尾部体验,比平均延迟更能反映最坏情况。", "meaningEn": "P99 latency is the value below which 99% of requests fall, a tail-experience metric more telling than the average." },
+      { "term": "索引新鲜度滞后 / index freshness lag", "meaning": "新商品从入库到可被搜到的时间差,由重建频率和 sidecar 策略决定。", "meaningEn": "Index freshness lag is the delay from an item entering the catalog to being searchable, set by rebuild cadence and sidecar strategy." }
+    ]
+  }
+]

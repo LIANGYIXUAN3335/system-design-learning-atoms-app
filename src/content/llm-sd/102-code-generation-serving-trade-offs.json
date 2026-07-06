@@ -1,0 +1,1287 @@
+[
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-overview",
+    "scenario": "面试官要你在 <200ms 内交付代码补全，同时保住质量、处理取消、收集改进信号。500ms 的补全会打断打字流。",
+    "scenario_en": "Interviewer: deliver code completions in <200ms while keeping quality, handling cancellation, and collecting improvement signal; a 500ms suggestion breaks the typing flow.",
+    "q": "低延迟代码补全服务的三根支柱是什么？",
+    "q_en": "What are the three pillars of a low-latency code-completion serving system?",
+    "why": "三根支柱：推测解码（压到 <200ms）、流式架构（边生成边显示 + 取消）、反馈闭环（把接受/拒绝转成微调信号）。它们一起在「延迟-质量-吞吐」这个三角里做权衡，缺一根就漏掉一大块 Staff+ 信号。",
+    "why_en": "The three pillars are speculative decoding for sub-200ms latency, a streaming architecture for incremental display plus cancellation, and a feedback loop turning accept/reject into fine-tuning signal, all balancing the latency-quality-throughput triangle.",
+    "tags": ["llm-sd", "code-gen", "serving"],
+    "diagram": "flowchart LR\n  S[\"推测解码<br/>压 <200ms\"] --> T[\"流式+取消<br/>边显示边省算力\"]\n  T --> F[\"反馈闭环<br/>接受/拒绝→微调\"]",
+    "options": [
+      "更大的模型、更多 GPU、更高精度——三者堆资源即可解决延迟",
+      "缓存所有补全、预生成全部代码、关闭流式——用空间换时间",
+      "推测解码（压 <200ms）、流式架构（边显示边取消）、反馈闭环（接受/拒绝→微调）",
+      "只靠 CDN 就近分发静态补全，避免调用模型"
+    ],
+    "options_en": [
+      "A bigger model, more GPUs, higher precision — just throw resources at latency.",
+      "Cache all completions, pre-generate all code, disable streaming — trade space for time.",
+      "Speculative decoding (drive sub-200ms), streaming architecture (display incrementally, cancel), feedback loop (accept/reject → fine-tuning).",
+      "Serve static completions from a CDN edge to avoid calling the model."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "堆资源既贵又不解决根因：单请求延迟受内存带宽限制，加 GPU 不改单次生成的串行瓶颈。",
+      "补全依赖实时前缀上下文，无法预生成或缓存；关流式反而让用户等更久，方向反了。",
+      "对；这三根支柱正好覆盖延迟（推测解码）、体验+算力（流式/取消）、持续改进（反馈），构成完整服务设计。",
+      "补全是上下文相关的动态生成，不是可缓存的静态资源，CDN 帮不上生成延迟。"
+    ],
+    "optionExplanations_en": [
+      "Throwing resources is costly and misses the root cause: single-request latency is memory-bandwidth bound, so adding GPUs won't fix the serial per-token bottleneck.",
+      "Completions depend on live prefix context and can't be pre-generated or cached; disabling streaming makes users wait longer — backwards.",
+      "Correct — these three pillars cover latency (speculative decoding), experience+compute (streaming/cancel), and continuous improvement (feedback), a complete serving design.",
+      "Completions are context-dependent dynamic generation, not cacheable static assets, so a CDN can't help generation latency."
+    ],
+    "termDefinitions": [
+      { "term": "latency-quality-throughput triangle / 延迟-质量-吞吐三角", "meaning": "服务代码补全的核心权衡：压低延迟、保住质量、维持大批量吞吐三者互相牵制。", "meaningEn": "The latency-quality-throughput triangle is the core serving tradeoff: cutting latency, preserving quality, and sustaining batch throughput pull against each other." },
+      { "term": "speculative decoding / 推测解码", "meaning": "用轻量 draft 模型提出多个候选 token、大 target 模型一次并行验证的加速解码法。", "meaningEn": "Speculative decoding uses a lightweight draft model to propose several tokens that the large target model verifies in one parallel pass, accelerating decoding." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-002",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "产品要求内联补全的端到端延迟目标是 <200ms，因为约 500ms 的补全会打断开发者的打字节奏。",
+    "scenario_en": "The product targets <200ms end-to-end for inline completions because a ~500ms suggestion disrupts the developer's typing rhythm.",
+    "q": "<200ms 是给定目标还是公式推导，它约束哪条设计路径？",
+    "q_en": "Is <200ms a given target or a formula, and which design path does it constrain?",
+    "why": "<200ms 是产品/UX 目标（SLO），不是公式推出的数——依据是超过约 500ms 就打断打字流。它直接约束解码路径：普通自回归逐 token 太慢，必须上推测解码 + 流式，先让用户在 <100ms 看到首 token。",
+    "why_en": "<200ms is a product/UX target (an SLO), not a formula, justified by the ~500ms typing-flow disruption threshold, and it forces speculative decoding plus streaming so first tokens appear under ~100ms.",
+    "tags": ["llm-sd", "code-gen", "latency"],
+    "options": [
+      "<200ms 是 UX 给定目标（约 500ms 会打断打字）；它逼你上推测解码+流式，让首 token <100ms 出现",
+      "<200ms 是由 GPU 显存和 token 数算出的精确公式结果，换硬件这个数就变",
+      "<200ms 只是营销口号，对架构没有实际约束，慢一点也无所谓",
+      "<200ms 指模型训练每步的耗时，和推理服务延迟无关"
+    ],
+    "options_en": [
+      "<200ms is a given UX target (~500ms breaks typing); it forces speculative decoding + streaming so first tokens appear under ~100ms.",
+      "<200ms is an exact formula from GPU memory and token count; change hardware and the number changes.",
+      "<200ms is just a marketing slogan with no real architectural constraint; a bit slower is fine.",
+      "<200ms is the per-step training time of the model, unrelated to inference serving latency."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "SLO", "fullName": "Service Level Objective", "meaning": "服务级目标：给定的性能承诺（如 <200ms 补全延迟），是设计约束而非公式推导值。", "meaningEn": "An SLO (Service Level Objective) is a given performance target (e.g. <200ms completion latency), a design constraint rather than a formula result." },
+      { "term": "typing flow / 打字流", "meaning": "开发者连续输入的节奏；补全延迟超过约 500ms 就会打断它、体验变差。", "meaningEn": "Typing flow is the developer's continuous input rhythm; completion latency above ~500ms disrupts it and degrades experience." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-003",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "autoregressive-bottleneck",
+    "scenario": "普通自回归解码每次前向只出 1 个 token，一个 20 token 的补全要 20 次串行前向。",
+    "scenario_en": "Standard autoregressive decoding emits one token per forward pass, so a 20-token completion needs 20 sequential passes.",
+    "q": "为什么标准自回归解码在补全场景太慢，瓶颈在哪？",
+    "q_en": "Why is standard autoregressive decoding too slow for completions, and where is the bottleneck?",
+    "why": "每次前向只出 1 token，20 token 就要 20 次串行前向，延迟随长度线性增长。小 batch 下瓶颈是内存带宽（每步都要把整套权重从显存搬进计算单元），不是算力——所以加 GPU 算力也压不下单请求延迟，得减少串行步数。",
+    "why_en": "One token per pass means latency scales linearly with length, and at small batch the bottleneck is memory bandwidth (reloading weights each step), not compute, so more compute won't help — you must cut the number of serial steps.",
+    "tags": ["llm-sd", "code-gen", "decoding"],
+    "options": [
+      "太慢是因为算力不足，多加 GPU 算力就能把单请求延迟线性压下去",
+      "每步只出 1 token→步数随长度线性增长；小 batch 下瓶颈是内存带宽而非算力，加算力压不下单请求延迟",
+      "太慢是因为网络带宽不够，把模型部署到离用户更近的机房即可",
+      "太慢是因为 token 太长，改用更短的词表就能一次出完整段代码"
+    ],
+    "options_en": [
+      "It's slow due to insufficient compute; adding GPU compute linearly cuts single-request latency.",
+      "One token per pass → steps scale linearly with length; at small batch the bottleneck is memory bandwidth not compute, so more compute won't cut single-request latency.",
+      "It's slow due to network bandwidth; deploy the model closer to the user to fix it.",
+      "It's slow because tokens are too long; a shorter vocabulary emits a whole code block at once."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "小 batch 下算力大量闲置、瓶颈是内存带宽，加算力对单请求延迟几乎无效，方向错了。",
+      "对；根因是串行步数×每步的内存带宽开销，所以要么减少串行步数（推测解码），要么攒大 batch 提吞吐。",
+      "延迟主要来自模型逐 token 生成的串行前向，不是机房距离；就近部署救不了解码瓶颈。",
+      "词表大小不改变「逐 token 串行」这个结构，短词表反而要更多 token，帮不上忙。"
+    ],
+    "optionExplanations_en": [
+      "At small batch, compute is largely idle and the bottleneck is memory bandwidth, so adding compute barely helps single-request latency — wrong direction.",
+      "Correct — the root cause is serial steps × per-step memory-bandwidth cost, so you either cut serial steps (speculative decoding) or batch up for throughput.",
+      "Latency comes from the model's serial per-token forward passes, not datacenter distance; edge deployment won't fix the decoding bottleneck.",
+      "Vocabulary size doesn't change the serial per-token structure; a shorter vocab needs more tokens, which doesn't help."
+    ],
+    "termDefinitions": [
+      { "term": "autoregressive decoding / 自回归解码", "meaning": "每次前向只生成 1 个 token、再喂回自己生成下一个的标准解码方式，延迟随长度线性增长。", "meaningEn": "Autoregressive decoding generates one token per forward pass, feeding it back to produce the next, so latency scales linearly with length." },
+      { "term": "memory bandwidth bound / 内存带宽受限", "meaning": "小 batch 下每步都要把权重从显存搬进计算单元，瓶颈在搬运速度而非算力。", "meaningEn": "Memory-bandwidth bound means at small batch each step reloads weights from memory, so throughput is limited by data movement, not compute." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "speculative-decoding",
+    "scenario": "为把补全压到 <200ms，你用一个轻量 draft 模型配大 target 模型做推测解码。",
+    "scenario_en": "To hit sub-200ms, you pair a lightweight draft model with the large target model for speculative decoding.",
+    "q": "推测解码的 draft-then-verify 机制怎么运作？",
+    "q_en": "How does speculative decoding's draft-then-verify mechanism work?",
+    "why": "轻量 draft 模型（约 150M、蒸馏得来）自回归地快速提出 K 个候选 token；大 target 模型用一次并行前向同时验证这 K 个，接受与自己一致的前缀，从第一个分歧处重采样。一次 target 前向就吐出多个 token，省掉大部分串行步。",
+    "why_en": "A lightweight draft model proposes K candidate tokens autoregressively, then the large target model verifies all K in one parallel forward pass, accepting the matching prefix and resampling from the first divergence, yielding several tokens per target pass.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "diagram": "flowchart LR\n  D[\"draft 提出 K 个 token\"] --> V[\"target 一次并行验证 K 个\"]\n  V --> A[\"接受一致前缀\"]\n  A --> R[\"从第一个分歧重采样\"]",
+    "options": [
+      "draft 和 target 各自独立生成，最后投票取多数，谁的 token 多听谁的",
+      "target 先生成，draft 再逐 token 复核 target 的输出对不对",
+      "两个模型交替各出一个 token，拼在一起组成最终补全",
+      "draft 快速提出 K 个候选 token，target 一次并行验证、接受一致前缀、从第一个分歧重采样"
+    ],
+    "options_en": [
+      "The draft and target generate independently, then vote by majority — whoever has more tokens wins.",
+      "The target generates first, then the draft rechecks each of the target's tokens.",
+      "The two models alternate, each emitting one token, concatenated into the final completion.",
+      "The draft quickly proposes K candidate tokens; the target verifies all K in one parallel pass, accepts the matching prefix, and resamples from the first divergence."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "不是投票：draft 只负责「猜」，最终分布由 target 验证保证，投票会破坏正确的采样分布。",
+      "顺序反了：draft 先猜、target 后验，正因为 target 一次能并行验 K 个才省时间。",
+      "不是交替各出一个：那还是串行、没有加速；关键在 target 一次并行验证多个 draft token。",
+      "对；draft 快猜 K 个、target 一次并行验完，接受前缀、分歧处重采样，保证输出分布与纯 target 一致却更快。"
+    ],
+    "optionExplanations_en": [
+      "Not voting: the draft only guesses, and the final distribution is guaranteed by target verification; voting would corrupt correct sampling.",
+      "Order reversed: the draft guesses first and the target verifies after — the speedup comes from the target verifying K tokens in parallel.",
+      "Not alternating one each: that's still serial with no speedup; the key is the target verifying multiple draft tokens in one parallel pass.",
+      "Correct — the draft guesses K, the target verifies all at once, accepts the prefix, and resamples at the divergence, matching the pure-target distribution but faster."
+    ],
+    "termDefinitions": [
+      { "term": "draft model / 草稿模型", "meaning": "约 150M 的轻量蒸馏模型，自回归地快速提出候选 token 供 target 验证。", "meaningEn": "A draft model is a lightweight (~150M) distilled model that autoregressively proposes candidate tokens for the target to verify." },
+      { "term": "parallel verification / 并行验证", "meaning": "大 target 模型用一次前向同时检验 draft 提出的全部 K 个 token，接受一致前缀。", "meaningEn": "Parallel verification is the large target model checking all K draft tokens in a single forward pass, accepting the matching prefix." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-005",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "acceptance-rate",
+    "scenario": "你要向面试官量化推测解码的收益，用「接受率」和相对 vanilla 的前向次数说明。",
+    "scenario_en": "You must quantify speculative decoding's gain to the interviewer using acceptance rate and forward-pass count versus vanilla.",
+    "q": "推测解码的关键指标接受率意味着什么，收益量级多大？",
+    "q_en": "What does the key metric acceptance rate mean, and how large is the gain?",
+    "why": "接受率 = draft 提出的 token 里被 target 接受的比例。接受率越高，一次 target 前向就吐出越多 token，延迟越低。典型代码补全下，推测解码把 target 模型前向次数减少到约原来的 1/3～1/5（即 3–5× 更少）。",
+    "why_en": "Acceptance rate is the fraction of draft tokens the target accepts; higher acceptance means more tokens per target pass and lower latency, typically 3–5× fewer target forward passes than vanilla for code completions.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "options": [
+      "接受率=draft token 被 target 接受的比例；越高每次 target 前向出的 token 越多，典型省 3–5× target 前向",
+      "接受率是 GPU 利用率，越高说明显卡越满，与 token 数无关",
+      "接受率是用户按 Tab 接受补全的比例，等同于 ACR",
+      "接受率是模型准确率，越高 pass@k 越高，与延迟无关"
+    ],
+    "options_en": [
+      "Acceptance rate = fraction of draft tokens the target accepts; higher means more tokens per target pass, typically 3–5× fewer target passes.",
+      "Acceptance rate is GPU utilization; higher means the GPU is fuller, unrelated to token count.",
+      "Acceptance rate is the fraction of completions users accept with Tab — same as ACR.",
+      "Acceptance rate is model accuracy; higher means higher pass@k, unrelated to latency."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "acceptance rate / 接受率", "meaning": "推测解码中 draft 提出的 token 被 target 验证接受的比例；越高每次 target 前向产出越多、延迟越低，典型带来 3–5× 更少 target 前向。", "meaningEn": "Acceptance rate is the fraction of draft tokens the target accepts in speculative decoding; higher yields more tokens per target pass and lower latency, typically 3–5× fewer target passes." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-006",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "draft-model",
+    "scenario": "设计推测解码时你要选 draft 模型的规模，太大太小都不行。",
+    "scenario_en": "Designing speculative decoding, you must size the draft model — too big or too small both hurt.",
+    "q": "draft 模型为什么用约 150M 的蒸馏小模型？",
+    "q_en": "Why is the draft model a small (~150M) distilled one?",
+    "why": "draft 模型要「猜得快又猜得像」：约 150M、从 target 蒸馏而来，跑得快才不拖慢提议阶段，蒸馏使它的分布接近 target 以提高接受率。它只负责提候选，最终正确性由 target 验证保证，所以可以小。",
+    "why_en": "The draft must be fast yet aligned: ~150M and distilled from the target so it runs cheaply while its distribution stays close to the target for high acceptance, and since the target verifies correctness it can be small.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "options": [
+      "因为 150M 是硬件上限，再大就装不进显存",
+      "因为 draft 要独立保证输出正确，必须和 target 一样大",
+      "draft 只负责快速提候选、正确性由 target 验证，所以用蒸馏小模型：跑得快、分布近 target 提高接受率",
+      "因为小模型准确率更高，150M 比大模型更会写代码"
+    ],
+    "options_en": [
+      "Because 150M is the hardware ceiling — any bigger won't fit in memory.",
+      "Because the draft must independently guarantee correctness, so it must be as large as the target.",
+      "The draft only proposes candidates while the target verifies correctness, so a distilled small model runs fast and stays close to the target for high acceptance.",
+      "Because small models are more accurate — 150M writes code better than a large model."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "150M 不是硬件上限而是速度/接受率的折中；draft 太大反而拖慢提议、吃显存。",
+      "draft 不需要独立正确，正确性由 target 验证兜底，所以恰恰可以小、可以快。",
+      "对；draft 的职责是「快而像」，蒸馏让它分布贴近 target 拉高接受率，正确性交给 target，故用小模型。",
+      "小模型单独写代码通常更差；draft 不追求独立正确，只追求提议快且接受率高。"
+    ],
+    "optionExplanations_en": [
+      "150M is a speed/acceptance tradeoff, not a hardware ceiling; too large a draft slows proposing and eats memory.",
+      "The draft needn't be independently correct — the target guarantees correctness — so it can be small and fast.",
+      "Correct — the draft's job is fast-and-aligned; distillation keeps its distribution near the target for acceptance, with correctness left to the target, so it stays small.",
+      "A small model alone usually writes worse code; the draft doesn't aim for standalone correctness, only fast, high-acceptance proposals."
+    ],
+    "termDefinitions": [
+      { "term": "distillation / 蒸馏", "meaning": "用大模型的输出训练小模型，使小模型行为逼近大模型，这里让 draft 分布贴近 target。", "meaningEn": "Distillation trains a small model on a large model's outputs so it mimics the large one, here keeping the draft's distribution close to the target." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "draft-divergence",
+    "scenario": "在某类代码上 draft 模型和 target 分歧很大，接受率掉到很低。",
+    "scenario_en": "On some code, the draft diverges heavily from the target and acceptance drops very low.",
+    "q": "draft 和 target 分歧大、接受率低会怎样？",
+    "q_en": "What happens when the draft diverges from the target and acceptance is low?",
+    "why": "接受率低时，draft 的多数猜测被 target 拒绝、白算，还得从分歧处重新走——推测解码不但没省，反而比纯 vanilla 更慢。所以要监控接受率，低于阈值就回退到普通解码，避免负优化。",
+    "why_en": "With low acceptance, most draft guesses are rejected and wasted, so speculation can increase latency beyond vanilla, which is why you monitor acceptance and fall back to plain decoding below a threshold.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "options": [
+      "没影响：draft 猜错也不浪费，target 总能一次验完，延迟恒定",
+      "多数 draft token 被拒、白算并要从分歧处重来，推测解码反而比 vanilla 更慢",
+      "接受率低会自动提高，因为 target 会重新训练 draft 对齐",
+      "接受率低只影响质量不影响延迟，输出会变差但速度不变"
+    ],
+    "options_en": [
+      "No impact: wrong draft guesses aren't wasted, the target always verifies in one pass, so latency is constant.",
+      "Most draft tokens are rejected and wasted and must restart from the divergence, so speculation is slower than vanilla.",
+      "Low acceptance self-corrects because the target retrains the draft to align on the fly.",
+      "Low acceptance only affects quality not latency — output degrades but speed is unchanged."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "draft 猜错就是白算 draft 的前向，还得重走，延迟并非恒定——低接受率下明显变差。",
+      "对；低接受率把 draft 的开销变成纯浪费，每次只落地一两个 token，反而不如直接 vanilla，所以需要回退策略。",
+      "在线推理里 target 不会即时重训 draft；接受率不会自动回升，得靠监控+回退处理。",
+      "接受率影响的正是延迟：拒绝越多、有效 token/前向越少、越慢；输出分布仍由 target 保证不变。"
+    ],
+    "optionExplanations_en": [
+      "Wrong guesses waste the draft's passes and force a restart, so latency isn't constant — it clearly worsens at low acceptance.",
+      "Correct — low acceptance turns the draft's cost into pure waste, landing only a token or two per round, worse than vanilla, hence the fallback policy.",
+      "In online inference the target doesn't retrain the draft on the fly; acceptance won't self-recover, so you monitor and fall back.",
+      "Acceptance affects latency precisely: more rejections mean fewer effective tokens per pass and slower output; the distribution stays target-guaranteed."
+    ],
+    "termDefinitions": [
+      { "term": "draft-target divergence / 草稿-目标分歧", "meaning": "draft 的预测与 target 不一致的程度；分歧大→接受率低→推测解码可能反而更慢。", "meaningEn": "Draft-target divergence is how much the draft's predictions differ from the target; high divergence lowers acceptance and can make speculation slower." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "batch-capacity",
+    "scenario": "高并发下，你发现开了推测解码后中位延迟改善了，但 p99 尾延迟反而变差。",
+    "scenario_en": "Under high concurrency, enabling speculative decoding improves median latency but worsens p99 tail latency.",
+    "q": "为什么推测解码在高并发下会推高 p99 尾延迟？",
+    "q_en": "Why does speculative decoding inflate p99 tail latency under high concurrency?",
+    "why": "draft 模型额外占显存，挤小了最大 batch 容量；高并发下能同时处理的请求变少，多出来的请求排队，尾延迟（p99）被抬高——即使中位延迟因为每请求更快而改善。这是「延迟换吞吐」的典型代价。",
+    "why_en": "The draft model consumes extra GPU memory, shrinking max batch capacity, so under high load fewer requests run concurrently, the rest queue, and p99 tail latency rises even as median improves.",
+    "tags": ["llm-sd", "code-gen", "serving"],
+    "options": [
+      "因为 draft 模型算得慢，直接拖慢每个请求，所以 p99 变差",
+      "draft 额外占显存→最大 batch 变小→高并发下请求排队→p99 抬高，尽管中位延迟改善",
+      "因为流式传输占了网络带宽，与 GPU 显存和 batch 无关",
+      "因为 p99 本来就随机波动，和推测解码没有因果关系"
+    ],
+    "options_en": [
+      "Because the draft model computes slowly, directly slowing every request, so p99 worsens.",
+      "The draft consumes extra GPU memory → smaller max batch → requests queue under high load → p99 rises, even as median improves.",
+      "Because streaming eats network bandwidth, unrelated to GPU memory or batch.",
+      "Because p99 fluctuates randomly anyway, with no causal link to speculative decoding."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "单请求其实更快了（中位改善）；p99 变差不是 draft 算得慢，而是 batch 容量被显存挤小导致排队。",
+      "对；这正是那道 p99 题的答案：双模型吃显存→batch 容量下降→高并发排队→尾延迟涨，是延迟/吞吐的权衡。",
+      "根因在 GPU 显存被 draft 占用、batch 缩小，不是网络带宽；流式不是 p99 恶化的主因。",
+      "这里有明确因果：显存占用→batch 缩小→排队，不是随机噪声。"
+    ],
+    "optionExplanations_en": [
+      "Single requests are actually faster (median improves); p99 worsens not from slow draft compute but from memory-squeezed batch capacity causing queuing.",
+      "Correct — this is the p99 answer: dual models eat memory → batch capacity drops → high-concurrency queuing → tail latency rises, a latency/throughput tradeoff.",
+      "The root cause is the draft occupying GPU memory and shrinking batch, not network bandwidth; streaming isn't the p99 culprit.",
+      "There is a clear causal chain: memory usage → smaller batch → queuing, not random noise."
+    ],
+    "termDefinitions": [
+      { "term": "p99 latency / p99 尾延迟", "fullName": "99th-percentile latency", "meaning": "99% 的请求比它快、最慢 1% 的请求延迟；反映尾部体验，比中位数更能暴露排队问题。", "meaningEn": "p99 (99th-percentile) latency is the value 99% of requests beat — the slowest 1% — exposing tail experience and queuing better than the median." },
+      { "term": "batch capacity / 批容量", "meaning": "GPU 能同时处理的请求数，受显存限制；draft 占显存会把它压小。", "meaningEn": "Batch capacity is how many requests a GPU can process concurrently, limited by memory; the draft's memory use shrinks it." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-009",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "draft-token-count",
+    "scenario": "调推测解码时你要设 draft 一次提出的候选 token 数 K，常见范围 4–8。",
+    "scenario_en": "Tuning speculative decoding, you set K, the number of candidate tokens the draft proposes at once, commonly 4–8.",
+    "q": "draft token 数 K 怎么权衡，取值范围是多少？",
+    "q_en": "How do you trade off the draft token count K, and what's the range?",
+    "why": "K 常取 4–8。K 越大，一次 target 前向能摊薄更多 token（接受率高时更省）；但接受率低时，靠后的候选大概率被拒、白算得更多。所以 K 要配合实测接受率调，接受率高就调大、低就调小。",
+    "why_en": "K is typically 4–8: a larger K amortizes more tokens per target pass when acceptance is high, but wastes more on rejected tail tokens when acceptance is low, so tune K against measured acceptance.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "options": [
+      "K 常取 4–8：越大摊薄越多 token（接受率高时省），但接受率低时靠后候选被拒、白算更多",
+      "K 越大越好、无上限，永远都比小 K 快，没有任何浪费",
+      "K 必须等于补全的总 token 数，一次把整段都提出来",
+      "K 是 GPU 数量，越多并行度越高，和 token 无关"
+    ],
+    "options_en": [
+      "K is typically 4–8: larger amortizes more tokens (saves when acceptance is high), but wastes more on rejected tail tokens when acceptance is low.",
+      "Larger K is always better with no ceiling — always faster than small K with no waste.",
+      "K must equal the completion's total token count, proposing the whole block at once.",
+      "K is the number of GPUs; more means more parallelism, unrelated to tokens."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "draft token count K / 草稿 token 数 K", "meaning": "draft 一次提出的候选 token 数，常取 4–8；大 K 在高接受率时更省，低接受率时浪费更多。", "meaningEn": "The draft token count K is how many candidates the draft proposes per round, typically 4–8; larger K saves more at high acceptance but wastes more at low acceptance." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-010",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "draft-size-tradeoff",
+    "scenario": "你在「更小的 draft」和「更大的 draft」之间权衡接受率与吞吐。",
+    "scenario_en": "You weigh acceptance rate against throughput between a smaller and a larger draft model.",
+    "q": "更大的 draft 模型在接受率与吞吐上怎么权衡？",
+    "q_en": "How does a larger draft model trade off acceptance rate against throughput?",
+    "why": "更大的 draft 分布更接近 target、接受率更高，但吃更多显存、把最大 batch 挤小、吞吐更紧。取舍轴是「接受率（延迟）vs 显存/吞吐」，要按负载在两端之间找平衡。",
+    "why_en": "A larger draft aligns better with the target for higher acceptance but consumes more GPU memory, shrinking max batch and tightening throughput — the axis is acceptance/latency versus memory/throughput.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "tradeoff": "大 draft（接受率高、延迟低，但吃显存、吞吐紧）vs 小 draft（省显存、吞吐高，但接受率偏低）",
+    "table": {
+      "headers": ["draft 大小", "接受率", "显存", "吞吐"],
+      "rows": [
+        ["小(如150M)", "偏低", "省", "高"],
+        ["大", "偏高", "占用多", "低"]
+      ]
+    },
+    "options": [
+      "更大的 draft 既接受率更高又更省显存，纯赚无代价，越大越好",
+      "更大的 draft 接受率反而更低，因为大模型更容易和 target 分歧",
+      "更大的 draft 接受率更高但吃更多显存、挤小 batch、吞吐更紧，是延迟换吞吐",
+      "draft 大小不影响接受率，只影响颜色，随便选"
+    ],
+    "options_en": [
+      "A larger draft has both higher acceptance and lower memory — pure gain, so bigger is always better.",
+      "A larger draft has lower acceptance because big models diverge more from the target.",
+      "A larger draft raises acceptance but uses more memory, shrinking batch and tightening throughput — trading latency for throughput.",
+      "Draft size doesn't affect acceptance, only cosmetics, so pick any."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "没有纯赚：大 draft 接受率高但显存开销大、吞吐降，正是要权衡的代价。",
+      "方向反了：大 draft 通常更贴近 target、接受率更高，代价在显存与吞吐而非接受率。",
+      "对；这是核心取舍——大 draft 换来的是更高接受率/更低延迟，付出的是显存和吞吐，要按负载选点。",
+      "draft 大小直接影响接受率与显存占用，不是无关变量。"
+    ],
+    "optionExplanations_en": [
+      "No free lunch: a larger draft raises acceptance but costs memory and lowers throughput — the tradeoff to weigh.",
+      "Backwards: a larger draft usually aligns better with the target for higher acceptance; the cost is memory and throughput, not acceptance.",
+      "Correct — the core tradeoff: a larger draft buys higher acceptance/lower latency at the price of memory and throughput, chosen by load.",
+      "Draft size directly affects acceptance and memory use — not an irrelevant variable."
+    ],
+    "termDefinitions": [
+      { "term": "draft model size / 草稿模型规模", "meaning": "draft 的参数量：更大→分布更近 target、接受率更高，但吃更多显存、压低 batch 与吞吐。", "meaningEn": "Draft model size is its parameter count: larger aligns closer to the target for higher acceptance but uses more memory, shrinking batch and throughput." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "fallback-policy",
+    "scenario": "监控发现某段时间接受率持续低于阈值，推测解码正在拖慢而不是加速请求。",
+    "scenario_en": "Monitoring shows acceptance persistently below threshold, and speculative decoding is slowing requests rather than speeding them.",
+    "q": "接受率跌破阈值时，服务该怎么处理？",
+    "q_en": "When acceptance drops below threshold, what should the serving layer do?",
+    "why": "设一个回退策略：实时监控接受率，一旦持续低于阈值就关掉推测解码、回退到普通自回归解码，避免负优化把延迟拖得更差。等接受率回升再重新启用，用监控闭环保证「只在有收益时投机」。",
+    "why_en": "Use a fallback policy: monitor acceptance in real time and, when it stays below threshold, disable speculation and revert to vanilla decoding to avoid regressions, re-enabling once acceptance recovers.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "tradeoff": "回退 vanilla（放弃投机收益但避免负优化）vs 硬撑推测解码（接受率低时反而更慢）",
+    "whenOtherWins": "若接受率只是短暂抖动、整体仍在阈值之上，就不该频繁切换——反复开关本身有开销，保持推测解码更稳。",
+    "options": [
+      "把 K 调到最大，硬堆候选数量来强行提高吞吐",
+      "监控接受率，低于阈值就关推测解码、回退到普通自回归解码，避免负优化",
+      "直接把 draft 模型换成和 target 一样大，保证接受率 100%",
+      "忽略它，接受率低是暂时的，服务不用做任何自适应"
+    ],
+    "options_en": [
+      "Push K to the max, piling on candidates to force higher throughput.",
+      "Monitor acceptance and, below threshold, disable speculation and revert to vanilla autoregressive decoding to avoid regressions.",
+      "Swap the draft for one as large as the target to guarantee 100% acceptance.",
+      "Ignore it — low acceptance is temporary, so serving needs no adaptation."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "接受率低时加大 K 只会浪费更多算力在被拒的候选上，让延迟更差，是反向操作。",
+      "对；回退策略用监控做闭环，接受率不划算时退回 vanilla，保证推测解码永远只在有收益时启用。",
+      "把 draft 做到和 target 一样大就失去了 draft「快」的意义，还翻倍吃显存，得不偿失。",
+      "不做自适应就会在低接受率时持续负优化，把本该 <200ms 的补全拖慢，必须有回退。"
+    ],
+    "optionExplanations_en": [
+      "At low acceptance, a larger K just wastes more compute on rejected candidates and worsens latency — the wrong move.",
+      "Correct — a fallback policy closes the loop with monitoring, reverting to vanilla when speculation isn't paying off, so it's only used when beneficial.",
+      "Making the draft as large as the target defeats the point of a fast draft and doubles memory use — not worth it.",
+      "Without adaptation you keep regressing at low acceptance, dragging a should-be-<200ms completion slower; a fallback is required."
+    ],
+    "termDefinitions": [
+      { "term": "fallback policy / 回退策略", "meaning": "监控接受率、跌破阈值就关掉推测解码回退普通解码的自适应机制，防止负优化。", "meaningEn": "A fallback policy monitors acceptance and disables speculation, reverting to plain decoding when it drops below threshold, to prevent regressions." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-012",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "streaming",
+    "scenario": "即便有推测解码，一条补全仍有 20–50 个 token；等整段生成完再显示会有可感知的停顿。",
+    "scenario_en": "Even with speculative decoding, a completion spans 20–50 tokens; waiting for the whole sequence adds a perceptible pause.",
+    "q": "为什么还要流式输出，它把感知延迟压到多少？",
+    "q_en": "Why stream output, and to what does it cut perceived latency?",
+    "why": "因为整段 20–50 token 生成完才显示仍有可感知延迟。流式在每次验证 pass 后就把已验证的 token 块推给 IDE，用户往往在一个周期内（<100ms）就看到首 token，后端同时继续生成余下部分，感知延迟大幅下降。",
+    "why_en": "Because waiting for the full 20–50 tokens is still perceptibly slow, streaming pushes each verified chunk to the IDE right after a verification pass, so users see first tokens within one cycle (often <100ms) while the backend generates the rest.",
+    "tags": ["llm-sd", "code-gen", "streaming"],
+    "options": [
+      "流式能提高模型准确率，让补全更正确",
+      "流式能减少 GPU 显存占用，从而增大 batch",
+      "流式能完全消除生成时间，让补全瞬间完成",
+      "流式在每次验证后就推送已验证 token，用户往往 <100ms 看到首 token，后端继续生成余下"
+    ],
+    "options_en": [
+      "Streaming raises model accuracy, making completions more correct.",
+      "Streaming reduces GPU memory usage, enlarging the batch.",
+      "Streaming eliminates generation time entirely, making completions instant.",
+      "Streaming pushes verified tokens after each verification pass, so users see first tokens in <100ms while the backend generates the rest."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "流式改变的是「何时显示」，不改变模型输出的正确性。",
+      "流式是传输/渲染策略，不减少显存占用，也不直接增大 batch。",
+      "生成时间还在，流式只是把它藏在首 token 之后——用户先看到开头，其余边生成边补。",
+      "对；关键是把首 token 的感知延迟压到 <100ms，其余 token 在后台继续，体验从「等整段」变「即时开始」。"
+    ],
+    "optionExplanations_en": [
+      "Streaming changes when output is shown, not the model's correctness.",
+      "Streaming is a transport/render strategy; it doesn't cut memory or directly enlarge the batch.",
+      "Generation time remains; streaming just hides it behind the first token — users see the start while the rest fills in.",
+      "Correct — the key is cutting first-token perceived latency to <100ms while remaining tokens continue in the background, turning 'wait for all' into 'starts instantly'."
+    ],
+    "termDefinitions": [
+      { "term": "streaming / 流式输出", "meaning": "每完成一批验证 token 就立即推送给客户端渲染，而不等整段生成完，压低首 token 感知延迟。", "meaningEn": "Streaming pushes each batch of verified tokens to the client to render immediately instead of waiting for the whole sequence, cutting first-token perceived latency." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-013",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "streaming-transport",
+    "scenario": "你要选一个把已验证 token 逐块推给 IDE 的传输协议，候选是 SSE 和 gRPC 双向流。",
+    "scenario_en": "You pick a transport to push verified token chunks to the IDE, choosing between SSE and a gRPC bidirectional stream.",
+    "q": "SSE 和 gRPC 双向流在补全流式传输上怎么选？",
+    "q_en": "How do you choose between SSE and gRPC bidirectional streaming for completion streaming?",
+    "why": "两者都能把服务端逐块推给 IDE。SSE 是单向服务端推、基于 HTTP、简单；gRPC 双向流是全双工，客户端能在同一连接上同时回传（如取消信号），更适合需要「边推 token 边收取消」的补全场景。取舍轴是「单向简单 vs 双向可回传」。",
+    "why_en": "Both push server chunks to the IDE, but SSE is a simple one-way HTTP push while a gRPC bidirectional stream is full-duplex, letting the client send back (e.g. cancel) on the same connection, fitting completion's push-tokens-while-receiving-cancel need.",
+    "tags": ["llm-sd", "code-gen", "streaming"],
+    "tradeoff": "SSE（单向服务端推、基于 HTTP、简单）vs gRPC 双向流（全双工、可同连接回传取消）",
+    "table": {
+      "headers": ["协议", "方向", "回传取消", "复杂度"],
+      "rows": [
+        ["SSE", "单向服务端推", "另开通道", "低"],
+        ["gRPC 双向流", "全双工", "同连接可回传", "较高"]
+      ]
+    },
+    "options": [
+      "都能逐块推 token；SSE 单向 HTTP 推、简单，gRPC 双向流全双工、可同连接回传取消",
+      "只有 SSE 能流式，gRPC 只能一次性返回完整结果，无法逐块推",
+      "两者完全等价，随便选一个，没有任何行为差异",
+      "gRPC 双向流是单向的，SSE 才是全双工，能同时收发"
+    ],
+    "options_en": [
+      "Both push token chunks; SSE is one-way HTTP push and simple, while a gRPC bidirectional stream is full-duplex and can return cancel on the same connection.",
+      "Only SSE can stream; gRPC can only return the full result at once and cannot push chunks.",
+      "They're fully equivalent — pick either, no behavioral difference.",
+      "The gRPC bidirectional stream is one-way, and SSE is the full-duplex one that sends and receives simultaneously."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；两者都做服务端流，区别在方向性——需要在推 token 的同时收取消信号时，gRPC 双向流更顺手，SSE 则要另开回传通道。",
+      "gRPC 支持流式（含双向），不是只能一次性返回；说它不能逐块推是错的。",
+      "两者行为不同：SSE 单向、gRPC 可双向，取消回传的处理方式就不一样，不能说等价。",
+      "方向说反了：gRPC 双向流才是全双工，SSE 是单向服务端推。"
+    ],
+    "optionExplanations_en": [
+      "Correct — both do server streaming; the difference is directionality — when you must receive cancel while pushing tokens, a gRPC bidi stream fits, whereas SSE needs a separate return channel.",
+      "gRPC supports streaming (including bidirectional), not only one-shot returns; saying it can't push chunks is wrong.",
+      "They behave differently: SSE is one-way, gRPC can be bidirectional, so cancel handling differs — not equivalent.",
+      "Reversed: the gRPC bidirectional stream is full-duplex, while SSE is one-way server push."
+    ],
+    "termDefinitions": [
+      { "term": "SSE", "fullName": "Server-Sent Events", "meaning": "基于 HTTP 的单向服务端推送协议，服务器可持续向客户端发事件流，简单但只单向。", "meaningEn": "SSE (Server-Sent Events) is an HTTP-based one-way server-push protocol streaming events to the client — simple but unidirectional." },
+      { "term": "gRPC", "fullName": "gRPC Remote Procedure Call", "meaning": "支持双向流的高性能 RPC 框架，客户端和服务端可在同一连接上同时收发。", "meaningEn": "gRPC (gRPC Remote Procedure Call) is a high-performance RPC framework supporting bidirectional streams where client and server send and receive on one connection." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-014",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ghost-text",
+    "scenario": "IDE 插件要在开发者按 Tab 之前，把流式到来的补全增量地展示出来。",
+    "scenario_en": "The IDE plugin must display the streamed completion incrementally before the developer hits Tab.",
+    "q": "IDE 里的 ghost text 是什么，怎么配合流式？",
+    "q_en": "What is ghost text in the IDE, and how does it pair with streaming?",
+    "why": "ghost text = 在按 Tab 接受之前，以半透明覆盖层增量显示的补全预览。流式每推来一块已验证 token，插件就把 ghost text 往后延长，用户边看边决定接不接受，感觉「边想边补」。",
+    "why_en": "Ghost text is the semi-transparent inline preview of the suggestion shown before Tab, extended incrementally as each streamed verified chunk arrives so the user watches it grow and decides whether to accept.",
+    "tags": ["llm-sd", "code-gen", "streaming"],
+    "options": [
+      "ghost text 是编译错误的红色下划线提示",
+      "ghost text 是把补全直接写进文件、需要撤销才能拒绝",
+      "ghost text = 按 Tab 前的半透明覆盖层预览，随流式到来的 token 增量延长",
+      "ghost text 是隐藏的日志，只在后台记录不显示给用户"
+    ],
+    "options_en": [
+      "Ghost text is the red underline hint for compile errors.",
+      "Ghost text writes the completion directly into the file, requiring undo to reject.",
+      "Ghost text = the semi-transparent overlay preview before Tab, extended incrementally as streamed tokens arrive.",
+      "Ghost text is a hidden log recorded in the background and never shown to the user."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "红色下划线是诊断提示，不是补全预览；ghost text 展示的是待接受的建议。",
+      "ghost text 是「未提交」的半透明预览，不接受就不落盘，不需要撤销，正是为了零成本拒绝。",
+      "对；半透明覆盖层让用户在按 Tab 前看到建议，配合流式逐块延长，体验顺滑。",
+      "ghost text 是显式给用户看的内联预览，不是后台隐藏日志。"
+    ],
+    "optionExplanations_en": [
+      "A red underline is a diagnostic hint, not a completion preview; ghost text shows the pending suggestion.",
+      "Ghost text is an uncommitted semi-transparent preview that isn't written unless accepted, so no undo is needed — enabling zero-cost rejection.",
+      "Correct — the semi-transparent overlay lets users see the suggestion before Tab, extended chunk by chunk with streaming for a smooth feel.",
+      "Ghost text is an explicit inline preview shown to the user, not a hidden background log."
+    ],
+    "termDefinitions": [
+      { "term": "ghost text / 幽灵文本", "meaning": "IDE 中按 Tab 接受前显示的半透明补全预览，随流式 token 增量延长，不接受就不写入文件。", "meaningEn": "Ghost text is the semi-transparent completion preview shown before Tab, extended incrementally with streamed tokens and never written to the file unless accepted." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-015",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cancellation",
+    "scenario": "开发者在补全生成到一半时继续打字，前缀上下文变了，正在生成的补全已经过时。",
+    "scenario_en": "The developer keeps typing mid-generation; the prefix context changes and the in-flight completion goes stale.",
+    "q": "开发者边打字边生成、不做取消会有什么后果？",
+    "q_en": "What happens if the developer keeps typing during generation and there's no cancellation?",
+    "why": "前缀一变，正在生成的补全就过时、没人会接受，但后端还在继续跑——白白占着 GPU 算力和 batch 槽位。没有取消机制，这些无效生成会挤占容量、抬高别人的延迟。所以要在生成中途能被取消、及时释放 GPU。",
+    "why_en": "Once the prefix changes, the in-flight completion is stale and won't be accepted, yet the backend keeps computing, wasting GPU compute and a batch slot, so without cancellation these dead generations squeeze capacity and inflate others' latency.",
+    "tags": ["llm-sd", "code-gen", "cancellation"],
+    "options": [
+      "没后果：过时的补全也能照常显示，用户接受即可",
+      "过时补全仍在跑、白占 GPU 与 batch 槽位，挤占容量、抬高他人延迟，所以必须能取消",
+      "后端会自动感知前缀变化并瞬间停止，无需任何取消协议",
+      "只影响这一个请求变慢，不会影响其他并发请求"
+    ],
+    "options_en": [
+      "No consequence: a stale completion still displays fine and the user can accept it.",
+      "The stale completion keeps running, wasting GPU and a batch slot, squeezing capacity and inflating others' latency, so cancellation is required.",
+      "The backend automatically senses the prefix change and stops instantly, needing no cancellation protocol.",
+      "It only slows this one request, with no effect on other concurrent requests."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "前缀已变，补全和当前代码对不上，用户不会接受；继续显示反而是噪声。",
+      "对；无效生成占着 GPU 和 batch 槽，等于偷走别人的容量，高并发下直接推高整体延迟，必须主动取消回收。",
+      "后端不会自动知道客户端改了前缀，必须由 IDE 显式发取消信号，模型不会读心。",
+      "它占用共享的 GPU/batch 资源，浪费会外溢到其他并发请求，不是孤立的。"
+    ],
+    "optionExplanations_en": [
+      "With a changed prefix the completion no longer matches the current code and won't be accepted; still showing it is just noise.",
+      "Correct — dead generations hold a GPU and batch slot, effectively stealing capacity and directly raising overall latency under load, so you must cancel and reclaim.",
+      "The backend can't automatically know the client changed the prefix; the IDE must send an explicit cancel — the model can't read minds.",
+      "It occupies shared GPU/batch resources, so the waste spills over to other concurrent requests — not isolated."
+    ],
+    "termDefinitions": [
+      { "term": "stale completion / 过时补全", "meaning": "前缀上下文改变后仍在生成、已不再匹配当前代码的补全，继续算就是浪费 GPU。", "meaningEn": "A stale completion is one still generating after the prefix context changed so it no longer matches the code; continuing to compute it wastes GPU." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-016",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cancellation-protocol",
+    "q": "把补全的取消协议按发生顺序排好：",
+    "q_en": "Order the completion cancellation protocol by when each step happens:",
+    "steps": [
+      "后端在两次验证 pass 之间检查 cancel 标志",
+      "开发者继续打字，改变了前缀上下文",
+      "命中 cancel 就提前终止生成、释放 GPU 槽位",
+      "IDE 对每次改变前缀的击键发出 cancel RPC"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "取消链：击键改前缀 → IDE 发 cancel RPC → 后端在验证 pass 之间检查 cancel 标志 → 命中就提前终止、释放 GPU 槽位。关键是后端在两次 pass 的间隙查标志，才能中途停下而不是等整段跑完，及时把算力还给他人。",
+    "why_en": "The cancel chain: a keystroke changes the prefix, the IDE sends a cancel RPC, the backend checks the cancel flag between verification passes, and on a hit it terminates early and frees the GPU slot.",
+    "tags": ["llm-sd", "code-gen", "cancellation"],
+    "diagram": "flowchart LR\n  K[\"击键改前缀\"] --> C[\"IDE 发 cancel RPC\"]\n  C --> B[\"pass 间检查 cancel 标志\"]\n  B --> T[\"提前终止, 释放 GPU\"]",
+    "termDefinitions": [
+      { "term": "cancel RPC / 取消调用", "fullName": "cancel Remote Procedure Call", "meaning": "IDE 在前缀改变时向后端发的远程调用，请求终止已过时的补全生成。", "meaningEn": "A cancel RPC (Remote Procedure Call) is the IDE's request to the backend to abort an in-flight, now-stale completion when the prefix changes." },
+      { "term": "cancel flag / 取消标志", "meaning": "后端在两次验证 pass 之间检查的一个标记，置位就提前终止生成、释放 GPU 槽位。", "meaningEn": "A cancel flag is a marker the backend checks between verification passes; if set, it terminates generation early and frees the GPU slot." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "eager-vs-debounced",
+    "scenario": "取消策略要在「立即取消」和「防抖等待」之间选：立即省算力但可能取消掉用户停顿后本会接受的补全；防抖会浪费一点算力但避免闪烁。",
+    "scenario_en": "The cancel strategy chooses between eager (immediate) and debounced: eager saves compute but may cancel completions the user would accept after a pause; debounced wastes some compute but avoids flicker.",
+    "q": "取消该用 eager 还是 debounced（约 50ms）？",
+    "q_en": "Should cancellation be eager or debounced (~50ms)?",
+    "why": "多数场景选 debounced：击键后等约 50ms 再决定取消，避免一边打字一边频繁取消/重启造成的补全闪烁，代价是浪费一点算力。eager 立即取消最省算力，但会误杀用户停顿一下本会接受的补全。防抖窗口就是平衡算力与体验稳定性的旋钮。",
+    "why_en": "Usually debounced: wait ~50ms after a keystroke before canceling to avoid flicker from constant cancel/restart while typing, at the cost of some wasted compute, whereas eager saves the most compute but kills completions the user would accept after a brief pause.",
+    "tags": ["llm-sd", "code-gen", "cancellation"],
+    "tradeoff": "eager（立即取消最省算力，但误杀停顿后会接受的补全）vs debounced ~50ms（浪费点算力，但防闪烁、体验稳）",
+    "whenOtherWins": "当 GPU 极度紧张、每一分算力都要省，且用户打字很快、几乎不会中途停顿时，eager 立即取消更划算。",
+    "options": [
+      "永远 eager：立即取消最省算力，体验问题可以忽略",
+      "把防抖窗口设到 2 秒以上，越久越稳，算力浪费不用管",
+      "取消策略无所谓，两者对算力和体验的影响完全一样",
+      "多数场景用 debounced（约 50ms）：防止频繁取消/重启的闪烁，代价是浪费一点算力"
+    ],
+    "options_en": [
+      "Always eager: immediate cancel saves the most compute and the experience issue is negligible.",
+      "Set the debounce window above 2 seconds — longer is more stable and wasted compute doesn't matter.",
+      "The cancel strategy doesn't matter; both affect compute and experience identically.",
+      "Usually debounced (~50ms): prevents flicker from constant cancel/restart, at the cost of some wasted compute."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "一味 eager 会在用户短暂停顿时误杀本会接受的补全，体验代价真实存在，不能忽略。",
+      "2 秒防抖太久，用户早已看不到及时补全，反而拖慢体验；50ms 量级才是合适的平衡点。",
+      "两者对算力和体验的取舍相反：eager 省算力伤体验、debounced 稳体验费算力，绝非一样。",
+      "对；50ms 防抖是常见平衡——挡住闪烁、保住停顿后可接受的补全，只牺牲少量算力，是可调旋钮。"
+    ],
+    "optionExplanations_en": [
+      "Pure eager kills completions the user would accept after a brief pause; the experience cost is real and can't be ignored.",
+      "A 2-second debounce is far too long — users no longer see timely completions, worsening experience; the ~50ms scale is the right balance.",
+      "The two trade off oppositely: eager saves compute but hurts experience, debounced steadies experience but wastes compute — not identical.",
+      "Correct — a ~50ms debounce is the common balance, blocking flicker and preserving post-pause acceptable completions at the price of slight wasted compute, a tunable knob."
+    ],
+    "termDefinitions": [
+      { "term": "eager cancellation / 立即取消", "meaning": "击键即刻取消在途补全，最省算力，但可能误杀用户停顿后本会接受的补全。", "meaningEn": "Eager cancellation aborts the in-flight completion immediately on a keystroke, saving the most compute but possibly killing ones the user would accept after a pause." },
+      { "term": "debounced cancellation / 防抖取消", "meaning": "击键后等约 50ms 再决定取消，避免频繁取消/重启的闪烁，代价是浪费少量算力。", "meaningEn": "Debounced cancellation waits ~50ms after a keystroke before canceling to avoid cancel/restart flicker, at the cost of some wasted compute." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-018",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "debounce-window",
+    "scenario": "你要把防抖窗口定成一个具体值，用来平衡算力浪费和 UX 稳定性。",
+    "scenario_en": "You must set the debounce window to a concrete value balancing wasted compute against UX stability.",
+    "q": "防抖窗口约 50ms 是给定旋钮还是公式，它平衡什么？",
+    "q_en": "Is the ~50ms debounce window a given knob or a formula, and what does it balance?",
+    "why": "约 50ms 是一个工程旋钮/经验值，不是公式推导：太短（趋近 eager）会频繁取消、闪烁；太长会浪费算力还让取消变迟钝。它平衡的是「浪费的算力 vs UX 稳定性」，按打字速度和 GPU 压力实测调。",
+    "why_en": "The ~50ms debounce is an engineering knob, not a formula: too short (near eager) causes frequent cancels and flicker, too long wastes compute and dulls responsiveness, so it balances wasted compute against UX stability.",
+    "tags": ["llm-sd", "code-gen", "cancellation"],
+    "options": [
+      "约 50ms 是经验旋钮：太短易闪烁、太长费算力，平衡浪费算力 vs UX 稳定性，按实测调",
+      "50ms 是由 token 数和 GPU 频率算出的精确公式结果，不可调",
+      "50ms 是硬件强制的最小时间片，改不了也不需要理解",
+      "50ms 是模型的推理延迟本身，和取消策略无关"
+    ],
+    "options_en": [
+      "~50ms is an empirical knob: too short flickers, too long wastes compute, balancing wasted compute vs UX stability, tuned by measurement.",
+      "50ms is an exact formula result from token count and GPU clock, not tunable.",
+      "50ms is a hardware-mandated minimum time slice, unchangeable and needn't be understood.",
+      "50ms is the model's inference latency itself, unrelated to the cancel strategy."
+    ],
+    "answer": [0],
+    "termDefinitions": [
+      { "term": "debounce window / 防抖窗口", "meaning": "击键后延迟取消的等待时长（约 50ms），一个平衡算力浪费与 UX 稳定性的经验旋钮，非公式推导。", "meaningEn": "The debounce window is the delay (~50ms) before acting on a cancel after a keystroke — an empirical knob balancing wasted compute against UX stability, not a formula." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-019",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "staff-signal",
+    "scenario": "面试中你只讲了模型怎么解码，没提客户端流式和取消，面试官觉得少了 Staff+ 信号。",
+    "scenario_en": "In the interview you only covered model decoding, not client-side streaming and cancellation, and the interviewer feels a Staff+ signal is missing.",
+    "q": "为什么「流式+取消」是 Staff+ 区分点？",
+    "q_en": "Why is streaming + cancellation a Staff+ differentiator?",
+    "why": "因为它把 ML 服务和客户端系统思维打通：不只优化模型解码，还要设计 IDE 与后端的流式协议、逐键取消、GPU 回收。只讲模型会漏掉这块跨栈设计，而端到端体验和算力效率恰恰靠它，正是 Staff+ 想看的系统级视角。",
+    "why_en": "Because it bridges ML serving with client-side systems thinking — designing the IDE↔backend streaming protocol, per-keystroke cancellation, and GPU reclamation — and covering only the model misses this cross-stack design that Staff+ interviews want.",
+    "tags": ["llm-sd", "code-gen", "serving"],
+    "options": [
+      "因为流式让模型准确率更高，Staff+ 只看准确率",
+      "因为它是最难实现的算法，Staff+ 只看编码难度",
+      "因为它打通 ML 服务与客户端系统思维（流式协议、逐键取消、GPU 回收），是跨栈系统级设计",
+      "因为只有 Staff+ 才有权限改 IDE 插件，普通工程师碰不到"
+    ],
+    "options_en": [
+      "Because streaming makes the model more accurate, and Staff+ only cares about accuracy.",
+      "Because it's the hardest algorithm to implement, and Staff+ only cares about coding difficulty.",
+      "Because it bridges ML serving with client-side systems thinking (streaming protocol, per-keystroke cancel, GPU reclamation), a cross-stack systems design.",
+      "Because only Staff+ engineers have permission to edit IDE plugins, which others can't touch."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "流式不改准确率，它改的是感知延迟和算力效率；Staff+ 看的是系统级取舍，不只是准确率。",
+      "重点不是实现难度，而是跨越模型-服务-客户端的整体设计视角。",
+      "对；能同时把解码、流式协议、取消与 GPU 回收讲清楚，体现的是端到端系统思维，这才是 Staff+ 差异。",
+      "权限不是重点；关键是能否设计跨栈的体验与算力方案，人人都可以在设计里讲到它。"
+    ],
+    "optionExplanations_en": [
+      "Streaming doesn't change accuracy; it changes perceived latency and compute efficiency, and Staff+ looks for systems-level tradeoffs, not just accuracy.",
+      "The point isn't implementation difficulty but the holistic view spanning model, serving, and client.",
+      "Correct — articulating decoding, streaming protocol, cancellation, and GPU reclamation together shows end-to-end systems thinking, the Staff+ differentiator.",
+      "Permissions aren't the point; it's whether you can design the cross-stack experience and compute plan, which anyone can discuss."
+    ],
+    "termDefinitions": [
+      { "term": "cross-stack design / 跨栈设计", "meaning": "同时贯通模型解码、服务端流式协议和客户端交互的端到端设计能力，Staff+ 面试的关键信号。", "meaningEn": "Cross-stack design is end-to-end design spanning model decoding, server streaming protocol, and client interaction — a key Staff+ interview signal." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-020",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "feedback-loop",
+    "scenario": "静态部署的补全模型永远不会变好，你想让线上的接受/拒绝行为反哺训练。",
+    "scenario_en": "A statically deployed completion model never improves; you want online accept/reject behavior to feed training.",
+    "q": "怎么把补全的接受/拒绝闭成一条反馈回路？",
+    "q_en": "How do you close accept/reject into a feedback loop?",
+    "why": "对每次补全事件记录三样：prompt 上下文、补全内容、结果（接受/拒绝/接受后编辑），把这些转成微调信号回流模型。serve-observe-retrain 这条闭环，正是把静态部署变成会自我提升的生产 ML 系统的关键。",
+    "why_en": "Log each completion event with three things — prompt context, the completion, and the outcome (accept/reject/edit) — and convert them into fine-tuning signal fed back to the model, so the serve-observe-retrain loop turns static deployment into a self-improving system.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "只记录接受率一个数字，定期看看仪表盘就够了",
+      "对每次事件记 prompt 上下文+补全+结果，转成微调信号回流，构成 serve-observe-retrain 闭环",
+      "把用户所有代码原样上传训练，不做任何筛选和处理",
+      "让模型上线后冻结，永不更新，避免引入风险"
+    ],
+    "options_en": [
+      "Just record the single ACR number and periodically glance at a dashboard.",
+      "Log each event with prompt context + completion + outcome, convert into fine-tuning signal fed back, forming a serve-observe-retrain loop.",
+      "Upload all user code verbatim for training with no filtering or processing.",
+      "Freeze the model after launch and never update it to avoid risk."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "只看 ACR 仪表盘是监控，不是反馈闭环——数据没回流训练，模型不会因此变好。",
+      "对；记齐 (上下文, 补全, 结果) 才能构成可训练样本，回流微调让模型持续改进，这是生产 ML 系统的标志。",
+      "原样上传用户代码有隐私/许可风险，且噪声标签会污染训练，必须先过隐私处理和筛选。",
+      "冻结虽稳但永不进步，静态部署会被持续迭代的竞品甩开，反馈闭环才是持续改进的引擎。"
+    ],
+    "optionExplanations_en": [
+      "Watching only an ACR dashboard is monitoring, not a feedback loop — data never flows back to training, so the model doesn't improve.",
+      "Correct — logging (context, completion, outcome) yields trainable samples, and feeding them back for fine-tuning continuously improves the model, the mark of a production ML system.",
+      "Uploading user code verbatim risks privacy/license and noisy labels corrupt training; it must first pass privacy processing and filtering.",
+      "Freezing is stable but never improves; static deployment falls behind iterating competitors, while the feedback loop is the engine of continuous improvement."
+    ],
+    "termDefinitions": [
+      { "term": "serve-observe-retrain loop / 服务-观察-再训练闭环", "meaning": "把线上补全的接受/拒绝行为记录、转成微调信号回流模型的循环，使部署持续自我提升。", "meaningEn": "The serve-observe-retrain loop logs online accept/reject behavior, converts it into fine-tuning signal, and feeds it back so the deployment keeps improving." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-021",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "signal-types",
+    "scenario": "你要把四种补全反馈事件按标签质量、数量和微调用途分类，好决定各自怎么用。",
+    "scenario_en": "You classify the four completion feedback events by label quality, volume, and fine-tuning use to decide how each is used.",
+    "q": "四类补全反馈信号在质量与用途上怎么区分？",
+    "q_en": "How do the four completion feedback signals differ in quality and use?",
+    "why": "四类：接受未改（强正例，做 SFT 正样本）、拒绝/忽略（弱负例，量大，做偏好对的负例但要滤噪）、接受后编辑（最富信息，编辑 diff→DPO/奖励建模的定向纠偏）、批量忽略（多为切换上下文的噪声，直接过滤）。质量和用途各不相同，不能一锅端。",
+    "why_en": "Four types — accepted-no-edit (strong positive → SFT), rejected/dismissed (weak negative, high volume → preference-pair negatives, filter noise), accepted-then-edited (richest, edit diff → targeted correction in DPO/reward modeling), and bulk dismissal (context-switch noise → filter out).",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "tradeoff": "接受后编辑（信息最富、量最少）vs 拒绝/忽略（信息弱、量最大）——质量与数量成反比",
+    "table": {
+      "headers": ["信号", "标签质量", "量", "微调用途"],
+      "rows": [
+        ["接受未改", "强正例", "中", "SFT 正例"],
+        ["拒绝/忽略", "弱负例", "高", "偏好对负例(滤噪)"],
+        ["接受后编辑", "富(编辑diff)", "低", "DPO/奖励纠偏"],
+        ["批量忽略", "噪声", "中", "过滤掉"]
+      ]
+    },
+    "options": [
+      "四类信号质量相同，都直接当正例喂进 SFT 就行",
+      "拒绝信号最有价值，因为量最大，应当作主要正样本",
+      "批量忽略是最强正信号，说明用户很满意所以不再看",
+      "接受未改=强正例(SFT)、拒绝=弱负例(偏好对,滤噪)、接受后编辑=最富(DPO纠偏)、批量忽略=噪声(过滤)"
+    ],
+    "options_en": [
+      "All four signals have equal quality; just feed them all as positives into SFT.",
+      "The reject signal is most valuable because it has the highest volume, so use it as the main positive.",
+      "Bulk dismissal is the strongest positive signal, showing users are so satisfied they stop looking.",
+      "Accepted-no-edit = strong positive (SFT), rejected = weak negative (preference pairs, filter), accepted-then-edited = richest (DPO correction), bulk dismissal = noise (filter)."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "四类质量差别很大：编辑 diff 富信息、拒绝弱、批量忽略是噪声，混作一类正例会污染训练。",
+      "量大不等于质量高：拒绝是弱负例、还含噪声，当正样本方向完全反了。",
+      "批量忽略往往是开会/切上下文导致的连续忽略，是噪声而非满意信号，应过滤掉。",
+      "对；这就是四象限用途——正例进 SFT、负例进偏好对、编辑 diff 进 DPO 纠偏、批量忽略滤除。"
+    ],
+    "optionExplanations_en": [
+      "Quality differs greatly: edit diffs are rich, rejects weak, bulk dismissals noise; lumping them as positives corrupts training.",
+      "High volume isn't high quality: rejects are weak negatives and noisy — using them as positives is entirely backwards.",
+      "Bulk dismissal is usually consecutive ignores from meetings/context switches — noise, not satisfaction — and should be filtered.",
+      "Correct — this is the four-way use: positives → SFT, negatives → preference pairs, edit diffs → DPO correction, bulk dismissal → filtered."
+    ],
+    "termDefinitions": [
+      { "term": "accepted-then-edited / 接受后编辑", "meaning": "用户 30 秒内接受后又修改补全；编辑 diff 精确指出输出偏离意图之处，是最富信息的信号。", "meaningEn": "Accepted-then-edited is when the user accepts then modifies within 30s; the edit diff pinpoints where output diverged from intent — the richest signal." },
+      { "term": "SFT", "fullName": "Supervised Fine-Tuning", "meaning": "用带标签样本（这里是接受未改的强正例）做监督微调。", "meaningEn": "SFT (Supervised Fine-Tuning) trains on labeled samples, here accepted-no-edit strong positives." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "richest-signal",
+    "scenario": "你的微调预算有限，四类反馈信号里要优先挖掘信息量最大的一类。",
+    "scenario_en": "With a limited fine-tuning budget, you prioritize mining the most information-rich of the four feedback signals.",
+    "q": "哪类反馈信号信息量最大，为什么？",
+    "q_en": "Which feedback signal is richest, and why?",
+    "why": "接受后编辑最富：编辑 diff 精确显示模型输出在哪里偏离了开发者意图——不是「对/错」一个比特，而是「该怎么改」的定向纠偏。把同一 prompt 的原始输出与编辑后版本配成偏好对，喂进 DPO/奖励建模，纠偏最精准。",
+    "why_en": "Accepted-then-edited is richest because the edit diff shows exactly where output diverged from intent — not a single right/wrong bit but a directional correction — so pairing the original and edited versions from the same prompt for DPO/reward modeling is the most precise.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "tradeoff": "接受后编辑（信息最富但量少）vs 纯接受/拒绝（量多但只有一个比特的对/错）",
+    "whenOtherWins": "若目标只是让模型多产出「一眼就接受」的补全、不需要精修方向，纯接受的强正例做 SFT 更简单直接。",
+    "options": [
+      "接受后编辑：编辑 diff 精确显示输出在哪偏离意图，配成偏好对喂 DPO/奖励建模，纠偏最精准",
+      "批量忽略：量大又集中，最能代表用户偏好",
+      "拒绝/忽略：一个明确的负信号就够训练，不需要更多细节",
+      "接受未改：它是完美样本，模型照抄即可，无需任何纠偏"
+    ],
+    "options_en": [
+      "Accepted-then-edited: the edit diff shows exactly where output diverged from intent, paired for DPO/reward modeling for the most precise correction.",
+      "Bulk dismissal: high and concentrated volume best represents user preference.",
+      "Rejected/dismissed: one clear negative signal is enough to train on, needing no more detail.",
+      "Accepted-no-edit: it's a perfect sample the model just copies, needing no correction."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；编辑 diff 携带「往哪个方向改」的密集信息，远超一个对/错比特，是 DPO/奖励建模最值钱的定向纠偏信号。",
+      "批量忽略多是上下文切换的噪声，不代表偏好，应过滤而非当宝。",
+      "拒绝只给一个弱负比特，说不清哪里错、该怎么改，信息量远不如编辑 diff。",
+      "接受未改是好的正例（做 SFT），但它只确认「这条对」，不含纠偏方向，信息量不及编辑 diff。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the edit diff carries dense 'which direction to fix' information beyond a right/wrong bit, the most valuable directional correction for DPO/reward modeling.",
+      "Bulk dismissal is mostly context-switch noise, not preference, and should be filtered, not prized.",
+      "A reject gives only a weak negative bit, not where it went wrong or how to fix — far less information than an edit diff.",
+      "Accepted-no-edit is a good positive (for SFT), but it only confirms 'this one is right' without a correction direction, less rich than an edit diff."
+    ],
+    "termDefinitions": [
+      { "term": "edit diff / 编辑差异", "meaning": "开发者接受后对补全所做修改的具体差异，精确指出模型输出偏离意图之处。", "meaningEn": "An edit diff is the specific changes a developer makes to an accepted completion, pinpointing where the model's output diverged from intent." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-023",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "dpo",
+    "scenario": "同一个 prompt 下你手头有「被接受的正例」和「被拒绝/编辑前的负例」，想直接用偏好对训练。",
+    "scenario_en": "For the same prompt you have an accepted positive and a rejected/pre-edit negative, and want to train on preference pairs directly.",
+    "q": "DPO 怎么用同一 prompt 的正负偏好对训练？",
+    "q_en": "How does DPO train on positive/negative preference pairs from the same prompt?",
+    "why": "DPO（直接偏好优化）跳过单独训一个奖励模型，直接用「同一 prompt 下正例优于负例」的成对偏好去微调 policy——把补全的接受/拒绝/编辑前后组成偏好对，就能直接优化模型更常产出被接受的那类输出。",
+    "why_en": "DPO (Direct Preference Optimization) skips training a separate reward model and fine-tunes the policy directly on paired preferences (positive over negative for the same prompt), so accept/reject/pre-edit pairs directly push the model toward accepted-style outputs.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "DPO 先训一个大 reward model，再用 PPO 强化学习，步骤和经典 RLHF 完全一样",
+      "DPO 只用正例做监督微调，不需要负例，也不涉及偏好",
+      "DPO 直接用同一 prompt 的正优于负成对偏好微调 policy，跳过单独的奖励模型",
+      "DPO 是一种数据去重算法，用来删掉重复的补全日志"
+    ],
+    "options_en": [
+      "DPO first trains a large reward model, then uses PPO reinforcement learning — identical to classic RLHF.",
+      "DPO uses only positives for supervised fine-tuning, needing no negatives and no preferences.",
+      "DPO fine-tunes the policy directly on positive-over-negative pairs from the same prompt, skipping a separate reward model.",
+      "DPO is a deduplication algorithm for removing duplicate completion logs."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "DPO 的卖点恰恰是免去单独的奖励模型和 PPO 那套；说它和经典 RLHF 一样是搞错了。",
+      "DPO 的核心就是成对偏好（正 vs 负），只用正例就退化成 SFT、不是 DPO。",
+      "对；DPO 用成对偏好直接优化 policy，工程上更简单，天然契合补全的接受/拒绝/编辑前后配对。",
+      "DPO 是偏好优化训练法，不是去重算法，二者毫不相干。"
+    ],
+    "optionExplanations_en": [
+      "DPO's selling point is precisely skipping a separate reward model and PPO; equating it with classic RLHF is wrong.",
+      "DPO's core is paired preference (positive vs negative); using only positives degenerates to SFT, not DPO.",
+      "Correct — DPO optimizes the policy directly on paired preferences, simpler in practice and a natural fit for completion accept/reject/pre-edit pairs.",
+      "DPO is a preference-optimization method, not a deduplication algorithm — unrelated."
+    ],
+    "termDefinitions": [
+      { "term": "DPO", "fullName": "Direct Preference Optimization", "meaning": "直接用成对偏好（正优于负）微调 policy 的对齐方法，省去单独训练奖励模型和 PPO。", "meaningEn": "DPO (Direct Preference Optimization) fine-tunes the policy directly on paired preferences (positive over negative), skipping a separate reward model and PPO." },
+      { "term": "preference pair / 偏好对", "meaning": "同一 prompt 下一个更受偏好的输出与一个较差输出组成的训练样本。", "meaningEn": "A preference pair is a training sample of a more-preferred and a less-preferred output for the same prompt." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-024",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "noise-filtering",
+    "scenario": "日志里有大量「连续多次忽略」的事件，往往发生在开发者开会或切换上下文时。",
+    "scenario_en": "The logs contain many consecutive-dismissal events, often when developers are in meetings or switching context.",
+    "q": "批量忽略这类信号不过滤会怎样？",
+    "q_en": "What happens if you don't filter bulk-dismissal signals?",
+    "why": "批量忽略多是开会/切上下文造成的连续无视，与补全质量无关——它是噪声。若当成真负例喂训练，会教模型「这些本来不错的补全也不好」，把好样本错误惩罚，污染偏好数据、拉低模型。所以要先过滤这类噪声标签。",
+    "why_en": "Bulk dismissals are mostly context-switch noise unrelated to completion quality, so treating them as real negatives teaches the model that good completions are bad, mislabeling and corrupting the preference data, which is why you filter this noise first.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "不过滤也没关系，忽略越多说明补全越差，是可靠的负信号",
+      "不过滤会把开会/切上下文的噪声当真负例，错误惩罚本来不错的补全，污染偏好数据",
+      "不过滤会让训练变快，因为样本更多，模型收敛更好",
+      "批量忽略是强正信号，不过滤会让模型误以为补全太好"
+    ],
+    "options_en": [
+      "No filtering is fine; more dismissals mean worse completions — a reliable negative signal.",
+      "Not filtering treats meeting/context-switch noise as real negatives, wrongly penalizing good completions and corrupting the preference data.",
+      "Not filtering speeds training because more samples mean better convergence.",
+      "Bulk dismissal is a strong positive; not filtering makes the model think completions are too good."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "连续忽略常来自开会/切上下文，和补全好坏无关，把它当可靠负信号是误读噪声。",
+      "对；噪声标签会让模型把好补全也学成「差」，偏好数据被污染，越训越偏，必须先滤除。",
+      "更多样本若是噪声只会更快学坏，不是收敛更好——垃圾进垃圾出。",
+      "批量忽略是噪声不是正信号，方向完全反了，既非正也非可靠负。"
+    ],
+    "optionExplanations_en": [
+      "Consecutive dismissals often come from meetings/context switches, unrelated to quality; treating them as a reliable negative misreads noise.",
+      "Correct — noisy labels teach the model that good completions are bad, corrupting preference data so it drifts worse — filter them first.",
+      "More samples, if noisy, just learn wrong faster, not converge better — garbage in, garbage out.",
+      "Bulk dismissal is noise, not a positive signal — entirely backwards, neither positive nor a reliable negative."
+    ],
+    "termDefinitions": [
+      { "term": "bulk dismissal / 批量忽略", "meaning": "开发者连续多次忽略补全，多因开会或切换上下文，是与质量无关的噪声，应从训练中过滤。", "meaningEn": "Bulk dismissal is many consecutive ignores, usually from meetings or context switches — quality-irrelevant noise to filter out of training." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-025",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "feedback-privacy",
+    "scenario": "反馈闭环要把开发者真实写的代码（prompt 上下文+补全）记日志再训练，这些代码可能含敏感/专有内容。",
+    "scenario_en": "The feedback loop logs developers' real code (prompt context + completion) for training, and that code may contain sensitive/proprietary content.",
+    "q": "把线上补全日志喂回训练前，隐私上必须做什么？",
+    "q_en": "Before feeding logged completions back into training, what must you do for privacy?",
+    "why": "记录的真实代码可能含专有逻辑、密钥、内部 URL，直接回训会让模型记住并可能逐字吐出。必须先套用隐私约束——去重 + 差分隐私（DP）——再进训练，把评估-隐私那套防线接到反馈管线上，否则闭环会变成泄露源。",
+    "why_en": "Logged real code may contain proprietary logic, keys, or internal URLs, so feeding it back risks memorization and verbatim leakage; you must apply the privacy constraints — dedup + differential privacy — before training, wiring the same defenses into the feedback pipeline.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "不用做什么，日志是内部数据，直接回训最安全",
+      "只需加密传输日志，落到训练集里就不用再管隐私",
+      "把日志公开发布，让社区帮忙清洗敏感信息",
+      "先套用隐私约束——去重 + 差分隐私——再回训，防止记住并逐字吐出敏感代码"
+    ],
+    "options_en": [
+      "Nothing needed; logs are internal data, so feeding them straight back is safest.",
+      "Just encrypt the logs in transit; once in the training set, privacy no longer matters.",
+      "Publish the logs publicly so the community helps scrub sensitive info.",
+      "Apply privacy constraints — dedup + differential privacy — before feeding back, to prevent memorizing and verbatim-leaking sensitive code."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "内部数据同样含专有逻辑/密钥，直接回训正是记忆化与泄露的高发路径，绝非最安全。",
+      "加密只保护传输，模型仍在明文上训练，落进训练集后照样会被记住吐出，隐私要在训练侧处理。",
+      "公开日志本身就是重大泄露事故，绝不能这么做。",
+      "对；反馈管线要接上去重+DP 的隐私防线，才能让「日志→训练」不成为敏感代码的泄露源。"
+    ],
+    "optionExplanations_en": [
+      "Internal data still holds proprietary logic/keys; feeding it straight back is exactly the memorization/leakage path — not safest.",
+      "Encryption protects transit only; the model still trains on plaintext and can memorize and emit it, so privacy must be handled training-side.",
+      "Publishing the logs is itself a major leak incident and must never be done.",
+      "Correct — wiring dedup+DP into the feedback pipeline keeps 'logs → training' from becoming a leakage source for sensitive code."
+    ],
+    "termDefinitions": [
+      { "term": "privacy-aware feedback pipeline / 隐私感知反馈管线", "meaning": "在把补全日志回流训练前先做去重+差分隐私处理，防止敏感/专有代码被记住并逐字泄露。", "meaningEn": "A privacy-aware feedback pipeline applies dedup + differential privacy to logged completions before training, preventing sensitive/proprietary code from being memorized and leaked." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-026",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "signal-usage",
+    "scenario": "你要把四类补全反馈各自路由到正确的微调用途，别把噪声当训练样本。",
+    "scenario_en": "You must route each of the four completion signals to its correct fine-tuning use and not treat noise as training data.",
+    "q": "四类反馈信号的微调用途，哪些对？(多选)",
+    "q_en": "Which fine-tuning uses of the four feedback signals are correct? (multiple)",
+    "why": "接受未改→SFT 正例；拒绝/忽略→偏好对里的负例（先滤噪）；接受后编辑→用编辑 diff 做 DPO/奖励建模的定向纠偏（最高价值）。批量忽略是上下文切换噪声，应过滤掉、不进训练。",
+    "why_en": "Accepted-no-edit → SFT positives; rejected/dismissed → negatives in preference pairs (after filtering noise); accepted-then-edited → edit-diff-driven DPO/reward correction (highest value); bulk dismissal is context-switch noise to filter out.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "接受未改 → 作为 SFT 的强正样本",
+      "接受后编辑 → 用编辑 diff 做 DPO/奖励建模的定向纠偏",
+      "拒绝/忽略 → 作为偏好对里的负例（先滤噪）",
+      "批量忽略 → 作为强正样本直接喂 SFT"
+    ],
+    "options_en": [
+      "Accepted-no-edit → strong positive sample for SFT.",
+      "Accepted-then-edited → edit-diff-driven targeted correction in DPO/reward modeling.",
+      "Rejected/dismissed → negatives in preference pairs (after filtering noise).",
+      "Bulk dismissal → strong positive fed straight into SFT."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；接受且 30 秒不改是强正例，最适合当 SFT 的正样本。",
+      "对；编辑 diff 指出该往哪改，是 DPO/奖励建模里信息量最高的纠偏信号。",
+      "对；拒绝是弱负例，可放进偏好对的负侧，但要先滤掉批量忽略这类噪声。",
+      "错；批量忽略是切换上下文的噪声，既不是正例也不可靠，应过滤而非当强正样本。"
+    ],
+    "optionExplanations_en": [
+      "Correct — accepted with no edit within 30s is a strong positive, ideal as an SFT positive.",
+      "Correct — the edit diff shows which way to fix, the highest-information correction signal for DPO/reward modeling.",
+      "Correct — rejects are weak negatives usable on the negative side of preference pairs, after filtering noise like bulk dismissal.",
+      "Wrong — bulk dismissal is context-switch noise, neither positive nor reliable, and should be filtered, not used as a strong positive."
+    ],
+    "termDefinitions": [
+      { "term": "preference pair / 偏好对", "meaning": "同一 prompt 下正例与负例组成的训练样本，用于 DPO 或奖励建模。", "meaningEn": "A preference pair is a positive and a negative output for the same prompt, used for DPO or reward modeling." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-027",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "l4-vs-l5",
+    "scenario": "同样讲代码补全服务，L4 和 L5 候选人的回答被区分开了。",
+    "scenario_en": "On the same code-completion serving question, L4 and L5 candidates are told apart.",
+    "q": "从 L4 到 L5，回答关键多了什么？",
+    "q_en": "From L4 to L5, what does the answer crucially add?",
+    "why": "L4 能点名推测解码（draft-then-verify）、流式输出、记接受率，但缺取舍深度和延迟预算。L5 会量化 <200ms 预算、讲 draft 定尺寸+接受率监控、取消协议含防抖取舍、反馈信号分类→DPO，全程贯穿取舍推理——从「说得出名词」升级到「讲得清代价」。",
+    "why_en": "L4 names speculative decoding, streaming, and logging acceptance but lacks tradeoff depth and latency budgets, while L5 quantifies the <200ms budget, draft sizing plus acceptance monitoring, the cancellation protocol with debounce tradeoff, and signal types → DPO, reasoning through tradeoffs throughout.",
+    "tags": ["llm-sd", "code-gen", "seniority"],
+    "tradeoff": "L4（说得出技术名词但缺代价）vs L5（量化预算+全程取舍推理）",
+    "options": [
+      "L5 多的是量化 <200ms 预算、draft 定尺寸+接受率监控、取消防抖取舍、信号分类→DPO，全程取舍推理",
+      "L5 多的是能背出更多论文名字和作者",
+      "L5 多的是用更大的模型和更多 GPU，方案更贵",
+      "L5 和 L4 没区别，只是职级头衔不同"
+    ],
+    "options_en": [
+      "L5 adds quantifying the <200ms budget, draft sizing + acceptance monitoring, the cancellation debounce tradeoff, and signal types → DPO, with tradeoff reasoning throughout.",
+      "L5 adds reciting more paper names and authors.",
+      "L5 adds using a bigger model and more GPUs for a costlier design.",
+      "L5 and L4 are the same, differing only in title."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；L5 的标志是把每个技术都配上量化预算和取舍——不止说「用推测解码」，而是说清 draft 多大、接受率怎么监控、取消怎么权衡。",
+      "背论文名字不是分级信号；面试看的是取舍推理，不是文献量。",
+      "堆更大模型更多 GPU 是加成本不是加深度，反而可能暴露没抓住内存带宽瓶颈。",
+      "L4/L5 的差别是取舍深度与量化程度的实打实差异，不是头衔。"
+    ],
+    "optionExplanations_en": [
+      "Correct — L5's hallmark is pairing each technique with quantified budgets and tradeoffs — not just 'use speculative decoding' but how big the draft is, how acceptance is monitored, how cancellation is balanced.",
+      "Reciting paper names isn't a leveling signal; interviews assess tradeoff reasoning, not citation count.",
+      "Piling on a bigger model and more GPUs adds cost, not depth, and may reveal missing the memory-bandwidth bottleneck.",
+      "The L4/L5 gap is a real difference in tradeoff depth and quantification, not a title."
+    ],
+    "termDefinitions": [
+      { "term": "tradeoff reasoning / 取舍推理", "meaning": "对每个技术选择说清它的代价与适用边界，而非只报出名词；是 L5 与 L4 的核心区分。", "meaningEn": "Tradeoff reasoning means articulating each choice's cost and applicability, not just naming it — the core L5-vs-L4 differentiator." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-028",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "staff-plus",
+    "scenario": "面试官想看你是否具备 Staff+ 的跨领域系统思维，而不只是逐个技术堆砌。",
+    "scenario_en": "The interviewer wants Staff+ cross-cutting systems thinking, not techniques listed one by one.",
+    "q": "Staff+ 回答在 L5 之上还要贯通哪些跨领域点？",
+    "q_en": "Beyond L5, what cross-cutting points must a Staff+ answer connect?",
+    "why": "Staff+ 加的是跨领域贯通：推测解码下 batch 缩小的车队级吞吐影响、按实时接受率自适应调 K、隐私感知的反馈管线（接 DP/去重）、以及用 A/B 验证反馈闭环是否真的提升留存——把服务一路接回评估与隐私两根支柱。区分点是跨切面推理，不是单个技术。",
+    "why_en": "Staff+ adds cross-cutting connections: fleet-scale throughput impact of batch reduction under speculation, adaptive K from real-time acceptance, privacy-aware feedback pipelines wired to DP/dedup, and an A/B plan testing whether the loop actually lifts retention — tying serving back to the evaluation and privacy pillars.",
+    "tags": ["llm-sd", "code-gen", "seniority"],
+    "options": [
+      "只要把 L5 的每个点讲得更慢更详细就是 Staff+",
+      "只谈模型架构创新，不碰服务、隐私和评估",
+      "跨领域贯通：车队级吞吐、自适应 K、隐私感知反馈管线、A/B 验证留存，把服务接回评估+隐私",
+      "把所有参数默认值背下来，报得越全越 Staff+"
+    ],
+    "options_en": [
+      "Just explaining each L5 point more slowly and in more detail is Staff+.",
+      "Discussing only model-architecture innovation, avoiding serving, privacy, and evaluation.",
+      "Cross-cutting connections: fleet-scale throughput, adaptive K, privacy-aware feedback pipeline, A/B on retention, tying serving back to evaluation + privacy.",
+      "Memorizing every default parameter value — the more you recite, the more Staff+."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "讲得更慢更细还是同一层的深度，Staff+ 要的是把不同领域连起来的系统视角，不是啰嗦。",
+      "只谈架构、回避服务/隐私/评估恰恰丢掉了跨切面，是反 Staff+ 的窄视角。",
+      "对；Staff+ 的信号是跨切面推理——从单机延迟一路想到车队吞吐、自适应、隐私管线和留存 A/B，把三根支柱串成一个系统。",
+      "背参数是记忆不是判断；Staff+ 看的是跨领域权衡与系统整合能力。"
+    ],
+    "optionExplanations_en": [
+      "Explaining more slowly is the same depth; Staff+ wants the systems view connecting domains, not verbosity.",
+      "Discussing only architecture while avoiding serving/privacy/evaluation drops the cross-cut — an anti-Staff+ narrow view.",
+      "Correct — the Staff+ signal is cross-cutting reasoning, from single-node latency out to fleet throughput, adaptivity, privacy pipelines, and retention A/B, weaving the three pillars into one system.",
+      "Reciting parameters is memory, not judgment; Staff+ assesses cross-domain tradeoffs and systems integration."
+    ],
+    "termDefinitions": [
+      { "term": "fleet-scale throughput / 车队级吞吐", "meaning": "从整个 GPU 集群而非单机看吞吐：推测解码占显存缩小 batch，会在车队规模上放大成容量与成本影响。", "meaningEn": "Fleet-scale throughput views capacity across the whole GPU cluster, not one node: speculation's memory-driven batch shrink magnifies into fleet-wide capacity and cost impact." },
+      { "term": "adaptive K / 自适应 K", "meaning": "根据实时接受率动态调整 draft 一次提出的 token 数 K，接受率高就加大、低就减小。", "meaningEn": "Adaptive K dynamically tunes the draft token count K from real-time acceptance — raising it when acceptance is high, lowering it when low." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "adaptive-k",
+    "scenario": "不同文件、不同语言下接受率波动很大，固定 K 有时浪费、有时不够。",
+    "scenario_en": "Acceptance varies a lot across files and languages, so a fixed K is sometimes wasteful, sometimes too small.",
+    "q": "固定 K 不理想时，Staff+ 会怎么调 K？",
+    "q_en": "When a fixed K is suboptimal, how does a Staff+ answer tune K?",
+    "why": "用自适应 K：按实时监控的接受率动态调 K——接受率高时调大（多摊几个 token、更省），接受率低时调小（少浪费在被拒的尾部候选）。这比一个静态 K 更贴合波动的负载，是 Staff+ 级的动态取舍。",
+    "why_en": "Use adaptive K: tune K from real-time acceptance — raise it when acceptance is high to amortize more tokens, lower it when acceptance is low to waste less on rejected tail candidates, fitting fluctuating load better than a static K.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "tradeoff": "自适应 K（贴合波动负载但要监控闭环）vs 固定 K（简单但要么浪费要么不够）",
+    "whenOtherWins": "若负载和接受率非常稳定、或团队要极简可预测的系统，一个调好的固定 K 就够，省掉自适应的复杂度。",
+    "options": [
+      "把 K 永久设到最大，反正候选越多越好，不用管接受率",
+      "按实时接受率自适应调 K：高就调大多摊 token、低就调小少浪费，贴合波动负载",
+      "干脆关掉推测解码，固定 K 不好就不用投机了",
+      "把 K 绑定到 GPU 数量，有几块卡就设 K 为几"
+    ],
+    "options_en": [
+      "Fix K permanently at the maximum — more candidates is always better, ignore acceptance.",
+      "Adaptive K from real-time acceptance: raise it when high to amortize more tokens, lower it when low to waste less, fitting fluctuating load.",
+      "Just disable speculative decoding — if a fixed K is bad, drop speculation entirely.",
+      "Bind K to the number of GPUs — set K equal to the card count."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "永久最大 K 在低接受率时浪费最狠，把算力全砸在被拒的尾部候选上，正是自适应要避免的。",
+      "对；随接受率动态调 K，把「高接受率多摊、低接受率少浪费」自动化，是应对波动负载的 Staff+ 做法。",
+      "接受率通常整体仍划算，只是波动；直接关掉投机丢掉了大部分场景的加速，因噎废食。",
+      "K 与 GPU 数量无因果关系；K 是每轮 draft 候选数，该由接受率而非卡数决定。"
+    ],
+    "optionExplanations_en": [
+      "A permanent max K wastes most at low acceptance, dumping compute on rejected tail candidates — exactly what adaptivity avoids.",
+      "Correct — tuning K with acceptance automates 'amortize more when high, waste less when low', the Staff+ way to handle fluctuating load.",
+      "Acceptance is usually worthwhile overall, just fluctuating; disabling speculation forfeits speedup in most cases — overkill.",
+      "K has no causal link to GPU count; K is per-round draft candidates and should be set by acceptance, not card count."
+    ],
+    "termDefinitions": [
+      { "term": "adaptive K / 自适应 K", "meaning": "根据实时接受率动态调整 draft 每轮提出的候选 token 数 K，兼顾摊薄收益与浪费。", "meaningEn": "Adaptive K dynamically adjusts the draft's per-round candidate count K from real-time acceptance, balancing amortization against waste." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-030",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "serving-pipeline",
+    "q": "把一次低延迟代码补全的端到端流程排成正确顺序：",
+    "q_en": "Order the end-to-end flow of one low-latency code completion:",
+    "steps": [
+      "target 一次并行前向验证 K 个候选，接受前缀、从第一个分歧重采样",
+      "把 (prompt, 补全, 接受/拒绝结果) 记日志，回流做微调",
+      "draft 模型自回归快速提出 K 个候选 token",
+      "每过一个验证 pass，就用 SSE 把已验证 token 作为 ghost text 流给 IDE",
+      "击键改变前缀时发 cancel、提前终止并释放 GPU 槽位"
+    ],
+    "answerOrder": [2, 0, 3, 4, 1],
+    "why": "端到端：draft 提 K 个 → target 一次并行验证接受前缀 → 每个 pass 后用 SSE 把已验证 token 作为 ghost text 流给 IDE → 若击键改前缀则 cancel 释放 GPU → 记 (prompt, 补全, 结果) 回流微调。三根支柱（推测解码/流式取消/反馈）在一条请求上串起来。",
+    "why_en": "End to end: the draft proposes K, the target verifies in parallel and accepts a prefix, each pass streams verified ghost text to the IDE via SSE, a prefix-changing keystroke cancels and frees the GPU, and the (prompt, completion, outcome) is logged back for fine-tuning.",
+    "tags": ["llm-sd", "code-gen", "serving"],
+    "diagram": "flowchart LR\n  D[\"draft 提 K\"] --> V[\"target 并行验证\"]\n  V --> S[\"SSE 流 ghost text\"]\n  S --> C[\"击键→cancel 释放 GPU\"]\n  C --> L[\"记日志→微调\"]",
+    "termDefinitions": [
+      { "term": "ghost text / 幽灵文本", "meaning": "IDE 中按 Tab 前显示的半透明补全预览，随流式 token 增量延长。", "meaningEn": "Ghost text is the semi-transparent completion preview shown before Tab, extended incrementally with streamed tokens." },
+      { "term": "SSE", "fullName": "Server-Sent Events", "meaning": "基于 HTTP 的单向服务端推送，用来把已验证 token 块流式发给 IDE。", "meaningEn": "SSE (Server-Sent Events) is an HTTP-based one-way server push used to stream verified token chunks to the IDE." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-031",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "speculative-decoding",
+    "q": "补全推测解码的机制与关键指标（填空）",
+    "q_en": "Fill in the mechanism and key metric of speculative decoding for completions.",
+    "text": "推测解码：draft 模型自回归提出 {{K}} 个候选 token，target 模型用一次{{并行}}前向验证它们，接受一个前缀并从第一个{{分歧}}处重采样；关键指标是{{接受率}}。",
+    "text_en": "Speculative decoding: the draft model proposes {{K}} candidate tokens autoregressively, the target model verifies them in one {{parallel}} forward pass, accepting a prefix and resampling from the first {{divergence}}; the key metric is {{acceptance rate}}.",
+    "why": "记住这条主线：draft 快猜 K 个、target 一次并行验完、接受前缀、分歧处重采样，收益由接受率衡量（典型 3–5× 更少 target 前向）。它是把补全压到 <200ms 的核心机制。",
+    "why_en": "The core line: the draft guesses K, the target verifies in one parallel pass, accepts the prefix, and resamples at the divergence, with acceptance rate measuring the 3–5× fewer target passes that drive sub-200ms completions.",
+    "tags": ["llm-sd", "code-gen", "speculative-decoding"],
+    "termDefinitions": [
+      { "term": "acceptance rate / 接受率", "meaning": "draft 提出的 token 被 target 接受的比例，越高每次 target 前向出的 token 越多、延迟越低。", "meaningEn": "Acceptance rate is the fraction of draft tokens the target accepts; higher yields more tokens per target pass and lower latency." }
+    ]
+  },
+  {
+    "id": "llm-102-code-generation-serving-trade-offs-032",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "signal-to-training",
+    "scenario": "你手上有两类可信信号：接受未改的强正例，和接受后编辑的原始/编辑版配对，要决定各喂进哪种训练。",
+    "scenario_en": "You hold two trusted signals — accepted-no-edit strong positives, and accepted-then-edited original/edited pairs — and must route each to the right training.",
+    "q": "这两类信号该分别用 SFT 还是 DPO？",
+    "q_en": "Should these two signals go to SFT or DPO respectively?",
+    "why": "接受未改是无对比的强正例，最适合做 SFT——直接监督模型多产出这类被接受的补全；接受后编辑天然是「编辑后优于原始」的成对偏好，适合做 DPO/奖励建模的定向纠偏。信号形状决定训练方法：单点正例→SFT，成对偏好→DPO。",
+    "why_en": "Accepted-no-edit is a standalone strong positive best for SFT (supervise the model toward accepted-style output), while accepted-then-edited is naturally an edited-over-original preference pair suited to DPO/reward correction — the signal's shape picks the method.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "tradeoff": "SFT（用单点正例直接模仿，简单）vs DPO（用成对偏好做定向纠偏，信息更密）",
+    "whenOtherWins": "若你已训了一个奖励模型、想用它给更多在线样本打分做 RL，那走奖励模型路线比直接 DPO 更灵活。",
+    "options": [
+      "两类都塞进 SFT 当正例，编辑版和原始版都当正确答案模仿",
+      "两类都只做 DPO，接受未改也硬拆成偏好对",
+      "两类都不训练，接受/编辑信号无法用于微调",
+      "接受未改→SFT 正例；接受后编辑→编辑优于原始的偏好对做 DPO/奖励纠偏"
+    ],
+    "options_en": [
+      "Put both into SFT as positives, imitating both the edited and the original as correct answers.",
+      "Send both to DPO only, forcibly splitting accepted-no-edit into a preference pair too.",
+      "Train on neither; accept/edit signals can't be used for fine-tuning.",
+      "Accepted-no-edit → SFT positive; accepted-then-edited → edited-over-original preference pair for DPO/reward correction."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "把原始版也当正确答案模仿会自相矛盾——它恰恰是被编辑掉的较差版本，不能当 SFT 正例。",
+      "接受未改没有配对的负例，硬拆成偏好对是造假；它就该做单点正例的 SFT。",
+      "这两类都是高质量可信信号，正是反馈闭环最该用的训练燃料，说不能用是错的。",
+      "对；信号形状定方法——单点强正例走 SFT，编辑前后的成对偏好走 DPO 做定向纠偏，各取所长。"
+    ],
+    "optionExplanations_en": [
+      "Imitating the original as correct is self-contradictory — it's precisely the worse version that got edited away, so it can't be an SFT positive.",
+      "Accepted-no-edit has no paired negative; forcing it into a preference pair fabricates one — it should be a standalone SFT positive.",
+      "Both are high-quality trusted signals, exactly the fuel the feedback loop should use; saying they can't be used is wrong.",
+      "Correct — signal shape picks the method: standalone strong positives to SFT, pre/post-edit preference pairs to DPO for targeted correction."
+    ],
+    "termDefinitions": [
+      { "term": "SFT vs DPO", "fullName": "Supervised Fine-Tuning vs Direct Preference Optimization", "meaning": "SFT 用单点正例监督模仿；DPO 用成对偏好（正优于负）直接优化 policy，适合编辑前后这类对比信号。", "meaningEn": "SFT (Supervised Fine-Tuning) imitates standalone positives; DPO (Direct Preference Optimization) optimizes the policy on paired preferences (positive over negative), fitting pre/post-edit contrast signals." }
+    ]
+  }
+]

@@ -1,0 +1,1663 @@
+[
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "spectrum-mental-model",
+    "scenario": "面试官问「你会怎么算这个模型要用的特征」,想看你有没有把特征计算当成一条可选择的谱系,而不是默认全走实时。",
+    "scenario_en": "The interviewer asks how you'd compute the model's features, watching whether you treat feature computation as a spectrum rather than defaulting to real-time everything.",
+    "q": "特征计算的三种范式(批/流/请求时)本质上在权衡哪三件事？",
+    "q_en": "What three things do the batch/streaming/request-time paradigms fundamentally trade off?",
+    "why": "特征计算是一条「新鲜度 vs 成本 vs 复杂度」的谱系:越新鲜的特征越贵、运维越难。强答案会把范式选择绑到新鲜度要求、延迟预算、成本和特征可得性上,而不是一句「全部实时」。",
+    "why_en": "Feature computation is a freshness-versus-cost-versus-complexity spectrum where fresher features cost more and are harder to operate, so tie the choice to the freshness requirement, not a blanket real-time answer.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "freshness-cost"
+    ],
+    "diagram": "flowchart LR\n  B[\"批处理<br/>小时级 · 最便宜\"] --> S[\"流处理<br/>秒-分钟级 · 中\"]\n  S --> R[\"请求时<br/>毫秒级 · 最贵\"]\n  B -.越往右越新鲜/越贵/越难运维.-> R",
+    "options": [
+      "模型精度 vs 训练时长 vs 参数量——特征管线只影响离线训练效果",
+      "存储格式 vs 压缩率 vs 网络带宽——本质是一个数据序列化问题",
+      "新鲜度 vs 成本 vs 复杂度——越新鲜越贵越难运维,选择要绑到延迟预算和特征可得性",
+      "模型大小 vs GPU 数量 vs 电费——本质是硬件采购问题"
+    ],
+    "options_en": [
+      "Model accuracy vs training time vs parameter count — feature pipelines only affect offline training quality.",
+      "Storage format vs compression ratio vs network bandwidth — fundamentally a serialization problem.",
+      "Freshness vs cost vs complexity — fresher is pricier and harder to operate, so tie the choice to latency budget and feature availability.",
+      "Model size vs GPU count vs electricity bill — fundamentally a hardware-procurement problem."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "范式差别在特征新鲜度和服务路径成本,不是训练时长或参数量,这几项跟批/流/请求时的选择无关。",
+      "序列化是实现细节;真正的取舍是「特征要多新鲜、愿意为此付多少成本和运维」。",
+      "对;三范式沿新鲜度轴排开,新鲜度越高成本和复杂度越高,选谁由延迟预算和特征能否预算好决定。",
+      "硬件采购是下游结果;先要决定的是特征新鲜度档位,而不是买几张卡。"
+    ],
+    "optionExplanations_en": [
+      "The paradigms differ on feature freshness and serving-path cost, not training time or parameter count, which are unrelated to the batch/streaming/request-time choice.",
+      "Serialization is an implementation detail; the real tradeoff is how fresh features must be and what cost and ops you'll pay for it.",
+      "Correct — the three paradigms line up along a freshness axis where higher freshness means higher cost and complexity, chosen by latency budget and availability.",
+      "Hardware procurement is a downstream consequence; you first decide the freshness tier, not how many cards to buy."
+    ],
+    "termDefinitions": [
+      {
+        "term": "feature freshness / 特征新鲜度",
+        "meaning": "特征反映现实的实时程度;批处理小时级、流处理秒-分钟级、请求时毫秒级。",
+        "meaningEn": "Feature freshness is how up-to-date a feature is: hours for batch, seconds-to-minutes for streaming, milliseconds for request-time."
+      },
+      {
+        "term": "training-serving skew / 训练-服务偏斜",
+        "meaning": "训练时算特征的逻辑与线上服务时不一致,导致线上表现掉点。",
+        "meaningEn": "Training-serving skew is when the feature logic at training time differs from serving time, degrading online performance."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "batch-fit",
+    "scenario": "要给推荐模型算「用户过去 30 天购买次数、平均会话时长、用户 embedding」,这些口味类信号变化很慢,数据量上亿条。",
+    "scenario_en": "You need a recommender's features like 30-day purchase counts, average session duration, and user embeddings — taste signals that change slowly over 100M+ records.",
+    "q": "这类变化缓慢的大规模聚合特征,该用哪种管线算？",
+    "q_en": "Which pipeline should compute these slowly-changing large-scale aggregate features?",
+    "why": "口味/长周期聚合几小时甚至一天不更新也没关系,批处理最便宜(spot 实例)、最好调试(有界数据可回放/单测),正好匹配「新鲜度要求宽松」。批处理的代价是最新只到上次跑批的时刻。",
+    "why_en": "Slowly-changing aggregates tolerate hours of staleness, so batch is cheapest and easiest to debug, matching a relaxed freshness requirement at the cost of being only as fresh as the last run.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "batch"
+    ],
+    "tradeoff": "批处理(最便宜、可回放、但小时级陈旧) vs 流/请求时(更新鲜但更贵更难)",
+    "options": [
+      "批处理:口味变化慢,几小时陈旧可接受,用 Spark 跑上亿条最便宜也最好调试",
+      "请求时同步计算:在预测请求里现算 30 天购买次数,保证绝对最新",
+      "流处理:为 30 天聚合维护一个永不关闭的有状态窗口,持续实时更新",
+      "干脆不预计算,每次训练和推理都全表扫描一遍历史订单"
+    ],
+    "options_en": [
+      "Batch: taste changes slowly and hours of staleness is fine, so run Spark over 100M+ records at the lowest cost and easiest debugging.",
+      "Request-time synchronous compute: recompute the 30-day purchase count inside each prediction request to guarantee absolute freshness.",
+      "Streaming: keep a never-closing stateful window for the 30-day aggregate, updating continuously in real time.",
+      "Skip precomputation entirely and full-scan the order history on every training and inference call."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若这个聚合窗口缩到「最近 10 分钟」并要驱动实时决策(如反欺诈),批处理的小时级陈旧就不够,应改用流处理的有状态窗口。",
+    "whenOtherWins_en": "If the window shrinks to the last 10 minutes and must drive real-time decisions like fraud, batch's hourly staleness is too stale and a streaming stateful window wins.",
+    "optionExplanations": [
+      "对;宽松新鲜度 + 大数据量正是批处理的主场,spot 实例最便宜、有界输入可回放可单测。",
+      "在服务路径里现算 30 天聚合会顶破单请求延迟预算,而且这类特征根本不需要毫秒新鲜。",
+      "为一个 30 天窗口常驻有状态流是杀鸡用牛刀:always-on 成本和状态运维都白付,新鲜度还用不上。",
+      "每次全表扫上亿条订单既慢又贵,预计算存下来就是为了避免重复扫描。"
+    ],
+    "optionExplanations_en": [
+      "Correct — relaxed freshness plus big data is batch's home turf: spot instances are cheapest and the bounded input is replayable and unit-testable.",
+      "Computing a 30-day aggregate inside the serving path blows the per-request latency budget, and these features don't need millisecond freshness.",
+      "A resident stateful stream for a 30-day window is overkill: you pay always-on cost and state ops for freshness you never use.",
+      "Full-scanning 100M+ orders every call is slow and costly; precomputing exists precisely to avoid re-scanning."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Apache Spark",
+        "meaning": "分布式批处理引擎,一个 job 就能在上亿条历史数据上算聚合特征。",
+        "meaningEn": "Apache Spark is a distributed batch engine that can compute aggregate features over 100M+ historical records in one job."
+      },
+      {
+        "term": "spot / preemptible 实例",
+        "meaning": "云厂商随时可回收的廉价算力,适合可重跑的批任务,大幅降本。",
+        "meaningEn": "Spot/preemptible instances are cheap, reclaimable cloud compute ideal for rerunnable batch jobs, cutting cost sharply."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-003",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "batch-properties",
+    "scenario": "面试官追问:批处理特征管线除了便宜,还有哪些运维上的好处让它成为默认起点。",
+    "scenario_en": "The interviewer asks what operational advantages, beyond cost, make batch the default starting point for feature pipelines.",
+    "q": "批处理管线有哪些「有界数据」带来的运维优势？(多选)",
+    "q_en": "Which operational advantages come from batch's bounded datasets? (multiple)",
+    "why": "批处理跑在有界的历史快照上:输入固定 → 输出确定,可重放同一份输入拿到同样结果,方便回填、单测和调试;而且没有需要重建的运行时状态。代价只是新鲜度停在上次跑批。",
+    "why_en": "Batch runs on a bounded historical snapshot, so the same input deterministically reproduces the same output, making backfill, unit testing, and debugging easy with no runtime state to reconstruct.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "batch"
+    ],
+    "options": [
+      "有界输入 → 输出确定,重放同一份数据得到同样结果",
+      "容易回填历史(backfill)和写单元测试",
+      "没有需要在故障后重建的运行时状态",
+      "特征天然是毫秒级新鲜的"
+    ],
+    "options_en": [
+      "Bounded input means deterministic output — replaying the same data yields the same result.",
+      "Easy to backfill history and write unit tests.",
+      "No runtime state that must be reconstructed after a failure.",
+      "Features are inherently millisecond-fresh."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对;有界 + 确定性让「重跑一遍」永远得到相同结果,是批处理好调试的根本。",
+      "对;历史数据摆在那里,想补哪段跑哪段,也能拿固定输入断言输出做单测。",
+      "对;批任务是无状态地扫一遍输入,挂了重跑即可,不像流要恢复窗口状态。",
+      "错;批处理恰恰最不新鲜,只到上次跑批的时刻,毫秒新鲜是请求时范式的特征。"
+    ],
+    "optionExplanations_en": [
+      "Correct — bounded plus deterministic means a rerun always reproduces the same result, the root of batch's debuggability.",
+      "Correct — history sits there so you can recompute any slice, and fixed inputs let you assert outputs in unit tests.",
+      "Correct — a batch job statelessly scans its input and just reruns on failure, unlike streaming which must recover window state.",
+      "Wrong — batch is the least fresh, only current to the last run; millisecond freshness belongs to request-time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "backfill / 回填",
+        "meaning": "对历史时间段重新计算特征;批处理因输入有界最容易做。",
+        "meaningEn": "Backfill recomputes features over past time ranges; batch makes this easiest because its input is bounded."
+      },
+      {
+        "term": "deterministic output / 确定性输出",
+        "meaning": "同一份输入必然得到同一份输出,便于调试与回放。",
+        "meaningEn": "Deterministic output means the same input always yields the same output, aiding debugging and replay."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-004",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "batch-freshness-limit",
+    "scenario": "一条特征用「每天凌晨跑一次」的批 job 计算,产品团队问它能有多新鲜。",
+    "scenario_en": "A feature is computed by a batch job that runs once nightly; the product team asks how fresh it can be.",
+    "q": "日频批 job 算出的特征,新鲜度上限是多少,这对哪些场景是硬伤？",
+    "q_en": "What's the freshness ceiling of a daily batch job, and which use cases does it break?",
+    "why": "新鲜度上限 = 跑批间隔:日频最坏能陈旧到接近 24 小时(下一次跑批前一直用旧值)。对反欺诈、会话内特征这种分钟级需求是硬伤;对内容推荐、信用评分这种慢变量则完全够用。",
+    "why_en": "The freshness ceiling equals the run interval, so a daily job can be nearly 24 hours stale, which breaks minute-scale needs like fraud but is fine for slow signals like content recs.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "freshness"
+    ],
+    "options": [
+      "上限约 1 秒陈旧,足以驱动反欺诈系统的分钟级滑动窗口计数与实时拦截",
+      "上限约 24 小时陈旧(等于跑批间隔),对分钟级反欺诈/会话特征是硬伤,对慢变量够用",
+      "上限约 5 分钟陈旧,和流处理的持续物化几乎等价,可支撑会话内特征更新",
+      "没有陈旧,批 job 会在源数据一有变化就自动触发重算,始终保持最新"
+    ],
+    "options_en": [
+      "Ceiling of about 1 second stale, enough to drive a fraud system's minute-scale sliding-window counts and real-time blocking.",
+      "Ceiling of about 24 hours stale (equal to the run interval), a dealbreaker for minute-scale fraud/session features but fine for slow signals.",
+      "Ceiling of about 5 minutes stale, nearly equivalent to streaming's continuous materialization and able to support in-session features.",
+      "No staleness — a batch job auto-recomputes the moment source data changes, always staying current."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "1 秒新鲜要常驻流/请求时才做得到,日频批根本达不到,分钟级反欺诈也不能靠它。",
+      "对;新鲜度上限就等于跑批周期,日频最坏近 24h 陈旧,慢变量够、分钟级需求不够。",
+      "5 分钟是流处理量级;日频批相差好几个数量级,不能画等号。",
+      "批 job 只在被调度时跑,数据变化不会触发重算,天生带跑批间隔的陈旧。"
+    ],
+    "optionExplanations_en": [
+      "One-second freshness needs a resident stream or request-time; a daily batch can't reach it and can't back minute-scale fraud.",
+      "Correct — the freshness ceiling equals the run cadence, so daily is up to ~24h stale: fine for slow signals, not for minute-scale needs.",
+      "Five minutes is streaming territory; a daily batch is orders of magnitude off, so they're not equivalent.",
+      "A batch job only runs when scheduled; data changes don't trigger recompute, so run-interval staleness is inherent."
+    ],
+    "termDefinitions": [
+      {
+        "term": "freshness ceiling / 新鲜度上限",
+        "meaning": "批 job 特征最新只能到上次跑批时刻,上限等于跑批间隔。",
+        "meaningEn": "The freshness ceiling of a batch feature is the last run time, so the ceiling equals the run interval."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "three-paradigm-compare",
+    "scenario": "把批处理、流处理、请求时实时三种范式放在同一张决策矩阵上,准备在面试里一眼说清取舍。",
+    "scenario_en": "Placing batch, streaming, and request-time real-time on one decision matrix to explain the tradeoffs at a glance in an interview.",
+    "q": "沿「新鲜度、吞吐、成本」轴,三范式的排序大致是怎样的？",
+    "q_en": "Along freshness, throughput, and cost, how do the three paradigms roughly rank?",
+    "why": "新鲜度:批(小时)< 流(秒-分钟)< 请求时(毫秒);吞吐:批/流高、请求时低(逐请求);成本:批最低、请求时最高、流居中。记这条单调关系就能快速匹配需求。",
+    "why_en": "Freshness rises batch < streaming < request-time, throughput is high for batch/streaming but low per-request for request-time, and cost is lowest for batch and highest for request-time.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "comparison"
+    ],
+    "tradeoff": "新鲜度越高(批→流→请求时)成本和复杂度越高、单点吞吐越低",
+    "table": {
+      "headers": [
+        "范式",
+        "新鲜度",
+        "吞吐",
+        "成本",
+        "运维复杂度"
+      ],
+      "rows": [
+        [
+          "批处理",
+          "小时",
+          "高",
+          "低",
+          "低"
+        ],
+        [
+          "流处理",
+          "秒-分钟",
+          "高",
+          "中",
+          "中-高"
+        ],
+        [
+          "请求时",
+          "毫秒",
+          "低",
+          "高",
+          "高"
+        ]
+      ]
+    },
+    "options": [
+      "三范式新鲜度、成本都一样,只是所用工具名字不同",
+      "请求时新鲜度最低、成本最低,批处理新鲜度最高、成本最高",
+      "新鲜度批<流<请求时,成本也随之批<流<请求时,吞吐请求时最低",
+      "流处理在三项上都严格优于批和请求时,是永远的最优解"
+    ],
+    "options_en": [
+      "All three have identical freshness and cost; only the tool names differ.",
+      "Request-time has the lowest freshness and cost, while batch has the highest freshness and cost.",
+      "Freshness rises batch < streaming < request-time, cost rises the same way, and request-time has the lowest throughput.",
+      "Streaming strictly dominates batch and request-time on all three axes and is always optimal."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "三者恰恰在新鲜度、成本、复杂度上系统性不同,工具名不同只是表象。",
+      "说反了:请求时最新鲜也最贵,批处理最不新鲜但最便宜。",
+      "对;新鲜度与成本同向递增,请求时逐请求算所以单点吞吐最低,这条单调链是选型基础。",
+      "流处理不是万能:它成本/复杂度高于批,新鲜度低于请求时,没有严格支配。"
+    ],
+    "optionExplanations_en": [
+      "They differ systematically on freshness, cost, and complexity; differing tool names are just surface.",
+      "Backwards: request-time is the freshest and priciest, while batch is the least fresh but cheapest.",
+      "Correct — freshness and cost rise together, and request-time computes per request so its throughput is lowest; this monotonic chain drives selection.",
+      "Streaming isn't universal: it costs and complicates more than batch and is less fresh than request-time, so it doesn't dominate."
+    ],
+    "termDefinitions": [
+      {
+        "term": "throughput / 吞吐",
+        "meaning": "单位时间能处理多少记录;批/流可批量高吞吐,请求时逐条算所以低。",
+        "meaningEn": "Throughput is records processed per unit time; batch/streaming go high in bulk while request-time computes one at a time."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-006",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "streaming-dataflow",
+    "scenario": "要让「最近 5 分钟的点击计数」这种特征在线上随时可查,且延迟低。",
+    "scenario_en": "You need a feature like 'clicks in the last 5 minutes' to be queryable online at any time with low latency.",
+    "q": "流处理管线的标准数据流是怎样的,特征最终落到哪里？",
+    "q_en": "What is the standard streaming pipeline data flow, and where do features land?",
+    "why": "标准路径:事件进 Kafka → 流处理器(Flink/Kafka Streams)持续消费并物化特征 → 写入低延迟存储(Redis/DynamoDB)供在线查询。把「持续计算」和「快速读取」解耦,服务端只做一次 KV 查。",
+    "why_en": "Events flow into Kafka, a stream processor continuously materializes features, and results land in a low-latency store like Redis/DynamoDB so serving only does a fast key lookup.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "diagram": "flowchart LR\n  E[\"事件\"] --> K[\"Kafka<br/>不可变日志\"]\n  K --> P[\"流处理器<br/>Flink/Kafka Streams\"]\n  P --> D[\"低延迟存储<br/>Redis/DynamoDB\"]\n  D --> Q[\"在线服务读取\"]",
+    "options": [
+      "事件 → Kafka → 流处理器持续物化特征 → 写 Redis/DynamoDB → 在线服务读",
+      "事件 → 关系数据库 → 每晚跑一次报表 → 邮件发给分析师",
+      "事件 → 直接写模型权重 → 模型参数随每条事件实时更新",
+      "事件 → 对象存储归档 → 需要时手动下载解析"
+    ],
+    "options_en": [
+      "Events → Kafka → stream processor continuously materializes features → write Redis/DynamoDB → online serving reads.",
+      "Events → relational database → a nightly report job → email to analysts.",
+      "Events → written directly into model weights → parameters update per event in real time.",
+      "Events → object-storage archive → manually downloaded and parsed when needed."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对;Kafka 做事件总线、流处理器持续物化、KV 存储供低延迟读,是流特征管线的标准三段。",
+      "每晚报表是批处理离线分析,不能给在线服务低延迟查最近 5 分钟点击。",
+      "把事件塞进权重是在线学习的另一个话题,不是特征物化,也不是这里要的低延迟查询。",
+      "归档到对象存储是冷存,手动下载解析根本满足不了实时特征服务。"
+    ],
+    "optionExplanations_en": [
+      "Correct — Kafka as the event bus, a processor that continuously materializes, and a KV store for low-latency reads are the three standard segments.",
+      "A nightly report is offline batch analysis and can't serve last-5-minute clicks to online requests at low latency.",
+      "Feeding events into weights is online learning, a different topic, not feature materialization or the low-latency lookup needed here.",
+      "Archiving to object storage is cold storage; manual download can't serve real-time features."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Apache Kafka",
+        "meaning": "分布式事件日志,不可变追加,充当流管线的事件总线与重放源。",
+        "meaningEn": "Apache Kafka is a distributed, append-only event log that acts as the event bus and replay source for streaming pipelines."
+      },
+      {
+        "term": "materialize / 物化特征",
+        "meaning": "把持续计算的结果预先写入存储,供在线查询,而非查询时才算。",
+        "meaningEn": "Materializing a feature means precomputing and writing its value to a store for online lookup rather than computing at query time."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "flink-vs-kafka-streams",
+    "scenario": "反欺诈要算「每张卡在滑动 10 分钟窗口内的交易次数」,跨数百万个卡号维护运行状态,还要 exactly-once 保证。",
+    "scenario_en": "Fraud needs 'transaction count per card in a sliding 10-minute window', keeping running state across millions of card keys with exactly-once guarantees.",
+    "q": "这种大规模有状态窗口聚合,该选哪个流处理器？",
+    "q_en": "For this large-scale stateful windowed aggregation, which stream processor fits?",
+    "why": "Flink 是独立分布式引擎,原生支持事件时间窗口、跨海量 key 的有状态计算和 exactly-once,正好扛滑动窗口反欺诈。Kafka Streams 是嵌在应用 JVM 里的轻库,适合简单富化/计数,扛不动这种规模的状态。",
+    "why_en": "Flink is a distributed engine with native event-time windowing, large-scale stateful compute, and exactly-once, fitting sliding-window fraud, while Kafka Streams is a lightweight in-JVM library for simpler enrichment.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "tradeoff": "Flink(独立集群、重状态、exactly-once) vs Kafka Streams(嵌 JVM、轻量、无独立集群)",
+    "table": {
+      "headers": [
+        "引擎",
+        "部署形态",
+        "状态能力",
+        "适用"
+      ],
+      "rows": [
+        [
+          "Flink",
+          "独立分布式集群",
+          "大规模有状态+事件时间窗口",
+          "滑动窗口反欺诈"
+        ],
+        [
+          "Kafka Streams",
+          "嵌入应用 JVM",
+          "轻量本地状态",
+          "简单富化/计数"
+        ]
+      ]
+    },
+    "options": [
+      "Kafka Streams:嵌在应用 JVM 里最省事,直接扛数百万 key 的滑动窗口状态",
+      "Apache Flink:独立分布式引擎,原生事件时间窗口 + 大规模有状态 + exactly-once,正合滑动窗口反欺诈",
+      "两个都不行,滑动窗口只能用批处理每小时重算一次",
+      "随便选,Flink 和 Kafka Streams 在状态规模和部署上没有区别"
+    ],
+    "options_en": [
+      "Kafka Streams: embedding in the app JVM is simplest and directly carries millions of keys of sliding-window state.",
+      "Apache Flink: a distributed engine with native event-time windowing, large-scale stateful compute, and exactly-once, fitting sliding-window fraud.",
+      "Neither works; sliding windows can only be recomputed hourly by batch.",
+      "Either is fine — Flink and Kafka Streams don't differ in state scale or deployment."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若只是给事件做简单富化或轻量计数、且不想运维独立集群,嵌入应用 JVM 的 Kafka Streams 反而更合适。",
+    "whenOtherWins_en": "If you only need simple event enrichment or lightweight counts and want no separate cluster to operate, in-JVM Kafka Streams is the better fit.",
+    "optionExplanations": [
+      "Kafka Streams 轻量、本地状态,扛不住跨数百万 key 的大规模有状态窗口,规模一上来就吃力。",
+      "对;Flink 的事件时间窗口 + 大规模状态 + exactly-once 恰好命中滑动窗口反欺诈的三个硬需求。",
+      "批处理小时级重算满足不了反欺诈的分钟级窗口,把实时需求硬塞回批处理是退步。",
+      "两者在部署(独立集群 vs 嵌 JVM)和状态规模上差别很大,不能随便选。"
+    ],
+    "optionExplanations_en": [
+      "Kafka Streams is lightweight with local state and can't carry large-scale stateful windows across millions of keys once scale grows.",
+      "Correct — Flink's event-time windowing, large-scale state, and exactly-once hit the three hard needs of sliding-window fraud.",
+      "Hourly batch recompute can't meet fraud's minute-scale window; forcing a real-time need back into batch is a regression.",
+      "They differ sharply in deployment (separate cluster vs in-JVM) and state scale, so it's not an arbitrary pick."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Flink",
+        "meaning": "Apache Flink:独立分布式流引擎,支持事件时间窗口、大规模有状态计算和 exactly-once。",
+        "meaningEn": "Flink (Apache Flink) is a distributed stream engine with event-time windowing, large-scale stateful compute, and exactly-once."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "Apache Kafka:分布式不可变事件日志,充当流管线的事件总线与重放源。",
+        "meaningEn": "Kafka (Apache Kafka) is a distributed, immutable event log serving as the event bus and replay source for streaming pipelines."
+      },
+      {
+        "term": "Kafka Streams",
+        "meaning": "嵌在应用 JVM 里的轻量流处理库,无需独立集群,适合简单富化/计数。",
+        "meaningEn": "Kafka Streams is a lightweight stream-processing library embedded in the app JVM, needing no separate cluster, for simple enrichment/counts."
+      },
+      {
+        "term": "exactly-once / 精确一次",
+        "meaning": "每条事件对结果的影响恰好计入一次,不重不漏,保证聚合正确。",
+        "meaningEn": "Exactly-once means each event affects the result precisely once, neither dropped nor double-counted, keeping aggregates correct."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "streaming-state-mgmt",
+    "scenario": "用流处理维护「滚动 10 分钟平均值」,某个流处理器节点在半路崩溃了。",
+    "scenario_en": "A streaming job maintains a rolling 10-minute average, and one processor node crashes midway.",
+    "q": "流处理最主要的复杂度来自哪里,崩溃后怎么不丢窗口结果？",
+    "q_en": "Where does streaming's main complexity come from, and how do you avoid losing window results on crash?",
+    "why": "滚动窗口要记住此前事件,状态管理就是主要复杂度来源。链条:持续更新窗口态 → 定期 checkpoint 落盘 → 崩溃后从 checkpoint 恢复 + 从 Kafka 重放其后事件 → 续算;代价是迟到/乱序事件要专门处理。",
+    "why_en": "The main complexity is state: a rolling window must remember prior events, so it checkpoints periodically and, on crash, restores from the last checkpoint and replays later Kafka events.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "options": [
+      "复杂度来自选颜色主题;崩溃后直接重启进程就能自动恢复窗口结果,完全不需要 checkpoint 机制",
+      "复杂度来自 SQL 语法;崩溃后从最早的位点把全部历史事件从头重放一遍即可,不需要任何状态快照",
+      "复杂度来自状态管理:持续更新窗口态→定期 checkpoint→崩溃后从 checkpoint 恢复+Kafka 重放后续→续算,代价是处理迟到/乱序",
+      "流处理本质无状态,窗口结果只存在内存里,任何节点崩溃都会永久丢失且没有任何恢复手段"
+    ],
+    "options_en": [
+      "Complexity is picking a color theme; on crash just restart the process to auto-recover window results, needing no checkpoint mechanism at all.",
+      "Complexity is SQL syntax; on crash replay all history from the earliest offset from scratch, needing no state snapshot whatsoever.",
+      "Complexity is state management: continuously update window state → periodic checkpoint → on crash restore + replay later Kafka events → resume, at the cost of handling late/out-of-order.",
+      "Streaming is fundamentally stateless; window results live only in memory and any node crash loses them permanently with no recovery path."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "颜色主题跟流处理无关;裸重启会丢内存里的窗口状态,正是要靠 checkpoint 才能恢复。",
+      "从头重放全部历史又慢又不必要;checkpoint 的意义就是只重放快照之后的事件。",
+      "对;走完「更新态→checkpoint→崩溃→恢复+重放→续算」整链;恢复靠快照加重放,业务还须容忍可能的重复处理。",
+      "流处理恰恰是有状态的;checkpoint + Kafka 重放正是为了让崩溃后能恢复窗口,不是无法恢复。"
+    ],
+    "optionExplanations_en": [
+      "Color theme is irrelevant; a bare restart loses in-memory window state, which is exactly why checkpoints exist.",
+      "Replaying all history is slow and unnecessary; checkpointing means you only replay events after the snapshot.",
+      "Correct — it walks the full chain update → checkpoint → crash → restore + replay → resume, at the cost of handling late/out-of-order events.",
+      "Streaming is stateful; checkpoints plus Kafka replay exist precisely so windows survive a crash, not the opposite."
+    ],
+    "termDefinitions": [
+      {
+        "term": "checkpoint / 检查点",
+        "meaning": "定期把流处理的运行状态快照落盘,崩溃后可从最近一次恢复。",
+        "meaningEn": "A checkpoint periodically snapshots the streaming job's state to durable storage so it can restore after a crash."
+      },
+      {
+        "term": "late / out-of-order event / 迟到乱序事件",
+        "meaning": "晚到或次序错乱的事件,窗口聚合必须优雅处理否则结果偏差。",
+        "meaningEn": "Late/out-of-order events arrive delayed or reordered and window aggregations must handle them gracefully or results skew."
+      },
+      {
+        "term": "state management / 状态管理",
+        "meaning": "维护窗口所需的历史事件与运行态,是流处理的主要复杂度来源。",
+        "meaningEn": "State management maintains the historical events and running state a window needs, the main source of streaming complexity."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-009",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "kafka-log-source-of-truth",
+    "scenario": "流管线出了 bug 算错了特征,或想给新特征回填历史,团队问「原始事件还在吗、怎么重来一遍」。",
+    "scenario_en": "The streaming pipeline had a bug or you want to backfill a new feature; the team asks whether raw events still exist and how to recompute.",
+    "q": "为什么说 Kafka 的不可变追加日志是流管线的「真相源」？",
+    "q_en": "Why is Kafka's immutable append-only log the source of truth for a streaming pipeline?",
+    "why": "Kafka 只追加、不改写,原始事件按序完整保留。因此可以从任意位点重放事件来重算特征、回填历史、或在故障后恢复——重放同一份日志得到确定结果,相当于给流处理一个「可重来」的底座。",
+    "why_en": "Kafka only appends and never rewrites, so raw events stay intact and ordered, letting you replay from any offset to recompute, backfill, or recover deterministically.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "kafka"
+    ],
+    "options": [
+      "因为它会自动纠正错误事件,重放时把之前写脏的数据改对再交给下游",
+      "因为日志只追加不改写,原始事件完整有序保留,可从任意位点重放来重算/回填/故障恢复",
+      "因为它把特征的最终值也一并存一份,在线服务端直接读这个成品值就行,不必重算",
+      "因为它会压缩掉历史事件只留每个键的最新状态,靠丢弃旧数据来节省存储成本"
+    ],
+    "options_en": [
+      "Because it auto-corrects bad events, cleaning previously dirty data on replay before handing off downstream.",
+      "Because the log is append-only and never rewritten, keeping raw events intact and ordered so you can replay from any offset to recompute/backfill/recover.",
+      "Because it also stores the final feature values, so online serving reads the finished value directly without recomputing.",
+      "Because it compacts away history keeping only each key's latest state, saving storage cost by discarding old data."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "Kafka 不会「纠正」事件,它忠实保留原样;重算的正确性来自可确定重放,不是自动改数据。",
+      "对;不可变追加保证原始事件可信可重放,这正是重算、回填、恢复的基础。",
+      "特征最终值落在下游 KV 存储,不是 Kafka 日志的职责;日志存的是原始事件。",
+      "默认日志按时间/大小保留原始事件供重放;compaction 是可选策略,不是「真相源」的理由。"
+    ],
+    "optionExplanations_en": [
+      "Kafka doesn't 'correct' events; it faithfully keeps them, and recompute correctness comes from deterministic replay, not auto-editing.",
+      "Correct — append-only immutability makes raw events trustworthy and replayable, the basis for recompute, backfill, and recovery.",
+      "Final feature values live in the downstream KV store, not the Kafka log, which holds raw events.",
+      "By default the log retains raw events by time/size for replay; compaction is optional and not the reason it's the source of truth."
+    ],
+    "termDefinitions": [
+      {
+        "term": "append-only log / 追加日志",
+        "meaning": "只在末尾追加、从不修改历史条目的日志结构,天然可重放。",
+        "meaningEn": "An append-only log only appends at the end and never mutates past entries, making it naturally replayable."
+      },
+      {
+        "term": "event replay / 事件重放",
+        "meaning": "从日志的某个位点重新消费事件,以重算特征、回填或故障恢复。",
+        "meaningEn": "Event replay re-consumes events from an offset to recompute features, backfill, or recover from failure."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "request-time-fit",
+    "scenario": "结账页要用「用户当前购物车总额」当特征;这个值随点击秒变,且只在这次请求里有意义,单请求延迟预算个位数毫秒。",
+    "scenario_en": "Checkout needs 'current cart total' as a feature; it changes per click, matters only for this request, and the per-request budget is single-digit ms.",
+    "q": "这种「当前请求上下文」特征最该用哪种范式算？",
+    "q_en": "Which paradigm best computes this 'current request context' feature?",
+    "why": "购物车总额随点击秒变、且只在本次请求有意义,预物化没意义,应在预测请求里请求时同步现算。代价是它落在服务关键路径上、加延迟,所以只能做简单查表/加总,不能塞 10 分钟窗口那种重计算。",
+    "why_en": "The cart total changes per click and only matters this request, so precomputing is pointless — compute it request-time inside the prediction call, at the cost of adding serving-path latency, so keep it to simple lookups.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "request-time"
+    ],
+    "tradeoff": "请求时(最新鲜但吃服务延迟预算,只能轻算) vs 预物化(不吃延迟但对秒变值无意义)",
+    "options": [
+      "每天批处理预算一次购物车总额,存 KV 供结账读",
+      "请求时同步现算:在预测请求里直接读购物车加总,最新鲜,代价是吃服务延迟只能轻算",
+      "用流处理为每个用户维护常驻购物车窗口,持续物化总额",
+      "训练时把购物车总额固化进模型权重,线上不再计算"
+    ],
+    "options_en": [
+      "Batch-precompute the cart total daily and store in a KV for checkout to read.",
+      "Compute it request-time: sum the cart directly inside the prediction call — freshest, at the cost of serving latency so keep it light.",
+      "Use streaming to keep a resident per-user cart window continuously materializing the total.",
+      "Bake the cart total into model weights at training time and never compute it online."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若这个特征其实变化缓慢、可复用(如用户 30 天均消费),就该预物化到 KV,不该在每次请求现算白吃延迟。",
+    "whenOtherWins_en": "If the feature actually changes slowly and is reusable (e.g. a user's 30-day average spend), precompute it to a KV instead of paying request-time latency each call.",
+    "optionExplanations": [
+      "日频批算购物车总额毫无意义:等下次跑批时用户早就结完账了,值也过期了。",
+      "对;秒变且只此一次的上下文特征就该请求时现算,轻量加总正好放进个位数毫秒预算。",
+      "为每个用户常驻购物车窗口是巨大浪费:购物车总额是本次请求现读的事,不值得维护常驻状态。",
+      "固化进权重是训练期常量,完全无法反映用户此刻的购物车,答非所问。"
+    ],
+    "optionExplanations_en": [
+      "Daily batch of the cart total is pointless: by the next run the user has checked out and the value is stale.",
+      "Correct — a per-click, single-use context feature should be computed request-time, and a light sum fits the single-digit-ms budget.",
+      "A resident cart window per user is huge waste: the cart total is read fresh this request and isn't worth maintaining as state.",
+      "Baking into weights is a training-time constant that can't reflect the user's cart right now, answering the wrong question."
+    ],
+    "termDefinitions": [
+      {
+        "term": "request-time computation / 请求时计算",
+        "meaning": "在预测请求内同步现算特征,最新鲜但占用服务延迟预算。",
+        "meaningEn": "Request-time computation calculates a feature synchronously inside the prediction request, freshest but consuming the serving latency budget."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-011",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "request-time-budget",
+    "scenario": "有人提议在预测请求里请求时现算一个「用户最近 10 分钟行为的滑动窗口聚合」,单请求延迟预算只有个位数毫秒。",
+    "scenario_en": "Someone proposes computing a user's rolling 10-minute behavioral window request-time inside the prediction call, with only a single-digit-ms budget.",
+    "q": "为什么请求时范式不适合算 10 分钟滑动窗口这种特征？",
+    "q_en": "Why is request-time the wrong paradigm for a 10-minute sliding window?",
+    "why": "请求时计算直接加在服务关键路径上,吃掉本就紧张的个位数毫秒预算,所以只能做简单查表/算术。10 分钟窗口要拉历史事件、维护状态,根本塞不进这点预算——它属于流处理预物化的活。",
+    "why_en": "Request-time compute sits on the serving critical path and eats the tight single-digit-ms budget, so it fits only simple lookups, not a 10-minute window that needs history and state.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "request-time"
+    ],
+    "options": [
+      "因为请求时在服务关键路径上、预算个位数毫秒,只够简单查表;10 分钟窗口要拉历史/维护状态,该交给流处理预物化",
+      "因为请求时算出来的特征天生不够新鲜,10 分钟窗口在这里反而比日频批处理还要陈旧,得不偿失",
+      "因为请求时的服务进程被禁止访问用户历史事件,权限层面就拿不到算 10 分钟窗口所需的数据",
+      "因为 10 分钟滑动窗口聚合必须在 GPU 上做,而请求时的服务节点只配了 CPU 跑不动它"
+    ],
+    "options_en": [
+      "Because request-time is on the serving critical path with a single-digit-ms budget fit only for simple lookups; a 10-minute window needs history/state and belongs to streaming precomputation.",
+      "Because request-time features are inherently not fresh enough, and a 10-minute window here ends up staler than daily batch, not worth it.",
+      "Because the request-time serving process is forbidden from accessing user history events, so permissions block getting the data the window needs.",
+      "Because a 10-minute sliding-window aggregation must run on a GPU, while request-time serving nodes only have CPUs and can't handle it."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对;关键路径 + 个位数毫秒预算只容得下轻量算术,重窗口聚合会顶破 p99,应由流处理提前物化。",
+      "说反了:请求时是最新鲜的范式,问题不在新鲜度,而在它吃服务延迟、只能轻算。",
+      "不是权限问题;请求时并非不能访问历史,而是在预算内来不及做重历史聚合。",
+      "GPU/CPU 不是这里的约束;瓶颈是延迟预算容不下窗口聚合的计算量。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the critical path plus a single-digit-ms budget allows only light arithmetic; a heavy window would blow p99 and should be pre-materialized by streaming.",
+      "Backwards: request-time is the freshest paradigm; the issue isn't freshness but that it eats serving latency and must stay light.",
+      "Not a permissions issue; request-time can access history but can't finish a heavy historical aggregation within budget.",
+      "GPU/CPU isn't the constraint here; the bottleneck is the latency budget not fitting the window's compute."
+    ],
+    "termDefinitions": [
+      {
+        "term": "serving critical path / 服务关键路径",
+        "meaning": "从收到请求到返回预测的同步链路,任何计算都直接加进用户延迟。",
+        "meaningEn": "The serving critical path is the synchronous route from request to prediction, where any compute adds directly to user latency."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hybrid-airbnb",
+    "scenario": "Airbnb 搜索一次请求里同时要:房源可订/价格、房东质量分、用户当前的搜索筛选条件三类特征。",
+    "scenario_en": "One Airbnb search request needs three feature types: listing availability/price, host quality score, and the user's current search filters.",
+    "q": "把这三类特征分别配到最合适的范式,正确搭配是？",
+    "q_en": "Matched to the best paradigm, what's the correct pairing for these three feature types?",
+    "why": "同一系统按每个特征的新鲜度需求混用范式:房源可订/价格分钟级变→流处理;房东质量分慢变→批处理;用户当前筛选条件本次请求才知道→请求时现算。多数真实系统都是这种混合体。",
+    "why_en": "One system mixes paradigms per feature: availability/price change by the minute so streaming, host quality is slow so batch, and current search filters are known only now so request-time.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "hybrid"
+    ],
+    "tradeoff": "按每个特征各自新鲜度需求分配范式(混合、各得其所) vs 全系统统一一种范式(简单但牺牲成本或新鲜度)",
+    "options": [
+      "三类特征全用批处理每晚统一算一次,简单一致",
+      "可订/价格→流处理;房东质量分→批处理;当前搜索筛选→请求时,各按新鲜度需求配范式",
+      "三类全用请求时现算,保证都最新鲜",
+      "可订/价格→批处理;房东质量分→请求时;当前搜索筛选→流处理"
+    ],
+    "options_en": [
+      "Compute all three with batch nightly for simplicity and consistency.",
+      "Availability/price → streaming; host quality → batch; current search filters → request-time, each matched to its freshness need.",
+      "Compute all three request-time to guarantee maximum freshness.",
+      "Availability/price → batch; host quality → request-time; current search filters → streaming."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若某个平台的房源价格其实一天只调一次(长租、固定定价),那价格特征也可降到批处理,不必上流处理。",
+    "whenOtherWins_en": "If a platform's listing prices actually change once a day (long-term stays, fixed pricing), the price feature can drop to batch rather than streaming.",
+    "optionExplanations": [
+      "全批处理会让分钟级变化的可订/价格和只此一次的搜索筛选都严重过期,牺牲了必要新鲜度。",
+      "对;按每个特征的新鲜度需求分别配范式,是真实系统的标准做法,也体现成本意识。",
+      "全请求时会把慢变的房东质量分也塞进服务路径白吃延迟,得不偿失。",
+      "搭配全错:价格该流、房东分该批、筛选该请求时,这个选项把三者对调了。"
+    ],
+    "optionExplanations_en": [
+      "All-batch leaves minute-scale availability/price and single-use search filters badly stale, sacrificing needed freshness.",
+      "Correct — matching each feature to its freshness need is standard practice in real systems and shows cost awareness.",
+      "All-request-time forces slow host-quality scores onto the serving path, wasting latency for no gain.",
+      "All wrong: price should stream, host score should batch, filters should be request-time — this option swaps them."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hybrid feature pipeline / 混合特征管线",
+        "meaning": "同一系统按每个特征的新鲜度需求混用批/流/请求时三种范式。",
+        "meaningEn": "A hybrid feature pipeline mixes batch/streaming/request-time paradigms within one system per each feature's freshness need."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-013",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "lambda-vs-kappa",
+    "scenario": "团队要把「历史精确重算」和「近实时更新」两种需求合到一套特征架构里,在 Lambda 与 Kappa 之间选。",
+    "scenario_en": "The team must serve both exact historical recompute and near-real-time updates in one feature architecture, choosing between Lambda and Kappa.",
+    "q": "Lambda 与 Kappa 架构的核心区别在哪条轴上？",
+    "q_en": "On what axis do Lambda and Kappa architectures fundamentally differ?",
+    "why": "核心区别是「几条代码路径」:Lambda 并行跑批层(求正确)和速度层(求低延迟)两套代码;Kappa 去掉批层,只用一条流管线,靠 Kafka 事件重放兼顾历史与实时。",
+    "why_en": "The core difference is codepaths: Lambda runs parallel batch and speed layers, while Kappa drops the batch layer and uses a single stream pipeline with event replay for both history and real-time.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "lambda-kappa"
+    ],
+    "tradeoff": "Lambda(双代码路径:批+流并行,易漂移) vs Kappa(单代码路径:纯流+重放,需成熟流基建)",
+    "table": {
+      "headers": [
+        "架构",
+        "代码路径",
+        "历史重算方式",
+        "主要代价"
+      ],
+      "rows": [
+        [
+          "Lambda",
+          "批层+速度层(两套)",
+          "批层全量重算",
+          "双路径漂移→训练服务偏斜"
+        ],
+        [
+          "Kappa",
+          "单条流管线",
+          "Kafka 事件重放",
+          "依赖成熟流基建"
+        ]
+      ]
+    },
+    "options": [
+      "区别在编程语言:Lambda 用 Python、Kappa 用 Java,逻辑其实一样",
+      "区别在代码路径数:Lambda 批层+速度层两套并行;Kappa 只一条流管线,靠事件重放兼顾历史与实时",
+      "区别在存储引擎:Lambda 用 SQL、Kappa 用 NoSQL,和批流无关",
+      "区别在模型类型:Lambda 只能配线性模型、Kappa 只能配深度模型"
+    ],
+    "options_en": [
+      "The difference is language: Lambda uses Python and Kappa uses Java; the logic is the same.",
+      "The difference is codepath count: Lambda runs parallel batch and speed layers; Kappa uses a single stream pipeline with event replay for both history and real-time.",
+      "The difference is storage engine: Lambda uses SQL and Kappa uses NoSQL, unrelated to batch/stream.",
+      "The difference is model type: Lambda only fits linear models and Kappa only fits deep models."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "语言不是分界;两者的真正差异是有几条并行代码路径处理同一份数据。",
+      "对;Lambda 双路径(批+速度)、Kappa 单路径(纯流+重放),这决定了漂移风险与基建要求。",
+      "存储引擎不是 Lambda/Kappa 的定义轴;它们讲的是批+流并行还是纯流单路径。",
+      "两种架构都与具体模型类型无关,不存在只能配某类模型的限制。"
+    ],
+    "optionExplanations_en": [
+      "Language isn't the divide; the real difference is how many parallel codepaths process the same data.",
+      "Correct — Lambda is dual-path (batch + speed), Kappa is single-path (pure stream + replay), which sets drift risk and infra needs.",
+      "Storage engine isn't the defining axis; the distinction is batch+stream parallel vs pure-stream single path.",
+      "Neither architecture is tied to a model type; there's no restriction to a particular model class."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Lambda architecture / Lambda 架构",
+        "meaning": "并行跑批层(全量正确)与速度层(近实时低延迟),服务层合并两者。",
+        "meaningEn": "Lambda architecture runs a batch layer for correctness and a speed layer for low latency in parallel, merged at serving."
+      },
+      {
+        "term": "Kappa architecture / Kappa 架构",
+        "meaning": "去掉批层,只用一条流管线,靠事件重放同时做实时与历史重算。",
+        "meaningEn": "Kappa architecture drops the batch layer and uses a single stream pipeline, doing real-time and historical recompute via event replay."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-014",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "lambda-dual-codepath",
+    "scenario": "Lambda 架构里同一套特征逻辑要在 Spark(批层)和 Flink(速度层)里各实现一遍。",
+    "scenario_en": "In Lambda, the same feature logic is implemented once in Spark (batch layer) and once in Flink (speed layer).",
+    "q": "Lambda 的「双代码路径」最主要会引发什么问题？",
+    "q_en": "What's the main problem caused by Lambda's dual codepath?",
+    "why": "同一逻辑写两遍(Spark + Flink),两边随时间实现漂移 → 训练用一套、服务用另一套时特征算得不一样 → 训练-服务偏斜,模型线上掉点;而且开发/维护工作量翻倍。这正是 Kappa 想用单路径消除的痛点。",
+    "why_en": "Implementing the same logic twice drifts over time, so training and serving compute features differently — training-serving skew — plus doubled dev effort, which Kappa's single path aims to remove.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "lambda-kappa"
+    ],
+    "options": [
+      "会让特征算得更准,因为两套实现可以互相校验纠错",
+      "两套实现随时间漂移→训练与服务特征不一致→训练-服务偏斜+开发维护翻倍",
+      "只会增加一点存储,对模型质量没有任何影响",
+      "会自动触发模型重训,反而让模型一直保持最新"
+    ],
+    "options_en": [
+      "It makes features more accurate because the two implementations cross-check and correct each other.",
+      "The two implementations drift over time → training and serving features diverge → training-serving skew plus doubled dev/maintenance.",
+      "It only adds a little storage with no effect on model quality.",
+      "It auto-triggers retraining, keeping the model always up to date."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "两套实现不会互相纠错,反而各自演化;没有单一真相,漂移只会更难发现。",
+      "对;逻辑写两遍必然漂移,导致训练-服务偏斜和双倍工作量,这是 Lambda 的招牌代价。",
+      "问题不在存储,而在两条路径算出不一样的特征,直接伤模型线上表现。",
+      "双路径不会自动重训;它带来的是特征不一致的隐患,不是自动更新的好处。"
+    ],
+    "optionExplanations_en": [
+      "The two implementations don't correct each other; they evolve separately, and with no single truth drift is harder to catch.",
+      "Correct — writing logic twice inevitably drifts, causing training-serving skew and double the work, Lambda's signature cost.",
+      "The problem isn't storage but two paths computing different features, directly hurting online model performance.",
+      "Dual paths don't auto-retrain; they create a feature-inconsistency hazard, not an auto-update benefit."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dual-codepath / 双代码路径",
+        "meaning": "同一特征逻辑在批与流各实现一遍,易随时间漂移不一致。",
+        "meaningEn": "Dual-codepath means the same feature logic is implemented in both batch and stream, prone to drifting apart over time."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "kappa-fit",
+    "scenario": "一家大厂有成熟的 Kafka + Flink 流基建,能扛大规模事件重放与 checkpoint 恢复,想减少特征逻辑重复实现带来的偏斜。",
+    "scenario_en": "A big-tech team has mature Kafka+Flink infra able to handle large-scale replay and checkpoint recovery, and wants to reduce skew from duplicated feature logic.",
+    "q": "这种情况下 Lambda 与 Kappa 更该选谁？",
+    "q_en": "Given this, should they lean Lambda or Kappa?",
+    "why": "有成熟流基建又想消除双路径偏斜时,Kappa 更合适:单条流管线 + Kafka 重放同时做实时和历史,逻辑只写一遍,漂移和维护量都降。前提正是它对流基建成熟度要求高。",
+    "why_en": "With mature streaming infra and a goal of killing dual-path skew, Kappa fits: one stream pipeline plus replay handles real-time and history with logic written once.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "lambda-kappa"
+    ],
+    "tradeoff": "Kappa(单路径省偏斜,但要成熟流基建) vs Lambda(批流逻辑天生不同或有遗留约束时更现实)",
+    "options": [
+      "Lambda,因为无论何时双路径都比单路径可靠",
+      "无所谓,两者在偏斜和维护量上没差别",
+      "Kappa:成熟流基建下单管线+重放消除双路径偏斜,逻辑只写一遍",
+      "都不选,应退回纯批处理放弃实时需求"
+    ],
+    "options_en": [
+      "Lambda, because dual paths are always more reliable than a single path.",
+      "It doesn't matter; the two are identical on skew and maintenance.",
+      "Kappa: with mature infra a single pipeline plus replay removes dual-path skew and logic is written once.",
+      "Neither; fall back to pure batch and drop the real-time need."
+    ],
+    "answer": [
+      2
+    ],
+    "whenOtherWins": "若批处理与流处理的业务逻辑本质不同,或有遗留系统挡住 Kappa 迁移,Lambda 仍然更现实。",
+    "whenOtherWins_en": "If batch and streaming logic genuinely differ, or legacy systems block a Kappa migration, Lambda remains the more realistic choice.",
+    "optionExplanations": [
+      "双路径不是「更可靠」,它恰恰引入漂移;Lambda 的优势另有前提(逻辑天生不同/遗留约束)。",
+      "两者差别很大:Kappa 单路径省偏斜但要成熟基建,Lambda 双路径反之,不能说没差别。",
+      "对;既有成熟流基建又想去偏斜,Kappa 的单路径正好命中,逻辑一处维护。",
+      "退回纯批会丢掉近实时需求,不是这道题要的权衡,属于因噎废食。"
+    ],
+    "optionExplanations_en": [
+      "Dual paths aren't 'more reliable'; they introduce drift, and Lambda's edge has other conditions (genuinely different logic/legacy).",
+      "They differ a lot: Kappa's single path cuts skew but needs mature infra, Lambda is the reverse, so not identical.",
+      "Correct — with mature streaming infra and a skew-reduction goal, Kappa's single path hits the mark with one place to maintain logic.",
+      "Falling back to pure batch drops the near-real-time need, not the tradeoff asked, and throws out the baby with the bathwater."
+    ],
+    "termDefinitions": [
+      {
+        "term": "streaming infra maturity / 流基建成熟度",
+        "meaning": "能稳定支撑大规模事件重放、状态管理、checkpoint 恢复与 exactly-once 的能力。",
+        "meaningEn": "Streaming infra maturity is the ability to reliably support large-scale replay, state management, checkpoint recovery, and exactly-once."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "fraud-window-fit",
+    "scenario": "反欺诈系统需要一个特征:某张卡在最近 10 分钟内的交易次数,用来实时拦截盗刷。",
+    "scenario_en": "A fraud system needs a feature: a card's transaction count in the last 10 minutes, to block theft in real time.",
+    "q": "算「最近 10 分钟卡交易次数」该用哪种管线？",
+    "q_en": "Which pipeline computes 'card transactions in the last 10 minutes'?",
+    "why": "这是分钟级新鲜、需跨事件维护滑动窗口计数的典型信号,正是流处理的有状态窗口聚合。批处理太旧、请求时又扛不住在预算内做窗口聚合,只有流处理能持续物化这个计数。",
+    "why_en": "This is a minute-fresh, cross-event sliding-window count — exactly streaming's stateful windowed aggregation — since batch is too stale and request-time can't do the window within budget.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "tradeoff": "流处理(有状态窗口、分钟级新鲜) vs 批(太旧) / 请求时(预算内做不了窗口)",
+    "options": [
+      "批处理每日聚合,凌晨统一算一次卡交易数",
+      "请求时在拦截请求里现场扫这张卡 10 分钟的全部交易",
+      "静态规则:每张卡固定阈值,不看时间窗口",
+      "流处理的有状态窗口聚合:持续维护每张卡的滑动 10 分钟计数"
+    ],
+    "options_en": [
+      "Batch daily aggregation, computing the card's transaction count once overnight.",
+      "Request-time: scan all of this card's 10-minute transactions live inside the blocking request.",
+      "A static rule: a fixed threshold per card, ignoring the time window.",
+      "Streaming stateful windowed aggregation: continuously maintain a sliding 10-minute count per card."
+    ],
+    "answer": [
+      3
+    ],
+    "whenOtherWins": "若欺诈判断只需「该卡历史累计交易数」这种慢变量,不要求分钟级窗口,那批处理反而更省。",
+    "whenOtherWins_en": "If the fraud check only needs a slow signal like the card's lifetime transaction count, not a minute-scale window, batch is cheaper.",
+    "optionExplanations": [
+      "日频批的计数最坏差近 24 小时,盗刷早就完成了,分钟级拦截靠不住它。",
+      "在拦截请求里现扫 10 分钟全量交易会吃爆延迟预算,窗口聚合不该放服务关键路径。",
+      "静态阈值不看时间分布,抓不住「短时间内异常高频」这一欺诈信号的关键。",
+      "对;分钟级新鲜 + 跨事件滑动窗口正是流处理有状态聚合的主场,持续物化该计数供实时拦截。"
+    ],
+    "optionExplanations_en": [
+      "A daily count can be nearly 24h off; the theft is long done, so minute-scale blocking can't rely on it.",
+      "Live-scanning 10 minutes of transactions in the blocking request blows the latency budget; window aggregation shouldn't sit on the critical path.",
+      "A static threshold ignores timing and misses the key fraud signal of abnormally high frequency in a short span.",
+      "Correct — minute freshness plus a cross-event sliding window is streaming's stateful-aggregation home turf, materializing the count for real-time blocking."
+    ],
+    "termDefinitions": [
+      {
+        "term": "sliding window aggregation / 滑动窗口聚合",
+        "meaning": "对不断推进的时间窗口内事件做聚合(如计数),需跨事件维护状态。",
+        "meaningEn": "Sliding-window aggregation computes over events in a continuously advancing time window, requiring cross-event state."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-017",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "choosing-by-freshness",
+    "q": "把「按新鲜度选特征管线」的决策链排成正确顺序：",
+    "q_en": "Order the decision chain for choosing a feature pipeline by freshness:",
+    "steps": [
+      "分钟级容忍(滚动欺诈、会话参与、趋势分)→ 流处理",
+      "先问:这个特征必须多新鲜？",
+      "小时级容忍(人口属性、30 天聚合、预训练 embedding)→ 批处理(最便宜)",
+      "请求范围内才有意义(购物车、当前 query、设备上下文)→ 请求时"
+    ],
+    "answerOrder": [
+      1,
+      2,
+      0,
+      3
+    ],
+    "why": "选型永远从「多新鲜」这个问题起手,再沿新鲜度递增分档:小时级→批(最便宜)、分钟级→流、只此请求→请求时。新鲜度定档后,成本和复杂度随之而定。",
+    "why_en": "Selection always starts from 'how fresh?', then tiers by rising freshness: hours to batch, minutes to streaming, this-request-only to request-time, with cost following.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "selection"
+    ],
+    "diagram": "flowchart TD\n  Q[\"这个特征必须多新鲜?\"] --> H[\"小时级容忍<br/>→ 批处理(最便宜)\"]\n  Q --> M[\"分钟级容忍<br/>→ 流处理\"]\n  Q --> R[\"仅本请求有意义<br/>→ 请求时\"]",
+    "termDefinitions": [
+      {
+        "term": "freshness-first selection / 新鲜度优先选型",
+        "meaning": "先确定特征所需新鲜度,再据此选批/流/请求时,成本随新鲜度上升。",
+        "meaningEn": "Freshness-first selection fixes the required freshness, then picks batch/streaming/request-time, with cost rising with freshness."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-018",
+    "format": "cloze",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "freshness-mapping",
+    "q": "填空:三档新鲜度需求各自对应的管线。",
+    "q_en": "Fill in the pipeline matching each freshness tier.",
+    "text": "小时级容忍(30 天聚合、预训练 embedding)→ {{批处理}};分钟级容忍(滚动欺诈、会话参与)→ {{流处理}};仅当前请求有意义(购物车、当前 query)→ {{请求时}}。",
+    "text_en": "Hours-tolerant (30-day aggregates, pretrained embeddings) → {{batch}}; minutes-tolerant (rolling fraud, session engagement) → {{streaming}}; only this-request meaningful (cart, current query) → {{request-time}}.",
+    "why": "记住这条映射就能秒答选型题:档位由新鲜度决定,成本沿批→流→请求时递增。面试里按「特征名 + 新鲜度 + 成本」一句话给出理由即可。",
+    "why_en": "Memorize this mapping to answer selection fast: the tier follows freshness and cost rises batch to streaming to request-time.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "selection"
+    ],
+    "termDefinitions": [
+      {
+        "term": "freshness tier / 新鲜度档位",
+        "meaning": "把特征按可容忍陈旧度分成小时/分钟/请求三档,一档对应一种管线。",
+        "meaningEn": "A freshness tier buckets features by tolerable staleness into hours/minutes/request, each mapping to one pipeline."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-019",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "cost-layering",
+    "scenario": "面试官问「这三种范式的成本差在哪」,想听你说清成本是怎么随新鲜度叠上去的。",
+    "scenario_en": "The interviewer asks where the cost difference lies across the three paradigms and how cost layers onto freshness.",
+    "q": "成本是如何在批/流/请求时之间叠加的？",
+    "q_en": "How does cost layer across batch, streaming, and request-time?",
+    "why": "成本沿新鲜度叠加:批处理每条记录最便宜(可用 spot、按需跑完即停);流处理是 always-on 常驻 + 状态管理开销;请求时不额外买机器,但吃掉服务延迟预算(等于占用最贵的在线资源)。三者成本形态不同,不能只比机器价。",
+    "why_en": "Cost layers onto freshness: batch is cheapest per record (spot, run-and-stop), streaming pays always-on plus state overhead, and request-time consumes the serving latency budget itself.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "cost"
+    ],
+    "options": [
+      "三种范式的单位成本完全一样,选谁都不影响账单,只是不同运维团队的使用习惯不同罢了",
+      "请求时是最便宜的范式,因为它既不预先物化特征、也不额外占用任何存储空间,近乎零成本",
+      "批处理每条最便宜(spot、跑完即停);流处理 always-on+状态开销;请求时吃服务延迟预算",
+      "流处理是最便宜的范式,因为它不像批处理那样需要长期保存海量历史数据来支撑重算"
+    ],
+    "options_en": [
+      "All three have identical per-record cost; the choice doesn't affect the bill — it's just different ops-team habits.",
+      "Request-time is the cheapest paradigm because it neither pre-materializes features nor uses any extra storage, near zero cost.",
+      "Batch is cheapest per record (spot, run-and-stop); streaming pays always-on plus state overhead; request-time eats the serving latency budget.",
+      "Streaming is the cheapest paradigm because, unlike batch, it doesn't retain massive history long-term to support recompute."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "成本形态明显不同:批可用 spot、流要常驻、请求时占在线预算,账单差别很大。",
+      "请求时不占额外机器不代表便宜——它消耗最贵的服务延迟预算,反而是最高成本范式。",
+      "对;成本沿新鲜度递增,批最便宜、请求时最贵、流居中,三者的成本来源各不相同。",
+      "流要常驻运行还要维护窗口状态,并不比批省;批用 spot 跑完即停才是成本最低的。"
+    ],
+    "optionExplanations_en": [
+      "The cost shapes clearly differ: batch can use spot, streaming stays resident, request-time takes online budget, so bills vary widely.",
+      "Not buying extra machines doesn't make request-time cheap — it consumes the priciest serving budget and is the costliest paradigm.",
+      "Correct — cost rises with freshness: batch cheapest, request-time priciest, streaming in between, each with a different cost source.",
+      "Streaming stays always-on and maintains state, not cheaper than batch; batch on spot that stops when done is the thriftiest."
+    ],
+    "termDefinitions": [
+      {
+        "term": "always-on cost / 常驻成本",
+        "meaning": "流处理需持续运行的集群与状态存储开销,即使流量低也要付。",
+        "meaningEn": "Always-on cost is the continuously running cluster and state storage a stream needs, paid even at low traffic."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-020",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "framing-signal",
+    "scenario": "面试里有人张口就说「所有特征都实时算」,或另一个人说「全批处理就行」,面试官在观察你的成本/延迟意识。",
+    "scenario_en": "In an interview someone says 'compute every feature in real time', another says 'just batch everything', while the interviewer gauges your cost/latency awareness.",
+    "q": "「全实时」和「全批处理」这两种极端各暴露了什么弱点？",
+    "q_en": "What weakness does each extreme — 'all real-time' and 'all batch' — reveal?",
+    "why": "「全部实时」暴露弱成本意识——为不需要新鲜的特征白付 always-on/延迟代价;「全部批处理」则漏掉了延迟敏感需求(反欺诈、会话)。强答案按特征逐个匹配新鲜度,并说出「这里批就够,因为新鲜度要求宽松」这类成本自觉。",
+    "why_en": "'All real-time' shows weak cost awareness (paying freshness cost where none is needed), while 'all batch' misses latency-sensitive needs; strong answers match freshness per feature.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "framing"
+    ],
+    "options": [
+      "全实时暴露弱成本意识(为不需新鲜的特征白付代价);全批处理漏掉延迟敏感需求(反欺诈/会话)",
+      "两种极端其实都很好,能大幅简化架构、减少要维护的管线种类,面试官通常都会为简洁加分",
+      "全实时是最省钱的方案;全批处理是最新鲜的方案,所以这两个极端其实各自都是全局最优解",
+      "两种说法没有本质区别,选错了也没关系,反正上线后都能通过 A/B 测试观察指标再回头修正"
+    ],
+    "options_en": [
+      "All real-time reveals weak cost awareness (paying for freshness nobody needs); all batch misses latency-sensitive needs (fraud/session).",
+      "Both extremes are actually great — they simplify architecture and cut the pipeline types to maintain, so interviewers reward the simplicity.",
+      "All real-time is the cheapest option; all batch is the freshest option, so these two extremes are each a global optimum.",
+      "There's no real difference; picking wrong is fine because A/B testing after launch will catch the metrics and let you fix it later."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对;两个极端各踩一个坑——全实时浪费成本、全批处理误了延迟,逐特征匹配新鲜度才是强答案。",
+      "极端简化会牺牲成本或延迟,面试官恰恰在看你会不会按需匹配,不会给极端加分。",
+      "说反了:实时最贵不是最省,批最便宜但最不新鲜,没有哪个极端普遍最优。",
+      "选错范式带来的成本/延迟问题 A/B 测不出来,选型该在设计阶段用新鲜度需求定。"
+    ],
+    "optionExplanations_en": [
+      "Correct — each extreme hits a pitfall: all real-time wastes cost, all batch misses latency; per-feature freshness matching is the strong answer.",
+      "Extreme simplification sacrifices cost or latency; the interviewer looks for need-based matching and won't reward extremes.",
+      "Backwards: real-time is priciest not cheapest, and batch is cheapest but least fresh; no extreme is universally optimal.",
+      "A/B testing won't surface the cost/latency of a wrong paradigm; selection belongs in design, driven by freshness need."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cost awareness / 成本意识",
+        "meaning": "只为真正需要的新鲜度付费,不给宽松特征上昂贵实时管线。",
+        "meaningEn": "Cost awareness means paying only for the freshness truly needed, not putting relaxed features on expensive real-time pipelines."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "hybrid-feature-store",
+    "scenario": "真实系统里批、流、请求时特征混着用,面试官问「这些异构管线最后怎么统一喂给训练和推理」。",
+    "scenario_en": "Real systems mix batch, streaming, and request-time features; the interviewer asks how these heterogeneous pipelines are unified for training and inference.",
+    "q": "多数系统是混合体,靠什么层把异构管线统一、防止训练-服务偏斜？",
+    "q_en": "Most systems are hybrids — what layer unifies the heterogeneous pipelines and prevents training-serving skew?",
+    "why": "特征存储(feature store)提供统一接口,把批和流的特征一致地供给训练与在线推理,让两侧读到同一份定义与值,从而防止训练-服务偏斜。Lambda/Kappa 决定管线怎么汇聚,feature store 决定怎么统一对外服务。",
+    "why_en": "A feature store gives one interface that serves batch and streaming features consistently to both training and inference, preventing training-serving skew.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "feature-store"
+    ],
+    "options": [
+      "靠 CDN 边缘缓存把算好的特征分发到各地节点,用就近读取来保证多个服务读到一致的特征",
+      "靠特征存储(feature store)统一接口,一致地把批+流特征供给训练与推理,防训练-服务偏斜",
+      "靠给每个用到特征的模型各自单独复制一份特征计算代码,让大家用同样的逻辑来对齐特征",
+      "靠一个每天定时运行的人工核对流程,逐一比对训练侧与线上服务侧的特征值是否一致"
+    ],
+    "options_en": [
+      "A CDN edge cache that distributes computed features to regional nodes, using nearby reads to keep multiple services consistent.",
+      "A feature store: one interface serving batch+streaming features consistently to training and inference, preventing training-serving skew.",
+      "Copying the feature-computation code separately into each model that uses it, aligning everyone via the same logic.",
+      "A daily scheduled manual reconciliation that compares training-side and online-serving feature values one by one."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "CDN 是内容分发,不解决训练与服务读到同一份特征定义的一致性问题。",
+      "对;feature store 就是那层统一接口,让训练和推理共享同一份特征值,系统性防偏斜。",
+      "给每个模型复制特征代码正是制造漂移的来源,与统一防偏斜的目标相反。",
+      "人工每天核对既不可扩展也不可靠,防偏斜要靠共享的特征存储而非人肉对账。"
+    ],
+    "optionExplanations_en": [
+      "A CDN is content delivery and doesn't solve training and serving reading the same feature definition.",
+      "Correct — the feature store is that unifying interface, letting training and inference share the same feature values and systematically preventing skew.",
+      "Copying feature code per model is itself a drift source, the opposite of unified skew prevention.",
+      "Daily manual reconciliation is neither scalable nor reliable; skew prevention needs a shared feature store, not human checking."
+    ],
+    "termDefinitions": [
+      {
+        "term": "feature store / 特征存储",
+        "meaning": "统一存取特征的系统,一致地把批+流特征供给训练与在线推理。",
+        "meaningEn": "A feature store is a system for storing and serving features consistently to both training and online inference."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "streaming-minutes-fit",
+    "scenario": "要算「用户本次会话的参与度」「某内容最近的趋势热度」这类信号,分钟级更新即可,不必毫秒,但一天一次太旧。",
+    "scenario_en": "You need signals like current-session engagement and recent trending score — minute-scale updates suffice, milliseconds unneeded, but daily is too stale.",
+    "q": "这类「分钟级新鲜」的信号最该用哪种管线？",
+    "q_en": "Which pipeline fits these minute-fresh signals?",
+    "why": "会话参与度、趋势热度是分钟级容忍的滚动信号:批处理一天一次太旧,请求时又不该在服务路径做重聚合,流处理持续物化正好卡在中间。代价是常驻集群与状态管理开销。",
+    "why_en": "Session engagement and trending are minute-tolerant rolling signals: batch is too stale and request-time shouldn't do heavy aggregation on the serving path, so streaming's continuous materialization fits.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "tradeoff": "流处理(分钟级、持续物化) vs 批(太旧) / 请求时(不宜在路径上重聚合)",
+    "options": [
+      "批处理:每天算一次会话参与度和趋势热度",
+      "请求时:在每次预测里现算最近趋势热度的聚合",
+      "流处理:持续物化分钟级滚动信号,代价是常驻集群+状态开销",
+      "静态配置:给每个内容写死一个固定热度分"
+    ],
+    "options_en": [
+      "Batch: compute session engagement and trending once a day.",
+      "Request-time: compute the recent trending aggregate live in each prediction.",
+      "Streaming: continuously materialize minute-scale rolling signals, at the cost of a resident cluster plus state overhead.",
+      "Static config: hardcode a fixed trending score per content item."
+    ],
+    "answer": [
+      2
+    ],
+    "whenOtherWins": "若「趋势热度」其实按天更新就够(如日榜),那降到批处理更省,不必上流处理常驻成本。",
+    "whenOtherWins_en": "If trending only needs daily updates (a daily chart), drop to batch to save the streaming always-on cost.",
+    "optionExplanations": [
+      "日频批对分钟级容忍的会话/趋势信号太旧,会话结束了参与度还没更新。",
+      "在服务路径现算趋势聚合会吃延迟预算,分钟级信号不该占用请求时的轻算额度。",
+      "对;分钟级容忍 + 滚动聚合正是流处理的位置,持续物化供在线读,代价是常驻与状态。",
+      "写死热度分无法反映实时趋势,趋势信号的意义就在于它会随时间变化。"
+    ],
+    "optionExplanations_en": [
+      "Daily batch is too stale for minute-tolerant session/trending signals; the session ends before engagement updates.",
+      "Computing the trending aggregate on the serving path eats budget; minute-scale signals shouldn't use request-time's light quota.",
+      "Correct — minute tolerance plus rolling aggregation is streaming's spot, materializing continuously for online reads at the cost of resident state.",
+      "A hardcoded score can't reflect live trends; a trending signal exists precisely because it changes over time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "trending score / 趋势热度",
+        "meaning": "反映内容近期热度的滚动信号,分钟级更新,依赖近期事件聚合。",
+        "meaningEn": "A trending score reflects recent content popularity as a rolling, minute-scale signal built from recent-event aggregation."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-023",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "lambda-layers",
+    "q": "填空:Lambda 架构的三层各自职责。",
+    "q_en": "Fill in the roles of Lambda architecture's three layers.",
+    "text": "Lambda 的 {{批处理层}}(batch layer)对全量历史重算保证正确性,{{速度层}}(speed layer)处理近期事件保证低延迟,{{服务层}}(serving layer)合并两者对外提供查询。",
+    "text_en": "Lambda's {{batch layer}} recomputes over full history for correctness, the {{speed layer}} handles recent events for low latency, and the {{serving layer}} merges both to answer queries.",
+    "why": "三层分工:批层求「对」、速度层求「快」、服务层做「合」。正因逻辑在批层与速度层各写一遍,才有 Lambda 招牌的双路径漂移风险。",
+    "why_en": "Batch layer for correctness, speed layer for latency, serving layer to merge — and duplicating logic across batch and speed is where Lambda's drift risk comes from.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "lambda-kappa"
+    ],
+    "termDefinitions": [
+      {
+        "term": "serving layer / 服务层",
+        "meaning": "Lambda 中合并批层与速度层结果、对外统一提供查询的层。",
+        "meaningEn": "The serving layer in Lambda merges batch and speed layer outputs to answer queries uniformly."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-024",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "throughput-contrast",
+    "scenario": "对比批处理与请求时实时在「单位时间能处理多少记录」上的差别。",
+    "scenario_en": "Contrasting batch and request-time on how many records each processes per unit time.",
+    "q": "在吞吐这条轴上,批处理和请求时为什么差这么多？",
+    "q_en": "On the throughput axis, why do batch and request-time differ so much?",
+    "why": "批处理把上亿条记录打包成大 job 一次算完,吞吐极高;请求时是每来一个请求现算一条,天生逐条、吞吐低。差别根源是「批量 vs 逐请求」的处理粒度,不是硬件快慢。",
+    "why_en": "Batch processes 100M+ records in one bulk job for very high throughput, while request-time computes one record per incoming request, so throughput is low by design.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "throughput"
+    ],
+    "tradeoff": "批处理(批量、高吞吐、不新鲜) vs 请求时(逐请求、低吞吐、最新鲜)",
+    "table": {
+      "headers": [
+        "范式",
+        "处理粒度",
+        "吞吐",
+        "新鲜度"
+      ],
+      "rows": [
+        [
+          "批处理",
+          "批量整批",
+          "高",
+          "小时级"
+        ],
+        [
+          "请求时",
+          "逐请求一条",
+          "低",
+          "毫秒级"
+        ]
+      ]
+    },
+    "options": [
+      "批处理是逐条一个个算所以吞吐低,请求时反而是打包成批一次算完所以吞吐更高,和延迟无关",
+      "批处理批量整批算所以吞吐高,请求时逐请求现算一条所以吞吐低,根源是处理粒度",
+      "两者的吞吐其实完全一样,差别只在延迟:批处理慢一点、请求时快一点,吞吐维度上没有区分",
+      "请求时吞吐更高,因为它不用像批处理那样等待调度器排期,来一个请求立刻就能算出结果"
+    ],
+    "options_en": [
+      "Batch computes one by one so throughput is low, while request-time bundles into bulk so its throughput is higher — unrelated to latency.",
+      "Batch processes whole bulk sets for high throughput, request-time computes one record per request for low throughput — the root is processing granularity.",
+      "Their throughput is actually identical; the only difference is latency, batch a bit slower and request-time a bit faster, with no throughput gap.",
+      "Request-time has higher throughput because it never waits for a scheduler like batch does and computes the moment a request arrives."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "说反了:批处理是批量算所以吞吐高,请求时才是逐条现算。",
+      "对;差别在粒度——批量 vs 逐请求,而非硬件;批适合百万-十亿/次,请求时是每请求一条。",
+      "吞吐并不一样:批量处理天然远高于逐请求现算,这正是两者的关键区分维度。",
+      "请求时逐条现算吞吐低;调度延迟不是这里的决定因素,粒度才是。"
+    ],
+    "optionExplanations_en": [
+      "Backwards: batch computes in bulk for high throughput; request-time is the one computing per record.",
+      "Correct — the difference is granularity (bulk vs per request), not hardware; batch suits millions-billions per run, request-time one per request.",
+      "Throughput isn't the same: bulk processing is far higher than per-request compute, the key distinguishing dimension.",
+      "Request-time's per-record compute is low throughput; scheduling latency isn't the deciding factor, granularity is."
+    ],
+    "termDefinitions": [
+      {
+        "term": "processing granularity / 处理粒度",
+        "meaning": "一次处理的记录规模:批处理成批、请求时逐条,决定吞吐高低。",
+        "meaningEn": "Processing granularity is how many records are handled at once — bulk for batch, one-by-one for request-time — driving throughput."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-025",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "streaming-recovery",
+    "q": "把流处理节点崩溃后的状态恢复流程排成正确顺序：",
+    "q_en": "Order the state-recovery flow after a streaming node crashes:",
+    "steps": [
+      "从最近一次 checkpoint 恢复窗口状态",
+      "处理器持续更新窗口状态并定期 checkpoint 落盘",
+      "从 Kafka 中重放 checkpoint 之后的事件补齐",
+      "某个流处理器节点崩溃,内存中窗口状态丢失"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      2
+    ],
+    "why": "恢复靠「快照 + 重放」两件套:平时定期 checkpoint,崩溃后先从最近 checkpoint 恢复状态,再从 Kafka 重放其后事件补齐,窗口即可续算。代价是恢复期短暂延迟,且业务要能容忍可能的重复处理。",
+    "why_en": "Recovery uses snapshot plus replay: checkpoint regularly, then on crash restore from the last checkpoint and replay later Kafka events to catch up.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "diagram": "flowchart LR\n  U[\"持续更新+定期checkpoint\"] --> C[\"节点崩溃<br/>内存态丢失\"]\n  C --> R[\"从checkpoint恢复\"]\n  R --> P[\"Kafka重放后续事件\"]\n  P --> D[\"窗口续算\"]",
+    "termDefinitions": [
+      {
+        "term": "checkpoint + replay recovery / 快照加重放恢复",
+        "meaning": "流处理靠定期状态快照与 Kafka 事件重放,在崩溃后恢复窗口计算。",
+        "meaningEn": "Checkpoint-plus-replay recovery uses periodic state snapshots and Kafka event replay to restore window computation after a crash."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "batch-credit-scoring",
+    "scenario": "给信用评分模型算特征:征信聚合、历史还款行为。这些信号按天甚至更慢变化,监管也倾向可复现、可审计。",
+    "scenario_en": "Features for a credit-scoring model: bureau aggregates and repayment history — signals that change daily or slower, with regulators favoring reproducibility and auditability.",
+    "q": "信用评分这类慢变、需可审计的特征,最该用哪种管线？",
+    "q_en": "For slow-changing, auditable credit-scoring features, which pipeline fits best?",
+    "why": "征信/还款信号慢变,日频足够新鲜;批处理不仅最便宜,其有界输入 + 确定性输出天然可重放、可审计,正合监管要求。用流/请求时是白付实时成本还增加不可复现风险。",
+    "why_en": "Bureau/repayment signals change slowly so daily is fresh enough, and batch's bounded, deterministic output is naturally reproducible and auditable, fitting regulation.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "batch"
+    ],
+    "tradeoff": "批处理(慢变够新鲜、可重放可审计、最便宜) vs 流/请求时(白付实时成本、复现更难)",
+    "options": [
+      "请求时:在每次评分请求里现算征信聚合,追求毫秒新鲜",
+      "流处理:为每个用户维护常驻还款行为窗口,持续物化",
+      "静态规则:不用历史数据,直接按年龄段给固定分",
+      "批处理:日频算征信/还款聚合,有界确定性输出天然可重放可审计,也最便宜"
+    ],
+    "options_en": [
+      "Request-time: compute bureau aggregates live in each scoring request for millisecond freshness.",
+      "Streaming: keep a resident repayment-behavior window per user, materializing continuously.",
+      "Static rule: skip history and assign a fixed score by age bracket.",
+      "Batch: daily bureau/repayment aggregates whose bounded, deterministic output is naturally reproducible and auditable, and cheapest."
+    ],
+    "answer": [
+      3
+    ],
+    "whenOtherWins": "若要在申请流程中实时纳入「刚刚发生的交易」这类分钟级信号,那部分特征才需要升级到流处理。",
+    "whenOtherWins_en": "If the application flow must incorporate just-happened transactions in real time, those minute-scale features warrant streaming.",
+    "optionExplanations": [
+      "征信慢变,毫秒新鲜毫无必要;在评分请求里现算重聚合还会吃延迟、增加复现难度。",
+      "为慢变还款信号维护常驻流是浪费:always-on 成本白付,新鲜度也用不上。",
+      "抛开历史用固定分既不准也不合规,信用评分的信号价值就在历史行为里。",
+      "对;慢变 + 可审计正是批处理主场,确定性输出可重放、成本最低,契合监管。"
+    ],
+    "optionExplanations_en": [
+      "Bureau signals change slowly so millisecond freshness is pointless, and live heavy aggregation in the request eats latency and hurts reproducibility.",
+      "A resident stream for slow repayment signals is waste: always-on cost paid for freshness never used.",
+      "Dropping history for a fixed score is inaccurate and non-compliant; credit signal value lives in historical behavior.",
+      "Correct — slow-changing plus auditable is batch's home turf: deterministic output is replayable at the lowest cost, fitting regulation."
+    ],
+    "termDefinitions": [
+      {
+        "term": "auditability / 可审计性",
+        "meaning": "能复现某次评分用的特征与结果;批处理确定性输出天然满足。",
+        "meaningEn": "Auditability is being able to reproduce the features and result of a given score, which batch's deterministic output naturally supports."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-027",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "batch-throughput-anchor",
+    "scenario": "一个 Spark 批 job 要在上亿(100M+)条记录上算 30 天购买次数、平均会话时长、用户 embedding。",
+    "scenario_en": "One Spark batch job computes 30-day purchase counts, average session durations, and user embeddings over 100M+ records.",
+    "q": "「一个 Spark job 覆盖 100M+ 记录」这个规模说明批处理的什么特点？",
+    "q_en": "What does 'one Spark job over 100M+ records' say about batch's profile?",
+    "why": "100M+ 是数据规模量级(不是延迟目标):它说明批处理靠批量并行拿到极高吞吐,把海量历史一次算完,单位记录成本被摊到最低。代价是这份结果只到跑批时刻,不解决新鲜度。",
+    "why_en": "The 100M+ is a data-scale magnitude showing batch's very high throughput via bulk parallelism, amortizing per-record cost, though results are only as fresh as the run.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "batch"
+    ],
+    "options": [
+      "说明批处理靠批量并行拿到极高吞吐,单位记录成本最低,代价是结果只到跑批时刻",
+      "说明批处理延迟极低,能在毫秒内返回单条查询",
+      "说明批处理天然新鲜,100M 记录会实时更新",
+      "说明批处理必须用 GPU 才能处理这么多记录"
+    ],
+    "options_en": [
+      "It shows batch achieves very high throughput via bulk parallelism at the lowest per-record cost, at the cost of results only being run-fresh.",
+      "It shows batch has very low latency, returning a single query in milliseconds.",
+      "It shows batch is inherently fresh — the 100M records update in real time.",
+      "It shows batch must use GPUs to handle that many records."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对;100M+ 是吞吐/规模的证据,批量并行摊薄每条成本,但换来的是小时级陈旧。",
+      "批处理延迟高(小时级),不是毫秒查询;低延迟单查是请求时/流的低延迟存储的活。",
+      "批处理最不新鲜,100M 记录是一次跑批的输入,不会实时更新。",
+      "GPU 不是必需;这类聚合特征多在 CPU 集群上跑,规模靠并行而非 GPU。"
+    ],
+    "optionExplanations_en": [
+      "Correct — 100M+ is throughput/scale evidence: bulk parallelism amortizes per-record cost, but trades for hourly staleness.",
+      "Batch latency is high (hours), not millisecond queries; low-latency single lookups are the job of a request-time/stream low-latency store.",
+      "Batch is the least fresh; the 100M records are one run's input and don't update in real time.",
+      "GPUs aren't required; such aggregate features usually run on CPU clusters, scaling via parallelism not GPUs."
+    ],
+    "termDefinitions": [
+      {
+        "term": "bulk parallelism / 批量并行",
+        "meaning": "把海量记录切分并行处理,一次 job 拿到高吞吐、低单位成本。",
+        "meaningEn": "Bulk parallelism splits massive records across workers so one job yields high throughput and low per-record cost."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-028",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "kappa-infra-requirement",
+    "scenario": "团队想迁到 Kappa,用单条流管线靠 Kafka 大规模事件重放同时做实时和历史重算。",
+    "scenario_en": "A team wants to move to Kappa, using one stream pipeline with large-scale Kafka replay for both real-time and historical recompute.",
+    "q": "Kappa 单路径的好处不是白来的,它对基建提出什么硬要求？",
+    "q_en": "Kappa's single-path benefit isn't free — what hard infra requirement does it impose?",
+    "why": "Kappa 用事件重放取代批层,所以要求成熟的流基建能扛大规模重放:稳健的状态管理、checkpoint 恢复、exactly-once 语义。基建不够成熟时,重放历史会压垮系统,这也是 Lambda 在有遗留约束时仍被保留的原因。",
+    "why_en": "Kappa replaces the batch layer with replay, so it demands mature streaming infra for large-scale replay: robust state management, checkpoint recovery, and exactly-once.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "lambda-kappa"
+    ],
+    "options": [
+      "只要一台小机器就能把全部历史事件重放一遍,对底层流基建的能力没有任何额外要求",
+      "要求成熟流基建扛大规模重放:稳健状态管理、checkpoint 恢复、exactly-once",
+      "要求团队全员都会写 SQL 查询,只要人会写查询,流基建本身成熟不成熟其实无所谓",
+      "要求把历史事件数据全部删掉、只保留最近一小时,靠丢弃历史来降低重放的压力"
+    ],
+    "options_en": [
+      "A single small machine can replay all history; it places no extra demand on the underlying streaming infra at all.",
+      "It requires mature streaming infra for large-scale replay: robust state management, checkpoint recovery, and exactly-once.",
+      "It requires the whole team to write SQL queries; as long as people can query, the infra's maturity doesn't matter.",
+      "It requires deleting all history events and keeping only the last hour, easing replay by discarding the past."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "大规模历史重放要分布式流基建支撑,小机器扛不住,这正是 Kappa 的门槛。",
+      "对;单路径省了漂移,但把担子压给流基建,必须成熟到能大规模重放并保证 exactly-once。",
+      "会不会 SQL 不是关键;Kappa 的硬要求是流基建的重放与状态恢复能力。",
+      "Kappa 恰恰要靠保留历史事件来重放重算,删掉历史就做不了历史重算了。"
+    ],
+    "optionExplanations_en": [
+      "Large-scale historical replay needs distributed streaming infra; a small machine can't carry it, which is Kappa's bar.",
+      "Correct — the single path removes drift but shifts the load to streaming infra, which must be mature enough for large-scale replay with exactly-once.",
+      "SQL skills aren't the point; Kappa's hard requirement is the infra's replay and state-recovery capability.",
+      "Kappa relies on retaining historical events to replay and recompute; deleting history makes historical recompute impossible."
+    ],
+    "termDefinitions": [
+      {
+        "term": "large-scale replay / 大规模重放",
+        "meaning": "从 Kafka 重新消费海量历史事件来重算,Kappa 用它替代批层。",
+        "meaningEn": "Large-scale replay re-consumes massive historical Kafka events to recompute, which Kappa uses in place of a batch layer."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-029",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "streaming-underestimated-cost",
+    "scenario": "有候选人把流处理说成「就是更快的批处理」,准备无脑给所有近实时特征上流。",
+    "scenario_en": "A candidate calls streaming 'just faster batch' and plans to put every near-real-time feature on it without thought.",
+    "q": "为什么「流处理只是更快的批处理」这句话有坑？",
+    "q_en": "Why is 'streaming is just faster batch' a trap?",
+    "why": "流处理不是批处理提速,而是另一套运维模型:常驻集群、状态管理、checkpoint、背压、迟到/乱序处理都要长期维护,运营成本常被低估。上流前应确认新鲜度确实需要,并算上这份持续开销。",
+    "why_en": "Streaming isn't sped-up batch but a different ops model — resident clusters, state, checkpointing, backpressure, late-event handling — whose operational cost is commonly underestimated.",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "streaming"
+    ],
+    "options": [
+      "因为流处理其实比批处理更慢,延迟更高,所以根本不该拿它来支撑任何实时或近实时的特征",
+      "因为流是另一套运维模型:常驻+状态+checkpoint+背压+乱序处理,运营成本常被低估",
+      "因为流处理在任何引擎上都无法保证 exactly-once,只要用它数据就一定会重复或丢失",
+      "因为流处理只能做最简单的计数累加,算不了滑动窗口、聚合等任何带时间维度的特征"
+    ],
+    "options_en": [
+      "Because streaming is actually slower than batch with higher latency, so it should never back any real-time or near-real-time feature.",
+      "Because streaming is a different ops model — resident cluster + state + checkpoint + backpressure + out-of-order handling — whose operational cost is commonly underestimated.",
+      "Because streaming can't guarantee exactly-once on any engine, so using it always duplicates or drops data.",
+      "Because streaming can only do the simplest count accumulation and cannot compute sliding windows, aggregations, or any time-based feature."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "流处理对实时特征更快而非更慢;坑不在速度,而在长期运维负担被低估。",
+      "对;流是另一套运营模型,状态/背压/乱序/checkpoint 都要长期养,成本别只算机器价。",
+      "Flink 等能提供 exactly-once,并非一定丢数据;把它说成必丢是误解。",
+      "流处理恰恰擅长窗口聚合(如滑动计数),说它只能简单计数不成立。"
+    ],
+    "optionExplanations_en": [
+      "Streaming is faster not slower for real-time features; the trap isn't speed but underestimated long-term ops burden.",
+      "Correct — streaming is a different ops model where state/backpressure/out-of-order/checkpointing need ongoing care, so don't price only the machines.",
+      "Engines like Flink offer exactly-once, so data isn't always lost; calling it guaranteed loss is a misconception.",
+      "Streaming excels at window aggregation like sliding counts, so 'only simple counts' is false."
+    ],
+    "termDefinitions": [
+      {
+        "term": "backpressure / 背压",
+        "meaning": "下游处理不过来时向上游施加的流控,流管线需妥善处理以防崩溃。",
+        "meaningEn": "Backpressure is flow control applied upstream when downstream can't keep up, which stream pipelines must handle to avoid collapse."
+      }
+    ]
+  },
+  {
+    "id": "llm-020-feature-pipelines-batch-vs-real-time-vs-streaming-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "justify-by-freshness",
+    "scenario": "面试里你要为「用户 embedding 用日频批处理」这个选择给一句有说服力的理由,展示成本意识。",
+    "scenario_en": "In an interview you must justify 'compute user embeddings with a daily batch' in one convincing line that shows cost awareness.",
+    "q": "为一个管线选择辩护时,一句好理由应该点名哪三件事？",
+    "q_en": "When justifying a pipeline choice, a good one-liner should name which three things?",
+    "why": "好理由 = 特征名 + 新鲜度需求 + 成本含义,例如「用户 embedding 用日频批算,因为口味变化慢,省掉了常驻流处理的成本」。这三件套把选择绑到约束上,正是面试官想听的约束驱动推理。",
+    "why_en": "A good justification names the feature, its freshness need, and the cost implication — e.g. 'user embeddings batch daily because taste shifts slowly, saving always-on streaming cost.'",
+    "tags": [
+      "llm-sd",
+      "feature-pipeline",
+      "justification"
+    ],
+    "tradeoff": "按新鲜度需求选档(有据可依) vs 无理由默认某范式(暴露成本意识缺失)",
+    "options": [
+      "点名:特征名 + 新鲜度需求 + 成本含义,把选择绑到约束上",
+      "点名:模型准确率 + 训练轮数 + 参数量",
+      "点名:用哪家云 + 机房位置 + 网络带宽",
+      "点名:团队规模 + 开发排期 + 汇报对象"
+    ],
+    "options_en": [
+      "Name the feature + its freshness need + the cost implication, tying the choice to constraints.",
+      "Name model accuracy + training epochs + parameter count.",
+      "Name which cloud + data-center location + network bandwidth.",
+      "Name team size + dev timeline + reporting chain."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若该特征其实新鲜度敏感(分钟级欺诈),同样的三件套会把理由导向流处理而非批处理——三件套不变,结论随约束变。",
+    "whenOtherWins_en": "If the feature is actually freshness-sensitive (minute-scale fraud), the same trio steers the justification to streaming instead of batch.",
+    "optionExplanations": [
+      "对;特征+新鲜度+成本三件套让选择有据可依,体现约束驱动推理,正中面试官下怀。",
+      "训练轮数/参数量是建模超参,回答不了「这条特征该用什么管线」的选型理由。",
+      "云厂商/机房/带宽是基建采购,不构成按新鲜度选管线的论据。",
+      "团队与排期是项目管理,与特征管线的技术选型理由无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the feature+freshness+cost trio grounds the choice in constraints, showing constraint-driven reasoning the interviewer wants.",
+      "Epochs/parameters are modeling hyperparameters and don't justify which pipeline a feature needs.",
+      "Cloud/location/bandwidth is infra procurement, not an argument for choosing a pipeline by freshness.",
+      "Team and timeline are project management, unrelated to the technical justification for a feature pipeline."
+    ],
+    "termDefinitions": [
+      {
+        "term": "constraint-driven reasoning / 约束驱动推理",
+        "meaning": "先摆出新鲜度/延迟/成本约束,再让约束推出选型,而非默认某方案。",
+        "meaningEn": "Constraint-driven reasoning states freshness/latency/cost constraints first and lets them dictate the choice rather than defaulting."
+      }
+    ]
+  }
+]

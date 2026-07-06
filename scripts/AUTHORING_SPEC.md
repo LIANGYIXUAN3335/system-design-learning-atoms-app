@@ -2,14 +2,26 @@
 
 > 📍 **体系导航**：三条内容管线之一（从文章写全新 deck）。判据权威是 `docs/card-quality-rubric.md`——本文 Hard rules 是其浓缩转述，若两者冲突以 rubric 为准（改标准先改 rubric 再同步这里）。地图：`docs/INDEX.md`。
 
-You are authoring spaced-repetition drill cards ("atoms") for a personal system-design study app, from Hello Interview articles the user already owns. Follow this spec exactly. Quality matters: bad distractors or vague explanations make the drill worthless.
+You are authoring spaced-repetition drill cards ("atoms") for a personal **interview-study** app. The subject matter is whatever the user needs to drill for interviews — system design, low-level design, ML/LLM systems, coding, **and interview delivery itself**. Follow this spec exactly. Quality matters: bad distractors or vague explanations make the drill worthless.
 
 ## Inputs & outputs
 
+This pipeline authors from **two kinds of source**:
+
+**Mode A — from an article** (Hello Interview / Educative / public docs the user owns or can access):
 - **Source**: clean Markdown at `/Users/yixuanliang/interview/Job_Search/atlas_page_scraper/output/clean/<topic>/<file>.md`. Read the whole article first.
 - **Output**: one JSON file per article at `/Users/yixuanliang/interview/Job_Search/system design learning/atoms-app/src/content/<topic>/<same-stem>.json`. The array is the deck for that article.
-  - `<topic>` is one of: `system-design`, `low-level-design`, `ml-system-design`, `ai-coding`.
-- After writing, VALIDATE (see bottom). Do not finish until your files pass.
+
+**Mode B — from an interview-review action item** (the `面试复盘/` files: `Interview Action Items.md`, `AI_Agent_Interview_Questions.md`, `Technical_Interview_Questions.md`). Each item is a gap the user hit in a real interview.
+- **Source**: one delimited review block (see the review-file "split new content" convention). Read the whole block.
+- **Classify each item before authoring**:
+  - ① **knowledge gap** — a concept / tool / algorithm they didn't know (RAG recall, Temporal, topological sort, XGBoost-vs-DL). Author a normal knowledge deck by Mode A rules into the matching `<topic>`; if depth is missing, first scrape an authoritative doc (add its URL to `atlas_page_scraper/urls.txt`).
+  - ② **delivery / behavioral gap** — they knew the material but executed poorly in the room (framing, "why leaving", questions to ask, internal jargon, pacing/AI-perception). Author **behavioral-drill cards** into the `interview-drill` topic (see the dedicated section below).
+- **Output**: knowledge → `src/content/<topic>/...`; behavioral → `src/content/interview-drill/<company-or-theme>.json`.
+
+`<topic>` is one of: `system-design`, `low-level-design`, `ml-system-design`, `ai-coding`, `interview-drill`.
+
+After writing, VALIDATE (see bottom). Do not finish until your files pass.
 
 ## Card schema (canonical — from src/types.ts)
 
@@ -93,6 +105,7 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 - Cards must be self-contained. Do not ask "this layer", "the article", "the above design", "this plan", or a bare company fact unless the scenario gives enough context to answer the card in isolation.
 - Do not turn article assumptions or benchmark numbers into trivia. If a number matters, ask what design implication follows from that number, or give the number in the scenario and ask for the architectural consequence.
 - Distractors should be plausible misconceptions or real alternative designs. Avoid throwaway choices and avoid generic explanations such as "does not fit the requirements".
+- **Balance option lengths — the correct option must NOT be the longest.** A detailed right answer next to terse distractors telegraphs itself (the NBME `answer_cue.longest_option` audit flags this). Write each distractor with the same specificity as the correct one (a real, fully-drawn wrong alternative), rather than padding the correct option or trimming it below the distractors. This is the single most common finding when an agent authors a batch.
 - For jargon-heavy choice cards, define the term locally in `scenario`, `why`, or per-option fields. A learner should not need the original article open to understand TCP, UDP, WebRTC, DynamoDB, CDC, DLRM, GraphSAGE, GSI, RCU/WCU, fan-out, etc.
 - Use `termDefinitions` when the card needs a local glossary entry that the global term detector may not know, especially for product-specific or paper-specific terms.
 - Prefer single-best-answer wording for tradeoffs. Many technologies are defensible; the card must say why one option is most direct under the stated constraints, not imply the other technologies are globally wrong.
@@ -103,10 +116,22 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 - **Interview voice is mandatory** (rubric 1.4-S7): write explanations as short spoken answers the learner can say back in an interview. One sentence = one idea. Prefer "我会先…因为…但代价是…" over abstract report prose. Do not write template phrases such as "选择它会把排查带向…" or "直接命中题目的关键约束".
 - **List/layer cards (multi, security layers, hardening, optimization menus)**: each item's note is one sentence of "what risk it blocks / where it removes pressure" (rubric 1.3-S5) — "read-only filesystem：防止用户代码改依赖、留持久文件", "batch processing：多条写合一次事务，减少 WAL flush，但有缓冲丢失风险". Never a noun translation list.
 
+## Behavioral / interview-delivery cards (`interview-drill` topic)
+
+Delivery gaps — "address a soft rejection head-on instead of ignoring it", "ask 2 substantive questions", "don't say HAC/PRAC out loud", "10-min out-loud warmup to kill the pausing/AI perception", "connect the self-intro to the role they just described" — are NOT system facts, but they ARE drillable recall. Map them onto the SAME schema; the difference is the subject, not the format:
+
+- **`fit` mcq — "situation → best move" (primary format).** `scenario` = the concrete interview moment ("Recruiter says mid-call: 'we're not hiring at that level yet'"). Options = candidate responses, with the RIGHT move as one option and **the real mistakes the user actually made** (from the action-item text) as the distractors. `whenOtherWins` = when a different move is the right call. This trains the decision, not a slogan.
+- **`cloze` / `fact` — recall the specific fix / number / phrase.** "The fix for the pausing-perception flag is a {{10}}-minute out-loud warmup answering {{3–4}} questions from memory." Use for a remedy, a set phrase, or a metric target.
+- **`chain` — ordered framework.** The steps of a repeatable move (the ML-ranking answer's 5 components; the self-intro "listen → reflect one signal back → bridge to my project" sequence). `steps` authored already-shuffled; `answerOrder` is the correct order.
+- **`atomType`**: `fit` for situation→move, `fact` for recall, `consequence` for "if I skip this → what it costs me in the room".
+- **Voice**: `why` / `why_en` = the first-person spoken principle the user says back to themselves — name the real failure and the real fix ("先直接 address 软拒绝再继续；假装没听见 = 结束时对方觉得你不匹配"). No invented psychology; the source is the action-item text, paraphrased into a decision the user can rehearse.
+- **Scope**: these are recall scaffolds. The real out-loud drilling still lives in the `rewrite-bq` workflow — a card reminds, it does not replace speaking practice. Do not turn a behavioral item into system trivia.
+- `sub` = a short theme ("soft-rejection", "questions-to-ask", "self-intro", "pacing"). File naming: `interview-drill/<company>.json` for one interview's items, or `interview-drill/<theme>.json` for cross-company patterns (e.g. `why-leaving`, `questions-to-ask`).
+
 ## id scheme (collision-free — derive mechanically)
 
 `id = "<abbr>-<file-stem-dashed>-<NNN>"`, NNN zero-padded to 3 digits, starting 001, per file.
-- `<abbr>`: system-design→`sd`, low-level-design→`lld`, ai-coding→`aic`, llm-sd→`llm`.
+- `<abbr>`: system-design→`sd`, low-level-design→`lld`, ai-coding→`aic`, llm-sd→`llm`, interview-drill→`idr`.
 - ROUTING NOTE: the scraped **ml-system-design** source articles are authored INTO the `llm-sd` output dir, with `topic: "llm-sd"` and abbr `llm` (they seed the llm-sd track). low-level-design source → `low-level-design` dir, `topic: "low-level-design"`, abbr `lld`. ai-coding source → `ai-coding` dir, `topic: "ai-coding"`, abbr `aic`.
 - `<file-stem-dashed>`: the source filename without `.md`, with `_` and any non-alphanumeric replaced by `-`.
 - Example: `system-design/deep-dives_kafka.md` → ids `sd-deep-dives-kafka-001`, `sd-deep-dives-kafka-002`, …

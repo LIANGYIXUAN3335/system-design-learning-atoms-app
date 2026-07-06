@@ -1,0 +1,1390 @@
+[
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-001",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "embedding-drift",
+    "scenario": "语义搜索用双塔编码器把 query 和文档映射到同一向量空间、靠余弦相似度召回；你要上线一版新编码器。",
+    "scenario_en": "Semantic search maps queries and docs into one vector space with a dual encoder and retrieves by cosine similarity; you are shipping a new encoder version.",
+    "q": "为什么 embedding drift 是这类系统最隐蔽的失效模式？",
+    "q_en": "Why is embedding drift the most insidious failure mode here?",
+    "why": "新模型把同一段文本映射到向量空间的不同区域，召回「看似合理其实不相关」的结果——没有 500、没有空页面，只有静默退化的相关性。所以要靠 embedding 分布漂移看板和离线 NDCG 提前发现，不能等用户指标掉了才知道。",
+    "why_en": "A new model maps the same text to a different region of the space, returning plausible-but-wrong results with no errors, so you catch it with drift dashboards and offline NDCG before user metrics degrade.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "embedding-drift"
+    ],
+    "diagram": "flowchart LR\n  Q[\"query\"] --> E[\"双塔编码器\"]\n  E --> A[\"ANN 召回\"]\n  A --> R[\"cross-encoder 重排\"]\n  R --> O[\"结果\"]\n  E -. 换新模型 .-> D[\"向量空间漂移<br/>静默降级·无报错\"]",
+    "options": [
+      "会直接抛 HTTP 500、请求失败率飙升，很容易在错误率看板上第一时间发现",
+      "索引会立刻返回空结果、zero-result rate 归零，一眼就能看出覆盖出了问题",
+      "结果照常返回、看似正常，但相关性静默下降——无报错、无空页，只有质量退化",
+      "查询延迟会翻倍、p99 超时告警立刻触发，运维一看延迟曲线就能定位"
+    ],
+    "options_en": [
+      "It throws HTTP 500s and error rates spike, so the error dashboard catches it immediately.",
+      "The index instantly returns empty results and zero-result rate drops to zero, making the coverage break obvious.",
+      "Results still return and look normal, but relevance silently degrades — no errors, no empty pages, just worse quality.",
+      "Query latency doubles and p99 timeout alerts fire immediately, so ops spots it on the latency curve."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "漂移不改接口契约，请求照常 200 返回，错误率看板一片绿，这正是它难发现的根源。",
+      "漂移后依然能召回够数的候选，zero-result rate 不会归零；空结果是另一类覆盖问题。",
+      "对；新模型把同一文本映射到不同区域，召回看似合理其实跑偏的文档，只能靠分布漂移看板或离线 NDCG 提前抓。",
+      "换编码器一般不改维度和检索路径，延迟基本不变，靠延迟告警抓不到语义漂移。"
+    ],
+    "optionExplanations_en": [
+      "Drift does not change the API contract; requests still return 200 and the error dashboard stays green, which is why it hides.",
+      "After drift you still retrieve enough candidates, so zero-result rate does not drop to zero; empty results are a different coverage problem.",
+      "Correct — the new model maps the same text elsewhere, retrieving plausible-but-off docs, catchable only by drift dashboards or offline NDCG.",
+      "Swapping encoders usually keeps dimensions and the retrieval path unchanged, so latency is stable and latency alerts miss semantic drift."
+    ],
+    "termDefinitions": [
+      {
+        "term": "embedding drift",
+        "meaning": "换一版编码器后，同一文本被映射到向量空间的不同区域，导致相关性静默改变。",
+        "meaningEn": "Embedding drift is when a new encoder maps the same text to a different region of the vector space, silently changing relevance."
+      },
+      {
+        "term": "dual encoder / 双塔编码器",
+        "meaning": "query 塔和文档塔各自把输入编码成同一空间的向量，用点积/余弦做召回。",
+        "meaningEn": "A dual encoder embeds query and document with two towers into one space and retrieves by dot-product or cosine."
+      },
+      {
+        "term": "ANN",
+        "fullName": "Approximate Nearest Neighbor",
+        "meaning": "近似最近邻检索：牺牲一点召回换数量级的检索加速。",
+        "meaningEn": "ANN (Approximate Nearest Neighbor) trades a little recall for orders-of-magnitude faster retrieval."
+      },
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "归一化折损累计增益：按分级相关性给分、并按排名折损的离线检索指标。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) is an offline metric scoring graded relevance discounted by rank."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "offline-metrics",
+    "scenario": "搜索以「导航/事实型」查询为主（如「Netflix 客服电话」），用户只要那一个正确答案，标注预算紧、只能给二元相关/不相关标签。",
+    "scenario_en": "Search is mostly navigational/factoid queries (e.g. 'Netflix support phone'), the user wants one right answer, and the labeling budget only affords binary relevant/not labels.",
+    "q": "离线相关性指标该选 MRR 还是 NDCG？",
+    "q_en": "For offline relevance, pick MRR or NDCG?",
+    "why": "导航型只要「第一个正确答案排多高」，MRR 正好衡量首个相关结果的倒数排名，而且只需二元标签、便宜。NDCG 要分级标注、更贵，价值在结果有多档相关性时才体现。",
+    "why_en": "Navigational queries only care how high the one right answer ranks, which MRR measures with cheap binary labels, while NDCG's graded labels only pay off with multi-level relevance.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "offline-metrics"
+    ],
+    "tradeoff": "MRR（只看首个相关、二元标签、便宜） vs NDCG（分级相关、多档标注、贵）",
+    "options": [
+      "选 MRR：只需二元标签、衡量首个相关结果的排名，正好贴合「只要一个正确答案」的导航查询",
+      "选 NDCG@10：对整页做分级相关性打分，导航查询也应该按多档相关性评估才够严谨",
+      "选 zero-result rate：用返回空结果的比例来当相关性指标，比 MRR 更省标注成本",
+      "选 query abandonment rate：用无点击比例衡量，能直接代表导航查询的相关性好坏"
+    ],
+    "options_en": [
+      "Pick MRR: it needs only binary labels and scores where the first relevant result ranks, fitting 'one right answer' navigational queries.",
+      "Pick NDCG@10: score the whole page with graded relevance; even navigational queries deserve multi-level evaluation for rigor.",
+      "Pick zero-result rate: use the share of empty-result queries as the relevance metric — cheaper labels than MRR.",
+      "Pick query abandonment rate: use the no-click share, which directly represents navigational relevance quality."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "当查询是探索/商品型、一页里有多篇不同档次的相关结果时，改用 NDCG 才能奖励「把更相关的排更前」。",
+    "whenOtherWins_en": "When queries are exploratory/product with many results of varying relevance on one page, switch to NDCG to reward ranking the more-relevant items higher.",
+    "optionExplanations": [
+      "对；导航查询成败就看那个正确答案排第几，MRR = 首个相关结果排名的倒数，二元标签就够、便宜。",
+      "NDCG 需要多档分级标注、更贵，导航查询只有一个正确答案时它的分级能力用不上，是过度投入。",
+      "zero-result rate 只反映「有没有返回东西」，不含相关性信号，替不了 MRR。",
+      "abandonment rate 会被即时答案/精选摘要污染（满意却不点），不是干净的相关性指标。"
+    ],
+    "optionExplanations_en": [
+      "Correct — navigational success is just how high the one answer ranks; MRR is the reciprocal rank of the first relevant result and needs only cheap binary labels.",
+      "NDCG needs pricier multi-level labels; with a single right answer its graded power is wasted, so it is over-investment.",
+      "Zero-result rate only reflects whether anything came back, carries no relevance signal, and cannot replace MRR.",
+      "Abandonment rate is polluted by instant answers/snippets (satisfied yet no click), so it is not a clean relevance metric."
+    ],
+    "termDefinitions": [
+      {
+        "term": "MRR",
+        "fullName": "Mean Reciprocal Rank",
+        "meaning": "平均倒数排名：对每个查询取首个相关结果排名的倒数再平均，越接近 1 越好。",
+        "meaningEn": "MRR (Mean Reciprocal Rank) averages the reciprocal of the rank of the first relevant result across queries."
+      },
+      {
+        "term": "navigational / factoid query",
+        "meaning": "只有一个正确目标的查询，如找某官网、某电话、某事实。",
+        "meaningEn": "A navigational/factoid query has one correct target, like a specific site, phone number, or fact."
+      },
+      {
+        "term": "binary relevance label / 二元相关标签",
+        "meaning": "只标「相关/不相关」两档，标注最便宜。",
+        "meaningEn": "A binary relevance label marks only relevant vs not — the cheapest annotation."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-003",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "mrr",
+    "scenario": "一条查询的首个相关结果排在第 3 位，你要算它对 MRR 的贡献。",
+    "scenario_en": "For one query the first relevant result sits at rank 3, and you compute its contribution to MRR.",
+    "q": "这条查询给 MRR 贡献多少，MRR 整体怎么算？",
+    "q_en": "What does this query contribute to MRR, and how is MRR computed overall?",
+    "why": "单条贡献 = 1/(首个相关结果的排名) = 1/3；MRR = 所有查询这个倒数排名的平均（Mean Reciprocal Rank）。它只看第一个命中，命中越靠前分越高，是导航型检索的成本很低的相关性基数。",
+    "why_en": "One query contributes 1 over the rank of its first relevant hit (1/3 here), and MRR is the mean of those reciprocal ranks across queries.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "mrr"
+    ],
+    "options": [
+      "贡献 3；MRR = 首个相关结果排名的平均，数值越大越好",
+      "贡献 1/3；MRR = 所有查询「首个相关结果排名倒数」的平均",
+      "贡献 1/log2(3+1)；MRR 按 log 折损每个位置的增益再累加",
+      "贡献 1；只要前 10 有相关结果就记满分，再对查询取平均"
+    ],
+    "options_en": [
+      "Contributes 3; MRR is the mean rank of the first relevant result, higher is better.",
+      "Contributes 1/3; MRR is the mean over queries of 1 over the rank of the first relevant result.",
+      "Contributes 1/log2(3+1); MRR sums each position's gain discounted by log.",
+      "Contributes 1; if any relevant result is in the top 10 it scores full marks, then average over queries."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "用排名本身（3）方向反了：排名越大越差却得分越高，与「越靠前越好」矛盾。",
+      "对；倒数把「越靠前越好」变成越大越好，rank 3 → 1/3，再对所有查询取平均即 MRR。",
+      "log2 折损是 NDCG/DCG 的做法，不是 MRR；MRR 只取首个相关结果的倒数排名。",
+      "「进前 10 就满分」丢掉了排名信息，那是 recall@10 的思路，不是 MRR。"
+    ],
+    "optionExplanations_en": [
+      "Using the raw rank (3) is inverted: a worse (larger) rank would score higher, contradicting 'higher rank is better'.",
+      "Correct — the reciprocal makes earlier-is-better into larger-is-better; rank 3 gives 1/3, averaged over queries yields MRR.",
+      "The log2 discount belongs to NDCG/DCG, not MRR; MRR just takes the reciprocal rank of the first relevant hit.",
+      "'Full marks if in top 10' discards rank information — that is recall@10 thinking, not MRR."
+    ],
+    "termDefinitions": [
+      {
+        "term": "MRR",
+        "fullName": "Mean Reciprocal Rank",
+        "meaning": "平均倒数排名：每条查询取首个相关结果排名的倒数，再对所有查询求平均。",
+        "meaningEn": "MRR (Mean Reciprocal Rank) is the average over queries of 1 divided by the rank of the first relevant result."
+      },
+      {
+        "term": "reciprocal rank / 倒数排名",
+        "meaning": "1 除以名次；名次越靠前值越大，把「越前越好」转成「越大越好」。",
+        "meaningEn": "Reciprocal rank is 1 over the position, turning earlier-is-better into larger-is-better."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ndcg",
+    "scenario": "商品/探索型搜索一页里有多篇相关度不等的结果（完全匹配、部分匹配、勉强相关），你要一个能奖励「更相关排更前」的指标。",
+    "scenario_en": "A product/exploratory results page has many docs of unequal relevance (exact, partial, weak), and you want a metric that rewards ranking the more-relevant higher.",
+    "q": "NDCG 是怎么给一页排序打分的？",
+    "q_en": "How does NDCG score a ranked page?",
+    "why": "DCG 把每个结果的分级相关性增益按位置用 log2(rank+1) 折损后累加——越靠后折得越狠；NDCG 再除以理想排序 IDCG 归一化到 0-1，让不同查询可比。所以它奖励「高相关排前面」，代价是要多档分级标注、贵。",
+    "why_en": "DCG sums each result's graded relevance gain discounted by log2(rank+1), then NDCG divides by the ideal ordering (IDCG) to normalize to 0-1 so queries are comparable.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ndcg"
+    ],
+    "options": [
+      "只看首个相关结果的排名倒数，忽略后面所有结果",
+      "把分级相关增益按 log2(rank+1) 折损累加成 DCG，再除以理想排序 IDCG 归一化到 0-1",
+      "统计返回空结果的查询比例，比例越低分越高",
+      "对整页做二元相关/不相关计数，命中数越多分越高，不区分位置"
+    ],
+    "options_en": [
+      "Look only at the reciprocal rank of the first relevant result, ignoring everything after it.",
+      "Sum graded relevance gains discounted by log2(rank+1) into DCG, then divide by the ideal ordering IDCG to normalize to 0-1.",
+      "Count the share of queries returning empty results; lower is better.",
+      "Do a binary relevant/not count over the page; more hits is better, ignoring position."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "只看首个相关结果是 MRR，NDCG 要评估整页每个位置的分级相关性。",
+      "对；分级增益 + log 位置折损 = DCG，再用 IDCG 归一化，让「更相关排更前」得高分且跨查询可比。",
+      "空结果比例是 zero-result rate（覆盖监控），不衡量排序质量。",
+      "只做二元计数、忽略位置，就丢掉了 NDCG 的两大要点：分级相关和位置折损。"
+    ],
+    "optionExplanations_en": [
+      "Looking only at the first relevant result is MRR; NDCG evaluates graded relevance at every position on the page.",
+      "Correct — graded gains plus log position discount make DCG, normalized by IDCG so 'more-relevant ranked higher' scores well and is comparable across queries.",
+      "Empty-result share is zero-result rate (coverage monitoring), not ranking quality.",
+      "A binary count ignoring position drops NDCG's two pillars: graded relevance and positional discount."
+    ],
+    "termDefinitions": [
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "归一化折损累计增益：分级相关增益按位置折损累加(DCG)后，除以理想排序(IDCG)归一化到 0-1。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) sums graded, rank-discounted gains (DCG) and divides by the ideal ordering (IDCG) to 0-1."
+      },
+      {
+        "term": "DCG",
+        "fullName": "Discounted Cumulative Gain",
+        "meaning": "把每个结果的相关增益按 log2(rank+1) 折损后累加，位置越靠后权重越小。",
+        "meaningEn": "DCG (Discounted Cumulative Gain) sums each result's relevance gain discounted by log2(rank+1), down-weighting later positions."
+      },
+      {
+        "term": "IDCG / 理想 DCG",
+        "meaning": "把结果按真实相关性从高到低完美排序时的 DCG，用作归一化分母。",
+        "meaningEn": "IDCG is the DCG of the perfect ordering by true relevance, used as the normalization denominator."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ndcg-cutoff",
+    "scenario": "线上评估探索型搜索质量，要选一个 NDCG 的截断位 @k 作为标准生产指标。",
+    "scenario_en": "Evaluating exploratory search quality online, you must pick an NDCG cutoff @k as the standard production metric.",
+    "q": "为什么 NDCG@10 是常用的生产截断位？",
+    "q_en": "Why is NDCG@10 the common production cutoff?",
+    "why": "@10 对齐「搜索结果第一页」——用户绝大多数只看前 10 条，评估这 10 个位置的排序质量最贴合真实体验。截断太浅（@1）退化成命中率，太深（@100）评估了用户根本不看的位置。",
+    "why_en": "NDCG@10 aligns with the first results page users actually scan, so it best matches real experience without wasting the metric on positions nobody sees.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ndcg"
+    ],
+    "options": [
+      "因为 @10 对齐搜索结果第一页——用户主要看前 10 条，评这 10 个位置最贴合真实体验",
+      "因为 10 是 NDCG 数学上唯一有定义的截断位，其它 k 会让归一化失效",
+      "因为 @10 能保证 NDCG 恒等于 1，方便跨系统直接比较绝对分",
+      "因为截断位越大越准，10 是当前 GPU 显存能一次算完的上限"
+    ],
+    "options_en": [
+      "Because @10 aligns with the first results page — users mostly view the top 10, so scoring those 10 positions best matches experience.",
+      "Because 10 is the only mathematically defined cutoff for NDCG; other k values break normalization.",
+      "Because @10 guarantees NDCG equals 1, making absolute scores directly comparable across systems.",
+      "Because larger cutoffs are always more accurate, and 10 is the max GPU memory can compute at once."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；@k 是产品选择不是数学限制，选 10 是因为它对齐第一页、评估用户真正会看的位置。",
+      "NDCG 对任意 k 都有定义（@1/@5/@20 都行），10 不是唯一合法值。",
+      "NDCG 已被 IDCG 归一化到 0-1，但不会恒等于 1；@10 也不会让它恒为满分。",
+      "截断位由用户行为决定不是显存；评估用户看不到的深位没有意义。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the cutoff is a product choice, not a math limit; 10 is picked because it aligns with the first page users actually see.",
+      "NDCG is defined for any k (@1/@5/@20 all valid); 10 is not the only legal value.",
+      "NDCG is normalized to 0-1 by IDCG but does not always equal 1; @10 does not force a perfect score.",
+      "The cutoff is set by user behavior, not GPU memory; scoring positions users never see is pointless."
+    ],
+    "termDefinitions": [
+      {
+        "term": "NDCG@10",
+        "meaning": "只对前 10 个结果计算 NDCG，对齐搜索结果第一页。",
+        "meaningEn": "NDCG@10 computes NDCG over the top 10 results, aligning with the first results page."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "mrr-vs-ndcg",
+    "scenario": "面试官让你一句话讲清 MRR 和 NDCG 的核心区别，好在不同搜索场景里选对指标。",
+    "scenario_en": "The interviewer asks you to crisply contrast MRR and NDCG so you can pick the right metric per search scenario.",
+    "q": "MRR 与 NDCG 在「衡量对象」上最本质的区别是什么？",
+    "q_en": "What is the most fundamental difference between MRR and NDCG in what they measure?",
+    "why": "MRR 只看「首个相关结果排多高」、二元标签就够，适合单答案的导航查询；NDCG 看「整页多档相关性的排序质量」、需要分级标注，适合有多个不同相关度结果的探索/商品查询。一句话：MRR 管第一个命中，NDCG 管整张榜单。",
+    "why_en": "MRR only measures how high the first relevant result ranks with binary labels, while NDCG scores the whole page's graded ranking quality with multi-level labels.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "mrr-vs-ndcg"
+    ],
+    "tradeoff": "MRR（只看首个命中·标注便宜） vs NDCG（评整页分级排序·标注贵）",
+    "table": {
+      "headers": [
+        "指标",
+        "衡量对象",
+        "相关性标签",
+        "适合场景"
+      ],
+      "rows": [
+        [
+          "MRR",
+          "首个相关结果排名",
+          "二元(相关/否)",
+          "单答案·导航型"
+        ],
+        [
+          "NDCG",
+          "整页分级排序质量",
+          "多档分级",
+          "多结果·探索型"
+        ]
+      ]
+    },
+    "options": [
+      "MRR 评整页分级排序、NDCG 只看首个命中——两者衡量对象正好相反",
+      "MRR 只看首个相关结果的排名、用二元标签；NDCG 评整页多档相关性的排序、需分级标注",
+      "两者衡量对象完全一样，区别只是 NDCG 计算更快、更省标注成本",
+      "MRR 是线上点击指标、NDCG 是离线指标，二者不在一个评估阶段无法比较"
+    ],
+    "options_en": [
+      "MRR scores the whole page's graded ranking and NDCG only the first hit — they measure opposite things.",
+      "MRR scores only the first relevant result's rank with binary labels; NDCG scores the whole page's graded relevance and needs multi-level labels.",
+      "They measure exactly the same thing; NDCG is just faster to compute and cheaper to label.",
+      "MRR is an online click metric and NDCG is offline, so they are in different stages and not comparable."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "说反了：只看首个命中的是 MRR，评整页分级排序的是 NDCG。",
+      "对；这正是选指标的判据——单答案用 MRR（便宜），多档相关性用 NDCG（评整页但标注贵）。",
+      "两者衡量对象不同（首个命中 vs 整页分级），且 NDCG 标注更贵不是更省。",
+      "两者都是离线相关性指标，可以在同一评估阶段并列使用。"
+    ],
+    "optionExplanations_en": [
+      "Reversed: MRR looks at the first hit, NDCG scores the whole page's graded ranking.",
+      "Correct — this is the selection rule: single-answer uses cheap MRR, multi-level relevance uses NDCG (whole-page but pricier labels).",
+      "They measure different things (first hit vs whole-page grading), and NDCG labels are pricier, not cheaper.",
+      "Both are offline relevance metrics and can be used together in the same evaluation stage."
+    ],
+    "termDefinitions": [
+      {
+        "term": "MRR",
+        "fullName": "Mean Reciprocal Rank",
+        "meaning": "只衡量首个相关结果的排名倒数，二元标签即可。",
+        "meaningEn": "MRR (Mean Reciprocal Rank) measures the reciprocal rank of the first relevant result with binary labels."
+      },
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "衡量整页分级相关性的排序质量，需要多档标注。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) measures whole-page graded ranking quality and needs multi-level labels."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "online-metrics",
+    "scenario": "上线新编码器后想要一个能在用户相关性指标恶化前就报警的线上信号，尤其针对覆盖缺口或 embedding 回归。",
+    "scenario_en": "After a new encoder ships you want an online signal that alarms before user relevance metrics degrade, especially on coverage gaps or embedding regressions.",
+    "q": "该把哪个指标当作 canary（金丝雀）报警信号？",
+    "q_en": "Which metric should be the canary alarm?",
+    "why": "zero-result rate（返回空结果的查询占比）是最灵敏的金丝雀：突增说明要么覆盖出缺口、要么 embedding 回归。按分钟级监控、在约 2–5% 阈值（依领域调）报警，能在用户相关性指标恶化前先亮灯。",
+    "why_en": "Zero-result rate is the most sensitive canary: a spike means a coverage gap or embedding regression, so monitor per-minute and alert around a 2-5% threshold before user relevance degrades.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "online-metrics"
+    ],
+    "tradeoff": "zero-result rate（灵敏早警但无相关性信号） vs 直接看 NDCG/CTR（有相关性但反应慢）",
+    "options": [
+      "query abandonment rate：用无点击比例当金丝雀，最能提前反映 embedding 回归",
+      "zero-result rate：按分钟监控、约 2–5% 阈值报警，突增即提示覆盖缺口或 embedding 回归",
+      "离线 NDCG@10：每天跑一次离线评估，用它的下降当线上金丝雀报警",
+      "平均查询延迟 p99：延迟突增即代表相关性回归，用它当金丝雀最直接"
+    ],
+    "options_en": [
+      "Query abandonment rate: use the no-click share as the canary — best at surfacing embedding regressions early.",
+      "Zero-result rate: monitor per-minute and alert around 2-5%, since a spike signals a coverage gap or embedding regression.",
+      "Offline NDCG@10: run offline evaluation once a day and use its drop as the online canary alarm.",
+      "Average p99 query latency: a latency spike means relevance regression, so it is the most direct canary."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当问题是「结果返回了但排序变差」而非「没结果」时，zero-result rate 不会动，得靠 interleaving 或 NDCG 抓排序退化。",
+    "whenOtherWins_en": "When results still return but ranking worsens (not empty), zero-result rate stays flat and you need interleaving or NDCG to catch the ranking regression.",
+    "optionExplanations": [
+      "abandonment rate 会被即时答案/精选摘要污染（满意也不点），噪声大、不适合当灵敏金丝雀。",
+      "对；空结果比例灵敏、按分钟可见，2–5% 阈值突破即报警，能在用户体验恶化前定位覆盖或回归问题。",
+      "离线 NDCG 是天级、批量的，太慢当不了实时金丝雀，只能当发布前的门槛。",
+      "换编码器一般不改延迟，p99 抓不到语义漂移，用它当相关性金丝雀会漏报。"
+    ],
+    "optionExplanations_en": [
+      "Abandonment rate is polluted by instant answers/snippets (satisfied yet no click), too noisy for a sensitive canary.",
+      "Correct — empty-result share is sensitive and visible per-minute; breaching 2-5% alarms and localizes coverage or regression before UX degrades.",
+      "Offline NDCG is daily and batch — too slow for a real-time canary; it belongs as a pre-release gate.",
+      "Swapping encoders usually keeps latency flat, so p99 misses semantic drift and would under-report as a relevance canary."
+    ],
+    "termDefinitions": [
+      {
+        "term": "zero-result rate / 零结果率",
+        "meaning": "返回空结果的查询占比；突增提示覆盖缺口或 embedding 回归。",
+        "meaningEn": "Zero-result rate is the share of queries returning nothing; a spike signals a coverage gap or embedding regression."
+      },
+      {
+        "term": "canary metric / 金丝雀指标",
+        "meaning": "一个灵敏的早期报警信号，在用户核心指标恶化前先亮灯。",
+        "meaningEn": "A canary metric is a sensitive early-warning signal that alarms before core user metrics degrade."
+      },
+      {
+        "term": "CTR",
+        "fullName": "Click-Through Rate",
+        "meaning": "点击率：点击数除以展示数，用户满意度的代理信号。",
+        "meaningEn": "CTR (Click-Through Rate) is clicks over impressions, a proxy for user satisfaction."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "abandonment-rate",
+    "scenario": "你用 query abandonment rate（无点击查询占比）当满意度代理，但页面上线了即时答案卡片和精选摘要后，abandonment 上升了。",
+    "scenario_en": "You use query abandonment rate (share of no-click queries) as a satisfaction proxy, but after adding instant-answer cards and featured snippets, abandonment rose.",
+    "q": "abandonment 上升一定代表搜索变差了吗，怎么消歧？",
+    "q_en": "Does rising abandonment always mean worse search, and how do you disambiguate?",
+    "why": "不一定：即时答案/精选摘要直接满足用户、他们看完就走、不点击，会抬高 abandonment 却是好体验。所以要配 CTR 或 dwell time（停留时长）一起看——真不满意是「无点击且很快换词/重查」，满意是「无点击但已获取答案」。",
+    "why_en": "Not necessarily: instant answers satisfy users who leave without clicking, inflating abandonment, so pair it with CTR or dwell time to tell satisfaction from dissatisfaction.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "abandonment-rate"
+    ],
+    "options": [
+      "是，abandonment 上升必然是相关性变差，应立刻回滚这次改动",
+      "不一定；即时答案让用户不点也满意，需配 CTR 或 dwell time 区分「满意离开」与「不满意放弃」",
+      "abandonment 是干净的满意度指标，单看它就够，加别的指标只会引入噪声",
+      "把即时答案卡片下线就能让 abandonment 回落，这才是根因修复"
+    ],
+    "options_en": [
+      "Yes, rising abandonment must mean worse relevance, so roll back the change immediately.",
+      "Not necessarily; instant answers satisfy users who do not click, so pair with CTR or dwell time to separate 'satisfied exit' from 'dissatisfied give-up'.",
+      "Abandonment is a clean satisfaction metric; it alone suffices and adding others only adds noise.",
+      "Taking down the instant-answer cards will bring abandonment back down — that is the real root-cause fix."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "直接回滚可能砍掉了真正提升体验的即时答案，把好功能当成回归误杀。",
+      "对；abandonment 与「满意但无需点击」混淆，配 CTR/dwell 才能把满意离开和不满意放弃分开。",
+      "abandonment 本身有歧义，单看会把即时答案的好体验误读成变差，必须配对指标。",
+      "下线即时答案是削足适履——为了让一个有歧义的指标好看而砍掉真实价值。"
+    ],
+    "optionExplanations_en": [
+      "Rolling back may kill the instant answers that genuinely improved UX, mistaking a good feature for a regression.",
+      "Correct — abandonment conflates 'satisfied without clicking', so CTR/dwell separates satisfied exits from dissatisfied give-ups.",
+      "Abandonment is inherently ambiguous; alone it misreads good instant-answer UX as worse, so a paired metric is required.",
+      "Removing instant answers is cutting the foot to fit the shoe — sacrificing real value to make an ambiguous metric look good."
+    ],
+    "termDefinitions": [
+      {
+        "term": "query abandonment rate / 查询放弃率",
+        "meaning": "查询后没有任何点击的比例，用作满意度代理但会被即时答案污染。",
+        "meaningEn": "Query abandonment rate is the share of queries with no click, a satisfaction proxy polluted by instant answers."
+      },
+      {
+        "term": "dwell time / 停留时长",
+        "meaning": "用户在结果页或点开页面上停留的时间，长停留通常代表内容有用。",
+        "meaningEn": "Dwell time is how long a user stays on a result or opened page; longer usually means the content was useful."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-009",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "observability",
+    "scenario": "语义搜索的 embedding→召回→排序会静默地叠加退化，你要为事后（post-hoc）排查每个请求埋点。",
+    "scenario_en": "Semantic search silently stacks degradation across embedding, retrieval, and ranking, so you instrument each request for post-hoc debugging.",
+    "q": "为事后调试排序退化，每个请求应该记录哪些字段？(多选)",
+    "q_en": "For post-hoc debugging of ranking regressions, what should you log per request? (multiple)",
+    "why": "失败跨 embedding/召回/排序静默叠加，要还原一次查询必须记住三样：query 的 embedding（看编码是否漂移）、top-K 候选 ID（看召回集对不对）、re-ranker 分数（看重排是否把好的压下去）。这些让你离线重放、逐层定位是哪一层坏了。",
+    "why_en": "Because failures stack silently across layers, replaying a query needs the query embedding, the top-K candidate IDs, and the re-ranker scores to localize which layer degraded.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "observability"
+    ],
+    "options": [
+      "query 的 embedding 向量（判断编码是否漂移）",
+      "召回出的 top-K 候选文档 ID（判断召回集是否正确）",
+      "re-ranker 给每个候选打的分（判断重排是否压错序）",
+      "服务器机房的温度和 GPU 风扇转速"
+    ],
+    "options_en": [
+      "The query's embedding vector (to check whether encoding drifted).",
+      "The retrieved top-K candidate document IDs (to check the recall set).",
+      "The re-ranker's score per candidate (to check whether re-ranking mis-ordered).",
+      "The datacenter temperature and GPU fan speed."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；记住 query embedding 才能离线比对新旧模型是否把同一 query 编到了不同区域。",
+      "对；top-K 候选 ID 还原召回集，能区分「召回就没拿到好文档」还是「拿到了却被排后」。",
+      "对；re-ranker 分数暴露重排层是否把相关文档压到了后面，是定位排序退化的关键。",
+      "错；机房温度/风扇转速是硬件运维信号，跟语义相关性退化的逐层排查无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — logging the query embedding lets you compare offline whether old and new models placed the same query differently.",
+      "Correct — top-K candidate IDs reconstruct the recall set, separating 'never retrieved the good doc' from 'retrieved but ranked low'.",
+      "Correct — re-ranker scores expose whether re-ranking buried relevant docs, key to localizing ranking regressions.",
+      "Wrong — datacenter temperature and fan speed are hardware ops signals, irrelevant to layer-by-layer relevance debugging."
+    ],
+    "termDefinitions": [
+      {
+        "term": "post-hoc debugging / 事后排查",
+        "meaning": "用已记录的请求数据在事后离线重放、定位问题，而非实时。",
+        "meaningEn": "Post-hoc debugging replays recorded request data offline after the fact to localize an issue."
+      },
+      {
+        "term": "top-K candidates / top-K 候选",
+        "meaning": "召回阶段返回、交给重排的前 K 个候选文档。",
+        "meaningEn": "Top-K candidates are the K documents retrieval returns to the re-ranking stage."
+      },
+      {
+        "term": "re-ranker / 重排器",
+        "meaning": "对召回候选做更精细打分排序的模型（常为 cross-encoder）。",
+        "meaningEn": "A re-ranker (often a cross-encoder) more precisely scores and re-orders the retrieved candidates."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-010",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "version-mismatch",
+    "scenario": "你把查询侧升级到 v2 编码器，但索引里的文档向量还是 v1 编码的、只重编了一部分。",
+    "scenario_en": "You upgrade the query side to a v2 encoder, but the index's document vectors are still v1-encoded and only partially re-embedded.",
+    "q": "v2 query 向量与 v1 文档向量混用，会发生什么？",
+    "q_en": "What happens when v2 query vectors meet v1 document vectors?",
+    "why": "v1 和 v2 是两个不同的向量空间，跨空间算余弦相似度「数学上算得出、语义上没意义」。系统照常返回结果、不报错，但相关性静默崩掉——这正是 embedding 版本不兼容最坑的地方，也是为什么必须全量重编而非部分。",
+    "why_en": "v1 and v2 are different vector spaces, so cross-space cosine is mathematically valid but semantically meaningless: results still return without errors while relevance silently collapses.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "version-mismatch"
+    ],
+    "options": [
+      "检索会直接报错、请求 500，因为向量维度不同无法计算余弦",
+      "余弦相似度算得出但语义无意义，结果照常返回、无报错，相关性静默崩掉",
+      "系统会自动检测版本不匹配并回退到关键词检索，相关性不受影响",
+      "只有被重编的那部分文档相关性下降，其余 v1 文档完全正常"
+    ],
+    "options_en": [
+      "Retrieval errors out with a 500 because different dimensions make cosine uncomputable.",
+      "Cosine is computable but semantically meaningless; results still return with no errors while relevance silently collapses.",
+      "The system auto-detects the version mismatch and falls back to keyword search, so relevance is unaffected.",
+      "Only the re-embedded subset degrades; the remaining v1 docs stay perfectly fine."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "维度往往一样（如都是 768 维），余弦照样算得出、不会 500，这正是它隐蔽的原因。",
+      "对；同维度不同空间，余弦有数值无语义，静默返回错乱结果——版本不兼容最典型的坑。",
+      "系统不会自动识别语义空间不匹配，也不存在自动回退关键词的机制，相关性会真崩。",
+      "跨空间比较是全局性的：v2 query 对所有 v1 文档都失真，不只坏在重编的那部分。"
+    ],
+    "optionExplanations_en": [
+      "Dimensions usually match (e.g. both 768-dim), so cosine still computes and does not 500 — which is exactly why it hides.",
+      "Correct — same dimension, different space: cosine has a value but no meaning, silently returning garbled results, the classic version-incompatibility trap.",
+      "The system does not auto-detect a semantic-space mismatch nor auto-fall-back to keywords; relevance really breaks.",
+      "Cross-space comparison is global: the v2 query distorts against all v1 docs, not just the re-embedded subset."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cosine similarity / 余弦相似度",
+        "meaning": "两个向量夹角的余弦，衡量方向一致程度；跨不同嵌入空间比较无意义。",
+        "meaningEn": "Cosine similarity is the cosine of the angle between two vectors; comparing across different embedding spaces is meaningless."
+      },
+      {
+        "term": "embedding space / 嵌入空间",
+        "meaning": "某一版模型学到的向量坐标系，不同版本模型的空间互不兼容。",
+        "meaningEn": "An embedding space is the coordinate system a model version learns; spaces from different versions are incompatible."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-011",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "reindex",
+    "scenario": "换新编码器时，为省成本你想只重编「热门/最近更新」的文档，其余保留旧向量。",
+    "scenario_en": "To save cost when swapping encoders, you want to re-embed only 'hot/recently updated' docs and keep old vectors for the rest.",
+    "q": "为什么「部分重编」在换 embedding 模型时行不通？",
+    "q_en": "Why does partial re-embedding fail when swapping the embedding model?",
+    "why": "共享空间假设被打破：召回靠「query 和文档在同一空间比距离」，只要索引里混着 v1 和 v2 向量，query 就无法对所有文档做一致比较。所以换模型必须用 query 的模型版本全量重编每一篇文档，不能只补一部分。",
+    "why_en": "Retrieval assumes query and docs share one space, so mixing v1 and v2 vectors breaks consistent comparison, forcing a full re-encode of every doc with the query's model version.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "reindex"
+    ],
+    "options": [
+      "因为部分重编会超预算，纯粹是成本问题、技术上其实可行",
+      "因为共享空间假设被打破：索引混着 v1/v2 向量，query 无法一致比较，必须全量重编每篇文档",
+      "因为新模型维度更高，旧向量补零对齐即可继续混用",
+      "因为只要给每个向量打上版本标签，检索就能自动跨空间换算、无需重编"
+    ],
+    "options_en": [
+      "Because partial re-embedding blows the budget — it is purely a cost issue and technically fine.",
+      "Because the shared-space assumption breaks: mixing v1/v2 vectors stops consistent comparison, forcing a full re-encode of every doc.",
+      "Because the new model has higher dimensions, but zero-padding old vectors to align lets you keep mixing them.",
+      "Because tagging each vector with its version lets retrieval auto-convert across spaces, so no re-embedding is needed."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "这不只是钱的问题：即使预算无限，混空间检索本身就语义失真，部分重编技术上就是错的。",
+      "对；召回依赖同一空间比距离，v1/v2 混用让比较失去意义，只能用 query 的版本全量重编。",
+      "补零对齐维度改变不了「两个空间语义不通」的事实，混用照样失真。",
+      "不存在跨嵌入空间的通用换算；版本标签能帮审计，但换算不出等价向量。"
+    ],
+    "optionExplanations_en": [
+      "It is not just money: even with infinite budget, mixed-space retrieval is semantically distorted, so partial re-embedding is simply wrong.",
+      "Correct — recall depends on comparing distances in one space; mixing v1/v2 makes comparison meaningless, so re-encode everything with the query's version.",
+      "Zero-padding to align dimensions does not fix that the two spaces are semantically incompatible; mixing still distorts.",
+      "There is no universal conversion across embedding spaces; version tags aid auditing but cannot compute equivalent vectors."
+    ],
+    "termDefinitions": [
+      {
+        "term": "shared-space assumption / 共享空间假设",
+        "meaning": "召回前提是 query 和文档用同一模型编到同一向量空间，才能一致比距离。",
+        "meaningEn": "The shared-space assumption is that queries and docs are embedded by the same model into one space so distances are comparable."
+      },
+      {
+        "term": "re-embedding / 重编码",
+        "meaning": "用新模型版本重新把文档编码成向量、重建索引。",
+        "meaningEn": "Re-embedding re-encodes documents into vectors with the new model version and rebuilds the index."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-012",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "blue-green-rebuild",
+    "q": "把「零停机蓝绿重建索引」的 5 个阶段排成正确顺序：",
+    "q_en": "Order the 5 stages of a zero-downtime blue-green index rebuild:",
+    "steps": [
+      "离线训练/微调新模型，用离线 NDCG@10 验证",
+      "全量批量编码整个语料 → 写入影子索引(shadow index)",
+      "跑黄金查询(golden queries)，NDCG@10 ≥ 生产分才放行",
+      "负载均衡原子地把流量从 v1 切到 v2（不出现半量索引命中）",
+      "保留旧索引热备，随时秒级回滚"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "顺序是训练→全量编码进影子索引→验证门槛→原子蓝绿切换→留旧索引热备回滚。关键是「先在影子索引里建好并验过，再一次性原子切换」，避免 query 打到半新半旧的索引上（那会触发版本不兼容的静默退化）。",
+    "why_en": "Train, batch-encode into a shadow index, gate on golden-query NDCG, atomically swap traffic v1 to v2, and keep the old index warm for rollback, so no query ever hits a half-updated index.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "blue-green-rebuild"
+    ],
+    "diagram": "flowchart LR\n  T[\"训练+离线验证\"] --> E[\"全量编码→影子索引\"]\n  E --> G[\"黄金查询验证门\"]\n  G --> S[\"原子蓝绿切换\"]\n  S --> R[\"旧索引热备·可回滚\"]",
+    "termDefinitions": [
+      {
+        "term": "blue-green deployment / 蓝绿部署",
+        "meaning": "同时维护旧(蓝)新(绿)两套，验好后一次性把流量原子切到新的，可秒级切回。",
+        "meaningEn": "Blue-green deployment keeps old (blue) and new (green) side by side, atomically switching traffic once the new one is validated, with instant rollback."
+      },
+      {
+        "term": "shadow index / 影子索引",
+        "meaning": "在不接生产流量的情况下用新模型重建好的索引，验证通过后才切换。",
+        "meaningEn": "A shadow index is rebuilt with the new model off the production path and switched in only after validation."
+      },
+      {
+        "term": "golden queries / 黄金查询",
+        "meaning": "一组带已知理想结果的代表性查询，用来在放行前检验新索引的相关性。",
+        "meaningEn": "Golden queries are a curated set of representative queries with known good results, used to gate relevance before promotion."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "atomic-swap",
+    "scenario": "新索引已在影子索引里建好并验过，现在要把生产流量从 v1 切到 v2，不能出现停机。",
+    "scenario_en": "The new index is built in a shadow index and validated; now switch production traffic v1 to v2 with zero downtime.",
+    "q": "切换应该原子完成还是逐文档灰度替换？",
+    "q_en": "Should the switch be atomic or a per-document gradual replacement?",
+    "why": "必须由负载均衡原子地整体切 v1→v2，因为逐文档替换会让 query 打到「半 v1 半 v2」的索引上，触发跨空间比较的静默退化。原子切换保证任一时刻 query 只命中单一版本的完整索引。",
+    "why_en": "Switch atomically at the load balancer, because a per-document replacement lets queries hit a half-v1/half-v2 index and trigger silent cross-space degradation.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "atomic-swap"
+    ],
+    "tradeoff": "原子整体切换（无半量命中·需双份索引资源） vs 逐文档替换（省资源但产生混空间静默退化）",
+    "options": [
+      "逐文档灰度替换：每替一批就放一点流量，平滑过渡、资源占用最省",
+      "负载均衡原子整体切换 v1→v2：保证任一时刻只命中单一版本的完整索引",
+      "先删掉 v1 索引再建 v2：腾出资源后重建，避免双份索引的内存开销",
+      "按用户地域分批切：一部分用户走 v1、一部分走 v2，长期共存"
+    ],
+    "options_en": [
+      "Per-document gradual replacement: send a trickle of traffic as each batch is swapped, smoothest and cheapest on resources.",
+      "Atomic load-balancer switch v1 to v2: guarantees every query hits a single complete index version at any instant.",
+      "Delete the v1 index first, then build v2: free resources before rebuilding to avoid double-index memory cost.",
+      "Split by user region: some users on v1, some on v2, coexisting long-term."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当新旧模型共享同一嵌入空间（如同架构只做了轻量增量微调、向量可比）时，才可考虑逐步替换而不触发跨空间失真。",
+    "whenOtherWins_en": "Only when old and new models share the same embedding space (e.g. a light incremental fine-tune whose vectors stay comparable) can a gradual replacement avoid cross-space distortion.",
+    "optionExplanations": [
+      "逐文档替换会让 query 同时比 v1 和 v2 向量，正是要避免的混空间静默退化。",
+      "对；原子切换让每个 query 要么全 v1、要么全 v2，杜绝半量索引命中导致的跨空间失真。",
+      "先删 v1 就丢了回滚热备，切换若出问题无法秒级回退，风险极高。",
+      "地域长期共存等于让一部分流量长期跑在混空间/旧版本上，同样引入不一致。"
+    ],
+    "optionExplanations_en": [
+      "Per-document replacement makes a query compare v1 and v2 vectors at once — exactly the mixed-space silent degradation to avoid.",
+      "Correct — an atomic switch keeps each query all-v1 or all-v2, eliminating cross-space distortion from half-updated index hits.",
+      "Deleting v1 first discards the warm rollback, so a bad switch cannot revert in seconds — very risky.",
+      "Long-term regional coexistence keeps some traffic on a mixed/old version indefinitely, introducing the same inconsistency."
+    ],
+    "termDefinitions": [
+      {
+        "term": "atomic swap / 原子切换",
+        "meaning": "负载均衡一次性把全部流量从旧索引改到新索引，不存在中间半量状态。",
+        "meaningEn": "An atomic swap flips all traffic from old to new index at once, with no intermediate half-updated state."
+      },
+      {
+        "term": "load balancer / 负载均衡",
+        "meaning": "把请求分发到后端的组件，这里用它做原子的索引版本切换。",
+        "meaningEn": "A load balancer routes requests to backends; here it performs the atomic index-version switch."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "validation-gate",
+    "scenario": "影子索引已全量编码完成，切生产流量前你要设一道自动放行/拦截的门槛。",
+    "scenario_en": "The shadow index is fully encoded; before switching production traffic you want an automatic promote/block gate.",
+    "q": "验证门（validation gate）该用什么判据放行新索引？",
+    "q_en": "What criterion should the validation gate use to promote the new index?",
+    "why": "跑一组黄金查询（已知理想结果的代表性查询），只有新索引的 NDCG@10 ≥ 当前生产分才放行。这把「上线前发现相关性回归」自动化，避免把静默退化的索引切上去。",
+    "why_en": "Run golden queries and promote only if the new index's NDCG@10 is at least the current production score, automating relevance-regression detection before the swap.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "validation-gate"
+    ],
+    "tradeoff": "NDCG@10 门槛（可信但需分级标注的黄金集） vs 只看 zero-result（便宜但抓不到排序退化）",
+    "options": [
+      "只要影子索引编码无报错、能返回结果就放行，相关性上线后再观察",
+      "跑黄金查询，新索引 NDCG@10 ≥ 生产分才放行，否则拦截",
+      "看新索引占用的内存是否比旧索引小，更省资源就放行",
+      "随机抽 10 个真实用户做问卷，多数说好就放行"
+    ],
+    "options_en": [
+      "Promote as long as the shadow index encodes without errors and returns results; observe relevance after go-live.",
+      "Run golden queries and promote only if the new index's NDCG@10 is at least the production score, else block.",
+      "Promote if the new index uses less memory than the old one — more resource-efficient wins.",
+      "Survey 10 random real users; promote if most say it feels good."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若这是全新语料、还没有生产基线分可比，则门槛改为「NDCG@10 达到人工设定的绝对下限」而非对比历史。",
+    "whenOtherWins_en": "If it is a brand-new corpus with no production baseline to compare, gate on an absolute NDCG@10 floor set by hand instead of a historical delta.",
+    "optionExplanations": [
+      "「能返回结果」不等于「相关性没退化」——embedding 漂移正是无报错的静默退化，这道门形同虚设。",
+      "对；黄金查询 + NDCG@10 ≥ 生产分是可自动执行的相关性门，能在切换前拦下回归。",
+      "内存省不等于相关性好，用资源当放行判据会把更差的索引放上线。",
+      "10 人问卷样本太小、query 级方差极大，得不出可信的相关性结论。"
+    ],
+    "optionExplanations_en": [
+      "'Returns results' is not 'relevance did not regress' — drift is precisely error-free silent degradation, so this gate is useless.",
+      "Correct — golden queries plus NDCG@10 at least the production score is an auto-enforceable relevance gate that blocks regressions pre-swap.",
+      "Less memory does not mean better relevance; gating on resources would promote a worse index.",
+      "A 10-person survey is too small and query-level variance is huge, yielding no trustworthy relevance conclusion."
+    ],
+    "termDefinitions": [
+      {
+        "term": "validation gate / 验证门",
+        "meaning": "切换前的自动检查点，只有满足相关性判据才放行新索引。",
+        "meaningEn": "A validation gate is an automatic pre-switch checkpoint that promotes the new index only if it meets a relevance criterion."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-015",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "rollback",
+    "scenario": "蓝绿切到 v2 后，线上 zero-result rate 突然飙升、疑似新索引有问题。",
+    "scenario_en": "After the blue-green switch to v2, live zero-result rate suddenly spikes, suggesting the new index is faulty.",
+    "q": "为什么切换后要「保留旧索引热备」，它换来的是什么？",
+    "q_en": "Why keep the old index warm after the switch, and what does that buy you?",
+    "why": "旧索引热备（还在内存里、可立即接流量）让回滚是秒级的：负载均衡把流量切回 v1 即可，不用重新加载 TB 级索引。代价是切换期间要同时占两份索引的内存/存储，但换来的是「出问题能马上止血」。",
+    "why_en": "Keeping the old index warm makes rollback a seconds-fast load-balancer flip back to v1 instead of reloading a TB-scale index, at the cost of double memory during the switch.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "rollback"
+    ],
+    "options": [
+      "为了省钱——旧索引留着可以复用它的机器跑别的任务",
+      "为了让回滚秒级完成：出问题直接把流量切回 v1，不用重新加载 TB 级索引",
+      "为了让 v1 和 v2 长期共同服务流量、做永久 A/B",
+      "为了在旧索引上继续接收写入，v2 只读不写"
+    ],
+    "options_en": [
+      "To save money — the old index's machines can be reused for other jobs while kept around.",
+      "To make rollback seconds-fast: on trouble, flip traffic back to v1 without reloading a TB-scale index.",
+      "To let v1 and v2 keep serving traffic together as a permanent A/B.",
+      "To keep taking writes on the old index while v2 stays read-only."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "热备恰恰是不腾机器、让索引留在内存随时可用，跟省钱复用相反。",
+      "对；旧索引留在内存里，回滚只是负载均衡切回 v1，秒级止血，省掉重新加载 TB 索引的时间。",
+      "热备是短期兜底，不是永久双活；长期共存反而引入版本不一致风险。",
+      "旧索引热备是为回滚只读兜底，不是拿来继续接写入的。"
+    ],
+    "optionExplanations_en": [
+      "Warm standby is the opposite of freeing machines — it keeps the index in memory ready to serve, not reused elsewhere.",
+      "Correct — the old index stays in memory, so rollback is just a load-balancer flip back to v1, stopping the bleeding in seconds without reloading a TB index.",
+      "Warm standby is a short-term safety net, not permanent active-active; long coexistence reintroduces version inconsistency.",
+      "The warm old index is a read-only rollback fallback, not a target for continued writes."
+    ],
+    "termDefinitions": [
+      {
+        "term": "warm standby / 热备",
+        "meaning": "旧索引仍加载在内存、可立即接管流量的待命状态，供快速回滚。",
+        "meaningEn": "Warm standby keeps the old index loaded in memory ready to take traffic instantly, enabling fast rollback."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-016",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "reindex-cost",
+    "scenario": "十亿(1B)级文档语料，每次换编码器都要全量重编，GPU 算力和存储都很贵；产品团队想每次模型有小改进就重建。",
+    "scenario_en": "A billion-doc corpus must be fully re-embedded on every encoder change, GPU compute and storage are costly, and the product team wants a rebuild on every small model improvement.",
+    "q": "面对十亿级全量重编的成本，重建节奏该怎么定？",
+    "q_en": "Given billion-scale full re-embedding cost, how should you set the rebuild cadence?",
+    "why": "十亿文档全量重编在 GPU 和存储上都很贵，不能每次增量都重建。做法是按季度批量摊销（把多次小改进攒到一次全量重编），并用版本化命名。这里没有精确公式，是成本-收益经验权衡：重建太频→烧钱，太少→相关性长期落后。",
+    "why_en": "Full re-embedding of a billion docs is GPU- and storage-costly, so batch improvements and rebuild roughly quarterly rather than on every increment.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "reindex-cost"
+    ],
+    "options": [
+      "每次模型有任何改进就立刻全量重建，始终保持最新",
+      "按季度批量摊销：把多次小改进攒到一次全量重编，平衡成本与相关性时效",
+      "永远不重建，靠部分重编增量更新即可省下所有成本",
+      "把重建频率绑定到 zero-result rate，每次它波动就重建一次"
+    ],
+    "options_en": [
+      "Rebuild fully on any model improvement to always stay newest.",
+      "Batch and amortize roughly quarterly: bundle several small improvements into one full re-embed, balancing cost against relevance freshness.",
+      "Never rebuild; partial incremental re-embedding saves all the cost.",
+      "Tie rebuild frequency to zero-result rate, rebuilding every time it fluctuates."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "每次增量都全量重编，十亿文档的 GPU/存储成本会爆，收益却是边际的。",
+      "对；季度批量把成本摊薄，同时相关性不会落后太久，是典型的成本-时效经验权衡。",
+      "部分重编会造成混空间静默退化（见版本不兼容），根本不能靠它替代全量重建。",
+      "zero-result 抖动频繁，绑它会触发大量不必要的十亿级重建，成本失控。"
+    ],
+    "optionExplanations_en": [
+      "Fully re-embedding on every increment explodes GPU/storage cost for a billion docs while the gain is marginal.",
+      "Correct — quarterly batching amortizes cost while keeping relevance from lagging too long, the classic cost-vs-freshness tradeoff.",
+      "Partial re-embedding causes mixed-space silent degradation (see version incompatibility) and cannot replace full rebuilds.",
+      "Zero-result rate fluctuates often; tying to it would trigger many needless billion-scale rebuilds, blowing the budget."
+    ],
+    "termDefinitions": [
+      {
+        "term": "amortize / 摊销",
+        "meaning": "把一次大成本分摊到较长周期，这里是攒多次改进做一次全量重编。",
+        "meaningEn": "Amortize spreads a large one-off cost over a longer period; here, bundling improvements into one full re-embed."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-017",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "index-versioning",
+    "scenario": "你要能在事故时快速审计「当前线上是哪一版索引、用哪版模型编的」，并支持回滚。",
+    "scenario_en": "You need to quickly audit 'which index version is live and which model encoded it' during incidents, and support rollback.",
+    "q": "索引命名/管理该怎么做才利于审计和回滚？",
+    "q_en": "How should you name/manage indexes to aid auditing and rollback?",
+    "why": "用版本化名字（如 index-v2-2024-06）加元数据标签（模型版本、语料快照、构建时间），让每个索引可追溯是谁、什么时候、用哪版模型建的。这样事故时能一眼定位当前版本、并明确回滚到哪一版。",
+    "why_en": "Use versioned names like index-v2-2024-06 plus metadata tags (model version, corpus snapshot, build time) so every index is traceable and rollback targets are explicit.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "index-versioning"
+    ],
+    "options": [
+      "所有索引都叫同一个名字，直接原地覆盖，最省事",
+      "用版本化名字(如 index-v2-2024-06) + 元数据标签(模型版本/语料快照/构建时间)，可追溯可回滚",
+      "只用构建时间戳当名字，不记模型版本，反正能按时间排序",
+      "用随机 UUID 命名，避免冲突就够了，元数据不用记"
+    ],
+    "options_en": [
+      "Name every index the same and overwrite in place — simplest.",
+      "Use versioned names (e.g. index-v2-2024-06) plus metadata tags (model version, corpus snapshot, build time) for traceability and rollback.",
+      "Use only a build timestamp as the name, skip model version — sorting by time is enough.",
+      "Name with a random UUID; avoiding collisions is enough, and metadata is unnecessary."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "同名原地覆盖直接毁掉回滚能力——旧版本没了，出事无从退回也无从审计。",
+      "对；版本化命名 + 元数据让每个索引可追溯、回滚目标明确，是审计友好的标准做法。",
+      "只有时间戳查不到「用哪版模型编的」，版本不兼容排查时缺了最关键的一维。",
+      "UUID 避免了冲突但完全不可读、无语义，审计时看不出版本关系。"
+    ],
+    "optionExplanations_en": [
+      "Same-name in-place overwrite destroys rollback — the old version is gone, so incidents cannot revert or be audited.",
+      "Correct — versioned names plus metadata make each index traceable with explicit rollback targets, the audit-friendly standard.",
+      "A timestamp alone cannot tell 'which model version encoded it', missing the key dimension for version-mismatch debugging.",
+      "A UUID avoids collisions but is unreadable and meaningless, hiding version relationships during audits."
+    ],
+    "termDefinitions": [
+      {
+        "term": "metadata tag / 元数据标签",
+        "meaning": "附在索引上的结构化信息，如模型版本、语料快照、构建时间，用于审计。",
+        "meaningEn": "A metadata tag is structured info attached to an index, like model version, corpus snapshot, and build time, used for auditing."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "interleaving",
+    "scenario": "你改了排序模型、想测相关性有没有变好。但相关性差异很微妙、query 级方差极高，传统 A/B 要几百万查询、跑几周才显著。",
+    "scenario_en": "You changed the ranking model and want to test if relevance improved, but relevance diffs are subtle, query-level variance is huge, and classic A/B needs millions of queries over weeks to reach significance.",
+    "q": "测相关性变化，该用交错(interleaving)还是传统 A/B？",
+    "q_en": "To test a relevance change, use interleaving or classic A/B?",
+    "why": "用 interleaving：把 A、B 两个系统的结果交错进同一页，同一个用户在同一 query 上同时评判两者，直接控住了 query 级方差，用 10–100× 更少的查询就能测出差异。A/B 让不同用户看不同结果，方差大、灵敏度低，适合影响整页的 UI/延迟实验。",
+    "why_en": "Use interleaving: merging A and B into one page lets the same user judge both on the same query, controlling query-level variance and detecting diffs with 10-100x fewer queries.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "interleaving"
+    ],
+    "tradeoff": "interleaving（同 query 同用户比·灵敏·省 10–100× 查询·只给相对偏好） vs A/B（分流·方差大·但能测绝对/整页效应）",
+    "options": [
+      "用传统 A/B：把用户随机分两组各看一个系统，最终按转化率判断，最稳妥",
+      "用 interleaving：把 A/B 结果交错进同一页，同用户同 query 比较，控住方差、省 10–100× 查询",
+      "直接上线新排序模型，看线上 CTR 有没有涨，不做对照实验",
+      "只跑离线 NDCG，不做任何线上实验就下结论"
+    ],
+    "options_en": [
+      "Use classic A/B: randomly split users to each system and judge by conversion — safest.",
+      "Use interleaving: merge A/B results into one page so the same user judges both on the same query, controlling variance and saving 10-100x queries.",
+      "Just ship the new ranker and watch whether live CTR rises, with no controlled experiment.",
+      "Run only offline NDCG and conclude without any online experiment."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "当改动影响整页体验（UI 改版、延迟变化、广告密度）而非纯排序相关性时，用 A/B——interleaving 只能比较两套排序结果，测不了整页级效应。",
+    "whenOtherWins_en": "When the change affects the whole page (UI redesign, latency, ad density) rather than pure ranking relevance, use A/B — interleaving only compares two rankings, not page-level effects.",
+    "optionExplanations": [
+      "A/B 让不同用户判不同结果，query 级方差没被控住，测微妙相关性差异要几百万查询、太慢。",
+      "对；交错让同一用户在同一 query 上同时评 A 和 B，方差被抵消，灵敏度高、省 10–100× 查询。",
+      "无对照直接上线，CTR 变化分不清是模型效果还是流量/时段波动，得不出因果。",
+      "离线 NDCG 是发布前门槛，替代不了线上真实用户对相关性变化的判断。"
+    ],
+    "optionExplanations_en": [
+      "A/B has different users judging different results, so query-level variance is uncontrolled and subtle relevance diffs need millions of queries — too slow.",
+      "Correct — interleaving has the same user judge A and B on the same query, canceling variance for high sensitivity and 10-100x fewer queries.",
+      "Shipping with no control confounds CTR change with traffic/time-of-day swings, yielding no causal conclusion.",
+      "Offline NDCG is a pre-release gate, not a substitute for real users judging a live relevance change."
+    ],
+    "termDefinitions": [
+      {
+        "term": "interleaving / 结果交错",
+        "meaning": "把两个排序系统的结果合并进同一页，让同一用户在同一查询上同时评判，用于灵敏的相关性对比。",
+        "meaningEn": "Interleaving merges two rankers' results into one page so the same user judges both on the same query, a sensitive relevance test."
+      },
+      {
+        "term": "A/B test / A/B 测试",
+        "meaning": "把用户随机分组、各看一个版本，比较组间指标；受 query 级方差影响、需大样本。",
+        "meaningEn": "An A/B test randomly splits users across versions and compares group metrics; sensitive to query-level variance and needs large samples."
+      },
+      {
+        "term": "query-level variance / 查询级方差",
+        "meaning": "不同查询本身难易/相关性差异极大带来的噪声，压过了系统间的微弱差异。",
+        "meaningEn": "Query-level variance is noise from queries differing wildly in difficulty, drowning out small differences between systems."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "team-draft-interleaving",
+    "scenario": "你要落地一次 team-draft interleaving 实验，比较排序系统 A 和 B。",
+    "scenario_en": "You are implementing a team-draft interleaving experiment comparing rankers A and B.",
+    "q": "team-draft interleaving 具体怎么合成结果、怎么记功？",
+    "q_en": "How does team-draft interleaving build the list and credit results?",
+    "why": "像队长选人：A、B 轮流从各自的 top 结果里挑一个放进同一个合并列表，用户看到一页、自然点击；每次点击记功给「产出该结果的系统」，谁被点得多谁赢。用户不知道哪条来自谁，避免偏置。",
+    "why_en": "Like team captains, A and B alternately pick their top result into one merged list; the user clicks naturally and each click is credited to the system that produced that result.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "team-draft-interleaving"
+    ],
+    "options": [
+      "把 A 的整页放上半屏、B 的整页放下半屏，看用户点上还是下",
+      "A、B 轮流从各自 top 结果里挑一个放进同一合并列表，点击记功给产出该结果的系统，多者胜",
+      "随机决定这次查询整页用 A 还是用 B，一周后比总点击",
+      "把 A、B 的分数直接相加重排成一页，取平均分最高的展示"
+    ],
+    "options_en": [
+      "Put A's whole page on the top half and B's on the bottom half, and see which half users click.",
+      "A and B alternately pick one of their top results into one merged list; each click credits the producing system, and more clicks wins.",
+      "Randomly decide per query whether the whole page is A or B, then compare total clicks after a week.",
+      "Add A's and B's scores and re-rank into one page, showing the highest average score."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "上下半屏分区会引入强烈的位置偏置（用户偏点上面），不是 team-draft 的做法。",
+      "对；轮流选人式合并 + 按产出系统记功，让同一用户在同一 query 上公平比较 A、B。",
+      "整页非 A 即 B 其实就是 A/B 分流，没有交错、没控住 query 级方差。",
+      "分数相加重排会混淆两系统的信号，无法把点击归因给某一个系统。"
+    ],
+    "optionExplanations_en": [
+      "Top/bottom halves introduce strong position bias (users click higher), which is not team-draft.",
+      "Correct — captain-style alternating picks plus crediting by producing system lets the same user fairly compare A and B on one query.",
+      "Whole-page-A-or-B is just A/B splitting — no interleaving and no control of query-level variance.",
+      "Summing scores and re-ranking blends the two systems' signals, so clicks cannot be attributed to one system."
+    ],
+    "termDefinitions": [
+      {
+        "term": "team-draft interleaving",
+        "meaning": "两个排序系统像队长轮流选人，各自把 top 结果交替放进同一列表，点击按产出系统记功。",
+        "meaningEn": "Team-draft interleaving has two rankers alternately draft their top results into one list, crediting each click to the producing system."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-020",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "interleaving-efficiency",
+    "scenario": "团队争论：既然有 A/B，为什么还要专门上 interleaving 来测相关性。",
+    "scenario_en": "The team debates why bother with interleaving for relevance when A/B exists.",
+    "q": "interleaving 相比 A/B 在灵敏度上的量级优势是多少，来自哪里？",
+    "q_en": "What is interleaving's order-of-magnitude sensitivity advantage over A/B, and where does it come from?",
+    "why": "约 10–100× 更少的查询就能测出同样的相关性差异（Netflix、Bing 的经验数字）。来源是它控住了 query 级方差——同一用户在同一 query 上同时评 A 和 B，噪声被同 query 抵消，不用靠海量样本去平均掉方差。",
+    "why_en": "Interleaving needs roughly 10-100x fewer queries because same-user, same-query comparison cancels query-level variance instead of averaging it out over huge samples.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "interleaving-efficiency"
+    ],
+    "options": [
+      "约 2× 更少查询，优势来自算法更快",
+      "约 10–100× 更少查询，来自同用户同 query 比较抵消了 query 级方差",
+      "约 1000× 更少查询，因为完全不需要真实用户",
+      "没有量级优势，只是换了个指标名字，样本需求一样"
+    ],
+    "options_en": [
+      "About 2x fewer queries, from a faster algorithm.",
+      "About 10-100x fewer queries, from same-user same-query comparison canceling query-level variance.",
+      "About 1000x fewer queries, because it needs no real users at all.",
+      "No order-of-magnitude advantage; it just renames the metric with identical sample needs."
+    ],
+    "answer": [
+      1
+    ],
+    "termDefinitions": [
+      {
+        "term": "sensitivity / 灵敏度",
+        "meaning": "实验用多少样本就能把真实差异测成统计显著；灵敏度越高需要的查询越少。",
+        "meaningEn": "Sensitivity is how few samples an experiment needs to detect a true difference as significant; higher means fewer queries."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-021",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "interleaving-limits",
+    "scenario": "interleaving 实验显示新排序系统 B 明显赢过 A，团队想据此宣布 B「达到了上线的绝对质量标准」。",
+    "scenario_en": "An interleaving experiment shows new ranker B clearly beats A, and the team wants to declare B meets the absolute quality bar to ship.",
+    "q": "只凭 interleaving 结果能不能下「达到绝对质量标准」的结论？",
+    "q_en": "Can interleaving alone establish that B meets an absolute quality bar?",
+    "why": "不能。interleaving 只测「B 相对 A 更受偏好」，是相对信号；它不告诉你 B 的绝对质量到不到线（A 也可能本来就烂）。所以还要配离线 NDCG 阈值和 abandonment-rate 监控设一个绝对标尺。",
+    "why_en": "No — interleaving only measures relative preference of B over A, not absolute quality, so you still need offline NDCG thresholds and abandonment monitoring for an absolute bar.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "interleaving-limits"
+    ],
+    "options": [
+      "能，B 赢了 A 就等于 B 达到了绝对质量标准",
+      "不能；interleaving 只给相对偏好，还需离线 NDCG 阈值 + abandonment 监控当绝对标尺",
+      "能，只要样本够大，相对偏好会自动收敛成绝对质量分",
+      "不能，但补救办法是再跑一次 interleaving 换个基线系统"
+    ],
+    "options_en": [
+      "Yes, B beating A means B meets the absolute quality bar.",
+      "No — interleaving gives only relative preference, so you still need offline NDCG thresholds plus abandonment monitoring as the absolute bar.",
+      "Yes, with a large enough sample relative preference converges to an absolute quality score.",
+      "No, but the fix is to run interleaving again against a different baseline system."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "「赢过 A」是相对的：A 可能本身就差，B 赢了也未必到线，不能当绝对达标。",
+      "对；相对偏好要配离线 NDCG 阈值和 abandonment 监控这类绝对标尺，才知道 B 够不够好。",
+      "样本再大也只把相对偏好测得更准，永远变不出绝对质量的刻度。",
+      "换基线还是相对比较，永远得不到绝对质量线，方向不对。"
+    ],
+    "optionExplanations_en": [
+      "'Beats A' is relative: A may be poor, so B winning need not clear the bar and cannot count as absolute pass.",
+      "Correct — relative preference must be paired with offline NDCG thresholds and abandonment monitoring as an absolute yardstick.",
+      "A larger sample only sharpens the relative preference; it never produces an absolute quality scale.",
+      "Swapping baselines is still relative comparison and never yields an absolute quality bar — wrong direction."
+    ],
+    "termDefinitions": [
+      {
+        "term": "relative vs absolute quality / 相对 vs 绝对质量",
+        "meaning": "相对是「B 比 A 好」，绝对是「B 好到能上线」；interleaving 只给前者。",
+        "meaningEn": "Relative quality is 'B beats A'; absolute is 'B is good enough to ship'; interleaving gives only the former."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-022",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "metric-selection",
+    "scenario": "面试速记：离线相关性指标怎么按查询类型选，NDCG 常用截断位是多少。",
+    "scenario_en": "Interview cheat: how to pick offline relevance metrics by query type, and NDCG's common cutoff.",
+    "q": "补全离线相关性指标的选择法则：",
+    "q_en": "Fill in the offline relevance metric selection rule:",
+    "text": "导航/事实型查询（只要一个正确答案）用 {{MRR}}，只需二元标签、便宜；探索/商品型查询（多档相关性）用 {{NDCG}}，需要分级标注；生产标准截断位常取 NDCG@{{10}}，对齐搜索结果第一页。",
+    "text_en": "Navigational/factoid queries (one right answer) use {{MRR}} with cheap binary labels; exploratory/product queries (graded relevance) use {{NDCG}} with multi-level labels; the standard production cutoff is NDCG@{{10}}, aligned to the first results page.",
+    "why": "口诀：单答案→MRR（便宜、只看首个命中）；多档相关→NDCG（贵、评整页）；截断位 @10 因为用户主要看第一页。指标一定要连同「按查询类型给理由」一起说，才是资深的信号。",
+    "why_en": "Say it as: single-answer to MRR, graded to NDCG, cutoff @10 for the first page, and always justify the metric by query type.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "metric-selection"
+    ],
+    "termDefinitions": [
+      {
+        "term": "MRR",
+        "fullName": "Mean Reciprocal Rank",
+        "meaning": "首个相关结果排名倒数的均值，适合单答案查询。",
+        "meaningEn": "MRR (Mean Reciprocal Rank) averages the reciprocal rank of the first relevant result, for single-answer queries."
+      },
+      {
+        "term": "NDCG",
+        "fullName": "Normalized Discounted Cumulative Gain",
+        "meaning": "整页分级相关性的归一化折损打分，适合多档相关查询。",
+        "meaningEn": "NDCG (Normalized Discounted Cumulative Gain) scores whole-page graded relevance, for multi-level queries."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "offline-metrics",
+    "scenario": "电商站内搜索，一次「跑鞋」查询返回几十个结果，相关度从「完全匹配的跑鞋」到「运动袜」不等，你有分级相关标注预算。",
+    "scenario_en": "E-commerce search returns dozens of results for 'running shoes', ranging from exact-match shoes to sport socks, and you have budget for graded relevance labels.",
+    "q": "这种多结果、相关度分档的搜索该用哪个离线指标？",
+    "q_en": "Which offline metric fits this multi-result, graded-relevance search?",
+    "why": "用 NDCG@10：它按分级相关性给增益、按位置折损，正好奖励「把完全匹配排在勉强相关之前」。MRR 只看首个命中，会忽略后面十几个结果的排序好坏，抓不到商品搜索真正关心的整页质量。",
+    "why_en": "Use NDCG@10: it rewards ranking exact matches above weakly-relevant items via graded gains and positional discount, which MRR's first-hit-only view cannot capture.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "offline-metrics"
+    ],
+    "tradeoff": "NDCG（评整页分级排序·需分级标注） vs MRR（只看首个命中·忽略其余结果）",
+    "options": [
+      "MRR：只看第一个相关结果排多高，最适合商品搜索",
+      "zero-result rate：统计返回空结果的比例即可代表商品搜索质量",
+      "NDCG@10：按分级相关增益 + 位置折损评整页，奖励把更相关的商品排更前",
+      "query abandonment rate：用无点击比例直接当离线相关性指标"
+    ],
+    "options_en": [
+      "MRR: just how high the first relevant result ranks, best for product search.",
+      "Zero-result rate: the share of empty-result queries already represents product-search quality.",
+      "NDCG@10: graded relevance gains plus positional discount over the whole page, rewarding ranking more-relevant products higher.",
+      "Query abandonment rate: use the no-click share directly as the offline relevance metric."
+    ],
+    "answer": [
+      2
+    ],
+    "whenOtherWins": "如果这个查询本质只有一个正确目标（如搜某个确切商品型号），退回 MRR 更合适——那时后面的排序无关紧要。",
+    "whenOtherWins_en": "If the query has essentially one correct target (e.g. an exact SKU), fall back to MRR — the rest of the ordering no longer matters.",
+    "optionExplanations": [
+      "MRR 只看首个命中，商品搜索关心的是整页几十个结果的相对排序，它抓不到。",
+      "zero-result 是覆盖监控、不含相关性分级信号，评不了排序质量。",
+      "对；NDCG 的分级增益 + 位置折损正好衡量「更相关排更前」，是商品/探索搜索的标准离线指标。",
+      "abandonment 是线上行为代理、且被即时答案污染，不是离线分级相关性指标。"
+    ],
+    "optionExplanations_en": [
+      "MRR sees only the first hit; product search cares about the relative ordering of dozens of results, which it cannot capture.",
+      "Zero-result is coverage monitoring with no graded relevance signal, so it cannot judge ranking quality.",
+      "Correct — NDCG's graded gains plus positional discount measure 'more-relevant ranked higher', the standard offline metric for product/exploratory search.",
+      "Abandonment is an online behavioral proxy polluted by instant answers, not an offline graded-relevance metric."
+    ],
+    "termDefinitions": [
+      {
+        "term": "graded relevance / 分级相关性",
+        "meaning": "把相关性分成多档（完全匹配/部分/勉强），而非只有相关/不相关两档。",
+        "meaningEn": "Graded relevance rates items on multiple levels (exact/partial/weak) rather than just relevant vs not."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-024",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ndcg-normalization",
+    "scenario": "你想跨不同查询平均 NDCG，但有的查询本来就有很多高相关文档、有的只有一两个。",
+    "scenario_en": "You want to average NDCG across queries, but some queries have many highly-relevant docs and others only one or two.",
+    "q": "NDCG 里的「N（归一化）」解决了什么问题？",
+    "q_en": "What problem does the 'N' (normalization) in NDCG solve?",
+    "why": "不同查询能拿到的最大 DCG 不同（可用高相关文档多寡不一），直接比 DCG 不公平。归一化就是把 DCG 除以该查询的理想排序 IDCG，压到 0-1，让「不同难度的查询」可以放到一起平均比较。",
+    "why_en": "Different queries have different maximum achievable DCG, so NDCG divides DCG by that query's ideal ordering (IDCG) to a 0-1 scale, making queries comparable and averageable.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "ndcg"
+    ],
+    "options": [
+      "归一化让 log 折损失效，从而给靠后位置更高权重",
+      "归一化把 DCG 除以该查询的理想排序 IDCG，压到 0-1，让不同难度查询可比可平均",
+      "归一化把二元标签转成分级标签，省去多档标注成本",
+      "归一化保证 NDCG 恒等于 1，方便判断系统是否完美"
+    ],
+    "options_en": [
+      "Normalization disables the log discount, giving later positions higher weight.",
+      "Normalization divides DCG by that query's ideal ordering IDCG to a 0-1 scale, making queries of different difficulty comparable and averageable.",
+      "Normalization converts binary labels into graded labels, saving multi-level annotation cost.",
+      "Normalization guarantees NDCG equals 1, making it easy to tell if the system is perfect."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "归一化不动 log 折损；折损照旧惩罚靠后位置，两者是独立的两步。",
+      "对；除以 IDCG 把每个查询的分压到 0-1，抵消了「有的查询天生能得更高 DCG」的不可比。",
+      "归一化处理的是分数尺度，不改变标签本身，也变不出分级标注。",
+      "只有完美排序时 NDCG 才等于 1，一般小于 1，它不是恒等于 1。"
+    ],
+    "optionExplanations_en": [
+      "Normalization does not touch the log discount; the discount still penalizes later positions — they are separate steps.",
+      "Correct — dividing by IDCG scales each query to 0-1, canceling the incomparability from some queries naturally scoring higher DCG.",
+      "Normalization handles the score scale, not the labels, and cannot manufacture graded annotations.",
+      "NDCG equals 1 only for a perfect ordering; generally it is below 1, so it does not always equal 1."
+    ],
+    "termDefinitions": [
+      {
+        "term": "normalization (NDCG) / 归一化",
+        "meaning": "把 DCG 除以理想排序 IDCG，得到 0-1 分数，让不同查询可比。",
+        "meaningEn": "Normalization divides DCG by the ideal IDCG to a 0-1 score so different queries are comparable."
+      }
+    ]
+  },
+  {
+    "id": "llm-067-semantic-search-evaluation-indexing-025",
+    "format": "cloze",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "version-mismatch",
+    "scenario": "复盘一次事故：升级了 query 编码器却没全量重编文档向量。",
+    "scenario_en": "Post-mortem: the query encoder was upgraded but document vectors were not fully re-embedded.",
+    "q": "补全 embedding 版本不兼容的故障链：",
+    "q_en": "Complete the embedding version-mismatch failure chain:",
+    "text": "v2 query 向量与 v1 文档向量属于{{不同}}的向量空间 → 余弦相似度{{算得出但语义无意义}} → 结果照常返回、{{无报错}} → 相关性静默退化。修复：用 query 的模型版本{{全量重编}}整个语料，并用蓝绿部署原子切换。",
+    "why": "这条链的杀伤力在于每一步都不报错：不同空间→余弦有数值没语义→静默返回错乱结果。所以修复不是「补编一部分」而是全量重编 + 原子蓝绿切换，杜绝混空间命中。",
+    "why_en": "Every step is error-free — different spaces, meaningful-looking but meaningless cosine, silent wrong results — so the fix is a full re-embed plus an atomic blue-green swap.",
+    "tags": [
+      "llm-sd",
+      "semantic-search",
+      "version-mismatch"
+    ],
+    "termDefinitions": [
+      {
+        "term": "version mismatch / 版本不兼容",
+        "meaning": "query 与文档用不同模型版本编码，落在互不兼容的向量空间，相关性静默崩坏。",
+        "meaningEn": "A version mismatch has query and docs encoded by different model versions in incompatible spaces, silently breaking relevance."
+      }
+    ]
+  }
+]

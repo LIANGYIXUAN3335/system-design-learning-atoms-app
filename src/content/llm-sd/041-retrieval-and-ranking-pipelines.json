@@ -1,0 +1,1238 @@
+[
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "three-stage-funnel",
+    "scenario": "为 10 亿用户从 5 亿候选视频里做推荐，p99 延迟预算只有 200ms。",
+    "scenario_en": "Recommend for 1B users over 500M candidate videos with a p99 latency budget of only 200ms.",
+    "q": "检索+排序的「三级漏斗」按顺序是哪三层？",
+    "q_en": "What are the three stages of the retrieval-and-ranking funnel, in order?",
+    "why": "漏斗每级都是「更强的模型、更少的候选」：候选生成十亿→千级(10-20ms)、粗排千级→百级(10-30ms)、精排百级→最终(20-50ms)。顺序必须由宽到深，重模型只在小集合上跑才付得起。",
+    "why_en": "The funnel runs candidate generation (billions to thousands), then coarse ranking (thousands to hundreds), then fine re-ranking (hundreds), each stage spending a heavier model on fewer items.",
+    "tags": ["llm-sd", "retrieval", "ranking-funnel"],
+    "diagram": "flowchart LR\n  A[\"5亿候选\"] --> B[\"候选生成<br/>两塔ANN · 10-20ms\"]\n  B --> C[\"~1000<br/>粗排 · 10-30ms\"]\n  C --> D[\"~100<br/>精排 · 20-50ms\"]\n  D --> E[\"最终结果\"]",
+    "options": [
+      "候选生成：两塔 ANN 从十亿粗筛到千级 → 粗排：轻量模型给千级打分留~100 → 精排：重模型精排~100",
+      "粗排：轻量模型先给十亿全量打分 → 候选生成：ANN 再压到千级 → 精排：重模型出最终结果",
+      "精排：重模型直接对全部候选打分 → 候选生成：负责去重降载 → 粗排：最后套业务规则收尾",
+      "候选生成：ANN 粗筛 → 精排：重模型直接排序 → 粗排：轻量模型再做一次二次兜底"
+    ],
+    "options_en": [
+      "Candidate generation: two-tower ANN narrows billions to thousands → coarse ranking: light model scores the thousands down to ~100 → fine re-ranking: heavy model re-ranks the ~100.",
+      "Coarse ranking: a light model scores all billions first → candidate generation: ANN then compresses to thousands → fine re-ranking: heavy model produces the final result.",
+      "Fine re-ranking: heavy model scores all candidates directly → candidate generation: handles dedup and load shedding → coarse ranking: applies business rules at the end.",
+      "Candidate generation: ANN pre-filters → fine re-ranking: heavy model sorts directly → coarse ranking: light model does a second fallback pass."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；由宽到深，候选生成先把量降到千级，粗排再降到百级，精排才用得起最贵的模型。",
+      "顺序颠倒：让轻量模型先给十亿全量打分正是三级漏斗要避免的算力灾难，候选生成必须在最前面。",
+      "重模型对 5 亿候选逐个打分算不完，正是没有候选生成会崩的那条路径。",
+      "精排放粗排前面就白白让重模型处理了更多候选，违背「越往后候选越少、模型越重」的原则。"
+    ],
+    "optionExplanations_en": [
+      "Correct — broad to deep: candidate generation drops volume to thousands, coarse ranking to hundreds, so fine re-ranking can afford the most expensive model.",
+      "Backwards: scoring all billions with any model first is the compute disaster the funnel exists to avoid; candidate generation must come first.",
+      "A heavy model cannot score 500M candidates in budget — this is exactly the path that breaks without candidate generation.",
+      "Putting fine re-ranking before coarse ranking wastes the heavy model on more items, violating fewer-items-heavier-model ordering."
+    ],
+    "termDefinitions": [
+      { "term": "ANN", "fullName": "Approximate Nearest Neighbor (search)", "meaning": "近似最近邻检索：不保证精确，但能在十亿向量里毫秒级找出最相似的 top-k。", "meaningEn": "ANN (Approximate Nearest Neighbor) search finds the most similar top-k vectors among billions in milliseconds, trading exactness for speed." },
+      { "term": "candidate generation / 候选生成", "meaning": "漏斗第一级：用两塔+ANN 把海量物料快速粗筛到几百到几千个候选。", "meaningEn": "Candidate generation is the funnel's first stage, quickly narrowing a huge corpus to a few hundred to few thousand candidates via two-tower + ANN." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-002",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "funnel-reasoning",
+    "q": "把「为什么要分三级漏斗」的推理链排成正确顺序：",
+    "q_en": "Order the reasoning for why the pipeline is split into three funnel stages:",
+    "steps": [
+      "候选集降到千级后，粗排用轻量模型进一步筛到百级",
+      "单个模型无法在延迟预算内给 5 亿物料逐个打分",
+      "百级小集合上才付得起精排的重模型(DCN/多任务/transformer)",
+      "所以先用两塔 ANN 把十亿快速粗筛到千级"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "推理起点是「一个模型算不完全量」这个约束，于是逐级用更强模型换更少候选：ANN 先降到千级 → 粗排降到百级 → 精排在百级上跑重模型。每一步都是拿广度换深度。",
+    "why_en": "It starts from the constraint that no single model can score all items in budget, so each stage trades breadth for depth: ANN to thousands, coarse ranking to hundreds, then a heavy model on the hundreds.",
+    "tags": ["llm-sd", "retrieval", "ranking-funnel"],
+    "termDefinitions": [
+      { "term": "DCN", "fullName": "Deep Cross Network", "meaning": "精排常用模型：显式建模特征交叉，比 MLP 更能学到高阶交互。", "meaningEn": "DCN (Deep Cross Network) explicitly models feature crosses, capturing higher-order interactions better than a plain MLP." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "why-multi-stage",
+    "scenario": "面试官问：既然精排模型最准，为什么不直接用它给全部 5 亿候选打分，省掉前两级？",
+    "scenario_en": "The interviewer asks: since the fine-ranking model is most accurate, why not just score all 500M candidates with it and skip the earlier stages?",
+    "q": "为什么要分级而不是用最强模型对全量打分？",
+    "q_en": "Why stage the pipeline instead of running the strongest model over everything?",
+    "why": "精排模型每个候选要几毫秒，5 亿候选根本算不完，且大多数是明显无关项。分级把重模型省到最后的百级小集合上，用广度换深度。",
+    "why_en": "The fine model costs milliseconds per item, so scoring 500M is impossible in budget and most items are obviously irrelevant; staging saves the heavy model for the final ~100.",
+    "tags": ["llm-sd", "retrieval", "ranking-funnel"],
+    "tradeoff": "分级(省算力但可能漏召回) vs 全量精排(最准但算不完)",
+    "whenOtherWins": "如果候选池本身只有几百个(如小型商品目录),就不需要漏斗,直接用一个精排模型全量打分反而更简单准确。",
+    "options": [
+      "因为精排模型只支持一次处理几百条输入,是框架的硬性 batch 上限,所以必须先砍到百级",
+      "因为候选生成的两塔模型比精排更准,精排只是用来做最后的多样性去重",
+      "因为对 5 亿候选逐个跑精排在延迟预算内算不完,且大多数明显无关,重模型该省到最后小集合",
+      "因为精排必须在 CPU 上跑而候选生成在 GPU 上,硬件不同所以要拆成两级流水线"
+    ],
+    "options_en": [
+      "Because the fine model can only take a few hundred inputs at once — a hard framework batch cap — so you must cut to hundreds first.",
+      "Because the two-tower model in candidate generation is more accurate than the fine model, which just does final dedup and diversity.",
+      "Because running the fine model over 500M candidates cannot finish in budget and most are obviously irrelevant, so the heavy model is saved for the final small set.",
+      "Because the fine model must run on CPU while candidate generation runs on GPU, so the hardware split forces two stages."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "batch 上限是可调工程参数,不是分级的根因;真正的原因是全量精排的总算力/延迟付不起。",
+      "说反了:两塔为速度牺牲了精度,精排才是最准的一级,不是只做去重。",
+      "对;约束是延迟预算 × 候选数,重模型只在广度已被砍小后才跑得起,这就是漏斗的意义。",
+      "硬件不是根因,候选生成和精排都能上 GPU;分级是为了控制总算力与延迟。"
+    ],
+    "optionExplanations_en": [
+      "Batch size is a tunable engineering knob, not the root reason; the real driver is that full fine-scoring cannot afford the compute/latency.",
+      "Reversed: the two-tower trades accuracy for speed, and the fine model is the most accurate stage, not just a dedup step.",
+      "Correct — the constraint is latency budget × candidate count, so the heavy model only runs once breadth is already cut, which is the funnel's whole point.",
+      "Hardware is not the root cause; both stages can run on GPU, and staging exists to control total compute and latency."
+    ],
+    "termDefinitions": [
+      { "term": "fine re-ranking / 精排", "meaning": "漏斗最后一级:用最贵最准的模型对~100个候选精细排序,并叠加业务规则。", "meaningEn": "Fine re-ranking is the last stage, applying the most expensive, most accurate model to ~100 candidates plus business overlays." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-004",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "recall-leverage",
+    "scenario": "一个相关物料在候选生成阶段没被 ANN 召回,后面粗排和精排都没机会再见到它。",
+    "scenario_en": "A relevant item is not retrieved by ANN in candidate generation, so coarse and fine ranking never see it.",
+    "q": "候选生成的漏项会造成什么后果,为什么它是杠杆最高的一级?",
+    "q_en": "What is the consequence of a miss in candidate generation, and why is it the highest-leverage stage?",
+    "why": "漏斗只会往下删、不会往上加,候选生成漏掉的物料下游永远找不回来,所以它的 recall@k 是天花板。粗排/精排再强也只能在已召回集合里排序。",
+    "why_en": "The funnel only removes items downstream, so anything missed in candidate generation can never be recovered, making its recall@k the ceiling for the whole system.",
+    "tags": ["llm-sd", "retrieval", "recall"],
+    "options": [
+      "漏掉的物料会在精排阶段被重模型自动补回,所以候选生成的召回率影响不大",
+      "漏掉的物料下游永远无法恢复,候选生成的 recall@k 是整条链路的天花板,是杠杆最高的一级",
+      "漏项只影响延迟不影响质量,因为候选越少后面算得越快、体验反而更好",
+      "漏掉的物料会进入一个二级召回队列,下一次请求时再补进来,单次请求不受影响"
+    ],
+    "options_en": [
+      "A missed item is automatically recovered by the heavy model in fine re-ranking, so candidate-generation recall barely matters.",
+      "A missed item can never be recovered downstream, so candidate-generation recall@k caps the whole pipeline — it is the highest-leverage stage.",
+      "Misses only affect latency, not quality, since fewer candidates make later stages faster and the experience better.",
+      "Missed items go into a secondary retrieval queue and are added on the next request, so a single request is unaffected."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错;精排只能对「已召回」的集合排序,它看不见没被召回的物料,补不回来。",
+      "对;这就是为什么候选生成盯 recall@k、其余阶段盯精度,漏召回是不可逆损失。",
+      "漏项直接损失了本该展示的相关内容,是质量损失而非单纯的延迟优化。",
+      "没有这种自动二级队列;漏召回就是当次结果里少了这个相关项,不会自动回补。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — fine re-ranking only sorts the already-retrieved set; it cannot see items that were never retrieved.",
+      "Correct — this is why candidate generation optimizes recall@k while later stages optimize precision; a miss is an irreversible loss.",
+      "A miss directly loses relevant content that should have shown, which is a quality loss, not just a latency win.",
+      "There is no such automatic secondary queue; a miss simply means that relevant item is absent from this result, with no auto-backfill."
+    ],
+    "termDefinitions": [
+      { "term": "recall@k", "meaning": "在返回的前 k 个结果里,覆盖了多少真正相关物料的比例;候选生成的核心指标。", "meaningEn": "Recall@k is the fraction of truly relevant items captured within the top-k returned, the key metric for candidate generation." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-005",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "two-tower",
+    "scenario": "候选生成要在 10-20ms 内从十亿物料里找出相关候选,不能对每对 user-item 现算一个大模型。",
+    "scenario_en": "Candidate generation must find relevant items among billions in 10-20ms, without running a big model on each user-item pair.",
+    "q": "两塔(two-tower)模型的结构和「联合训练」为什么能支撑毫秒级检索?",
+    "q_en": "How does the two-tower model's structure and joint training enable millisecond retrieval?",
+    "why": "query 塔吃用户上下文、item 塔吃物料特征,输出同维 embedding,联合训练让相关 pair 的向量靠近(余弦相似)。因为两塔独立,item 向量可离线预算入 ANN 索引,线上只算 query 向量再查 ANN。",
+    "why_en": "The query tower encodes user context and the item tower encodes item features into same-dim embeddings, trained jointly so relevant pairs sit close, letting item vectors be precomputed offline into an ANN index.",
+    "tags": ["llm-sd", "retrieval", "two-tower"],
+    "diagram": "flowchart LR\n  U[\"用户上下文\"] --> QT[\"query 塔\"]\n  I[\"物料特征\"] --> IT[\"item 塔\"]\n  QT --> QE[\"query embedding\"]\n  IT --> IE[\"item embedding<br/>(离线预算入ANN)\"]\n  QE -. 余弦相似 .- IE",
+    "options": [
+      "query 塔和 item 塔联合训练成同维 embedding,相关 pair 靠近;item 向量离线预算入 ANN,线上只算 query 再查",
+      "两塔共享同一套权重,对每个 user-item 对在线拼接后过一个深层网络算出精确分数",
+      "query 塔离线预算所有用户向量,item 塔在线为每个候选实时编码,再逐对算点积排序",
+      "两塔分别训练、互不影响,靠一个额外的交叉注意力层在线融合 user 和 item 特征"
+    ],
+    "options_en": [
+      "Query and item towers are trained jointly into same-dim embeddings so relevant pairs sit close; item vectors are precomputed offline into ANN, and only the query is computed online.",
+      "Both towers share one set of weights and, for each user-item pair, concatenate online and pass through a deep network to compute an exact score.",
+      "The query tower precomputes all user vectors offline while the item tower encodes each candidate online in real time, then dot-products every pair.",
+      "The towers are trained separately and independently, fused online by an extra cross-attention layer over user and item features."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对;两塔分离是关键——item 侧能离线算好入索引,线上只剩一次 query 编码+ANN 查询,毫秒完成。",
+      "在线对每对过深层网络正是两塔要避免的,那是精排的做法,十亿量级算不完。",
+      "反了;是 item 向量离线预算、query 在线算,而非相反,且不做逐对点积而是 ANN 近似检索。",
+      "两塔必须联合训练才能让 query 和 item 落到同一可比空间;在线交叉注意力破坏了可预算性。"
+    ],
+    "optionExplanations_en": [
+      "Correct — tower separation is the key: item vectors are precomputed into the index, leaving only one query encode plus an ANN lookup online, done in milliseconds.",
+      "Running a deep network per pair online is exactly what two-tower avoids; that is the fine-ranking approach and cannot scale to billions.",
+      "Reversed: item vectors are precomputed and the query is computed online, and it uses ANN, not exhaustive per-pair dot products.",
+      "The towers must be trained jointly so query and item land in one comparable space; online cross-attention breaks precomputability."
+    ],
+    "termDefinitions": [
+      { "term": "two-tower model / 双塔模型", "meaning": "两个独立编码器分别把 user 和 item 映射成同维向量,用向量相似度做匹配。", "meaningEn": "A two-tower model uses two separate encoders to map user and item into same-dim vectors, matched by vector similarity." },
+      { "term": "embedding / 嵌入向量", "meaning": "把对象压成一个稠密向量,语义相近的对象向量距离近。", "meaningEn": "An embedding is a dense vector representation where semantically similar objects have nearby vectors." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-006",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "candidate-count",
+    "scenario": "候选生成阶段要在十亿级物料上给出可供后续排序的候选集。",
+    "scenario_en": "The candidate-generation stage must return a workable candidate set from billions of items.",
+    "q": "候选生成大致把量级从多少降到多少、用多长时间?这个规模决定了什么?",
+    "q_en": "Roughly what count and latency does candidate generation target, and what does that size decide?",
+    "why": "经验量级:十亿物料 → ~500-2000 候选,10-20ms 内完成。这个「千级」输出规模是粗排的输入基数,决定后面 feature store 要批量取多少行特征、粗排要给多少候选打分。",
+    "why_en": "Rough anchor: billions to ~500-2000 candidates in 10-20ms, and this thousands-scale output sets the base load for coarse ranking's feature fetches and scoring.",
+    "tags": ["llm-sd", "retrieval", "candidate-count"],
+    "options": [
+      "从十亿降到~10 个候选,耗时约 100-200ms,直接就是最终展示给用户的结果集",
+      "从十亿降到~500-2000 个候选,10-20ms 完成,这个千级规模是粗排的输入基数",
+      "从十亿降到~100 万候选,约 1s 完成,再交给精排逐个用重模型打分",
+      "从十亿降到固定 256 个候选,耗时约 50ms,数量固定是为了对齐 GPU batch"
+    ],
+    "options_en": [
+      "From billions to ~10 candidates in about 100-200ms, which is directly the final set shown to the user.",
+      "From billions to ~500-2000 candidates in 10-20ms, and this thousands-scale count is the input base for coarse ranking.",
+      "From billions to ~1M candidates in about 1s, then handed to fine re-ranking to score each with the heavy model.",
+      "From billions to a fixed 256 candidates in about 50ms, fixed to align with the GPU batch size."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "~10 是最终结果的量级,不是候选生成的输出;还要经过粗排精排两级才轮到它变这么小。",
+      "对;千级候选 + 10-20ms 是标准锚点,它决定了粗排要处理多少候选、取多少特征。",
+      "百万候选精排根本算不完;候选生成的意义正是把量降到千级而非百万。",
+      "候选数不是为对齐 batch 固定死的,而是由 recall 需求和下游预算决定的动态量级。"
+    ],
+    "optionExplanations_en": [
+      "~10 is the final result scale, not candidate generation's output; it only shrinks that far after coarse and fine ranking.",
+      "Correct — thousands of candidates in 10-20ms is the standard anchor, and it sets how many candidates coarse ranking scores and how many features it fetches.",
+      "Fine re-ranking cannot score a million candidates; candidate generation exists precisely to cut to thousands, not millions.",
+      "Candidate count is not fixed to match a batch; it is a dynamic scale set by recall needs and downstream budget."
+    ],
+    "termDefinitions": [
+      { "term": "top-k", "meaning": "检索返回相似度最高的 k 个结果;这里 k 约为几百到几千。", "meaningEn": "Top-k returns the k most similar results; here k is roughly a few hundred to a few thousand." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "online-offline-split",
+    "scenario": "两塔上线时,item 有十亿个而 query(用户上下文)每次请求都不同。要在 10ms 内查到候选。",
+    "scenario_en": "At serving time there are billions of items while the query (user context) differs each request, and candidates must return in 10ms.",
+    "q": "两塔的哪一侧该离线预算、哪一侧在线算?为什么这样切?",
+    "q_en": "Which tower is precomputed offline vs computed online, and why split it this way?",
+    "why": "item 向量离线批量算好、灌进 ANN 索引;线上只对当次 query 算一个向量,再查 ANN 取 top-k。因为 item 集合巨大但相对稳定,query 小但每次都变——把不变的大集合预算掉,只在线算多变的小部分。",
+    "why_en": "Item vectors are precomputed into the ANN index while only the per-request query vector is computed online, because items are huge but stable and the query is small but always changing.",
+    "tags": ["llm-sd", "retrieval", "two-tower"],
+    "tradeoff": "item 离线预算(省在线算力但索引会漂移) vs 全在线(永远最新但十亿量级算不动)",
+    "whenOtherWins": "如果 item 特征高频变化(如实时价格、库存),离线预算的 embedding 会很快过期,这时需要流式重算 item 向量或把易变特征挪到粗排阶段处理。",
+    "options": [
+      "query 向量离线预算好所有用户,item 向量在线为每个候选实时编码后逐对比对",
+      "两侧都在线算:每次请求同时编码 query 和全部 item 向量,保证绝对新鲜",
+      "item 向量离线批量算入 ANN 索引,线上只算当次 query 向量再查 ANN 取 top-k",
+      "两侧都离线预算:把所有 user×item 的相似度提前算成一张大表,线上直接查表"
+    ],
+    "options_en": [
+      "Query vectors are precomputed for all users offline, while item vectors are encoded online per candidate and compared pairwise.",
+      "Compute both online: encode the query and all item vectors on every request to guarantee absolute freshness.",
+      "Item vectors are precomputed offline into the ANN index; online you only compute the current query vector and look up top-k in ANN.",
+      "Precompute both offline: materialize the full user×item similarity table ahead of time and just read it online."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "反了;用户上下文每次请求都变、无法预算全,能预算的是相对稳定的 item 侧。",
+      "在线编码十亿 item 每次请求都算不完,正是两塔要绕开的算力灾难。",
+      "对;把不变的大集合(item)离线灌进索引,只在线算多变的小部分(query),毫秒级完成。",
+      "user×item 全量相似度表是十亿×十亿量级,存不下也没法及时更新,不可行。"
+    ],
+    "optionExplanations_en": [
+      "Reversed — user context changes every request and cannot be fully precomputed; the stable item side is what gets precomputed.",
+      "Encoding a billion items online per request cannot finish; this is the compute disaster two-tower avoids.",
+      "Correct — precompute the large stable set (items) into the index and compute only the small changing part (query) online, done in milliseconds.",
+      "A full user×item similarity table is billions×billions in size — unstorable and impossible to keep fresh."
+    ],
+    "termDefinitions": [
+      { "term": "ANN index / 近邻索引", "meaning": "预先组织好的向量索引结构,支持毫秒级查最相似的 top-k。", "meaningEn": "An ANN index is a pre-built vector structure that answers top-k nearest-neighbor queries in milliseconds." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "training-negatives",
+    "scenario": "训练两塔时,只有「用户点过的正样本」,没有天然的负样本告诉模型哪些 item 不相关。",
+    "scenario_en": "Training the two towers, you only have positive samples (items the user engaged) and no natural negatives telling the model which items are irrelevant.",
+    "q": "两塔训练怎么造负样本?in-batch negatives 和 hard-negative mining 各解决什么?",
+    "q_en": "How does two-tower training source negatives, and what do in-batch negatives vs hard-negative mining each solve?",
+    "why": "in-batch negatives:把同一 batch 里别人的正 item 当作当前 query 的负样本,几乎零成本造大量负例。但这些多是「太容易」的负例,再加 hard-negative mining——挑那些相似但实际不相关的难负例——逼模型学会细分边界。",
+    "why_en": "In-batch negatives reuse other queries' positive items in the batch as negatives almost for free, while hard-negative mining adds similar-but-irrelevant items to force sharper decision boundaries.",
+    "tags": ["llm-sd", "retrieval", "training"],
+    "options": [
+      "两塔不需要负样本,只用正样本做回归,让相关 pair 的相似度回归到 1 即可",
+      "把整个物料库随机采样当负例,采样越多越好,不需要区分难易",
+      "in-batch negatives 复用同 batch 其他正 item 当负例(近乎免费),hard-negative mining 再补相似难负例练边界",
+      "只用人工标注的负样本,标注者逐条标出哪些 item 与 query 不相关"
+    ],
+    "options_en": [
+      "Two towers need no negatives; train on positives only, regressing relevant pairs' similarity toward 1.",
+      "Randomly sample the entire corpus as negatives, the more the better, with no need to distinguish easy from hard.",
+      "In-batch negatives reuse other positives in the batch as negatives (nearly free); hard-negative mining then adds similar hard negatives to sharpen boundaries.",
+      "Use only human-labeled negatives, with annotators marking item by item which are irrelevant to the query."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "没有负例模型学不到「什么不相关」,只压正 pair 会让所有向量塌到一起。",
+      "纯随机负例大多太容易(明显不相关),模型学不到相似项之间的细分边界。",
+      "对;in-batch 近乎免费但偏易,hard negatives 专挑相似难例,两者互补。",
+      "逐条人工标负样本成本极高、无法覆盖十亿量级,工业界靠 in-batch + hard mining。"
+    ],
+    "optionExplanations_en": [
+      "Without negatives the model cannot learn what is irrelevant; pushing only positives collapses all vectors together.",
+      "Purely random negatives are mostly too easy (obviously irrelevant), so the model never learns fine boundaries between similar items.",
+      "Correct — in-batch negatives are nearly free but easy, and hard-negative mining targets similar hard cases; the two complement each other.",
+      "Hand-labeling negatives item by item is prohibitively costly and cannot cover billions; industry uses in-batch plus hard mining."
+    ],
+    "termDefinitions": [
+      { "term": "in-batch negatives / 批内负样本", "meaning": "训练时把同一 batch 里其他样本的正 item 当作当前 query 的负例,免额外采样。", "meaningEn": "In-batch negatives treat other samples' positive items within the same batch as negatives for the current query, avoiding extra sampling." },
+      { "term": "hard-negative mining / 难负样本挖掘", "meaning": "刻意挑选与 query 相似但实际不相关的样本作负例,逼模型学细分边界。", "meaningEn": "Hard-negative mining deliberately picks items similar to the query but actually irrelevant, forcing the model to learn finer boundaries." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "embedding-drift",
+    "scenario": "item embedding 已离线灌入 ANN 索引,但物料的属性/热度在变,索引却没有及时重建。",
+    "scenario_en": "Item embeddings were loaded offline into the ANN index, but item attributes/popularity change while the index is not refreshed in time.",
+    "q": "embedding drift(嵌入漂移)是什么、怎么发生、如何缓解?",
+    "q_en": "What is embedding drift, how does it happen, and how do you mitigate it?",
+    "why": "正常:离线算好的 item 向量代表当前物料语义。异常:物料变了但索引没重建→旧向量与真实语义脱节→检索悄悄退化、recall 下降却无报错。缓解:周期性重建索引或流式增量更新。代价:重建耗资源、流式更新增加系统复杂度。",
+    "why_en": "Embedding drift is when item attributes change but the index is not rebuilt, so stale vectors silently degrade retrieval and lower recall with no error; mitigate with periodic re-indexing or streaming updates.",
+    "tags": ["llm-sd", "retrieval", "embedding-drift"],
+    "diagram": "flowchart LR\n  A[\"item 属性变化\"] --> B[\"索引未重建\"]\n  B --> C[\"旧向量脱离真实语义\"]\n  C --> D[\"recall 悄悄下降<br/>无报错\"]\n  D -->|缓解| E[\"周期重建 / 流式更新\"]\n  E --> B",
+    "options": [
+      "embedding drift 指 GPU 显存里向量被随机翻转的硬件位错误,靠 ECC 内存纠正",
+      "旧 item 向量与物料真实语义脱节→检索悄悄退化 recall 下降;缓解靠周期重建索引或流式增量更新",
+      "指训练时 loss 不收敛导致 embedding 发散,靠调小学习率解决,与线上索引无关",
+      "指用户 query 分布随时间变化,只需重训 query 塔即可,item 索引无需动"
+    ],
+    "options_en": [
+      "Embedding drift is a hardware bit-flip of vectors in GPU memory, corrected by ECC RAM.",
+      "Stale item vectors detach from items' true meaning → retrieval silently degrades and recall drops; mitigate with periodic re-indexing or streaming updates.",
+      "It means training loss diverges so embeddings blow up, fixed by lowering the learning rate, unrelated to the serving index.",
+      "It means the user query distribution shifts over time, needing only a query-tower retrain, with no change to the item index."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "这是硬件位翻转,不是 embedding drift;drift 是语义层面的过期,不是内存错误。",
+      "对;危险在于「无报错的悄悄退化」——recall 掉了但系统不报错,得靠重建/流式更新止损。",
+      "训练发散是另一回事;drift 说的是线上索引里的向量随物料变化而过期。",
+      "query 分布漂移是另一种问题;此处 drift 特指 item 索引里的向量过期,需重建 item 索引。"
+    ],
+    "optionExplanations_en": [
+      "That is a hardware bit-flip, not embedding drift; drift is semantic staleness, not a memory error.",
+      "Correct — the danger is silent degradation with no error: recall falls quietly, so periodic re-indexing or streaming updates are needed to stem it.",
+      "Training divergence is a different issue; drift is about serving-index vectors going stale as items change.",
+      "Query-distribution shift is a separate problem; this drift is specifically stale item vectors in the index, needing an item-index rebuild."
+    ],
+    "termDefinitions": [
+      { "term": "embedding drift / 嵌入漂移", "meaning": "索引里的物料向量因物料变化而过期,与真实语义脱节,导致检索质量悄悄下降。", "meaningEn": "Embedding drift is when indexed item vectors go stale as items change, detaching from true meaning and quietly degrading retrieval." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-010",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ann-index-structures",
+    "scenario": "要为十亿向量选 ANN 索引结构,理解 HNSW、IVF、PQ 各自的机制与代价。",
+    "scenario_en": "Choosing an ANN index structure for a billion vectors, you compare the mechanisms and costs of HNSW, IVF, and PQ.",
+    "q": "HNSW、IVF、PQ 三种 ANN 结构分别靠什么机制、各自的主要代价是什么?",
+    "q_en": "What mechanism does each of HNSW, IVF, and PQ use, and what is each one's main cost?",
+    "why": "HNSW=多层可导航图,高层长程边快速跳转、低层细化精度,recall 高但内存/构建贵。IVF=k-means 把空间切成 Voronoi 单元,只搜最近 nprobe 个单元,nprobe 越大 recall 越高、延迟线性上升。PQ=把向量切段各自量化到码本质心,压缩 10-50× 但损一点精度,常与 IVF 组合成 IVF+PQ。",
+    "why_en": "HNSW is a multi-layer navigable graph (high recall but memory/build-heavy), IVF partitions space into Voronoi cells searched by nprobe (higher nprobe trades latency for recall), and PQ quantizes sub-vectors to codebook centroids for 10-50x compression at some accuracy cost.",
+    "tags": ["llm-sd", "retrieval", "ann-index"],
+    "tradeoff": "HNSW(高 recall,吃内存) vs IVF(nprobe 调 recall/延迟) vs PQ(省内存,损精度)",
+    "options": [
+      "HNSW=多层可导航图(高 recall 但吃内存),IVF=Voronoi 单元搜 nprobe(调 recall/延迟),PQ=子向量量化压缩 10-50×损点精度",
+      "三者都是精确检索,区别只是编程语言:HNSW 用 C++、IVF 用 Python、PQ 用 CUDA",
+      "HNSW 靠磁盘顺序扫描、IVF 靠哈希分桶、PQ 靠 B+ 树索引,三者互斥不可组合",
+      "HNSW 压缩内存最狠、IVF 精度最高无损、PQ 是唯一多层图结构,常单独使用"
+    ],
+    "options_en": [
+      "HNSW = multi-layer navigable graph (high recall but memory-heavy), IVF = Voronoi cells searched by nprobe (tunes recall/latency), PQ = sub-vector quantization compressing 10-50x at slight accuracy cost.",
+      "All three are exact search, differing only in language: HNSW in C++, IVF in Python, PQ in CUDA.",
+      "HNSW scans disk sequentially, IVF hashes into buckets, PQ uses a B+ tree, and the three are mutually exclusive and cannot combine.",
+      "HNSW compresses memory the most, IVF is highest-precision and lossless, and PQ is the only multi-layer graph, usually used alone."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对;三者机制清晰:图导航(HNSW)、单元剪枝(IVF)、码本压缩(PQ),常 IVF+PQ 组合。",
+      "它们都是「近似」检索不是精确,区别在结构不在语言。",
+      "机制描述全错;且 IVF+PQ 恰恰是常见组合,并非互斥。",
+      "反了:PQ 才是压缩最狠的,HNSW 是多层图,IVF 有损;PQ 常与 IVF 组合而非单用。"
+    ],
+    "optionExplanations_en": [
+      "Correct — clear mechanisms: graph navigation (HNSW), cell pruning (IVF), codebook compression (PQ), often combined as IVF+PQ.",
+      "All three are approximate, not exact, and differ by structure, not programming language.",
+      "The mechanisms are all wrong, and IVF+PQ is in fact a common combination, not mutually exclusive.",
+      "Reversed: PQ compresses the most, HNSW is the multi-layer graph, IVF is lossy, and PQ usually combines with IVF rather than standing alone."
+    ],
+    "termDefinitions": [
+      { "term": "HNSW", "fullName": "Hierarchical Navigable Small World", "meaning": "多层图索引:高层稀疏长程边快速定位,低层稠密边精细搜索。", "meaningEn": "HNSW (Hierarchical Navigable Small World) is a multi-layer graph index: sparse long-range links up top for fast jumps, dense links below for fine search." },
+      { "term": "IVF", "fullName": "Inverted File (index)", "meaning": "用 k-means 把向量空间切成 Voronoi 单元,查询只搜最近的 nprobe 个单元。", "meaningEn": "IVF (Inverted File) partitions the vector space into Voronoi cells via k-means and searches only the nearest nprobe cells." },
+      { "term": "PQ", "fullName": "Product Quantization", "meaning": "把向量切成子段,每段量化到学到的码本质心,大幅压缩内存。", "meaningEn": "PQ (Product Quantization) splits a vector into sub-segments and quantizes each to a learned codebook centroid, heavily compressing memory." },
+      { "term": "Voronoi cell / 单元", "meaning": "以聚类中心划分的空间区域,每个点归属最近的中心。", "meaningEn": "A Voronoi cell is a region of space around a cluster center, with each point assigned to its nearest center." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-011",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "pq-compression",
+    "scenario": "十亿 FP32 向量若全量驻内存,成本高得离谱,需要压缩才能放进 ANN 索引。",
+    "scenario_en": "A billion FP32 vectors held fully in memory is prohibitively costly, so compression is needed to fit them in the ANN index.",
+    "q": "PQ(Product Quantization)大致能压缩多少倍内存?代价是什么、下游影响什么?",
+    "q_en": "Roughly how much memory does PQ compress, at what cost, and what does it affect downstream?",
+    "why": "PQ 把向量切段、每段用码本质心的 id 代替原始浮点,大致压缩 10-50×。代价是量化误差→recall 略降。它决定十亿向量能否放进内存索引,直接影响单机能存多少物料、要不要分片。",
+    "why_en": "PQ replaces each sub-vector with a codebook-centroid id, compressing memory roughly 10-50x at the cost of some recall loss, deciding whether a billion vectors fit in an in-memory index.",
+    "tags": ["llm-sd", "retrieval", "pq-compression"],
+    "options": [
+      "压缩约 2×,代价是延迟翻倍,决定要不要上 GPU",
+      "压缩约 10-50×,代价是量化误差使 recall 略降,决定十亿向量能否驻内存、要不要分片",
+      "压缩约 1000×,几乎无损,所以可以永远单机放下任意规模,不用分片",
+      "不压缩内存,只压缩磁盘 IO,代价是构建时间变长,decode 时才解压"
+    ],
+    "options_en": [
+      "About 2x compression, at the cost of doubled latency, deciding whether to move to GPU.",
+      "About 10-50x compression, at the cost of quantization error slightly lowering recall, deciding whether a billion vectors fit in memory and whether to shard.",
+      "About 1000x compression, essentially lossless, so any scale always fits on one machine with no sharding.",
+      "It compresses disk IO, not memory, at the cost of longer build time, decompressing only at decode."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "2× 远低于 PQ 的实际压缩比;PQ 靠码本量化能到 10-50×。",
+      "对;10-50× 是标准锚点,拿 recall 换内存,直接决定内存索引容量与是否分片。",
+      "1000× 且无损不现实;PQ 是有损量化,压缩比也在 10-50× 量级。",
+      "PQ 压的就是向量内存占用(码本 id 代替浮点),不是只压磁盘 IO。"
+    ],
+    "optionExplanations_en": [
+      "2x is far below PQ's real ratio; codebook quantization reaches 10-50x.",
+      "Correct — 10-50x is the standard anchor, trading recall for memory, directly setting in-memory index capacity and whether to shard.",
+      "1000x and lossless is unrealistic; PQ is lossy quantization with a 10-50x-scale ratio.",
+      "PQ compresses vector memory footprint (codebook ids replacing floats), not just disk IO."
+    ],
+    "termDefinitions": [
+      { "term": "codebook / 码本", "meaning": "PQ 为每个子段学到的一组质心;向量子段用最近质心的 id 表示。", "meaningEn": "A codebook is the set of centroids PQ learns per sub-segment; each sub-vector is stored as the id of its nearest centroid." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-012",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "ivf-nprobe",
+    "scenario": "用 IVF 索引,发现召回率偏低漏掉相关项,想调 nprobe 参数来救。",
+    "scenario_en": "Using an IVF index, recall is low and misses relevant items, so you consider tuning nprobe.",
+    "q": "调大 IVF 的 nprobe 会怎样?这个取舍的代价在哪?",
+    "q_en": "What happens when you raise IVF's nprobe, and where is the tradeoff?",
+    "why": "nprobe = 查询时搜索多少个最近的 Voronoi 单元。调大→覆盖更多候选单元→recall 上升,但要扫的单元变多→延迟近似线性上升。所以 nprobe 是 IVF 上「召回 vs 延迟」的直接旋钮。",
+    "why_en": "nprobe is how many nearest Voronoi cells a query searches; raising it covers more candidates and lifts recall but scans more cells, so latency rises roughly linearly.",
+    "tags": ["llm-sd", "retrieval", "ann-tuning"],
+    "tradeoff": "nprobe 大(recall 高、延迟高) vs nprobe 小(延迟低、易漏召回)",
+    "options": [
+      "nprobe 越大 recall 越高、延迟近似线性上升;它是 IVF 上召回 vs 延迟的直接旋钮",
+      "nprobe 只影响构建时间,查询延迟不受影响,所以尽量设到最大总没错",
+      "nprobe 越大延迟越低、recall 越低,和直觉相反,是用精度换速度的开关",
+      "nprobe 控制 PQ 的压缩率,与召回无关,主要影响索引占用的内存大小"
+    ],
+    "options_en": [
+      "Higher nprobe raises recall with roughly linear latency increase; it is IVF's direct recall-vs-latency knob.",
+      "nprobe only affects build time, not query latency, so setting it as high as possible is always safe.",
+      "Higher nprobe lowers latency and lowers recall — counterintuitively a precision-for-speed switch.",
+      "nprobe controls PQ's compression ratio, unrelated to recall, mainly affecting index memory footprint."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对;多搜单元多找回相关项(recall↑)但扫描量增加(延迟↑),典型召回-延迟权衡。",
+      "nprobe 直接决定查询要扫多少单元,是查询期开销,不是构建期;设满会顶破延迟预算。",
+      "方向说反了:nprobe 大是 recall 高、延迟高,不是延迟低。",
+      "nprobe 是 IVF 的搜索广度参数,与 PQ 压缩率是两回事。"
+    ],
+    "optionExplanations_en": [
+      "Correct — more cells find more relevant items (recall up) but scan more (latency up), the classic recall-latency tradeoff.",
+      "nprobe directly sets how many cells a query scans — a query-time cost, not build-time; maxing it blows the latency budget.",
+      "Direction is reversed: high nprobe means high recall and high latency, not low latency.",
+      "nprobe is IVF's search-breadth parameter, separate from PQ's compression ratio."
+    ],
+    "termDefinitions": [
+      { "term": "nprobe", "meaning": "IVF 查询时搜索的最近 Voronoi 单元数量,越大覆盖越广、越慢。", "meaningEn": "nprobe is the number of nearest Voronoi cells an IVF query searches; larger means broader coverage and slower queries." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "hnsw-params",
+    "scenario": "自建 HNSW 索引,要调 ef_construction 和 M 两个关键参数来平衡质量与资源。",
+    "scenario_en": "Self-hosting an HNSW index, you tune the two key parameters ef_construction and M to balance quality against resources.",
+    "q": "HNSW 的 ef_construction 和 M 分别控制什么?调大有什么代价?",
+    "q_en": "What do HNSW's ef_construction and M each control, and what is the cost of raising them?",
+    "why": "M = 每个节点的连边数(图的稠密度);ef_construction = 建图时每步考察的候选数(建图质量)。两者调大→recall 更高,但代价是更多内存(M)和更长构建时间(ef_construction)。能报出这两个参数说明有 ANN 实操经验。",
+    "why_en": "M is the number of links per node (graph density) and ef_construction is the build-time candidate breadth; raising either improves recall at the cost of more memory (M) and longer build time (ef_construction).",
+    "tags": ["llm-sd", "retrieval", "hnsw"],
+    "options": [
+      "ef_construction 是查询超时时间、M 是最大内存上限,两者都是运行时限流参数",
+      "M=每节点连边数(图稠密度)、ef_construction=建图候选广度;调大 recall 升,代价是更多内存/更长构建",
+      "M 控制向量维度、ef_construction 控制压缩比,和 recall 无关,只影响存储",
+      "两者都只影响查询延迟不影响 recall,调大只是让查询变慢没有质量收益"
+    ],
+    "options_en": [
+      "ef_construction is the query timeout and M is the memory cap; both are runtime throttling parameters.",
+      "M = links per node (graph density), ef_construction = build-time candidate breadth; raising them lifts recall at the cost of more memory / longer build.",
+      "M controls vector dimension and ef_construction controls compression ratio, unrelated to recall, affecting only storage.",
+      "Both only affect query latency, not recall; raising them just slows queries with no quality gain."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "两者是建图参数不是运行时限流;混淆了 ef_construction 与查询期的 ef_search。",
+      "对;M 决定图多稠密(内存)、ef_construction 决定建图多仔细(构建时间),都换 recall。",
+      "M 和 ef_construction 都不改向量维度或压缩比,而是图结构质量参数。",
+      "它们确实影响 recall(建图质量决定检索质量),不是只影响延迟。"
+    ],
+    "optionExplanations_en": [
+      "Both are build parameters, not runtime throttles; this confuses ef_construction with query-time ef_search.",
+      "Correct — M sets graph density (memory) and ef_construction sets build thoroughness (build time), both trading for recall.",
+      "Neither M nor ef_construction changes vector dimension or compression; they are graph-quality parameters.",
+      "They do affect recall (build quality drives search quality), not just latency."
+    ],
+    "termDefinitions": [
+      { "term": "ef_construction", "meaning": "HNSW 建图时每一步考察的候选邻居数,越大图质量越好、构建越慢。", "meaningEn": "ef_construction is how many candidate neighbors HNSW evaluates per build step; larger gives better graph quality but slower builds." },
+      { "term": "M", "meaning": "HNSW 中每个节点保留的连接数,越大图越稠密、recall 越高、内存越多。", "meaningEn": "M is the number of links kept per HNSW node; larger makes the graph denser with higher recall and more memory." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "memory-vs-disk-index",
+    "scenario": "十亿级 ANN 索引放不进单机内存,团队在「全内存分片」和「单机磁盘索引」之间选,系统有 p99<200ms 的硬约束。",
+    "scenario_en": "A billion-scale ANN index won't fit one machine's RAM; the team weighs sharded in-memory vs single-node disk-based index, under a hard p99<200ms constraint.",
+    "q": "有严格 p99 约束时,in-memory 分片 vs 磁盘索引该怎么选?",
+    "q_en": "With a strict p99 constraint, how do you choose in-memory sharding vs a disk-based index?",
+    "why": "磁盘索引更便宜但尾延迟高、容易顶破 p99;有严格 p99 时应把索引分片到多机内存并行查再合并,内存查询延迟低且稳定。代价是机器成本和分片/合并的运维复杂度。",
+    "why_en": "Disk indexes are cheaper but have high tail latency that breaks p99, so under a strict p99 you shard the index across machines' RAM and query in parallel, paying with machine cost and shard-merge complexity.",
+    "tags": ["llm-sd", "retrieval", "billion-scale"],
+    "tradeoff": "内存分片(低稳尾延迟,贵+运维复杂) vs 磁盘索引(便宜,尾延迟高易破 p99)",
+    "whenOtherWins": "如果没有严格实时 p99 要求(如离线批量检索或后台推荐预算),磁盘索引更省钱,尾延迟高一点可以接受。",
+    "options": [
+      "选磁盘索引:它尾延迟更低更稳定,内存索引反而 p99 波动大,成本还高",
+      "选内存分片:分片到多机内存并行查再合并,延迟低而稳,代价是机器成本+分片运维复杂度",
+      "两者随便选都行:p99 只由模型决定,索引存哪里不影响尾延迟",
+      "选单机全内存不分片:直接买一台超大内存机器,避免分片就没有合并开销和尾延迟"
+    ],
+    "options_en": [
+      "Pick disk: it has lower, steadier tail latency, while in-memory has high p99 jitter and costs more.",
+      "Pick in-memory sharding: shard across machines' RAM, query in parallel and merge for low steady latency, paying with machine cost and shard-merge ops complexity.",
+      "Either is fine: p99 is set by the model alone, and where the index lives does not affect tail latency.",
+      "Pick single-node all-in-memory without sharding: just buy one giant-RAM machine to avoid sharding, so there is no merge overhead or tail latency."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "反了;磁盘索引尾延迟更高(冷读、寻道),恰恰是它容易破 p99,内存才低而稳。",
+      "对;严格 p99 下要低且稳定的延迟,内存分片并行查最合适,代价是钱和运维。",
+      "索引介质直接决定读取延迟,磁盘 vs 内存对尾延迟影响巨大,不能不管。",
+      "十亿索引装不进单机内存正是前提;硬扛超大内存机成本极高且有单点风险,分片才是常规解。"
+    ],
+    "optionExplanations_en": [
+      "Reversed — disk has higher tail latency (cold reads, seeks), which is exactly what breaks p99; RAM is the low, steady option.",
+      "Correct — a strict p99 needs low steady latency, so sharded in-memory parallel query fits best, paying with cost and ops.",
+      "The storage medium directly sets read latency; disk vs RAM hugely affects tail latency and cannot be ignored.",
+      "The premise is that a billion vectors do not fit one machine's RAM; forcing a giant-RAM box is very costly with single-point risk, so sharding is the norm."
+    ],
+    "termDefinitions": [
+      { "term": "sharding / 分片", "meaning": "把索引切成多份放到不同机器,查询并行发到所有分片再合并结果。", "meaningEn": "Sharding splits the index across machines, querying all shards in parallel and merging the results." },
+      { "term": "p99", "meaning": "第 99 百分位延迟:99% 的请求快于这个值,衡量尾部体验。", "meaningEn": "p99 is the 99th-percentile latency: 99% of requests are faster than this value, measuring tail experience." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "vector-db-choice",
+    "scenario": "要为十亿向量选托管/自建向量库,团队小、想快速上线、能接受一定成本,但要求亚 10ms 检索且少运维。",
+    "scenario_en": "Choosing a vector DB for a billion vectors: a small team wants fast time-to-market, accepts some cost, needs sub-10ms retrieval and minimal ops.",
+    "q": "小团队要少运维、快速上线,FAISS / ScaNN / Pinecone 该选哪个?",
+    "q_en": "For a small team wanting minimal ops and fast launch, which of FAISS / ScaNN / Pinecone fits?",
+    "why": "Pinecone 是托管 HNSW,亚 10ms 且免运维,最契合「小团队少运维快上线」。FAISS 最灵活但要自建自维;ScaNN 延迟最低但强绑 Google 基建。约束是运维成本而非极致延迟,所以选托管。",
+    "why_en": "Pinecone is managed HNSW with sub-10ms latency and no ops, fitting a small team wanting a fast launch, while FAISS needs self-hosting and ScaNN couples to Google infra.",
+    "tags": ["llm-sd", "retrieval", "vector-db"],
+    "tradeoff": "Pinecone(免运维,规模成本高+可调有限) vs FAISS(灵活最强,自建自维) vs ScaNN(延迟最低,绑 Google)",
+    "whenOtherWins": "如果要极致低延迟且已在 Google 基建上,ScaNN 亚 2ms(CPU)更优;如果要深度定制索引且有专人维护,FAISS 的灵活性无可替代。",
+    "options": [
+      "选 FAISS:它是托管服务免运维,小团队直接用最省心",
+      "选 ScaNN:它对小团队最友好、开箱即用且不依赖任何特定云",
+      "选 Pinecone:托管 HNSW、亚 10ms、免运维,契合小团队快上线,代价是规模成本与可调性有限",
+      "选自建 HNSW+PQ:虽然要养索引,但小团队更该从零手搓以获得完全控制"
+    ],
+    "options_en": [
+      "Pick FAISS: it is a managed no-ops service, easiest for a small team to just use.",
+      "Pick ScaNN: it is the most beginner-friendly, works out of the box, and depends on no particular cloud.",
+      "Pick Pinecone: managed HNSW, sub-10ms, no ops — fits a small team's fast launch, paying with scale cost and limited tunability.",
+      "Pick self-built HNSW+PQ: despite maintaining the index, a small team should hand-roll from scratch for full control."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "FAISS 是库不是托管服务,得自己部署运维,与「少运维」诉求相反。",
+      "ScaNN 延迟最低但强耦合 Google 基建,不是「不依赖特定云、开箱即用」。",
+      "对;托管+亚10ms+免运维正好命中小团队约束,代价是贵和调参空间小。",
+      "小团队最缺的就是维护索引的人力,从零手搓与「少运维快上线」正相反。"
+    ],
+    "optionExplanations_en": [
+      "FAISS is a library, not a managed service — you deploy and operate it yourself, contrary to the minimal-ops need.",
+      "ScaNN has the lowest latency but couples tightly to Google infra, so it is not cloud-agnostic or turnkey.",
+      "Correct — managed + sub-10ms + no ops hits the small-team constraint, paying with cost and limited tuning.",
+      "A small team most lacks the headcount to maintain an index, so hand-rolling contradicts minimal-ops fast-launch."
+    ],
+    "termDefinitions": [
+      { "term": "FAISS", "fullName": "Facebook AI Similarity Search", "meaning": "Meta 开源的向量检索库,支持 IVF+PQ/HNSW,灵活但需自建自维。", "meaningEn": "FAISS (Facebook AI Similarity Search) is Meta's open-source vector library supporting IVF+PQ/HNSW, flexible but self-hosted." },
+      { "term": "ScaNN", "fullName": "Scalable Nearest Neighbors", "meaning": "Google 的向量检索库,用各向异性向量量化,CPU 上亚 2ms,但绑 Google 基建。", "meaningEn": "ScaNN (Scalable Nearest Neighbors) is Google's library using anisotropic quantization for sub-2ms CPU search, coupled to Google infra." },
+      { "term": "Pinecone", "meaning": "托管向量数据库,底层托管 HNSW,亚 10ms、免运维但规模成本较高。", "meaningEn": "Pinecone is a managed vector database running managed HNSW with sub-10ms latency and no ops, at higher cost at scale." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-016",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "metadata-filtering",
+    "scenario": "检索要按语言/地区/政策等元数据过滤,团队在 post-filtering 和 pre-filtering 之间权衡。",
+    "scenario_en": "Retrieval must filter by metadata (language/region/policy), and the team weighs post-filtering vs pre-filtering.",
+    "q": "post-filtering 和 pre-filtering 在机制和风险上有什么区别?",
+    "q_en": "How do post-filtering and pre-filtering differ in mechanism and risk?",
+    "why": "post-filtering:先 ANN 检索再丢掉不满足过滤的项——简单,但过滤太狠会让最终集合缩到不足 top-k,体验退化。pre-filtering:按元数据把索引分区、只搜相关分区——保证结果数量,但索引分区暴涨,存储与管理成本上升。",
+    "why_en": "Post-filtering searches ANN first then drops items failing the filter (simple, but heavy filtering can shrink the set below top-k), while pre-filtering partitions the index by metadata and searches only the relevant partition (guarantees count but multiplies partitions).",
+    "tags": ["llm-sd", "retrieval", "metadata-filter"],
+    "tradeoff": "post-filtering(简单,结果数可能不足 top-k) vs pre-filtering(保证数量,分区暴涨)",
+    "diagram": "flowchart TB\n  subgraph Post[post-filtering]\n    P1[\"ANN 检索 top-k\"] --> P2[\"丢弃不合规项\"] --> P3[\"可能少于 top-k\"]\n  end\n  subgraph Pre[pre-filtering]\n    R1[\"按元数据分区\"] --> R2[\"只搜相关分区\"] --> R3[\"保证结果数量\"]\n  end",
+    "options": [
+      "post-filtering 先分区再搜、pre-filtering 先搜再丢,两者只是叫法不同结果一样",
+      "post-filtering 先 ANN 再丢不合规项(可能不足 top-k);pre-filtering 按元数据分区只搜相关区(保数量但分区暴涨)",
+      "两者都保证结果数量,区别只是 post 更快、pre 更省内存,没有其他取舍",
+      "post-filtering 只能过滤数值字段、pre-filtering 只能过滤文本字段,按字段类型二选一"
+    ],
+    "options_en": [
+      "Post-filtering partitions then searches, pre-filtering searches then drops — just different names for the same result.",
+      "Post-filtering runs ANN then drops non-compliant items (may fall below top-k); pre-filtering partitions the index by metadata and searches only the relevant partition (guarantees count but multiplies partitions).",
+      "Both guarantee result count, differing only in that post is faster and pre saves memory, with no other tradeoff.",
+      "Post-filtering can filter only numeric fields and pre-filtering only text fields, chosen by field type."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "定义弄反了:post 是先搜后丢、pre 是先分区后搜,结果风险也不同。",
+      "对;核心区别是「先搜后丢会数量不足」vs「先分区保数量但分区膨胀」。",
+      "post 不保证数量(过滤后可能少于 top-k),这正是它的主要风险。",
+      "两者与字段是数值还是文本无关,过滤逻辑一样,区别在过滤发生在检索前还是后。"
+    ],
+    "optionExplanations_en": [
+      "Definitions reversed: post searches then drops, pre partitions then searches, with different risks.",
+      "Correct — the core difference is search-then-drop can under-fill vs partition-first guarantees count but bloats partitions.",
+      "Post does not guarantee count (may fall below top-k after filtering), which is its main risk.",
+      "Neither depends on numeric vs text fields; the filter logic is the same, differing in whether it runs before or after retrieval."
+    ],
+    "termDefinitions": [
+      { "term": "post-filtering / 检索后过滤", "meaning": "先做 ANN 检索,再把不满足元数据条件的结果丢掉。", "meaningEn": "Post-filtering runs ANN retrieval first, then drops results that fail the metadata condition." },
+      { "term": "pre-filtering / 检索前过滤", "meaning": "先按元数据把索引分区,查询只在符合条件的分区里检索。", "meaningEn": "Pre-filtering partitions the index by metadata first, so a query only searches the qualifying partition." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "post-filter-shrink",
+    "scenario": "线上用 post-filtering,某些强过滤(小语种+特定地区)下,ANN 返回 top-k 后被过滤到只剩几条,结果集不足以填满页面。",
+    "scenario_en": "In production with post-filtering, some strong filters (rare language + specific region) shrink the ANN top-k to just a few items, not enough to fill the page.",
+    "q": "post-filtering 返回结果少于 top-k,最该怎么修?",
+    "q_en": "When post-filtering returns fewer than top-k, what is the best fix?",
+    "why": "根因是「先检索再丢」在强过滤下会把集合丢到不足 top-k。最直接的修法是改成 pre-filtering:按该元数据把索引分区、只在相关分区里检索,从源头保证够 top-k 个合规候选。",
+    "why_en": "The root cause is search-then-drop shrinking the set under strong filters, so the direct fix is pre-filtering: partition the index by that metadata and search only the relevant partition to guarantee enough compliant candidates.",
+    "tags": ["llm-sd", "retrieval", "metadata-filter"],
+    "tradeoff": "pre-filtering(保证数量,分区管理成本) vs 继续 post-filtering(简单,强过滤下数量不足)",
+    "whenOtherWins": "如果过滤只是偶发轻度(大多数请求过滤后仍够 top-k),简单加大 over-retrieval 倍数继续 post-filtering 就够,不必上分区。",
+    "options": [
+      "调大 ANN 的 nprobe/ef 一直加,直到过滤后凑够 top-k,不改过滤策略",
+      "改成 pre-filtering:按该元数据把索引分区、只搜相关分区,从源头保证够 top-k 合规候选",
+      "放宽过滤条件、把不合规项也展示给用户,先保证数量再说",
+      "把 top-k 直接设成 1,只要有一条结果就不算「少于 top-k」"
+    ],
+    "options_en": [
+      "Keep raising ANN's nprobe/ef until enough survive filtering, without changing the filter strategy.",
+      "Switch to pre-filtering: partition the index by that metadata and search only the relevant partition, guaranteeing enough compliant candidates from the source.",
+      "Relax the filter and show non-compliant items to users, prioritizing count over compliance.",
+      "Set top-k to 1, so any single surviving result no longer counts as 'fewer than top-k'."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "一味加大检索广度成本高且不稳,强过滤下仍可能不够,治标不治本。",
+      "对;分区检索让返回的每一条都天然合规,从根上保证数量,是标准解。",
+      "展示不合规项违反过滤本意(语言/地区/政策),是拿合规换数量,不可取。",
+      "把 top-k 降到 1 是掩盖问题,不能满足页面需要的结果数量。"
+    ],
+    "optionExplanations_en": [
+      "Just widening retrieval is costly and unstable, and may still under-fill under strong filters — treating the symptom.",
+      "Correct — partitioned search makes every returned item compliant by construction, guaranteeing count at the source, the standard fix.",
+      "Showing non-compliant items defeats the filter's purpose (language/region/policy), trading compliance for count.",
+      "Dropping top-k to 1 hides the problem and fails to deliver the result count the page needs."
+    ],
+    "termDefinitions": [
+      { "term": "over-retrieval multiplier / 过取倍数", "meaning": "post-filtering 时多取几倍 top-k 候选,预留被过滤掉的余量。", "meaningEn": "An over-retrieval multiplier fetches several times top-k in post-filtering to leave headroom for items that get filtered out." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "hybrid-filtering",
+    "scenario": "既有高基数维度(国家/语言,几百上千个值)又有低基数维度(是否成人内容等),想兼顾结果数量保证和分区可控。",
+    "scenario_en": "You have both high-cardinality dims (country/language, hundreds of values) and low-cardinality dims (e.g. is-adult), and want both count guarantees and manageable partitions.",
+    "q": "同时有高基数和低基数过滤维度时,混合过滤该怎么分工?",
+    "q_en": "With both high- and low-cardinality filter dims, how should hybrid filtering divide the work?",
+    "why": "对高基数维度(国家/语言)做 pre-filtering 分区,保证结果数量且分区数可控;对低基数维度用 post-filtering + over-retrieval 倍数在检索后过滤。这样既不让分区随所有维度组合爆炸,又保住数量。",
+    "why_en": "Partition (pre-filter) on high-cardinality dims like country/language to guarantee count with a manageable partition count, and post-filter low-cardinality dims with an over-retrieval multiplier, so partitions don't explode across all dimension combinations.",
+    "tags": ["llm-sd", "retrieval", "metadata-filter"],
+    "tradeoff": "高基数 pre + 低基数 post(分区可控且保数量) vs 全维度 pre(分区组合爆炸)",
+    "whenOtherWins": "如果所有过滤维度都是低基数且过滤很轻,直接全 post-filtering + 适当过取倍数最简单,不必分区。",
+    "options": [
+      "对所有维度都做 pre-filtering 分区,维度越多分区越细,数量最有保证",
+      "对所有维度都做 post-filtering,统一在检索后过滤,避免任何分区管理",
+      "对高基数维度(国家/语言)pre 分区保数量,对低基数维度 post 过滤+过取倍数,避免分区爆炸",
+      "对低基数维度 pre 分区、高基数维度 post 过滤,因为低基数分区少最省事"
+    ],
+    "options_en": [
+      "Pre-filter (partition) on every dimension; the more dimensions the finer the partitions, best for count.",
+      "Post-filter every dimension, filtering uniformly after retrieval to avoid any partition management.",
+      "Pre-partition high-cardinality dims (country/language) to guarantee count, and post-filter low-cardinality dims with an over-retrieval multiplier, avoiding partition explosion.",
+      "Pre-partition low-cardinality dims and post-filter high-cardinality dims, since few low-cardinality partitions are simplest."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "对所有维度分区会让分区数按维度组合指数爆炸,存储和管理不可控。",
+      "全 post 在强过滤维度上又会回到「数量不足 top-k」的老问题。",
+      "对;高基数维度分区数可控且保数量,低基数留给 post,兼顾两端,是混合过滤的标准分工。",
+      "反了:高基数才该分区(分区数由值域决定但仍可控且保数量),低基数分区收益小、更适合 post。"
+    ],
+    "optionExplanations_en": [
+      "Partitioning every dimension explodes partitions combinatorially, making storage and management unmanageable.",
+      "All-post reintroduces the under-top-k problem on strongly filtering dimensions.",
+      "Correct — high-cardinality partitions stay manageable and guarantee count, low-cardinality goes to post, balancing both, the standard hybrid split.",
+      "Reversed: high-cardinality dims are the ones to partition (guaranteeing count), while low-cardinality dims gain little from partitioning and suit post-filtering."
+    ],
+    "termDefinitions": [
+      { "term": "cardinality / 基数", "meaning": "一个维度可能取值的数量;国家/语言是高基数,布尔标记是低基数。", "meaningEn": "Cardinality is how many distinct values a dimension can take; country/language are high-cardinality, boolean flags are low." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "coarse-ranking",
+    "scenario": "粗排要在 10-30ms 内给候选生成来的~1000 个候选打分,选出~100 个进精排。",
+    "scenario_en": "Coarse ranking must score the ~1000 candidates from candidate generation in 10-30ms and pass ~100 to fine re-ranking.",
+    "q": "粗排(coarse ranking)用什么模型、吃什么特征、预算多少?",
+    "q_en": "What models, features, and budget does coarse ranking use?",
+    "why": "粗排用轻量模型(逻辑回归/浅层 MLP/小 GBDT),吃 embedding 之外的特征(user-item 交互计数、时段、设备、简单交叉),预算 10-30ms,把~1000 筛到~100。它比候选生成用更多特征、但仍要快。",
+    "why_en": "Coarse ranking uses light models (logistic regression, shallow MLP, small GBDT) with features beyond embeddings (interaction counts, time-of-day, device, simple crosses) in a 10-30ms budget, cutting ~1000 to ~100.",
+    "tags": ["llm-sd", "retrieval", "coarse-ranking"],
+    "options": [
+      "用最重的 transformer 多任务模型,吃全部原始特征,预算放宽到 100ms 追求最高精度",
+      "只用两塔 embedding 的余弦相似度重排,不引入任何新特征,和候选生成完全一样",
+      "用轻量模型(LR/浅层 MLP/小 GBDT),吃交互计数/时段/设备等特征,预算 10-30ms,把~1000 筛到~100",
+      "不打分,直接按 item 热度排序取前 100,粗排本质是个热度榜"
+    ],
+    "options_en": [
+      "Use the heaviest multi-task transformer over all raw features, relaxing the budget to 100ms for max accuracy.",
+      "Just re-rank by two-tower embedding cosine similarity with no new features, identical to candidate generation.",
+      "Use light models (LR/shallow MLP/small GBDT) over interaction counts/time-of-day/device features in a 10-30ms budget, cutting ~1000 to ~100.",
+      "Do not score at all; sort by item popularity and take the top 100 — coarse ranking is essentially a popularity board."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "重 transformer + 100ms 是精排的做法,粗排要在千级候选上保持轻快。",
+      "粗排的价值正是引入 embedding 之外的新特征,只用余弦相似度等于没做粗排。",
+      "对;轻模型 + 交互/上下文特征 + 10-30ms,是粗排的标准配置。",
+      "纯热度榜忽略了个性化交互特征,粗排要打个性化分而非全局热度。"
+    ],
+    "optionExplanations_en": [
+      "Heavy transformer + 100ms is fine-ranking; coarse ranking must stay light over thousands of candidates.",
+      "Coarse ranking's value is adding features beyond embeddings; cosine-only means no real coarse ranking.",
+      "Correct — light models + interaction/context features + 10-30ms is the standard coarse-ranking setup.",
+      "A pure popularity board ignores personalized interaction features; coarse ranking scores personalization, not global popularity."
+    ],
+    "termDefinitions": [
+      { "term": "GBDT", "fullName": "Gradient Boosted Decision Trees", "meaning": "梯度提升树,轻量高效的表格特征打分模型,常用于粗排。", "meaningEn": "GBDT (Gradient Boosted Decision Trees) is a light, efficient tabular scoring model often used for coarse ranking." },
+      { "term": "MLP", "fullName": "Multi-Layer Perceptron", "meaning": "多层感知机,基础的全连接前馈神经网络。", "meaningEn": "MLP (Multi-Layer Perceptron) is a basic fully-connected feedforward neural network." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "coarse-bottleneck",
+    "scenario": "粗排 p99 超预算。工程师第一反应是换更快的模型,但 profiling 显示模型推理只占一小部分。",
+    "scenario_en": "Coarse ranking's p99 is over budget. The instinct is a faster model, but profiling shows inference is only a small fraction.",
+    "q": "粗排延迟的主要瓶颈通常是什么?该往哪里优化?",
+    "q_en": "What is coarse ranking's dominant latency bottleneck, and where should you optimize?",
+    "why": "粗排要给~1000 个候选各取几百个特征,主要时间花在 feature store 检索而非模型推理。优化点是特征取用的批量化/缓存(一次批量取、缓存热特征),而不是换更快的模型。",
+    "why_en": "Coarse ranking fetches hundreds of features for each of ~1000 candidates, so feature-store retrieval — not model inference — dominates latency, and the fix is batching/caching feature lookups.",
+    "tags": ["llm-sd", "retrieval", "feature-store"],
+    "tradeoff": "优化特征取用(批量+缓存,治本) vs 换更快模型(推理本就不是瓶颈,收效甚微)",
+    "whenOtherWins": "如果 profiling 显示推理确实占大头(如误用了重模型做粗排),那才该先换轻模型或量化;瓶颈定位要以实测为准。",
+    "diagram": "flowchart LR\n  C[\"~1000 候选\"] --> F[\"feature store 批量取<br/>数百特征×1000 (主瓶颈)\"]\n  F --> M[\"轻量模型推理<br/>(占比小)\"]\n  M --> O[\"~100 候选\"]",
+    "options": [
+      "瓶颈是模型推理,应把模型换成更小的或量化,feature store 取用可忽略",
+      "瓶颈是 feature store 检索(数百特征×1000 候选),应做批量取用+缓存热特征,而非只换模型",
+      "瓶颈是网络带宽,应把粗排服务和候选生成部署到同一进程消除 RPC",
+      "瓶颈是 GPU 显存不足,应加显存把 batch 开大,与特征取用无关"
+    ],
+    "options_en": [
+      "The bottleneck is model inference; swap in a smaller or quantized model — feature-store lookups are negligible.",
+      "The bottleneck is feature-store retrieval (hundreds of features × 1000 candidates); batch the lookups and cache hot features rather than just swapping models.",
+      "The bottleneck is network bandwidth; co-locate coarse ranking and candidate generation in one process to eliminate RPC.",
+      "The bottleneck is GPU memory; add VRAM to enlarge the batch, unrelated to feature lookups."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "profiling 明确显示推理只占一小部分,换模型救不了主要延迟。",
+      "对;数百特征×1000 候选的取用才是大头,批量化+缓存才治本。",
+      "带宽不是这里的主因;主要是特征取用的次数与延迟,批量取才是关键。",
+      "粗排轻模型显存压力小,瓶颈在取特征而非显存或 batch 大小。"
+    ],
+    "optionExplanations_en": [
+      "Profiling clearly shows inference is a small fraction, so swapping models won't fix the main latency.",
+      "Correct — hundreds of features × 1000 candidates dominates; batching plus caching is the real fix.",
+      "Bandwidth is not the main cause here; it's the count and latency of feature lookups, so batching them is key.",
+      "A light coarse model has little VRAM pressure; the bottleneck is feature fetching, not memory or batch size."
+    ],
+    "termDefinitions": [
+      { "term": "feature store / 特征存储", "meaning": "在线存取模型特征的低延迟服务,推理前批量取候选的特征。", "meaningEn": "A feature store is a low-latency service for serving model features, batch-fetched for candidates before inference." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "fine-ranking",
+    "scenario": "精排只需处理~100 个候选,预算可放宽到 20-50ms,要用最有表达力的模型。",
+    "scenario_en": "Fine re-ranking handles only ~100 candidates with a relaxed 20-50ms budget and uses the most expressive models.",
+    "q": "精排为什么用得起最重的模型?典型用哪些模型、叠加什么?",
+    "q_en": "Why can fine re-ranking afford the heaviest models, and what models/overlays does it use?",
+    "why": "候选已被前两级砍到~100,小集合让重模型的高单价可承受,预算放宽到 20-50ms。典型模型:Deep Cross Network、多任务(联合建 engagement+satisfaction)、建模 item 间依赖的 transformer;之后叠加多样性/新鲜度/政策等业务规则。",
+    "why_en": "With only ~100 candidates left, the small set justifies expensive models in a 20-50ms budget, using DCN, multi-task models (engagement+satisfaction), and inter-item transformers, then business overlays like diversity/freshness/policy.",
+    "tags": ["llm-sd", "retrieval", "fine-ranking"],
+    "options": [
+      "因为精排在 CPU 上跑没有 GPU 成本,所以可以任意加大模型",
+      "候选已砍到~100,小集合让重模型可承受(20-50ms);用 DCN/多任务/inter-item transformer,再叠多样性/新鲜度/政策",
+      "因为精排结果会被缓存复用,单次算多贵都摊薄了,所以模型无上限",
+      "因为精排不需要取特征,省下的时间全给模型,所以能上超大模型"
+    ],
+    "options_en": [
+      "Because fine ranking runs on CPU with no GPU cost, so the model can grow arbitrarily.",
+      "Candidates are already cut to ~100, so the small set justifies heavy models (20-50ms); use DCN/multi-task/inter-item transformers, then overlay diversity/freshness/policy.",
+      "Because fine-ranking results are cached and reused, amortizing any per-call cost, so the model is unbounded.",
+      "Because fine ranking needs no feature fetching, all saved time goes to the model, enabling a huge model."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "精排多在 GPU 上跑重模型,不是靠 CPU 免成本;根因是候选少了单价可承受。",
+      "对;小集合摊得起高单价,才用 DCN/多任务/transformer 并叠业务规则。",
+      "精排结果高度个性化+时效,难长期缓存复用;能上重模型是因候选少。",
+      "精排照样要取特征;能上重模型的根因是候选数从千级降到百级。"
+    ],
+    "optionExplanations_en": [
+      "Fine ranking usually runs heavy models on GPU, not free CPU; the reason is fewer candidates make per-item cost affordable.",
+      "Correct — a small set affords high per-item cost, enabling DCN/multi-task/transformers plus business overlays.",
+      "Fine-ranking results are highly personalized and time-sensitive, hard to cache long-term; heavy models are afforded by few candidates.",
+      "Fine ranking still fetches features; the reason heavy models are affordable is candidates dropping from thousands to hundreds."
+    ],
+    "termDefinitions": [
+      { "term": "multi-task model / 多任务模型", "meaning": "一个模型同时预测多个目标(如点击 engagement 与满意度 satisfaction),共享表示。", "meaningEn": "A multi-task model jointly predicts several targets (e.g. engagement and satisfaction) with a shared representation." },
+      { "term": "business-logic overlay / 业务规则叠加", "meaning": "在模型分之上叠加的硬规则:多样性、新鲜度提升、政策过滤等。", "meaningEn": "Business-logic overlays are hard rules applied on top of model scores: diversity, freshness boosting, policy filters." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-022",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "diversity-overlay",
+    "scenario": "精排纯按分数排,结果前 5 个视频全来自同一个创作者,用户体验单调。",
+    "scenario_en": "Ranking purely by score, the top 5 videos all come from one creator, making the feed monotonous.",
+    "q": "为什么精排后要加多样性等业务规则?不加会怎样?",
+    "q_en": "Why add diversity and other business rules after fine ranking, and what happens without them?",
+    "why": "纯分数最优会让高分来源(同一创作者/同一话题)扎堆,体验单调、长期伤留存。多样性约束(限制同源占比)、新鲜度提升、政策过滤是叠在模型分之上的硬规则,把「单次相关最优」修正成「整体体验最优」。代价是牺牲一点单点相关性。",
+    "why_en": "Pure top-score ranking clusters items from one source, hurting experience and retention, so diversity/freshness/policy overlays trade a bit of per-item relevance for better overall experience.",
+    "tags": ["llm-sd", "retrieval", "diversity"],
+    "tradeoff": "多样性规则(整体体验更好,牺牲单点相关) vs 纯分数(单点最优但扎堆单调)",
+    "options": [
+      "不用加;模型分已经是最优,任何业务规则都只会降低质量",
+      "加规则是为了合规审计留痕,与用户体验无关,不加也不影响观感",
+      "纯分数会让同源/同话题扎堆、体验单调伤留存;多样性/新鲜度/政策规则把单点最优修正成整体最优,代价是牺牲一点相关性",
+      "加规则是为了降低精排延迟,规则能提前砍掉候选让模型少算"
+    ],
+    "options_en": [
+      "No need; the model score is already optimal and any business rule only lowers quality.",
+      "Rules exist for compliance audit trails, unrelated to user experience, and skipping them doesn't affect the feel.",
+      "Pure scoring clusters same-source/same-topic items, making the feed monotonous and hurting retention; diversity/freshness/policy overlays fix per-item-optimal into overall-optimal at the cost of some relevance.",
+      "Rules exist to cut fine-ranking latency by pruning candidates so the model computes less."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "模型分优化的是单点相关,不含整体多样性;不加规则会扎堆,并非任何规则都降质。",
+      "多样性/新鲜度直接改变用户看到的排列,是体验问题不是纯审计。",
+      "对;规则把「单条最相关」修正为「整页最好看」,代价是略降单点相关性。",
+      "业务规则是排序后叠加的重排,不是为降延迟砍候选。"
+    ],
+    "optionExplanations_en": [
+      "The model score optimizes per-item relevance, not overall diversity; without rules items cluster, and not every rule lowers quality.",
+      "Diversity/freshness directly change what the user sees — an experience issue, not mere auditing.",
+      "Correct — rules turn most-relevant-per-item into best-overall-page, at the cost of slightly lower per-item relevance.",
+      "Business rules are a post-ranking rerank, not candidate pruning to cut latency."
+    ],
+    "termDefinitions": [
+      { "term": "diversity constraint / 多样性约束", "meaning": "限制结果里同一来源/话题的占比,避免扎堆,提升整体体验。", "meaningEn": "A diversity constraint caps how many results share one source/topic to avoid clustering and improve overall experience." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "relevance-vs-latency",
+    "scenario": "精排想上更大的 transformer 提升相关性,但单次推理逼近 50ms 预算上限,不能简单换回小模型。",
+    "scenario_en": "Fine ranking wants a bigger transformer for relevance but inference nears the 50ms budget cap, and reverting to a small model isn't acceptable.",
+    "q": "精排面临「相关性 vs 延迟」矛盾时,怎么在不明显掉精度下压延迟?",
+    "q_en": "Facing the relevance-vs-latency conflict in fine ranking, how do you cut latency without visibly losing accuracy?",
+    "why": "用量化(降精度加速)+知识蒸馏(把大模型能力压进小学生模型)在几乎不掉精度的前提下降延迟。相比直接换回小模型丢相关性、或硬扛大模型超预算,这是保住相关性又满足延迟的中间路。",
+    "why_en": "Use quantization (lower precision for speed) plus knowledge distillation (compress the big model into a smaller student) to cut latency with minimal accuracy loss, unlike simply reverting to a small model.",
+    "tags": ["llm-sd", "retrieval", "optimization"],
+    "tradeoff": "量化+蒸馏(几乎不掉精度地降延迟,需额外工程) vs 换小模型(简单但丢相关性)",
+    "whenOtherWins": "如果相关性差一点无所谓、工程资源紧张,直接用现成小模型最省事;蒸馏/量化的额外训练与验证成本只有在相关性关键时才值得。",
+    "options": [
+      "直接把 transformer 换成逻辑回归,虽然掉相关性但一定不超时,简单可靠",
+      "用量化(降精度加速)+知识蒸馏(大模型能力压进小模型),几乎不掉精度地压延迟",
+      "把精排预算从 50ms 硬调到 200ms,不改模型,让它慢慢算完",
+      "对每个请求缓存精排结果,第二次直接返回,绕开延迟问题"
+    ],
+    "options_en": [
+      "Just replace the transformer with logistic regression: it loses relevance but never times out — simple and reliable.",
+      "Use quantization (lower precision for speed) plus knowledge distillation (compress the big model into a small student) to cut latency with almost no accuracy loss.",
+      "Hard-raise the fine-ranking budget from 50ms to 200ms without changing the model, letting it finish slowly.",
+      "Cache each request's fine-ranking result and return it on the second hit, sidestepping the latency problem."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "换 LR 是拿相关性换延迟,与「不明显掉精度」的目标冲突。",
+      "对;量化+蒸馏在保住相关性的同时降延迟,是相关性关键时的标准解。",
+      "把 p99 预算从 50ms 抬到 200ms 违反 SLA,是放弃延迟目标不是解决矛盾。",
+      "精排结果高度个性化时效强,难缓存复用,治标不治本。"
+    ],
+    "optionExplanations_en": [
+      "Swapping to LR trades relevance for latency, conflicting with the no-visible-accuracy-loss goal.",
+      "Correct — quantization plus distillation cut latency while preserving relevance, the standard fix when relevance matters.",
+      "Raising the p99 budget from 50ms to 200ms violates the SLA — abandoning the latency goal, not resolving the conflict.",
+      "Highly personalized, time-sensitive fine-ranking results are hard to cache, so this treats the symptom."
+    ],
+    "termDefinitions": [
+      { "term": "knowledge distillation / 知识蒸馏", "meaning": "用大模型(teacher)的输出训练小模型(student),把能力压进更快的小模型。", "meaningEn": "Knowledge distillation trains a small student model on a big teacher's outputs, compressing capability into a faster model." },
+      { "term": "quantization / 量化", "meaning": "把权重/激活从高精度(FP32)降到低精度(FP16/INT8),加速推理、省内存。", "meaningEn": "Quantization lowers weights/activations from high precision (FP32) to low (FP16/INT8), speeding inference and saving memory." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-024",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "stage-budgets",
+    "q": "填空:三级漏斗每级的候选量级与延迟预算。",
+    "q_en": "Fill in each funnel stage's candidate scale and latency budget.",
+    "text": "候选生成:十亿 → ~{{500-2000}} 候选,预算 {{10-20}}ms;粗排:~1000 → ~{{100}},预算 {{10-30}}ms;精排:~100 → 最终,预算 {{20-50}}ms。",
+    "text_en": "Candidate generation: billions → ~{{500-2000}} candidates, budget {{10-20}}ms; coarse ranking: ~1000 → ~{{100}}, budget {{10-30}}ms; fine re-ranking: ~100 → final, budget {{20-50}}ms.",
+    "why": "记住量级递减(十亿→千→百)与预算递增(候选越少、模型越重、越舍得给时间)的对应关系:总预算被三级瓜分,任何一级超支都会顶破 p99。",
+    "why_en": "Remember the shrinking counts (billions→thousands→hundreds) paired with growing budgets, since the total p99 is split across the three stages.",
+    "tags": ["llm-sd", "retrieval", "stage-budgets"],
+    "termDefinitions": [
+      { "term": "latency budget / 延迟预算", "meaning": "分配给某一级的时间上限,各级之和不能超过端到端 p99 目标。", "meaningEn": "A latency budget is the time ceiling allotted to a stage; the stages must sum within the end-to-end p99 target." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-025",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "breadth-depth",
+    "q": "填空:三级漏斗每一级在做的核心权衡。",
+    "q_en": "Fill in the core tradeoff each funnel stage makes.",
+    "text": "漏斗每一级都用「更{{少}}的候选」换「更{{强}}的模型」——即拿{{广度}}换{{深度}};候选生成盯 {{recall}}(漏了不可恢复),后两级盯精度。",
+    "text_en": "Each funnel stage trades {{fewer}} candidates for a {{heavier}} model — i.e. {{breadth}} for {{depth}}; candidate generation optimizes {{recall}} (misses are unrecoverable), later stages optimize precision.",
+    "why": "一句话记住漏斗:广度换深度。第一级 recall 优先(漏项不可逆),越往后候选越少、模型越重、越追求精度。",
+    "why_en": "One-liner for the funnel: trade breadth for depth, with recall first up front (misses are irreversible) and precision growing downstream.",
+    "tags": ["llm-sd", "retrieval", "ranking-funnel"],
+    "termDefinitions": [
+      { "term": "precision / 精确率", "meaning": "返回结果中真正相关的比例;后两级排序追求把最相关的排到最前。", "meaningEn": "Precision is the fraction of returned results that are truly relevant; later ranking stages push the most relevant to the top." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-026",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "candidate-gen-metric",
+    "scenario": "要给候选生成阶段定一个主指标来指导迭代;有人提议用 precision@k,有人提议 recall@k。",
+    "scenario_en": "You must pick a primary metric to guide candidate-generation iteration; some propose precision@k, others recall@k.",
+    "q": "候选生成该以 recall@k 还是 precision@k 为主指标?为什么?",
+    "q_en": "Should candidate generation optimize recall@k or precision@k, and why?",
+    "why": "候选生成盯 recall@k:它的职责是「别漏掉相关项」,漏了下游永远补不回来;精度(把最相关排最前)是后两级排序的活。用 precision 当主指标会奖励「少而准」,反而放大漏召回风险。",
+    "why_en": "Candidate generation optimizes recall@k because its job is to not miss relevant items (misses are unrecoverable downstream), while precision — putting the most relevant on top — is the later ranking stages' job.",
+    "tags": ["llm-sd", "retrieval", "recall"],
+    "tradeoff": "recall@k(不漏相关项,可能带进噪声由下游筛) vs precision@k(准但易漏,漏了不可逆)",
+    "whenOtherWins": "如果下游排序能力很弱、无法从噪声候选里挑出好结果,那才需要候选生成本身更看重 precision;通常下游足够强,recall 优先。",
+    "options": [
+      "以 precision@k 为主:候选越准下游越省事,漏一点相关项无所谓",
+      "以 recall@k 为主:职责是不漏相关项(漏了下游补不回),精度交给后两级排序",
+      "两个都不用,直接用点击率 CTR 当候选生成的主指标最贴近业务",
+      "用延迟当唯一主指标:候选生成只要够快,召回精度都不重要"
+    ],
+    "options_en": [
+      "Optimize precision@k: more precise candidates ease downstream, and missing a few relevant items is fine.",
+      "Optimize recall@k: the job is not to miss relevant items (misses are unrecoverable downstream), leaving precision to later ranking stages.",
+      "Use neither; use click-through rate (CTR) as the primary metric since it is closest to business.",
+      "Use latency as the sole primary metric: as long as candidate generation is fast, recall and precision don't matter."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "漏召回不可逆,precision 优先会奖励「少而漏」,与候选生成的职责相悖。",
+      "对;候选生成的天条是别漏相关项,精度是下游排序的目标。",
+      "CTR 是端到端业务指标,受下游排序主导,无法单独指导候选生成的召回。",
+      "只看延迟会牺牲召回质量;快但漏一堆相关项没有意义。"
+    ],
+    "optionExplanations_en": [
+      "Misses are irreversible; prioritizing precision rewards few-but-missing, contradicting candidate generation's job.",
+      "Correct — candidate generation's cardinal rule is not to miss relevant items, leaving precision to downstream ranking.",
+      "CTR is an end-to-end business metric dominated by downstream ranking and cannot alone guide candidate-generation recall.",
+      "Optimizing latency alone sacrifices recall; fast but missing many relevant items is pointless."
+    ],
+    "termDefinitions": [
+      { "term": "precision@k", "meaning": "返回前 k 个里相关项的比例;衡量「准不准」,是排序阶段目标。", "meaningEn": "Precision@k is the fraction of the top-k that are relevant, measuring accuracy — the ranking stages' goal." },
+      { "term": "CTR", "fullName": "Click-Through Rate", "meaning": "点击率:展示中被点击的比例,端到端业务指标。", "meaningEn": "CTR (Click-Through Rate) is the fraction of impressions that get clicked, an end-to-end business metric." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-027",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "billion-scale-replication",
+    "scenario": "十亿级 ANN 索引已分片到多机,单个分片机器偶发宕机会让该分片的候选全查不到,且流量峰值时单副本扛不住。",
+    "scenario_en": "A billion-scale ANN index is sharded across machines; a shard node's occasional crash makes that shard's candidates unreachable, and one replica can't absorb peak traffic.",
+    "q": "十亿级索引除了分片,为什么还要副本(replication)?",
+    "q_en": "Beyond sharding, why does a billion-scale index also need replication?",
+    "why": "分片解决「装不下+并行查」,但单分片宕机会丢该分片全部候选、且单副本扛不住峰值。副本给每个分片多份拷贝→容错(挂一份还有别份)+负载均衡(峰值分摊到多副本)。代价是存储与同步成本翻倍。",
+    "why_en": "Sharding solves capacity and parallelism, but replication adds copies per shard for fault tolerance (survive a node loss) and load balancing (spread peak traffic), at the cost of extra storage and sync.",
+    "tags": ["llm-sd", "retrieval", "billion-scale"],
+    "options": [
+      "副本是为了提高召回率:多份索引投票取交集能提升 recall,与容错无关",
+      "副本给每个分片多份拷贝→容错(挂一份还有别份)+负载均衡(峰值分摊),代价是存储/同步翻倍",
+      "副本是为了压缩内存:每份副本存不同精度,合起来省显存",
+      "有了分片就不需要副本,分片已经天然容错,加副本纯属浪费"
+    ],
+    "options_en": [
+      "Replication boosts recall: multiple index copies vote and intersect to raise recall, unrelated to fault tolerance.",
+      "Replication adds copies per shard for fault tolerance (survive one node's loss) and load balancing (spread peak traffic), at the cost of doubled storage/sync.",
+      "Replication compresses memory: each replica stores a different precision, together saving VRAM.",
+      "Sharding removes the need for replication — shards are inherently fault-tolerant, so replicas are pure waste."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "副本存的是同一份数据的拷贝,不是投票机制,和 recall 提升无关。",
+      "对;分片管容量与并行,副本管容错与负载,是两个正交维度。",
+      "副本是相同数据的冗余拷贝,不是不同精度分层,压缩是 PQ 的活。",
+      "分片本身没有冗余,单分片宕机就丢该分片数据,必须靠副本容错。"
+    ],
+    "optionExplanations_en": [
+      "Replicas are copies of the same data, not a voting scheme, and don't raise recall.",
+      "Correct — sharding handles capacity/parallelism while replication handles fault tolerance/load, two orthogonal axes.",
+      "Replicas are redundant copies of identical data, not mixed-precision tiers; compression is PQ's job.",
+      "Sharding alone has no redundancy — one shard's crash loses that shard's data, so replication is required for fault tolerance."
+    ],
+    "termDefinitions": [
+      { "term": "replication / 副本", "meaning": "为每个分片保存多份相同拷贝,用于容错和分摊查询负载。", "meaningEn": "Replication keeps multiple identical copies of each shard for fault tolerance and to spread query load." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "weaviate-hybrid",
+    "scenario": "检索既要向量语义相似,又要能按关键词命中和复杂元数据过滤(如同时匹配品牌词并限定地区),团队想少运维。",
+    "scenario_en": "Retrieval needs vector semantic similarity plus keyword hits and complex metadata filters (e.g. match a brand term and restrict region), with minimal ops.",
+    "q": "需要「向量+关键词混合检索且带复杂元数据过滤」时,四个候选里 Weaviate 相对更合适在哪?",
+    "q_en": "When you need hybrid vector+keyword retrieval with complex metadata filters, why is Weaviate relatively fitting among the four?",
+    "why": "Weaviate 原生支持 HNSW + 关键词的混合检索和元数据过滤,契合「语义+关键词+复杂过滤」需求。代价是复杂过滤下延迟会上升;若只需纯向量亚 10ms,Pinecone/FAISS/ScaNN 更简单快。",
+    "why_en": "Weaviate natively supports HNSW plus keyword hybrid search and metadata filtering, fitting semantic+keyword+complex-filter needs, at the cost of higher latency under complex filters.",
+    "tags": ["llm-sd", "retrieval", "vector-db"],
+    "tradeoff": "Weaviate(混合检索+元数据过滤灵活,复杂过滤延迟高) vs 纯向量库(更快但过滤/关键词弱)",
+    "whenOtherWins": "如果只需纯向量相似度、不要关键词或复杂过滤且要极致低延迟,ScaNN/Pinecone 更快更简单,不需要 Weaviate 的混合能力。",
+    "options": [
+      "Weaviate 延迟最低,任何复杂过滤下都比其他三个快,所以选它",
+      "Weaviate 原生支持 HNSW+关键词混合检索和元数据过滤,契合语义+关键词+复杂过滤,代价是复杂过滤延迟升高",
+      "Weaviate 是唯一支持 GPU 的向量库,靠 GPU 算力做混合检索",
+      "Weaviate 压缩率最高,靠 PQ 把索引压到最小,所以适合复杂过滤"
+    ],
+    "options_en": [
+      "Weaviate has the lowest latency and beats the other three under any complex filter, so pick it.",
+      "Weaviate natively supports HNSW + keyword hybrid search and metadata filtering, fitting semantic+keyword+complex filters, at the cost of higher latency under complex filters.",
+      "Weaviate is the only GPU-capable vector DB and does hybrid search via GPU compute.",
+      "Weaviate has the highest compression, using PQ to shrink the index, which suits complex filtering."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "Weaviate 在复杂过滤下延迟反而升高,并非最低延迟;它胜在混合检索能力。",
+      "对;它的差异化是混合检索+灵活元数据过滤,而不是极致延迟。",
+      "GPU 支持不是 Weaviate 的卖点(FAISS 也有 GPU);它的卖点是混合检索。",
+      "压缩率不是 Weaviate 的差异点;它靠原生混合检索+过滤取胜。"
+    ],
+    "optionExplanations_en": [
+      "Weaviate's latency actually rises under complex filters, so it is not the lowest; its edge is hybrid search.",
+      "Correct — its differentiator is hybrid retrieval plus flexible metadata filtering, not peak latency.",
+      "GPU support is not Weaviate's selling point (FAISS also has GPU); its selling point is hybrid search.",
+      "Compression is not Weaviate's differentiator; it wins on native hybrid search plus filtering."
+    ],
+    "termDefinitions": [
+      { "term": "Weaviate", "meaning": "支持 HNSW + 关键词混合检索与元数据过滤的向量数据库。", "meaningEn": "Weaviate is a vector database supporting HNSW plus keyword hybrid search and metadata filtering." },
+      { "term": "hybrid search / 混合检索", "meaning": "同时用向量语义相似度和关键词/词法匹配打分,再融合排序。", "meaningEn": "Hybrid search scores by both vector semantic similarity and keyword/lexical match, then fuses the rankings." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-029",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "kv-phases-prefill",
+    "scenario": "面试官追问:候选生成用 ANN,那 ANN 的 recall 和延迟能同时拉满吗?",
+    "scenario_en": "The interviewer probes: with ANN in candidate generation, can you max out both recall and latency at once?",
+    "q": "ANN 检索里 recall 和延迟是什么关系?这对参数调优意味着什么?",
+    "q_en": "What is the relationship between recall and latency in ANN search, and what does it mean for tuning?",
+    "why": "ANN 是近似检索:搜得越广(HNSW 的 ef_search、IVF 的 nprobe 越大)recall 越高但延迟越高,二者是此消彼长。调优就是在 p99 预算内把 recall 顶到最高,而非同时拉满——鱼与熊掌不可兼得。",
+    "why_en": "ANN is approximate: searching wider (higher ef_search/nprobe) raises recall but also latency, so tuning maximizes recall within the p99 budget rather than maxing both.",
+    "tags": ["llm-sd", "retrieval", "ann-tuning"],
+    "tradeoff": "搜索更广(recall 高、延迟高) vs 搜索更窄(延迟低、recall 低)",
+    "options": [
+      "recall 和延迟无关,可以同时拉满,只要机器够快",
+      "recall 越高延迟一定越低,二者正相关,调大搜索广度双赢",
+      "搜得越广 recall 越高但延迟也越高,二者此消彼长;调优是在 p99 预算内把 recall 顶到最高",
+      "延迟只由向量维度决定,与搜索广度无关,调 ef_search/nprobe 不影响延迟"
+    ],
+    "options_en": [
+      "Recall and latency are unrelated and can both be maxed, given fast enough machines.",
+      "Higher recall always means lower latency — they are positively correlated, so widening the search is win-win.",
+      "Searching wider raises recall but also latency — they trade off; tuning maximizes recall within the p99 budget.",
+      "Latency depends only on vector dimension, unrelated to search breadth, so ef_search/nprobe don't affect latency."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "近似检索里 recall 与延迟由搜索广度耦合,加机器改变不了单查询的此消彼长。",
+      "方向反了:recall 高通常伴随延迟高,不是延迟低。",
+      "对;这就是 ANN 调优的本质——在延迟预算内尽量拉高 recall。",
+      "ef_search/nprobe 直接决定扫描量,是延迟主因,不能说与广度无关。"
+    ],
+    "optionExplanations_en": [
+      "In approximate search recall and latency are coupled by search breadth; adding machines doesn't remove the per-query tradeoff.",
+      "Direction reversed: high recall usually comes with high latency, not low.",
+      "Correct — this is the essence of ANN tuning: push recall as high as possible within the latency budget.",
+      "ef_search/nprobe directly set scan volume and are the main latency driver, so they're not unrelated to breadth."
+    ],
+    "termDefinitions": [
+      { "term": "ef_search", "meaning": "HNSW 查询期考察的候选数,越大 recall 越高、延迟越高(与建图期 ef_construction 不同)。", "meaningEn": "ef_search is HNSW's query-time candidate breadth; larger raises recall and latency (distinct from build-time ef_construction)." }
+    ]
+  },
+  {
+    "id": "llm-041-retrieval-and-ranking-pipelines-030",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "skip-coarse-ranking",
+    "scenario": "有人提议砍掉粗排,让候选生成的~1000 候选直接进精排,以简化流水线。",
+    "scenario_en": "Someone proposes dropping coarse ranking and feeding candidate generation's ~1000 candidates straight into fine re-ranking to simplify the pipeline.",
+    "q": "如果砍掉粗排,直接让~1000 候选进精排,会发生什么?",
+    "q_en": "What happens if you skip coarse ranking and feed ~1000 candidates directly into fine re-ranking?",
+    "why": "精排是最贵的模型,只在~100 候选上跑才付得起。让~1000 直接进精排会让精排算力/延迟约 10× 膨胀,顶破 20-50ms 预算。粗排的作用正是用轻量模型把千级先削到百级,为精排减负。",
+    "why_en": "Fine ranking is the most expensive model and only affordable on ~100 candidates, so feeding ~1000 inflates its compute/latency roughly 10x and blows the budget — coarse ranking exists to pre-cut thousands to hundreds.",
+    "tags": ["llm-sd", "retrieval", "ranking-funnel"],
+    "options": [
+      "没影响:精排本来就能处理任意数量候选,砍掉粗排能简化系统还更准",
+      "精排延迟大降:候选虽多但精排会自动只挑前 100 个算,其余跳过",
+      "精排算力/延迟约 10× 膨胀顶破预算;粗排的作用正是用轻模型把千级削到百级为精排减负",
+      "候选生成会补偿:检测到没有粗排后自动把候选压到 100,无需精排改动"
+    ],
+    "options_en": [
+      "No impact: fine ranking can handle any candidate count, so dropping coarse ranking simplifies and improves accuracy.",
+      "Fine-ranking latency drops sharply: despite more candidates, it auto-picks only the top 100 to score and skips the rest.",
+      "Fine-ranking compute/latency inflates ~10x and blows the budget; coarse ranking exists to pre-cut thousands to hundreds and unload fine ranking.",
+      "Candidate generation compensates: detecting no coarse stage, it auto-compresses candidates to 100 with no fine-ranking change."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "精排单价高,候选从 100 涨到 1000 直接约 10× 成本,不可能又快又准。",
+      "精排不会「自动只算前 100」——判断谁是前 100 正是粗排要先做的事。",
+      "对;粗排是精排的减负阀门,砍掉它精排就被千级候选压垮。",
+      "候选生成不感知下游是否有粗排,也不负责把候选压到百级,那是粗排的职责。"
+    ],
+    "optionExplanations_en": [
+      "Fine ranking is costly per item, so going from 100 to 1000 candidates ~10x's cost — it cannot stay fast and accurate.",
+      "Fine ranking cannot auto-score only the top 100 — deciding which 100 is exactly coarse ranking's job.",
+      "Correct — coarse ranking is the relief valve for fine ranking; drop it and fine ranking is crushed by thousands.",
+      "Candidate generation is unaware of downstream stages and doesn't compress to hundreds — that is coarse ranking's role."
+    ],
+    "termDefinitions": [
+      { "term": "coarse ranking / 粗排", "meaning": "漏斗第二级:轻量模型给千级候选打分,削到百级交给精排。", "meaningEn": "Coarse ranking is the funnel's second stage: a light model scores thousands of candidates down to hundreds for fine re-ranking." }
+    ]
+  }
+]

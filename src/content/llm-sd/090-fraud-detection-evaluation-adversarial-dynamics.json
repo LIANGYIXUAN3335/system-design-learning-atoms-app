@@ -1,0 +1,1626 @@
+[
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-001",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "metric-choice",
+    "scenario": "支付处理器每天 1M 笔交易、欺诈率约 0.1%。把所有交易都判为「合法」就有 99.9% accuracy，却一笔欺诈都没抓到。",
+    "scenario_en": "A payment processor handles 1M transactions/day at ~0.1% fraud; labeling everything 'legit' yields 99.9% accuracy while catching zero fraud.",
+    "q": "在这种极度不平衡下，为什么不能用 accuracy 做主指标？",
+    "q_en": "Under this extreme imbalance, why can't accuracy be the headline metric?",
+    "why": "正类（欺诈）只占 0.1%，accuracy 被 99.9% 的合法样本主导，全判合法就有 99.9%，完全掩盖漏抓。应看只针对欺诈类的 PR-AUC（precision-recall 曲线下面积），它不被海量真阴性稀释。",
+    "why_en": "With fraud at 0.1%, accuracy is dominated by the legit majority so 'always legit' scores 99.9%; use PR-AUC, which only looks at the fraud class and isn't diluted by the true-negative flood.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "metrics"
+    ],
+    "diagram": "flowchart LR\n  A[\"欺诈评估三支柱\"] --> B[\"1. 非对称成本感知指标\"]\n  A --> C[\"2. 时间序列评估\"]\n  A --> D[\"3. 对抗鲁棒 / 持续学习\"]",
+    "options": [
+      "accuracy 已到 99.9%，说明模型足够好，只要再微调阈值把它推到 99.99% 就行",
+      "正类只占 0.1%，accuracy 被合法多数主导；改看 PR-AUC，它只衡量欺诈类的 precision/recall",
+      "换用 ROC-AUC，它对类别不平衡天然免疫，是极度不平衡场景的首选汇总指标",
+      "accuracy 没问题，问题只是阈值默认 0.5 太低，调高到 0.9 后 accuracy 会更可信"
+    ],
+    "options_en": [
+      "Accuracy is already 99.9%, so the model is good enough; just nudge the threshold to push it to 99.99%.",
+      "The positive class is only 0.1% so accuracy is dominated by the legit majority; switch to PR-AUC, which measures precision/recall on the fraud class.",
+      "Switch to ROC-AUC, which is naturally immune to class imbalance and the preferred summary metric under extreme skew.",
+      "Accuracy is fine; the only issue is the default 0.5 threshold being too low, so raising it to 0.9 makes accuracy trustworthy."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "推高 accuracy 只会让模型更偏向全判合法，漏抓更多欺诈——它测的根本不是我们关心的那件事。",
+      "对；PR-AUC 只看欺诈类的查准/查全，不被 99.9% 合法样本稀释，才反映真正抓没抓到欺诈。",
+      "ROC-AUC 在极度不平衡下会被大量真阴性撑得虚高（FPR 分母极大），比 PR-AUC 更容易误导。",
+      "调阈值改变的是 precision/recall 的取舍，救不了 accuracy 这个被多数类主导的指标本身。"
+    ],
+    "optionExplanations_en": [
+      "Pushing accuracy up just biases the model further toward 'always legit', missing more fraud — it isn't measuring what we care about.",
+      "Correct — PR-AUC only scores the fraud class's precision/recall and isn't diluted by the 99.9% legit samples, so it reflects whether fraud is actually caught.",
+      "Under extreme imbalance ROC-AUC is inflated by the huge true-negative count (giant FPR denominator), making it more misleading than PR-AUC.",
+      "Tuning the threshold shifts the precision/recall tradeoff but can't fix accuracy itself, which is dominated by the majority class."
+    ],
+    "termDefinitions": [
+      {
+        "term": "PR-AUC",
+        "fullName": "Precision-Recall Area Under the Curve",
+        "meaning": "precision-recall 曲线下的面积，只衡量正类（欺诈）的查准/查全，适合极度不平衡数据。",
+        "meaningEn": "PR-AUC (Precision-Recall Area Under the Curve) summarizes precision vs recall on the positive class, ideal for extreme imbalance."
+      },
+      {
+        "term": "ROC-AUC",
+        "fullName": "Receiver Operating Characteristic Area Under the Curve",
+        "meaning": "TPR-FPR 曲线下面积；在欺诈这种极度不平衡下会被海量真阴性撑得虚高。",
+        "meaningEn": "ROC-AUC (Receiver Operating Characteristic AUC) is the TPR-vs-FPR area, inflated by the true-negative flood under extreme imbalance."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-002",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "asymmetric-cost",
+    "scenario": "漏抓一笔欺诈（false negative）平均损失约 $500（拒付、调查、监管罚），错拦一笔合法交易（false positive）只损失约 $2–5（流失、摩擦）。",
+    "scenario_en": "A missed fraud (false negative) costs ~$500 (chargebacks, investigation, regulatory), while a blocked legit txn (false positive) costs ~$2–5 (lost revenue, friction).",
+    "q": "这个 50x–100x 的成本比，对阈值选择意味着什么？",
+    "q_en": "What does this 50x–100x cost ratio imply for threshold selection?",
+    "why": "成本比 = C_fn / C_fp ≈ $500 / $2–5 ≈ 50–100 倍，不是公式推导而是业务给定的量级。它是阈值决策的输入：因为漏抓贵得多，最优阈值要压低、偏向高 recall，目标是最小化总成本而非 F1 最大。",
+    "why_en": "The cost ratio C_fn/C_fp ≈ $500/$2–5 ≈ 50–100x is a business-given magnitude that drives the threshold: since misses cost far more, the optimum shifts to lower thresholds and higher recall, minimizing total cost rather than F1.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "asymmetric-cost"
+    ],
+    "options": [
+      "两类错误成本差不多，选 F1 最大的阈值即可，无需单独建成本模型",
+      "false positive 更贵，应把阈值调高、宁可放过也别打扰用户",
+      "漏抓贵 50–100 倍，最优阈值该压低、偏向高 recall，目标是最小化总成本而非 F1 最大",
+      "成本比只影响事后报表，不该进阈值决策，阈值永远固定在 0.5"
+    ],
+    "options_en": [
+      "Both error costs are similar, so just pick the F1-maximizing threshold with no separate cost model.",
+      "False positives are pricier, so raise the threshold and rather let fraud through than bother users.",
+      "Misses cost 50–100x more, so the optimum shifts to a lower threshold and higher recall, minimizing total cost rather than F1.",
+      "The cost ratio only affects after-the-fact reports and shouldn't enter threshold decisions, which stay fixed at 0.5."
+    ],
+    "answer": [
+      2
+    ],
+    "termDefinitions": [
+      {
+        "term": "false negative (FN)",
+        "fullName": "False Negative",
+        "meaning": "漏抓：把欺诈误判为合法，欺诈这里约 $500/笔。",
+        "meaningEn": "A false negative (FN) is fraud wrongly passed as legit, here ~$500 per case."
+      },
+      {
+        "term": "false positive (FP)",
+        "fullName": "False Positive",
+        "meaning": "错拦：把合法交易误判为欺诈，这里约 $2–5/笔。",
+        "meaningEn": "A false positive (FP) is a legit txn wrongly blocked as fraud, here ~$2–5 per case."
+      },
+      {
+        "term": "F1",
+        "meaning": "precision 与 recall 的调和平均，隐含假设两类错误成本相等——欺诈里并不成立。",
+        "meaningEn": "F1 is the harmonic mean of precision and recall, implicitly assuming equal error costs, which fails for fraud."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "threshold-selection",
+    "scenario": "欺诈系统里漏抓成本 C_fn≈$500、错拦成本 C_fp≈$3。团队想找一个「最优」判定阈值。",
+    "scenario_en": "In a fraud system a miss costs C_fn≈$500 and a false block costs C_fp≈$3; the team wants the 'optimal' decision threshold.",
+    "q": "该按什么目标选阈值？",
+    "q_en": "What objective should pick the threshold?",
+    "why": "阈值是业务决策：最小化总成本 = FN×C_fn + FP×C_fp，把两类错误各自的美元代价算进去。选 F1 最大等于假设两类等价，会在 100x 成本差下严重偏保守、多漏抓。",
+    "why_en": "Threshold selection is a business decision: minimize total cost = FN×C_fn + FP×C_fp, pricing each error in dollars, whereas F1-max assumes equal costs and lets too much fraud through under a 100x gap.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "threshold-selection"
+    ],
+    "tradeoff": "最小化美元总成本(贴合业务) vs F1 最大(假设两类等价、在 100x 差下偏保守)",
+    "whenOtherWins": "当两类错误代价确实接近（如内容推荐里点错/漏推差别不大），F1 或 balanced accuracy 才是合理目标。",
+    "options": [
+      "最小化总成本 = FN×C_fn + FP×C_fp，把两类错误各自的美元代价都算进去",
+      "选 F1 分数最高的阈值，它平衡了 precision 和 recall，是通用最优解",
+      "选让 precision 达到 95% 的阈值，precision 越高说明拦得越准越好",
+      "选让 accuracy 最高的阈值，整体判对率最大就是最优"
+    ],
+    "options_en": [
+      "Minimize total cost = FN×C_fn + FP×C_fp, pricing each error type in its own dollars.",
+      "Pick the F1-maximizing threshold; it balances precision and recall and is the universal optimum.",
+      "Pick the threshold giving 95% precision, since higher precision means more accurate blocks.",
+      "Pick the accuracy-maximizing threshold, since the highest overall hit rate is optimal."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；把 FN、FP 各乘以真实美元成本再相加求最小，才让 100x 的非对称成本真正进入阈值决策。",
+      "F1 隐含两类错误等价，在漏抓贵 100 倍时会选出偏保守的阈值，放过大量高价欺诈。",
+      "一味追 precision 会牺牲 recall、漏抓更多 $500 的欺诈，把最贵的错误做多了。",
+      "accuracy 被 99.9% 合法样本主导，几乎不随阈值变，用它选阈值等于没选。"
+    ],
+    "optionExplanations_en": [
+      "Correct — summing FN and FP times their real dollar costs and minimizing is the only way the 100x asymmetry actually enters the threshold decision.",
+      "F1 assumes equal error costs, so when misses cost 100x more it picks a conservative threshold that lets expensive fraud through.",
+      "Chasing precision alone sacrifices recall and misses more $500 fraud, maximizing the most expensive error.",
+      "Accuracy is dominated by the 99.9% legit samples and barely moves with the threshold, so choosing by it is choosing nothing."
+    ],
+    "termDefinitions": [
+      {
+        "term": "total cost",
+        "meaning": "总成本 = FN×C_fn + FP×C_fp，把两类错误各自的美元代价加总，是选阈值的目标函数。",
+        "meaningEn": "Total cost = FN×C_fn + FP×C_fp sums each error type's dollar cost and is the objective for choosing a threshold."
+      },
+      {
+        "term": "C_fn / C_fp",
+        "meaning": "分别是一次漏抓、一次错拦的单位成本，欺诈里约 $500 vs $3。",
+        "meaningEn": "C_fn and C_fp are the unit costs of one miss and one false block, roughly $500 vs $3 in fraud."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "tiered-thresholds",
+    "scenario": "Stripe/PayPal 类支付风控：模型给每笔交易一个 0–1 欺诈概率，想在「防欺诈」「用户摩擦」「审核员产能」间取平衡。",
+    "scenario_en": "Stripe/PayPal-style risk: the model gives each txn a 0–1 fraud probability, balancing fraud prevention, user friction, and analyst capacity.",
+    "q": "用一个还是三个阈值来把概率变成动作？",
+    "q_en": "One threshold or three to turn probability into an action?",
+    "why": "用低、高两个界把概率分三段：低于低界自动放行、高于高界自动拦截、中间不确定的送人工复核。在模型最没把握的中段插入人工判断，比单阈值一刀切更省成本。",
+    "why_en": "Two cutoffs split the score into three bands — auto-approve below low, auto-block above high, manual review in the uncertain middle — inserting human judgment exactly where the model is least confident.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "tiered-thresholds"
+    ],
+    "tradeoff": "三段分层(在低置信中段加人工、更省成本) vs 单阈值(简单但一刀切、边界样本非错拦即漏抓)",
+    "whenOtherWins": "当没有人工审核产能、或延迟预算极紧必须全自动实时决策时，单阈值更简单可行。",
+    "options": [
+      "单阈值，概率过 0.5 就拦、不过就放，简单直接、无需人工",
+      "单阈值但设很高（0.9），只拦最确定的，其余全放以免打扰用户",
+      "三段分层：低界下自动放行、高界上自动拦截、中间不确定段送人工复核",
+      "五段以上细分，每 0.2 一档配不同动作，越细越精确"
+    ],
+    "options_en": [
+      "A single threshold: block if probability > 0.5 else pass — simple and no humans needed.",
+      "A single but high threshold (0.9): block only the surest cases and pass the rest to avoid bothering users.",
+      "Three bands: auto-approve below a low cutoff, auto-block above a high cutoff, send the uncertain middle to manual review.",
+      "Five-plus fine bands, a different action every 0.2, since finer is more precise."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "单阈值把边界上模棱两可的样本强行二选一，不是错拦就是漏抓，浪费了「不确定」这个信息。",
+      "只拦 0.9 以上会放过大量中高风险欺诈，在 100x 成本差下总成本很高。",
+      "对；三段把最没把握的中段交给人工，模型只在有把握处自动决策，人工标注还能回流训练。",
+      "分太多段既超出人工产能、也让每档阈值难以维护和动态调整，收益递减。"
+    ],
+    "optionExplanations_en": [
+      "A single threshold forces ambiguous borderline cases into a binary call — either a false block or a miss — wasting the 'uncertain' signal.",
+      "Blocking only above 0.9 lets lots of mid-to-high-risk fraud through, giving high total cost under the 100x gap.",
+      "Correct — three bands hand the least-confident middle to humans while the model auto-decides only where it's confident, and analyst labels feed retraining.",
+      "Too many bands exceed analyst capacity and make each threshold hard to maintain and tune, with diminishing returns."
+    ],
+    "termDefinitions": [
+      {
+        "term": "tiered thresholds / 分层阈值",
+        "meaning": "用两个界把概率分成自动放行、人工复核、自动拦截三段，各段配不同动作。",
+        "meaningEn": "Tiered thresholds use two cutoffs to split scores into auto-approve, manual-review, and auto-block bands, each with its own action."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-005",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "cost-tradeoff",
+    "scenario": "同一模型三种阈值的月成本估算：高精度(0.9)≈$200,096；平衡(0.5)≈$75,639；高召回(0.1)≈$14,410（成本 = FN×$500 + FP×$3）。",
+    "scenario_en": "Same model, three thresholds, monthly cost: high-precision(0.9)≈$200,096; balanced(0.5)≈$75,639; high-recall(0.1)≈$14,410 (cost = FN×$500 + FP×$3).",
+    "q": "为什么 precision 最低的高召回阈值反而总成本最低？",
+    "q_en": "Why does the low-precision high-recall threshold give the lowest total cost?",
+    "why": "总成本 = FN×$500 + FP×$3，漏抓贵 100 倍。高召回虽多错拦（FP 从几十涨到 1,470），但每笔只 $3；换来漏抓从 400 降到 20，省下的 $500×380 远超多花的 FP 成本。这正是非对称成本的直接结果。",
+    "why_en": "Total cost = FN×$500 + FP×$3, and misses cost 100x more; high-recall adds cheap false blocks ($3 each, FP up to 1,470) but slashes misses from 400 to 20, and 380 saved misses at $500 dwarfs the extra FP cost.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "cost-tradeoff"
+    ],
+    "options": [
+      "因为高召回阈值的 precision 其实也最高，只是表格标错了",
+      "因为漏抓贵 100 倍，多花的廉价 FP 成本远小于省下的昂贵 FN 成本，非对称成本的直接结果",
+      "因为阈值调低后模型会自动变准，FN 和 FP 会同时下降",
+      "因为高召回意味着拦得少，用户摩擦最小所以最省钱"
+    ],
+    "options_en": [
+      "Because the high-recall threshold actually has the highest precision too; the table is just mislabeled.",
+      "Because misses cost 100x more, so the extra cheap FP cost is far below the expensive FN cost saved — a direct result of asymmetric costs.",
+      "Because lowering the threshold makes the model itself more accurate, dropping FN and FP together.",
+      "Because high recall means blocking fewer txns, minimizing user friction and thus saving the most."
+    ],
+    "answer": [
+      1
+    ],
+    "termDefinitions": [
+      {
+        "term": "high-recall threshold / 高召回阈值",
+        "meaning": "把判定阈值压很低（如 0.1），尽量抓全欺诈，代价是错拦更多合法交易。",
+        "meaningEn": "A high-recall threshold sets the cutoff very low (e.g. 0.1) to catch most fraud, at the cost of more false blocks."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "pr-auc-vs-roc-auc",
+    "scenario": "欺诈率 0.1%，要选一个汇总指标向面试官汇报模型质量、并做模型间比较。",
+    "scenario_en": "Fraud is 0.1%; you must pick a summary metric to report model quality and compare models.",
+    "q": "极度不平衡下，PR-AUC 和 ROC-AUC 哪个更该做汇总指标？",
+    "q_en": "Under extreme imbalance, PR-AUC or ROC-AUC as the summary metric?",
+    "why": "ROC-AUC 的 FPR = FP/(FP+TN)，TN 有百万级，FP 涨几百也几乎不动 FPR，指标虚高。PR-AUC 的 precision = TP/(TP+FP) 直接暴露误报，随欺诈类表现真实变化，所以是欺诈首选汇总指标。",
+    "why_en": "ROC-AUC's FPR = FP/(FP+TN) barely moves because TN is in the millions, so it looks inflated; PR-AUC's precision = TP/(TP+FP) exposes false alarms and tracks the fraud class honestly, making it the preferred summary.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "metrics"
+    ],
+    "tradeoff": "PR-AUC(precision 暴露误报、随欺诈类真实变化) vs ROC-AUC(FPR 被百万 TN 稀释、虚高)",
+    "table": {
+      "headers": [
+        "指标",
+        "不平衡下行为",
+        "适用"
+      ],
+      "rows": [
+        [
+          "PR-AUC",
+          "随欺诈类真实变化",
+          "极度不平衡首选"
+        ],
+        [
+          "ROC-AUC",
+          "被海量 TN 撑高",
+          "类别较均衡时可用"
+        ]
+      ]
+    },
+    "options": [
+      "ROC-AUC，因为它的取值范围固定在 0.5–1，更好跨模型比较",
+      "PR-AUC，precision=TP/(TP+FP) 直接暴露误报，不被百万真阴性稀释，随欺诈类真实变化",
+      "两者等价，极度不平衡下给出的数值和结论完全一致",
+      "都不看，直接用 accuracy 汇报最直观"
+    ],
+    "options_en": [
+      "ROC-AUC, because its range is fixed at 0.5–1 and easier to compare across models.",
+      "PR-AUC, since precision=TP/(TP+FP) exposes false alarms and isn't diluted by the million true negatives, tracking the fraud class honestly.",
+      "They're equivalent and give identical numbers and conclusions under extreme imbalance.",
+      "Neither; just report accuracy as the most intuitive number."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "取值范围不是重点；ROC-AUC 的问题是 FPR 分母含百万 TN，误报涨了也看不出来，虚高误导。",
+      "对；precision 的分母是 TP+FP，误报一涨就掉，PR-AUC 因此忠实反映欺诈类表现，是首选。",
+      "两者在极度不平衡下会严重背离：ROC-AUC 常虚高到 0.95 而 PR-AUC 只有 0.6，结论相反。",
+      "accuracy 被 99.9% 合法样本主导，全判合法就 99.9%，是这里最不该用的指标。"
+    ],
+    "optionExplanations_en": [
+      "Range isn't the point; ROC-AUC's flaw is that FPR's denominator holds a million TN, so rising false alarms stay invisible and it inflates.",
+      "Correct — precision's denominator is TP+FP, so it drops as false alarms rise, making PR-AUC a faithful, preferred summary of the fraud class.",
+      "The two diverge sharply under extreme imbalance: ROC-AUC may read 0.95 while PR-AUC is 0.6, giving opposite conclusions.",
+      "Accuracy is dominated by the 99.9% legit samples — 'always legit' scores 99.9% — the worst metric to use here."
+    ],
+    "termDefinitions": [
+      {
+        "term": "FPR",
+        "fullName": "False Positive Rate",
+        "meaning": "FP/(FP+TN)，误报占所有真实合法的比例；TN 极大时对 FP 变化不敏感。",
+        "meaningEn": "FPR (False Positive Rate) = FP/(FP+TN); with huge TN it's insensitive to changes in FP."
+      },
+      {
+        "term": "TN",
+        "fullName": "True Negative",
+        "meaning": "真阴性：被正确判为合法的交易，欺诈场景里数量以百万计。",
+        "meaningEn": "TN (True Negative) is a legit txn correctly passed, numbering in the millions for fraud."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "adversarial-drift",
+    "scenario": "上线欺诈模型几周后，同样的特征分布下，欺诈却开始绕过检测。",
+    "scenario_en": "Weeks after deploying a fraud model, fraud starts slipping past detection even under similar feature distributions.",
+    "q": "什么叫「对抗性概念漂移」，它和普通漂移的本质区别是什么？",
+    "q_en": "What is 'adversarial concept drift' and how does it differ from ordinary drift?",
+    "why": "对抗性概念漂移 = 变化是有意针对模型的：欺诈者研究并规避你的模型，改变特征与欺诈的映射关系。普通（被动）漂移只是环境自然变，如季节性；对抗漂移是有对手主动破坏，所以评估是移动靶。",
+    "why_en": "Adversarial concept drift means the change is intentional and targeted — fraudsters study and evade your model, shifting the feature-to-fraud mapping — unlike passive drift (e.g. seasonal), so evaluation is a moving target.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "concept-drift"
+    ],
+    "options": [
+      "变化是有意针对模型的：欺诈者研究并规避模型，主动改变特征与欺诈的关系；普通漂移只是被动的环境变化",
+      "指数据量随时间增长导致的分布变化，和是否有对手无关",
+      "指标注错误累积造成的标签漂移，属于数据质量问题",
+      "指模型参数在训练中自然更新，与欺诈者行为无关"
+    ],
+    "options_en": [
+      "The change is intentional and targeted: fraudsters study and evade the model, actively shifting the feature-fraud relationship; ordinary drift is just passive environmental change.",
+      "It's distribution change from growing data volume over time, unrelated to any adversary.",
+      "It's label drift from accumulated annotation errors, a data-quality issue.",
+      "It's the model's parameters naturally updating during training, unrelated to fraudster behavior."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；关键是「有意针对」——对手主动逆向你的拒绝规则并适配，让特征↔欺诈的映射被人为改写。",
+      "数据量增长是被动漂移的一种，缺了「对手主动对抗」这一核心，不是对抗性漂移。",
+      "标签漂移是数据质量问题，和欺诈者有意规避模型是两回事。",
+      "参数训练更新是模型内部行为，对抗漂移讲的是外部对手改变了输入分布与标签关系。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the key is 'intentional targeting': the adversary reverse-engineers your rejection rules and adapts, artificially rewriting the feature-to-fraud mapping.",
+      "Growing data volume is a form of passive drift; it lacks the core 'active adversary', so it isn't adversarial drift.",
+      "Label drift is a data-quality issue, separate from fraudsters deliberately evading the model.",
+      "Parameter updates during training are internal model behavior; adversarial drift is an external adversary changing the input-label relationship."
+    ],
+    "termDefinitions": [
+      {
+        "term": "adversarial concept drift / 对抗性概念漂移",
+        "meaning": "特征与标签的关系因对手有意规避而改变，区别于季节性等被动漂移。",
+        "meaningEn": "Adversarial concept drift is a change in the feature-label relationship caused by an adversary deliberately evading the model, unlike passive seasonal drift."
+      },
+      {
+        "term": "concept drift / 概念漂移",
+        "meaning": "输入特征与目标标签之间的映射关系随时间变化，使旧模型失准。",
+        "meaningEn": "Concept drift is when the mapping from input features to the target label changes over time, degrading an old model."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-008",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "adaptation-tactics",
+    "scenario": "欺诈模型上线后，欺诈者观察到自己被拒的模式并开始适配。",
+    "scenario_en": "After the fraud model ships, fraudsters observe their rejection patterns and begin adapting.",
+    "q": "以下哪些是欺诈者对抗模型的真实适配手段？(多选)",
+    "q_en": "Which are real ways fraudsters adapt against the model? (multiple)",
+    "why": "对抗适配都是针对模型学到的特征做规避：伪造设备指纹绕过新设备标记、放慢并加大交易额躲开速度检测、提前数月养合成身份。它们共同改变了特征↔欺诈的关系，导致 recall 悄悄下滑。",
+    "why_en": "Adaptations all evade the features the model learned — spoofing device fingerprints, slowing and enlarging txns to dodge velocity checks, and aging synthetic identities for months — all shifting the feature-to-fraud mapping and silently degrading recall.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "adaptation-tactics"
+    ],
+    "options": [
+      "设备指纹伪造：用工具模仿受信任设备签名，绕过「新设备」标记",
+      "速度模式转移：从快速小额多笔改成更长窗口内少量大额交易",
+      "合成身份构建：提前数月养出看似正常的假身份再发起攻击",
+      "把模型的 GPU 训练集群偷偷降频，让它训得更慢"
+    ],
+    "options_en": [
+      "Device-fingerprint evasion: tools mimic trusted device signatures to bypass 'new device' flagging.",
+      "Velocity-pattern shifting: switch from rapid small txns to fewer larger txns over a longer window.",
+      "Synthetic-identity construction: age fake-but-normal-looking identities for months before attacking.",
+      "Secretly underclock the model's GPU training cluster so it trains slower."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；一旦模型学会标记新设备，伪造指纹就让欺诈交易看起来来自受信任老设备。",
+      "对；速度检测靠短窗口高频信号，拉长窗口、降低频次就能钻过阈值。",
+      "对；合成身份先积累正常历史，绕过「账户太新」类信号，是慢速有预谋的对抗。",
+      "错；这是攻击基础设施的臆想，不是通过改变交易特征来规避模型的对抗漂移手段。"
+    ],
+    "optionExplanations_en": [
+      "Correct — once the model flags new devices, spoofed fingerprints make fraud look like it comes from trusted old devices.",
+      "Correct — velocity checks rely on short-window high-frequency signals, so lengthening the window and lowering frequency slips under the threshold.",
+      "Correct — synthetic identities build normal history first to dodge 'account too new' signals, a slow premeditated adaptation.",
+      "Wrong — that's a fantasy attack on infrastructure, not an adversarial-drift tactic of changing txn features to evade the model."
+    ],
+    "termDefinitions": [
+      {
+        "term": "device fingerprint / 设备指纹",
+        "meaning": "由设备硬件、浏览器、网络等特征拼出的近似唯一标识，用于识别可信/可疑设备。",
+        "meaningEn": "A device fingerprint is a near-unique identifier built from hardware, browser, and network signals to spot trusted vs suspicious devices."
+      },
+      {
+        "term": "synthetic identity / 合成身份",
+        "meaning": "拼凑真假信息养出的假身份，先积累正常历史再实施欺诈。",
+        "meaningEn": "A synthetic identity is a fabricated identity built from mixed real/fake data, aged with normal history before committing fraud."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-009",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "adversarial-feedback-loop",
+    "q": "把「对抗反馈回路」排成导致 recall 衰退、触发重训的正确顺序：",
+    "q_en": "Order the adversarial feedback loop that degrades recall and triggers retraining:",
+    "scenario": "一个已上线的欺诈模型正在被欺诈者持续对抗。",
+    "scenario_en": "A deployed fraud model is under continuous adversarial pressure.",
+    "steps": [
+      "模型上线，欺诈交易被拦、欺诈率短期下降",
+      "欺诈者逆向出被拒模式，适配出新绕过手法",
+      "新手法让漏抓增多，recall 悄悄衰退",
+      "漂移检测触发，进入重训流水线"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "闭环是：上线压住欺诈→对手逆向并适配→新手法让 recall 下滑→漂移检测触发重训。关键洞察是模型一上线就开始「变旧」，货架期是几周不是几月，所以监控与重训必须是常态。",
+    "why_en": "The loop runs deploy suppresses fraud, adversary reverse-engineers and adapts, new tactics erode recall, drift detection triggers retraining; the model starts aging the moment it ships, so monitoring and retraining must be continuous.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "feedback-loop"
+    ],
+    "diagram": "flowchart LR\n  A[\"模型上线<br/>欺诈率下降\"] --> B[\"欺诈者逆向<br/>拒绝模式\"]\n  B --> C[\"适配新手法<br/>recall 衰退\"]\n  C --> D[\"漂移检测触发<br/>重训\"]\n  D --> A",
+    "termDefinitions": [
+      {
+        "term": "recall / 召回率",
+        "meaning": "抓到的欺诈占所有真实欺诈的比例，对抗适配会让它在特征不变的表象下悄悄下滑。",
+        "meaningEn": "Recall is the fraction of all true fraud that is caught; adversarial adaptation erodes it even when feature distributions look unchanged."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-010",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "gradual-vs-sudden-drift",
+    "scenario": "两种漂移：一种是欺诈战术在数周内缓慢演化；另一种是某晚数据泄露把数百万张卡一次性倾泻进来。",
+    "scenario_en": "Two drifts: tactics evolving slowly over weeks, versus a breach overnight dumping millions of cards at once.",
+    "q": "gradual drift 与 sudden drift 的关键区别与应对差异是什么？",
+    "q_en": "How do gradual and sudden drift differ and call for different responses?",
+    "why": "gradual drift 是战术数周渐变，靠分布指标（如 PSI）在几天内累积察觉、定期重训跟上；sudden drift 是一夜新向量（泄露倾泻），需要能秒级/小时级捕捉突变点的行为监控与快速回滚，慢周期重训来不及。",
+    "why_en": "Gradual drift evolves over weeks and is caught by accumulating distribution metrics with periodic retraining; sudden drift is an overnight new vector (a breach dump) needing change-point behavior monitoring and fast rollback, since slow retraining can't keep up.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "concept-drift"
+    ],
+    "tradeoff": "gradual(数周渐变、分布监控+定期重训) vs sudden(一夜突变、行为突变点检测+快速回滚)",
+    "table": {
+      "headers": [
+        "类型",
+        "时间尺度",
+        "典型信号",
+        "应对"
+      ],
+      "rows": [
+        [
+          "gradual",
+          "数周",
+          "分布缓慢偏移",
+          "定期重训"
+        ],
+        [
+          "sudden",
+          "一夜",
+          "行为量突跳",
+          "突变点检测+回滚"
+        ]
+      ]
+    },
+    "options": [
+      "两者只是程度差别，用同一套定期重训按月跟上即可",
+      "gradual 数周渐变靠分布监控+定期重训；sudden 一夜突变需行为突变点检测+快速回滚",
+      "gradual 更危险因为它更快，sudden 因为慢所以可以忽略",
+      "gradual 指特征漂移、sudden 指标签漂移，二者互不相关"
+    ],
+    "options_en": [
+      "They differ only in degree; one monthly retraining schedule handles both.",
+      "Gradual evolves over weeks and needs distribution monitoring plus periodic retraining; sudden is overnight and needs change-point behavior detection plus fast rollback.",
+      "Gradual is more dangerous because it's faster; sudden is slow so it can be ignored.",
+      "Gradual means feature drift and sudden means label drift; the two are unrelated."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "月度重训跟不上一夜倾泻的突变，把两种漂移当一回事会在 sudden 场景大量漏抓。",
+      "对；时间尺度决定手段——渐变用分布累积信号+定期重训，突变要秒级行为监控+回滚。",
+      "说反了：sudden 是一夜突变、更快更急，gradual 才是慢速演化，两者都不能忽略。",
+      "两者都可能表现为概念漂移（特征↔欺诈关系变），不是简单的特征漂移 vs 标签漂移。"
+    ],
+    "optionExplanations_en": [
+      "Monthly retraining can't keep up with an overnight dump; treating both the same misses lots of fraud in the sudden case.",
+      "Correct — time scale dictates the tool: gradual uses accumulating distribution signals plus periodic retraining, sudden needs second-level behavior monitoring plus rollback.",
+      "Backwards: sudden is the overnight, faster, more urgent one; gradual is the slow evolution, and neither can be ignored.",
+      "Both can show up as concept drift (feature-to-fraud relation changing), not a simple feature-vs-label drift split."
+    ],
+    "termDefinitions": [
+      {
+        "term": "gradual drift / 渐变漂移",
+        "meaning": "战术在数周内缓慢演化，靠分布指标累积察觉。",
+        "meaningEn": "Gradual drift is tactics evolving slowly over weeks, detected by accumulating distribution metrics."
+      },
+      {
+        "term": "sudden drift / 突变漂移",
+        "meaning": "一夜出现的新攻击向量（如泄露倾泻），需突变点检测快速响应。",
+        "meaningEn": "Sudden drift is a new attack vector appearing overnight (e.g. a breach dump), needing change-point detection for fast response."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-011",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "catastrophic-forgetting",
+    "scenario": "只用最近数据重训欺诈模型，几个月后一批旧的欺诈模式卷土重来，模型却认不出了。",
+    "scenario_en": "Retraining a fraud model only on recent data, an old fraud pattern returns months later and the model no longer recognizes it.",
+    "q": "这是什么问题，怎么缓解？",
+    "q_en": "What is this problem and how do you mitigate it?",
+    "why": "灾难性遗忘：只用近期数据重训会覆盖掉旧模式的判别能力，等旧手法回归就漏抓。缓解靠 reservoir sampling——用固定大小缓冲区保留历史欺诈样本，每个重训批次都混入旧+新，让模型不忘老模式。",
+    "why_en": "Catastrophic forgetting: retraining only on recent data overwrites the ability to detect old patterns, so returning tactics slip through; mitigate with a reservoir-sampling buffer that keeps historical fraud examples so each batch mixes old and new.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "catastrophic-forgetting"
+    ],
+    "tradeoff": "混入历史样本(记住旧模式但训练成本升、近期信号被稀释) vs 只用近期数据(适配快但会遗忘)",
+    "options": [
+      "过拟合；加 L2 正则和 dropout 即可解决",
+      "灾难性遗忘；用 reservoir sampling 固定缓冲区保留历史欺诈样本，每批混入旧+新",
+      "标签泄漏；把旧数据从训练集彻底删掉就能避免",
+      "冷启动；等数据量足够大后问题自然消失"
+    ],
+    "options_en": [
+      "Overfitting; add L2 regularization and dropout to fix it.",
+      "Catastrophic forgetting; use a reservoir-sampling buffer to keep historical fraud examples so each batch mixes old and new.",
+      "Label leakage; permanently drop the old data from training to avoid it.",
+      "Cold start; the problem disappears once the dataset is large enough."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "过拟合是记太牢训练集；这里是相反的「忘掉旧知识」，正则化不解决遗忘。",
+      "对；固定缓冲区按 reservoir sampling 保留历史样本，每次重训都复习旧模式，旧手法回归也认得出。",
+      "删旧数据恰恰加剧遗忘——正是因为训练里没有旧模式才会认不出它回归。",
+      "冷启动是没数据可训，和「有数据但重训忘了旧模式」是两码事。"
+    ],
+    "optionExplanations_en": [
+      "Overfitting is memorizing the training set too hard; this is the opposite — forgetting old knowledge — which regularization doesn't fix.",
+      "Correct — a fixed reservoir-sampling buffer keeps historical examples so each retraining revisits old patterns and recognizes returning tactics.",
+      "Dropping old data makes forgetting worse — it's precisely the absence of old patterns in training that makes returns unrecognizable.",
+      "Cold start is having no data to train on, unlike having data but forgetting old patterns on retraining."
+    ],
+    "termDefinitions": [
+      {
+        "term": "catastrophic forgetting / 灾难性遗忘",
+        "meaning": "只用新数据重训使模型丢失对旧模式的判别力，旧模式回归时漏抓。",
+        "meaningEn": "Catastrophic forgetting is when retraining on new data alone loses the ability to detect old patterns, missing them when they return."
+      },
+      {
+        "term": "reservoir sampling / 蓄水池采样",
+        "meaning": "固定大小缓冲区随机保留历史样本，让每个重训批次都混入旧+新数据。",
+        "meaningEn": "Reservoir sampling keeps a fixed-size buffer of randomly retained historical examples so each retraining batch mixes old and new."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "drift-diagnosis",
+    "scenario": "一个季度里模型的 precision 稳定在 85% 没掉，但欺诈损失金额却翻了一倍。",
+    "scenario_en": "Over a quarter the model's precision holds steady at 85%, yet fraud losses have doubled.",
+    "q": "最可能的原因是什么？",
+    "q_en": "What's the most likely cause?",
+    "why": "precision 稳定说明拦下来的确实多是欺诈（误报没变多），但损失翻倍说明漏抓多了——是 recall 在掉。对抗性概念漂移引入了模型没学过的新模式，它们绕过检测，precision 看不出来。",
+    "why_en": "Steady precision means the blocks are still mostly real fraud (false alarms unchanged), but doubled losses mean more misses — recall is falling — as adversarial drift introduces new patterns that evade detection invisibly to precision.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "drift-diagnosis"
+    ],
+    "tradeoff": "recall 衰退(漏抓上升、precision 看不见) vs precision 恶化(误报上升、损失不会因此翻倍)",
+    "whenOtherWins": "若同时观察到误报激增、用户投诉暴涨，那才该怀疑 precision 端出问题（如阈值或特征异常）。",
+    "options": [
+      "precision 恶化导致误报暴增，所以损失上升",
+      "整体交易量翻倍，欺诈绝对数自然翻倍，模型没问题",
+      "recall 因对抗性概念漂移衰退：新欺诈模式绕过检测，漏抓上升而 precision 看不见",
+      "阈值被调得太高，把欺诈都放过了，与漂移无关"
+    ],
+    "options_en": [
+      "Precision worsened, so false alarms spiked and losses rose.",
+      "Total txn volume doubled, so absolute fraud doubled too; the model is fine.",
+      "Recall degraded from adversarial concept drift: new fraud patterns evade detection, so misses rise while precision stays blind to it.",
+      "The threshold was set too high, letting all fraud through, unrelated to drift."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "precision 稳定恰恰说明误报没变多；precision 恶化会让拦截更不准，但不会解释漏抓造成的损失翻倍。",
+      "题目没给交易量翻倍的信息，且即便如此也应反映在其他指标上，不能默认模型无恙。",
+      "对；损失=漏抓×单笔成本，precision 不变而损失翻倍，唯一解释是 recall 掉了，典型对抗漂移。",
+      "阈值调高会让 precision 上升、recall 下降，但也不至于让 precision 恰好稳定在 85%，漂移更贴合。"
+    ],
+    "optionExplanations_en": [
+      "Steady precision means false alarms didn't rise; worse precision degrades block accuracy but won't explain miss-driven doubled losses.",
+      "The prompt gives no volume-doubling info, and even so it would show in other metrics — you can't assume the model is fine.",
+      "Correct — losses = misses × unit cost, so steady precision with doubled losses can only mean falling recall, the classic adversarial-drift signature.",
+      "Raising the threshold lifts precision and drops recall but wouldn't hold precision exactly at 85%; drift fits better."
+    ],
+    "termDefinitions": [
+      {
+        "term": "precision / 查准率",
+        "meaning": "被判为欺诈里真是欺诈的比例；只反映误报，看不见漏抓。",
+        "meaningEn": "Precision is the fraction of flagged txns that are truly fraud; it reflects false alarms only and is blind to misses."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-013",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "label-delay",
+    "scenario": "欺诈的真实标签要等拒付确认、调查结案才能拿到，往往滞后数十天。",
+    "scenario_en": "True fraud labels arrive only after chargebacks confirm and investigations close, often lagging tens of days.",
+    "q": "「标签延迟问题」核心是什么，它卡住了什么？",
+    "q_en": "What is the 'label-delay problem' at its core, and what does it block?",
+    "why": "标签延迟 = 交易发生到拿到可信欺诈标签之间有几十天空窗。核心约束是：没有标签就没法监督式重训，而对抗漂移几周就见效，等标签齐了模型已经旧了。持续学习正是为绕开这个空窗设计。",
+    "why_en": "Label delay is the weeks-long gap between a txn and its trustworthy fraud label; you can't do supervised retraining without labels, yet adversarial drift acts in weeks, so continual-learning strategies exist to bridge that window.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "label-delay"
+    ],
+    "options": [
+      "交易到拿到可信标签有数十天空窗，没标签就无法监督重训，而漂移几周就见效",
+      "标签本身是错的，需要重新标注全部历史数据",
+      "标签太多存不下，需要压缩存储",
+      "标签实时可得，问题只是模型训练太慢"
+    ],
+    "options_en": [
+      "There's a weeks-long gap from txn to trustworthy label, so you can't do supervised retraining, yet drift acts within weeks.",
+      "The labels themselves are wrong and all history must be relabeled.",
+      "There are too many labels to store and they need compression.",
+      "Labels are available in real time; the problem is just slow model training."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；空窗期没有可信标签，监督重训无米下锅，而对手几周就适配完，这才是持续学习要解决的问题。",
+      "标签是准的（拒付/结案确认），只是来得晚；不是标注错误问题。",
+      "存储不是瓶颈；瓶颈是标签「什么时候到」而不是「放哪里」。",
+      "标签恰恰不是实时的，正是延迟数十天才逼出 pseudo-label 等补偿手段。"
+    ],
+    "optionExplanations_en": [
+      "Correct — during the gap there are no trustworthy labels so supervised retraining has nothing to learn from, while the adversary adapts in weeks — exactly what continual learning addresses.",
+      "The labels are accurate (chargeback/close-confirmed), just late; it's not an annotation-error problem.",
+      "Storage isn't the bottleneck; the bottleneck is when labels arrive, not where they're stored.",
+      "Labels are precisely not real-time; the tens-of-days delay is what forces compensations like pseudo-labels."
+    ],
+    "termDefinitions": [
+      {
+        "term": "label delay / 标签延迟",
+        "meaning": "交易发生到拿到可信欺诈标签之间的时间空窗（拒付/调查滞后数十天）。",
+        "meaningEn": "Label delay is the gap between a txn and its trustworthy fraud label, lagging tens of days via chargebacks/investigations."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-014",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "continual-learning-strategies",
+    "scenario": "标签延迟数十天，你要在「准但慢」和「快但脏」之间为持续学习选信号来源。",
+    "scenario_en": "With labels delayed tens of days, you must choose a continual-learning signal between 'accurate but slow' and 'fast but noisy'.",
+    "q": "confirmed-label 重训 与 pseudo-label 增强 的核心取舍是什么？",
+    "q_en": "What's the core tradeoff between confirmed-label retraining and pseudo-label augmentation?",
+    "why": "confirmed-label 用已结案的可信标签（拒付确认、调查结案），准但滞后数十天；pseudo-label 拿高置信的人工复核队列预测当标签补充，信号快得多但带标签噪声。实践里两者互补：可信基线 + 快速补充。",
+    "why_en": "Confirmed-label retraining uses resolved trustworthy labels (accurate but tens of days stale); pseudo-label augmentation uses high-confidence review-queue predictions as extra labels (much faster signal but noisier), and in practice they complement each other.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "continual-learning"
+    ],
+    "tradeoff": "confirmed-label(可信但滞后) vs pseudo-label(快但有标签噪声)",
+    "table": {
+      "headers": [
+        "策略",
+        "准确度",
+        "时效",
+        "风险"
+      ],
+      "rows": [
+        [
+          "confirmed-label",
+          "高",
+          "滞后数十天",
+          "太旧"
+        ],
+        [
+          "pseudo-label",
+          "中",
+          "快",
+          "标签噪声"
+        ]
+      ]
+    },
+    "options": [
+      "两者都用实时可信标签，只是数据量不同",
+      "confirmed-label 准但滞后数十天；pseudo-label 用高置信复核预测补充，快但带标签噪声",
+      "confirmed-label 更快、pseudo-label 更准，应优先 pseudo-label",
+      "confirmed-label 是无监督、pseudo-label 是有监督，二者不能混用"
+    ],
+    "options_en": [
+      "Both use real-time trustworthy labels, differing only in volume.",
+      "Confirmed-label is accurate but lags tens of days; pseudo-label augments with high-confidence review predictions, faster but noisier.",
+      "Confirmed-label is faster and pseudo-label more accurate, so prefer pseudo-label.",
+      "Confirmed-label is unsupervised and pseudo-label supervised; the two can't be mixed."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "confirmed-label 恰恰不是实时的——它滞后数十天，这正是要引入 pseudo-label 的原因。",
+      "对；一个是准但旧的可信基线，一个是快但脏的补充信号，实践中互补使用。",
+      "说反了：confirmed-label 更准但慢，pseudo-label 更快但有噪声。",
+      "两者都是有监督（都提供标签），且实践中恰恰是混用的：可信基线 + 伪标签补充。"
+    ],
+    "optionExplanations_en": [
+      "Confirmed-label is precisely not real-time — it lags tens of days, which is why pseudo-labels are introduced.",
+      "Correct — one is an accurate-but-stale trustworthy baseline, the other a fast-but-noisy supplement, used together in practice.",
+      "Backwards: confirmed-label is more accurate but slow, pseudo-label faster but noisy.",
+      "Both are supervised (both supply labels), and in practice they're precisely mixed: trustworthy baseline plus pseudo-label supplement."
+    ],
+    "termDefinitions": [
+      {
+        "term": "confirmed-label retraining / 确认标签重训",
+        "meaning": "用已结案的可信标签（拒付确认、调查结案）定期重训，准但滞后。",
+        "meaningEn": "Confirmed-label retraining periodically retrains on resolved trustworthy labels (confirmed chargebacks, closed investigations) — accurate but stale."
+      },
+      {
+        "term": "pseudo-label augmentation / 伪标签增强",
+        "meaning": "拿高置信的人工复核队列预测当标签补充训练，信号快但有噪声。",
+        "meaningEn": "Pseudo-label augmentation supplements training with high-confidence review-queue predictions as labels — fast signal but noisy."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "reservoir-sampling",
+    "scenario": "重训后模型对当下攻击很强，但每隔几个月一批旧欺诈模式回归时就集体失手。",
+    "scenario_en": "After retraining the model is strong on current attacks but repeatedly misses a batch of old fraud patterns that returns every few months.",
+    "q": "该在训练数据侧加什么来稳住旧模式？",
+    "q_en": "What should you add on the training-data side to hold old patterns?",
+    "why": "加一个固定大小的 reservoir sampling 缓冲区，随机留存历史欺诈样本，让每个重训批次都混入旧+新。这样模型每次都「复习」老模式，抵消灾难性遗忘；代价是训练成本上升、近期信号被稀释。",
+    "why_en": "Add a fixed-size reservoir-sampling buffer that randomly retains historical fraud examples so every retraining batch mixes old and new, making the model revisit old patterns each time and offsetting catastrophic forgetting, at the cost of higher training cost and diluted recent signal.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "reservoir-sampling"
+    ],
+    "tradeoff": "固定历史缓冲区(记住旧模式) vs 全用近期数据(适配快但周期性遗忘)",
+    "whenOtherWins": "若欺诈模式确实一去不返、旧样本已无参考价值（业务彻底改版），只用近期数据反而更贴合当下分布。",
+    "options": [
+      "把 batch size 调大，让每次看到更多近期数据",
+      "提高学习率，让模型更快适应新样本",
+      "固定大小的 reservoir sampling 缓冲区，随机保留历史欺诈样本，每批混入旧+新",
+      "关闭正则化，让模型有更大容量记住所有模式"
+    ],
+    "options_en": [
+      "Increase the batch size so each step sees more recent data.",
+      "Raise the learning rate so the model adapts faster to new samples.",
+      "A fixed-size reservoir-sampling buffer that randomly retains historical fraud examples so each batch mixes old and new.",
+      "Turn off regularization so the model has more capacity to memorize all patterns."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "调大 batch 只是多看近期数据，历史模式仍不在训练集里，遗忘照旧。",
+      "提高学习率让模型更快忘旧、更贴新，反而加剧对旧模式的遗忘。",
+      "对；缓冲区确保每次重训都有旧样本参与，模型持续复习老模式，旧手法回归也认得。",
+      "关正则化不解决「训练集里没有旧模式」这个根因，还容易过拟合近期噪声。"
+    ],
+    "optionExplanations_en": [
+      "A bigger batch just sees more recent data; historical patterns still aren't in the training set, so forgetting persists.",
+      "A higher learning rate makes the model forget old and chase new faster, worsening old-pattern forgetting.",
+      "Correct — the buffer ensures old samples join every retraining, so the model keeps revisiting old patterns and recognizes returning tactics.",
+      "Turning off regularization doesn't fix the root cause (old patterns absent from training) and risks overfitting recent noise."
+    ],
+    "termDefinitions": [
+      {
+        "term": "reservoir sampling buffer / 蓄水池缓冲区",
+        "meaning": "固定大小、随机保留历史欺诈样本的缓冲区，让重训批次混入旧+新以防遗忘。",
+        "meaningEn": "A reservoir-sampling buffer is a fixed-size store of randomly retained historical fraud examples that mixes old and new into retraining to prevent forgetting."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "differential-privacy",
+    "scenario": "要在监管严格的司法辖区，用用户真实交易数据重训欺诈模型，法务担心训练会泄露个人交易信息。",
+    "scenario_en": "In a strict-regulation jurisdiction you must retrain on real user transaction data, and legal worries training could leak individual transaction info.",
+    "q": "怎样在保留可训练性的同时降低隐私泄露风险？",
+    "q_en": "How do you cut privacy-leak risk while keeping the data trainable?",
+    "why": "用 differential privacy：在梯度上加校准过的噪声，限制任一条用户记录对模型的可辨识影响，从而在数学上限制反推个体信息。代价是加噪略降模型精度、需调隐私预算 ε。",
+    "why_en": "Apply differential privacy by adding calibrated noise to gradients, bounding how much any single user record can influence the model and thus limiting inference of individuals, at the cost of some accuracy and tuning the privacy budget epsilon.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "privacy"
+    ],
+    "tradeoff": "差分隐私加噪(限制个体泄露但略降精度) vs 明文梯度训练(精度高但可被反推个人数据)",
+    "whenOtherWins": "若数据已彻底匿名化/聚合、或辖区无严格隐私约束，直接用明文梯度训练精度更高、实现更简单。",
+    "options": [
+      "differential privacy：在梯度上加校准噪声，限制任一用户记录的可辨识影响",
+      "把用户 ID 换成自增数字，其余原样训练即可保证隐私",
+      "训练前用 base64 编码所有字段，编码后就无法反推",
+      "只保留最近 24 小时数据训练，时间短就没有隐私风险"
+    ],
+    "options_en": [
+      "Differential privacy: add calibrated noise to gradients, bounding any single user record's identifiable influence.",
+      "Replace user IDs with auto-increment integers and train the rest as-is to guarantee privacy.",
+      "Base64-encode all fields before training so they can't be reversed.",
+      "Train only on the last 24 hours of data; a short window means no privacy risk."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；DP 在梯度层面加校准噪声，给出可证明的个体不可辨识边界，正对监管辖区的合规诉求。",
+      "换 ID 是弱假名化，交易金额/时间/商户组合仍能重识别个人，达不到 DP 的保证。",
+      "base64 只是编码不是加密更不是隐私保护，可被瞬间解码还原。",
+      "缩短时间窗不改变单条记录可被反推的事实，隐私风险与窗口长短无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — DP adds calibrated noise at the gradient level, giving a provable bound on identifying any individual, matching regulatory demands.",
+      "Swapping IDs is weak pseudonymization; the amount/time/merchant combo still re-identifies people, falling short of DP's guarantee.",
+      "Base64 is encoding, not encryption or privacy, and is instantly decoded back.",
+      "Shortening the window doesn't change that a single record can be reverse-engineered; privacy risk is independent of window length."
+    ],
+    "termDefinitions": [
+      {
+        "term": "differential privacy (DP) / 差分隐私",
+        "fullName": "Differential Privacy",
+        "meaning": "在训练（如梯度）中注入校准噪声，数学上限制任一条记录对输出的可辨识影响。",
+        "meaningEn": "Differential privacy (DP) injects calibrated noise into training (e.g. gradients) to mathematically bound how much any single record affects the output."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-017",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "champion-challenger",
+    "scenario": "有个新欺诈模型看似更好，但你不敢直接换掉线上模型，怕它在真实分布上更差、造成损失。",
+    "scenario_en": "A new fraud model looks better, but you daren't swap the live model outright in case it's worse on real traffic and causes losses.",
+    "q": "该怎么安全地评估并切换到新模型？",
+    "q_en": "How do you safely evaluate and switch to the new model?",
+    "why": "champion-challenger：challenger 影子模式与 champion 并行给每笔交易打分，但只有 champion 的决策真正作用于用户。只有当 challenger 在最近窗口的时间验证指标更优时才晋升，天然提供回滚路径。",
+    "why_en": "Champion-challenger: the challenger runs in shadow mode scoring every txn alongside the champion, but only the champion's decisions affect users, and you promote the challenger only when its recent-window temporal validation beats the champion, giving a natural rollback.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "champion-challenger"
+    ],
+    "tradeoff": "影子模式并行评估(安全、可回滚，但要双份打分算力) vs 直接热切换(省算力但无验证、风险大)",
+    "whenOtherWins": "当新模型只是无风险的小改（如纯特征重命名、等价重构），且离线验证充分时，可直接灰度替换省去影子成本。",
+    "options": [
+      "直接把线上模型替换成新模型，出问题再回滚",
+      "两个模型各服务 50% 流量做 A/B，让一半用户承担新模型风险",
+      "challenger 影子模式与 champion 并行打分、只有 champion 决策生效；时间验证更优才晋升",
+      "让新模型只在测试环境跑，永远不上线真实流量"
+    ],
+    "options_en": [
+      "Swap the live model for the new one directly and roll back if it breaks.",
+      "Serve 50/50 traffic A/B so half the users bear the new model's risk.",
+      "Run the challenger in shadow mode scoring alongside the champion, only the champion's decisions act, and promote when temporal validation is better.",
+      "Keep the new model in staging forever and never expose it to real traffic."
+    ],
+    "answer": [
+      2
+    ],
+    "diagram": "flowchart LR\n  T[\"每笔交易\"] --> C[\"champion<br/>决策生效\"]\n  T --> H[\"challenger<br/>影子打分\"]\n  C --> U[\"用户\"]\n  H -.\"最近窗口验证更优才晋升\".-> C",
+    "optionExplanations": [
+      "直接热切换没有真实分布上的验证，若新模型更差，损失已经发生才发现，回滚也补不回。",
+      "50/50 A/B 让一半真实用户直接暴露在未验证模型下，欺诈损失贵，风险太高。",
+      "对；影子模式先在真实流量上验证 challenger 而不影响用户，指标更优再晋升，且随时可回滚。",
+      "永不上线就永远拿不到真实分布验证，新模型再好也无法安全接管，等于放弃迭代。"
+    ],
+    "optionExplanations_en": [
+      "A direct hot swap has no validation on real traffic; if the new model is worse, losses already happened before you notice and rollback can't recover them.",
+      "50/50 A/B exposes half of real users to an unvalidated model, and fraud losses are expensive — too risky.",
+      "Correct — shadow mode validates the challenger on real traffic without affecting users, promotes only when metrics beat the champion, and allows instant rollback.",
+      "Never shipping means never getting real-traffic validation, so no matter how good the model is it can't safely take over — that's abandoning iteration."
+    ],
+    "termDefinitions": [
+      {
+        "term": "champion-challenger / 冠军-挑战者",
+        "meaning": "线上 champion 决策生效，challenger 影子并行打分，验证更优才晋升，天然可回滚。",
+        "meaningEn": "Champion-challenger runs the live champion for decisions while the challenger scores in shadow, promoting only when it validates better, with natural rollback."
+      },
+      {
+        "term": "shadow mode / 影子模式",
+        "meaning": "新模型对真实流量打分但不影响用户，用来无风险地采集其真实表现。",
+        "meaningEn": "Shadow mode scores real traffic without affecting users, safely gathering the new model's real performance."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-018",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "temporal-leakage",
+    "scenario": "有人用标准 k-fold 交叉验证评估欺诈模型：随机打乱所有历史交易再分折。",
+    "scenario_en": "Someone evaluates a fraud model with standard k-fold cross-validation: randomly shuffle all historical txns then split into folds.",
+    "q": "为什么这样评估会系统性高估线上表现？",
+    "q_en": "Why does this systematically overestimate production performance?",
+    "why": "随机打乱把未来交易混进了训练折，模型等于「偷看了明天的欺诈战术」——时间泄漏。线上没有未来信息，所以离线指标虚高，据此上线会低估真实损失。欺诈必须用时间切分评估。",
+    "why_en": "Random shuffling leaks future txns into training folds, so the model 'peeks at tomorrow's fraud tactics' — temporal leakage — while production has no future info, inflating offline metrics and underestimating real losses; fraud needs time-ordered splits.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "temporal-leakage"
+    ],
+    "diagram": "flowchart TB\n  S[\"随机打乱全部交易\"] --> F[\"训练折含未来交易\"]\n  F --> L[\"模型偷看明天战术<br/>时间泄漏\"]\n  L --> M[\"离线指标虚高\"]\n  M --> P[\"上线后低估损失\"]",
+    "options": [
+      "因为 k-fold 折数太少，加到 10 折就没问题了",
+      "随机打乱把未来交易泄漏进训练折，模型偷看明天的战术，离线指标虚高、上线低估损失",
+      "因为欺诈样本太少，k-fold 会重复采样导致过拟合",
+      "因为 k-fold 没做特征标准化，量纲不一致拉高了指标"
+    ],
+    "options_en": [
+      "Because k-fold has too few folds; bumping to 10 folds fixes it.",
+      "Random shuffling leaks future txns into training folds so the model peeks at tomorrow's tactics, inflating offline metrics and underestimating production losses.",
+      "Because fraud samples are too few, so k-fold resamples them and overfits.",
+      "Because k-fold skips feature standardization, so inconsistent scales inflate the metrics."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "折数多少不改变「随机打乱导致未来混入训练」这个根因，加折反而可能泄漏更多。",
+      "对；时间泄漏让模型在评估时已知未来欺诈模式，线上没有这信息，故指标必然虚高。",
+      "样本少是不平衡问题，可用分层等处理，但不是这里指标虚高的根因——根因是时间泄漏。",
+      "标准化与否不造成未来信息泄漏，也不会系统性抬高对线上的估计。"
+    ],
+    "optionExplanations_en": [
+      "The number of folds doesn't change the root cause — shuffling mixes future into training — and more folds can leak more.",
+      "Correct — temporal leakage lets the model know future fraud patterns at eval time; production lacks that info, so metrics are necessarily inflated.",
+      "Few samples is an imbalance issue handled by stratification etc., but not the cause here — the cause is temporal leakage.",
+      "Standardization doesn't leak future info and won't systematically inflate the estimate of production."
+    ],
+    "termDefinitions": [
+      {
+        "term": "k-fold cross-validation / k 折交叉验证",
+        "fullName": "k-fold Cross-Validation",
+        "meaning": "把数据随机分成 k 折轮流做验证集；随机打乱会破坏时间顺序，对时序数据造成泄漏。",
+        "meaningEn": "k-fold cross-validation splits data into k randomly shuffled folds; the shuffle breaks time order and leaks for time-series data."
+      },
+      {
+        "term": "temporal leakage / 时间泄漏",
+        "meaning": "评估时让模型接触到了未来信息，使离线指标高于线上真实水平。",
+        "meaningEn": "Temporal leakage lets the model see future information at eval time, making offline metrics exceed real production performance."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-019",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "leakage-inflation",
+    "scenario": "同一欺诈模型：随机 k-fold 交叉验证测得 0.95 PR-AUC，上线后实际只有 0.70。",
+    "scenario_en": "Same fraud model: random k-fold CV reads 0.95 PR-AUC but production is only 0.70.",
+    "q": "这个 10–30% 的落差说明什么、该怎么用它？",
+    "q_en": "What does the 10–30% gap tell you and how should you use it?",
+    "why": "落差 ≈ (0.95−0.70)/0.95 ≈ 26%，落在时间泄漏典型的 10–30% 区间——这是经验幅度不是公式。它意味着随机 CV 的分数不可信，只能用时间切分（walk-forward）的指标做上线决策，否则会照虚高数据低估损失、配错阈值。",
+    "why_en": "The gap ≈ (0.95−0.70)/0.95 ≈ 26%, in the typical 10–30% leakage range (an empirical magnitude, not a formula), meaning random-CV scores are untrustworthy and only time-split (walk-forward) metrics should drive go-live, else you underestimate losses and misset thresholds.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "leakage-inflation"
+    ],
+    "options": [
+      "说明模型上线后退化了，需要立刻重训一版",
+      "说明生产环境有 bug，指标应该和离线一致",
+      "随机 CV 因时间泄漏虚高 10–30%，不可信；上线决策只能用时间切分指标，否则低估损失、配错阈值",
+      "说明 0.70 才是过拟合的假象，应相信 0.95"
+    ],
+    "options_en": [
+      "It means the model degraded after launch and needs an immediate retrain.",
+      "It means production has a bug, since metrics should match offline.",
+      "Random CV is inflated 10–30% by temporal leakage and is untrustworthy; only time-split metrics should drive go-live, else you underestimate losses and misset thresholds.",
+      "It means 0.70 is the overfit illusion and you should trust 0.95."
+    ],
+    "answer": [
+      2
+    ],
+    "termDefinitions": [
+      {
+        "term": "walk-forward validation / 前推验证",
+        "meaning": "按时间顺序训练早期、验证/测试后期窗口，信息只向前流，杜绝时间泄漏。",
+        "meaningEn": "Walk-forward validation trains on earlier windows and validates/tests on later ones so information flows only forward, eliminating temporal leakage."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "walk-forward",
+    "scenario": "你要为欺诈模型设计一套忠实反映线上表现的评估方法，数据是带时间戳的历史交易。",
+    "scenario_en": "You must design an evaluation faithful to production for a fraud model, given time-stamped historical txns.",
+    "q": "该怎么切分训练/验证/测试集？",
+    "q_en": "How should you split train/validation/test?",
+    "why": "用 walk-forward：按时间在 [t0,t1] 训练、[t1,t2] 验证、[t2,t3] 测试，窗口互不重叠、信息只向前流。这模拟线上「只能用过去预测未来」，避免随机打乱造成的时间泄漏。",
+    "why_en": "Use walk-forward: train on [t0,t1], validate on [t1,t2], test on [t2,t3] with non-overlapping windows and information flowing only forward, mirroring production's 'past predicts future' and avoiding the temporal leakage of random shuffling.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "walk-forward"
+    ],
+    "tradeoff": "时间切分(忠实反映线上、无泄漏) vs 随机 k-fold(样本利用率高但泄漏、指标虚高)",
+    "whenOtherWins": "当数据没有时间维度、样本可交换（如静态图像分类），随机 k-fold 才是合适且样本利用更高的选择。",
+    "diagram": "flowchart LR\n  A[\"train [t0,t1]\"] --> B[\"validate [t1,t2]\"] --> C[\"test [t2,t3]\"]\n  A -. \"信息只向前流\" .-> C",
+    "options": [
+      "walk-forward：按时间训练早窗、验证/测试后窗，窗口不重叠、信息只向前流",
+      "随机 k-fold：打乱后分折，样本利用率最高",
+      "留一法：每次留一条做测试，最大化训练数据",
+      "按用户 ID 哈希分组切分，保证同一用户不跨集"
+    ],
+    "options_en": [
+      "Walk-forward: train on earlier windows, validate/test on later ones, non-overlapping, information flowing only forward.",
+      "Random k-fold: shuffle then split for maximum sample utilization.",
+      "Leave-one-out: hold out one row at a time to maximize training data.",
+      "Hash-partition by user ID so the same user never spans sets."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；时间切分让评估始终「用过去测未来」，与线上一致，是欺诈唯一忠实的方法。",
+      "随机 k-fold 打乱时间序，未来漏进训练，指标虚高 10–30%，正是要避免的。",
+      "留一法同样随机、破坏时间序，且计算昂贵，救不了时间泄漏。",
+      "按用户切分能防用户泄漏，但同一用户的未来交易仍可能进训练，防不住时间泄漏。"
+    ],
+    "optionExplanations_en": [
+      "Correct — time splits always 'test the future with the past', matching production, the only faithful method for fraud.",
+      "Random k-fold shuffles time order, leaking future into training and inflating metrics 10–30% — exactly what to avoid.",
+      "Leave-one-out is also random, breaks time order, and is compute-heavy, not fixing temporal leakage.",
+      "User-based splitting prevents user leakage, but a user's future txns can still enter training, so it doesn't stop temporal leakage."
+    ],
+    "termDefinitions": [
+      {
+        "term": "walk-forward validation / 前推验证",
+        "meaning": "训练早期窗口、验证/测试后期窗口，窗口不重叠、信息只向前，模拟线上时序。",
+        "meaningEn": "Walk-forward validation trains on earlier windows and validates/tests on later, non-overlapping ones with forward-only information, mimicking production time order."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-021",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "expanding-vs-sliding",
+    "scenario": "在 walk-forward 里，训练窗口有两种取法：不断累积全部历史，或只保留最近 N 个月。",
+    "scenario_en": "Within walk-forward, the training window can either accumulate all history or keep only the last N months.",
+    "q": "expanding window 与 sliding window 的核心取舍是什么？",
+    "q_en": "What's the core tradeoff between expanding and sliding windows?",
+    "why": "expanding window 训练集不断增长、保留全部历史，保住旧模式但训练成本升、且可能稀释近期信号；sliding window 只留最近 N 月，适配快但会灾难性遗忘旧模式。欺诈里推荐 expanding + 指数衰减权重折中。",
+    "why_en": "An expanding window keeps growing and retains all history (preserves old patterns but costs more and can dilute recent signal); a sliding window keeps only the last N months (adapts fast but catastrophically forgets old patterns), so fraud favors expanding plus exponential decay weighting.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "windowing"
+    ],
+    "tradeoff": "expanding(保留历史但成本高、稀释近期) vs sliding(适配快但遗忘旧模式)",
+    "table": {
+      "headers": [
+        "窗口",
+        "历史",
+        "适配速度",
+        "风险"
+      ],
+      "rows": [
+        [
+          "expanding",
+          "全保留",
+          "慢",
+          "稀释近期信号"
+        ],
+        [
+          "sliding",
+          "只近 N 月",
+          "快",
+          "灾难性遗忘"
+        ]
+      ]
+    },
+    "options": [
+      "两者只是实现细节，效果完全一样",
+      "expanding 保留全部历史（不忘旧但成本高、稀释近期）；sliding 只留近 N 月（适配快但遗忘旧模式）",
+      "expanding 适配更快、sliding 保留历史，应总选 sliding",
+      "expanding 用于测试集、sliding 用于训练集，二者搭配使用"
+    ],
+    "options_en": [
+      "They're just implementation details with identical effects.",
+      "Expanding keeps all history (no forgetting but costlier and dilutes recent); sliding keeps only the last N months (adapts fast but forgets old patterns).",
+      "Expanding adapts faster and sliding retains history, so always pick sliding.",
+      "Expanding is for the test set and sliding for the training set, used together."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "两者在遗忘旧模式和适配速度上截然不同，绝非等价。",
+      "对；一个保历史但慢/稀释、一个快但遗忘，欺诈推荐 expanding 再配指数衰减权重折中。",
+      "说反了：sliding 适配快但遗忘，expanding 才保留历史。",
+      "两者都是训练窗口策略，不是训练/测试的分工。"
+    ],
+    "optionExplanations_en": [
+      "They differ sharply on forgetting old patterns and adaptation speed — far from equivalent.",
+      "Correct — one keeps history but is slow/diluting, the other is fast but forgets, so fraud favors expanding plus exponential decay weighting as a compromise.",
+      "Backwards: sliding adapts fast but forgets; expanding is the one that retains history.",
+      "Both are training-window strategies, not a train/test division of labor."
+    ],
+    "termDefinitions": [
+      {
+        "term": "expanding window / 扩张窗口",
+        "meaning": "训练集随时间不断增长、保留全部历史，防遗忘但成本升、稀释近期。",
+        "meaningEn": "An expanding window grows the training set over time and retains all history, preventing forgetting but costing more and diluting recent signal."
+      },
+      {
+        "term": "sliding window / 滑动窗口",
+        "meaning": "训练集只保留最近 N 个月，适配快但会灾难性遗忘旧模式。",
+        "meaningEn": "A sliding window keeps only the last N months, adapting fast but catastrophically forgetting old patterns."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-022",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "decay-weighting",
+    "scenario": "欺诈既有需要快速适配的新战术，也有会周期性回归的旧模式（如节假日、报税季身份欺诈）。",
+    "scenario_en": "Fraud has both new tactics needing fast adaptation and recurring old patterns (holiday spikes, tax-season identity fraud).",
+    "q": "训练窗口该怎么设计兼顾「跟上新」和「记住旧」？",
+    "q_en": "How should the training window both keep up with new and remember old?",
+    "why": "推荐 expanding window + 指数衰减样本权重：保留全部历史但让近期交易权重更高、旧样本以降低的影响力留存。既跟得上新战术，又不忘旧模式，还能覆盖随机切分会掩盖的季节性欺诈。",
+    "why_en": "Use an expanding window with exponential decay sample weighting: keep all history but weight recent txns higher while old ones remain at reduced influence, keeping up with new tactics without forgetting old ones and capturing seasonal fraud that random splits mask.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "decay-weighting"
+    ],
+    "tradeoff": "expanding+指数衰减权重(兼顾新旧但要调衰减率) vs 纯 sliding(只跟新、丢旧、错过季节性)",
+    "whenOtherWins": "若旧模式确认永不回归、且计算预算很紧，纯 sliding window 只训近期更省成本也够用。",
+    "options": [
+      "纯 sliding window，只用最近 1 个月，永远追最新",
+      "expanding window + 指数衰减样本权重：保全历史、近期权重更高、旧样本降权留存",
+      "把所有历史等权重全用上，不做任何加权",
+      "每季度全量重训一次，季度内不更新"
+    ],
+    "options_en": [
+      "Pure sliding window, only the last 1 month, always chasing the newest.",
+      "Expanding window plus exponential decay sample weighting: keep all history, weight recent higher, retain old at reduced influence.",
+      "Use all history at equal weight with no weighting at all.",
+      "Full retrain once per quarter, no updates within the quarter."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "只用近 1 月会灾难性遗忘周期性回归的旧模式，报税季一到就集体失手。",
+      "对；衰减权重让新战术主导优化、旧模式以低权重留存，兼顾适配与记忆，还覆盖季节性欺诈。",
+      "等权全历史会让陈旧模式稀释近期信号，适配太慢跟不上对抗节奏。",
+      "季度重训对几周就见效的对抗漂移太慢，季度内模型已严重过时。"
+    ],
+    "optionExplanations_en": [
+      "Only the last month catastrophically forgets recurring old patterns, failing en masse when tax season returns.",
+      "Correct — decay weighting lets new tactics drive optimization while old patterns persist at low weight, balancing adaptation and memory and covering seasonal fraud.",
+      "Equal-weight full history lets stale patterns dilute recent signal, adapting too slowly for the adversarial pace.",
+      "Quarterly retraining is far too slow for drift that acts in weeks; the model is badly stale within the quarter."
+    ],
+    "termDefinitions": [
+      {
+        "term": "exponential decay sample weighting / 指数衰减样本权重",
+        "meaning": "训练时给近期样本更高权重、越旧权重越低，兼顾适配新战术与保留旧模式。",
+        "meaningEn": "Exponential decay sample weighting gives recent samples higher weight and older ones exponentially less, balancing adaptation and retention."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-023",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "model-shelf-life",
+    "scenario": "面试官问：欺诈模型多久要重训一次，为什么不能像普通推荐模型那样几个月一训？",
+    "scenario_en": "The interviewer asks: how often must a fraud model retrain, and why not every few months like an ordinary recommender?",
+    "q": "「货架期是数周不是数月」对重训与监控节奏意味着什么？",
+    "q_en": "What does 'shelf life is weeks not months' imply for retraining and monitoring cadence?",
+    "why": "因为对手主动对抗、几周就能适配绕过，模型的有效期是数周。所以必须建持续监控（分布/行为漂移）+自动触发的高频重训，不能等季度批处理，否则 recall 在两次重训之间就已经塌了。",
+    "why_en": "Because the adversary adapts and evades within weeks, the model's effective life is weeks, so you need continuous drift monitoring plus auto-triggered frequent retraining rather than quarterly batches, or recall collapses between retrains.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "shelf-life"
+    ],
+    "options": [
+      "可以放心几个月重训一次，欺诈模型和推荐模型没区别",
+      "只要一开始训得够好，就永远不用重训",
+      "重训越少越好，频繁重训会引入不稳定，应尽量拉长周期",
+      "有效期只有数周，必须持续监控漂移 + 自动触发的高频重训，等季度批处理就晚了"
+    ],
+    "options_en": [
+      "You can safely retrain every few months; fraud models are no different from recommenders.",
+      "As long as the initial training is good enough, you never need to retrain.",
+      "The fewer retrains the better; frequent retraining adds instability, so stretch the cycle.",
+      "Effective life is only weeks, so you need continuous drift monitoring plus auto-triggered frequent retraining — quarterly batches are too late."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "推荐模型面对的是被动偏好漂移，欺诈面对的是主动对手，节奏完全不同，不能类比。",
+      "对手会持续适配，任何静态模型都会在数周内失效，一劳永逸不存在。",
+      "拉长周期会让模型在两次重训间大量漏抓，欺诈里频繁重训是必需而非可选。",
+      "对；数周货架期决定了监控+自动重训必须常态化，这正是持续学习管线存在的理由。"
+    ],
+    "optionExplanations_en": [
+      "Recommenders face passive preference drift; fraud faces an active adversary, a totally different cadence that can't be equated.",
+      "The adversary keeps adapting, so any static model fails within weeks — 'train once' doesn't exist here.",
+      "Stretching the cycle means heavy misses between retrains; in fraud, frequent retraining is required, not optional.",
+      "Correct — a weeks-long shelf life makes monitoring plus auto-retraining the norm, which is exactly why the continual-learning pipeline exists."
+    ],
+    "termDefinitions": [
+      {
+        "term": "model shelf life / 模型货架期",
+        "meaning": "模型从上线到因漂移失准的有效时间；对抗欺诈里只有数周。",
+        "meaningEn": "Model shelf life is how long a model stays accurate before drift degrades it — only weeks in adversarial fraud."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-024",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "three-pillars",
+    "scenario": "把欺诈评估的整体框架压成一句可复述的三支柱。",
+    "scenario_en": "Compress the fraud-evaluation framework into one restatable three-pillar sentence.",
+    "q": "补全欺诈评估的三大支柱：",
+    "q_en": "Fill in the three pillars of fraud evaluation:",
+    "text": "欺诈评估三支柱：(1) 非对称{{成本}}感知指标（FN/FP 差 50–100x，看 {{PR-AUC}}）；(2) {{时间}}序列评估（walk-forward，杜绝时间泄漏）；(3) 对抗鲁棒 / {{持续学习}}（应对对抗性概念漂移）。",
+    "text_en": "Three pillars of fraud evaluation: (1) asymmetric {{cost}}-aware metrics (FN/FP 50–100x, use {{PR-AUC}}); (2) {{temporal}} evaluation (walk-forward, no leakage); (3) adversarial robustness / {{continual learning}} (against adversarial concept drift).",
+    "why": "三支柱串起整课：成本框定阈值、时间切分保证指标可信、持续学习对抗漂移。任何一根缺失都会让欺诈系统在评估或对抗层面失真。",
+    "why_en": "The three pillars tie the lesson together: cost frames the threshold, temporal splits keep metrics honest, and continual learning fights drift — missing any one distorts the system.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "three-pillars"
+    ],
+    "termDefinitions": [
+      {
+        "term": "adversarial robustness / 对抗鲁棒性",
+        "meaning": "系统在对手主动规避下仍维持检测能力，靠持续学习与监控实现。",
+        "meaningEn": "Adversarial robustness is keeping detection strong while an adversary actively evades, achieved via continual learning and monitoring."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-025",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "total-cost-formula",
+    "scenario": "把选阈值的目标函数写成可复述的公式。",
+    "scenario_en": "Write the threshold-selection objective as a restatable formula.",
+    "q": "补全成本感知阈值的目标函数：",
+    "q_en": "Fill in the cost-aware threshold objective:",
+    "text": "最优阈值 = 最小化总成本 = ({{FN}} × C_fn) + ({{FP}} × C_fp)。欺诈里 C_fn ≈ ${{500}}、C_fp ≈ $2–5，成本比 {{50}}–100x，所以最优点偏向高 {{recall}}。",
+    "text_en": "Optimal threshold = minimize total cost = ({{FN}} × C_fn) + ({{FP}} × C_fp). In fraud C_fn ≈ ${{500}}, C_fp ≈ $2–5, a {{50}}–100x ratio, so the optimum shifts toward high {{recall}}.",
+    "why": "这个公式是把「评估是业务决策」落成一行：每类错误乘各自美元成本求和最小。100x 的非对称成本把最优阈值从 F1 峰拉向高 recall——记住公式就能现场推出阈值方向。",
+    "why_en": "This formula turns 'evaluation is a business decision' into one line: sum each error times its dollar cost and minimize, with the 100x asymmetry pulling the optimum from the F1 peak toward high recall.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "total-cost-formula"
+    ],
+    "termDefinitions": [
+      {
+        "term": "total cost / 总成本",
+        "meaning": "FN×C_fn + FP×C_fp，选阈值的目标函数，把两类错误的美元代价加总。",
+        "meaningEn": "Total cost = FN×C_fn + FP×C_fp is the threshold objective, summing each error type's dollar cost."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-026",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "continual-learning-menu",
+    "scenario": "在标签延迟数十天的约束下，把三种持续学习信号来源背成一组。",
+    "scenario_en": "Under tens-of-days label delay, memorize the three continual-learning signal sources.",
+    "q": "补全应对标签延迟的三种持续学习策略：",
+    "q_en": "Fill in the three continual-learning strategies against label delay:",
+    "text": "标签延迟下的持续学习：(1) {{confirmed-label}} 重训（拒付/结案确认，准但滞后）；(2) {{pseudo-label}} 增强（高置信复核预测，快但有噪声）；(3) {{reservoir sampling}} 缓冲区（保留历史欺诈样本，防{{灾难性遗忘}}）。",
+    "text_en": "Continual learning under label delay: (1) {{confirmed-label}} retraining (chargeback/close-confirmed, accurate but stale); (2) {{pseudo-label}} augmentation (high-confidence review predictions, fast but noisy); (3) {{reservoir sampling}} buffer (retains historical fraud, prevents {{catastrophic forgetting}}).",
+    "why": "三种信号各补一块短板：confirmed 给可信基线、pseudo 给时效、reservoir 给记忆。合起来在没有实时标签的空窗里既跟得上新战术又不忘旧模式。",
+    "why_en": "The three signals each patch a gap: confirmed gives a trustworthy baseline, pseudo gives timeliness, reservoir gives memory, together keeping up with new tactics without forgetting old ones during the label gap.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "continual-learning"
+    ],
+    "termDefinitions": [
+      {
+        "term": "continual learning / 持续学习",
+        "meaning": "在数据分布持续变化下不断更新模型的一整套策略，欺诈里用于对抗漂移。",
+        "meaningEn": "Continual learning is the set of strategies for continuously updating a model as the data distribution shifts, used against fraud drift."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "sudden-drift-response",
+    "scenario": "某晚一起大规模数据泄露把数百万张被盗卡一次性投入市场，欺诈攻击量瞬间暴涨。",
+    "scenario_en": "Overnight a large breach dumps millions of stolen cards into the market at once, and fraud attack volume spikes instantly.",
+    "q": "面对这种突变漂移，最该依赖哪种监控与响应？",
+    "q_en": "Against this sudden drift, which monitoring and response should you rely on?",
+    "why": "突变一夜发生，靠慢慢累积的分布指标和季度重训来不及。要靠能秒级/小时级检测行为量突变点的监控（如 block/review 率突跳），触发快速重训或规则兜底，并保留 champion-challenger 的回滚能力。",
+    "why_en": "The change is overnight, so slowly accumulating distribution metrics and quarterly retraining are too late; rely on change-point behavior monitoring (e.g. a sudden jump in block/review rate) to trigger fast retraining or rule fallback, keeping champion-challenger rollback.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "sudden-drift"
+    ],
+    "tradeoff": "行为突变点检测+快速响应(抓一夜突变但更易误报) vs 分布累积指标(稳但对突变反应慢)",
+    "whenOtherWins": "若变化是数周缓慢演化的 gradual drift，慢速累积的分布指标（如 PSI）+定期重训反而更稳、更少误报。",
+    "options": [
+      "季度全量重训，等下一个周期把新数据训进去",
+      "行为量突变点检测（block/review 率突跳）触发快速重训或规则兜底，保留回滚能力",
+      "只加大离线 k-fold 评估频率，靠离线指标发现突变",
+      "什么都不做，等拒付标签在 30–90 天后确认再说"
+    ],
+    "options_en": [
+      "Quarterly full retraining; fold the new data in next cycle.",
+      "Change-point behavior monitoring (sudden jump in block/review rate) triggers fast retraining or rule fallback, keeping rollback.",
+      "Just increase offline k-fold evaluation frequency and catch the shift via offline metrics.",
+      "Do nothing and wait 30–90 days for chargeback labels to confirm."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "季度重训对一夜突变慢了几个数量级，泄露当晚就大量得手，等下季度已损失惨重。",
+      "对；行为突变点监控秒级/小时级发现突跳，立即触发响应，是突变漂移的正确抓手。",
+      "离线 k-fold 用的是历史数据，抓不到实时突变，频率再高也滞后。",
+      "等 30–90 天标签确认，突变造成的损失早已发生，被动挨打。"
+    ],
+    "optionExplanations_en": [
+      "Quarterly retraining is orders of magnitude too slow for an overnight shift; the breach succeeds that night and losses mount before next quarter.",
+      "Correct — change-point behavior monitoring spots the jump within seconds/hours and triggers immediate response, the right handle for sudden drift.",
+      "Offline k-fold uses historical data and can't catch a real-time shift; more frequency just adds lag.",
+      "Waiting 30–90 days for confirmed labels means the sudden-drift losses already happened — purely reactive."
+    ],
+    "termDefinitions": [
+      {
+        "term": "change-point detection / 突变点检测",
+        "meaning": "在流式数据里检测统计量突然跳变的时刻，用于捕捉一夜突变的欺诈行为。",
+        "meaningEn": "Change-point detection spots the moment a streaming statistic jumps, used to catch overnight fraud surges."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-028",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "review-band-width",
+    "scenario": "分层阈值里，中间「人工复核」band 的上下界怎么定是关键决策：审核团队每天只能处理固定量。",
+    "scenario_en": "In tiered thresholds, setting the middle 'manual review' band's bounds is the key decision: analysts can only handle a fixed volume per day.",
+    "q": "复核 band 宽度该怎么权衡？",
+    "q_en": "How should you trade off the review-band width?",
+    "why": "band 太宽会把太多交易塞进人工队列、压垮审核员产能；太窄又让不确定的欺诈滑过、直接自动放行漏抓。要按审核产能、时段、攻击强度动态调，让人力用在模型最没把握、边际收益最高的样本上。",
+    "why_en": "Too wide floods the analyst queue and overwhelms capacity; too narrow lets uncertain fraud slip into auto-approve, so tune the width dynamically by analyst capacity, time of day, and attack intensity to spend human effort where the model is least confident.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "review-band"
+    ],
+    "tradeoff": "band 宽(抓更多不确定样本但压垮审核) vs band 窄(省人力但漏抓边界欺诈)",
+    "whenOtherWins": "当审核产能极充裕、且漏抓代价远超人力成本时，可放宽 band 尽量多送人工复核。",
+    "options": [
+      "band 越宽越好，能送更多交易给人工，抓得最全",
+      "band 越窄越好，人力成本最低",
+      "按审核产能/时段/攻击强度动态调宽度：太宽压垮审核，太窄漏抓边界欺诈",
+      "band 固定在 0.4–0.85 永不改动，简单可预测"
+    ],
+    "options_en": [
+      "The wider the band the better; send more txns to humans and catch the most.",
+      "The narrower the band the better; it minimizes labor cost.",
+      "Tune the width dynamically by analyst capacity/time-of-day/attack intensity: too wide overwhelms analysts, too narrow misses borderline fraud.",
+      "Fix the band at 0.4–0.85 forever for simple predictability."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "无限放宽会让人工队列爆掉，审核延迟拉长，强标签回流也变慢，产能是硬约束。",
+      "无限收窄把大量不确定样本推向自动放行，边界欺诈直接漏抓，省了人力赔了损失。",
+      "对；band 宽度是产能与漏抓的平衡点，且随产能/时段/攻击强度动态调整最优。",
+      "固定不动无法应对攻击强度和产能的波动，高峰期要么爆队列要么漏抓。"
+    ],
+    "optionExplanations_en": [
+      "Unbounded widening bursts the analyst queue, lengthens review latency, and slows strong-label feedback — capacity is a hard constraint.",
+      "Unbounded narrowing pushes many uncertain samples into auto-approve, missing borderline fraud — saving labor but losing money.",
+      "Correct — band width is the balance point between capacity and misses, best tuned dynamically by capacity/time/attack intensity.",
+      "A fixed band can't handle fluctuating attack intensity and capacity, either bursting the queue or missing fraud at peaks."
+    ],
+    "termDefinitions": [
+      {
+        "term": "manual review band / 人工复核带",
+        "meaning": "分层阈值中间段，概率不高不低、模型最没把握的交易被送人工判断。",
+        "meaningEn": "The manual review band is the middle tier where the model is least confident, sending those txns to human judgment."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-029",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cv-inflated-deploy",
+    "scenario": "团队看到随机 CV 上 0.95 PR-AUC 很兴奋，据此设定了阈值和预算就上线了。",
+    "scenario_en": "The team is thrilled by 0.95 PR-AUC on random CV and ships with thresholds and budget set from it.",
+    "q": "在虚高的离线指标上做上线决策，会带来什么后果？",
+    "q_en": "What happens when go-live decisions rest on inflated offline metrics?",
+    "why": "离线指标虚高 10–30%，团队会低估真实欺诈损失、把阈值和风控预算配得过松。上线后 recall 远不及预期、损失超预算，还会误判「模型退化」而其实从没达到过那个水平。",
+    "why_en": "Inflated-by-10–30% offline metrics make the team underestimate real losses and set thresholds and budgets too loose, so production recall falls short, losses exceed budget, and they misdiagnose 'degradation' the model never actually achieved.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "deployment-risk"
+    ],
+    "options": [
+      "没有后果，离线和线上指标本来就该一致",
+      "低估真实损失、阈值/预算配得过松，上线 recall 不及预期、损失超预算，还误判模型退化",
+      "线上表现会比离线更好，因为真实数据更多",
+      "只影响报表美观，不影响实际风控效果"
+    ],
+    "options_en": [
+      "No consequence; offline and production metrics should match anyway.",
+      "Underestimated losses, thresholds/budgets set too loose, production recall short of expectation, losses over budget, and a misdiagnosed 'degradation'.",
+      "Production will do better than offline because there's more real data.",
+      "It only affects report aesthetics, not actual risk control."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "随机 CV 因时间泄漏系统性高于线上，二者本就不该一致，指望一致就是误区。",
+      "对；虚高指标一路误导预算与阈值，上线才发现 recall 塌了、损失超支，是典型泄漏陷阱。",
+      "泄漏只会让离线高于线上，线上更差不是更好，方向反了。",
+      "它直接决定阈值和预算配比，错的指标会造成真实的欺诈损失，绝非美观问题。"
+    ],
+    "optionExplanations_en": [
+      "Random CV is systematically higher than production due to leakage, so they shouldn't match — expecting that is the trap.",
+      "Correct — inflated metrics mislead budget and thresholds all the way, and only in production do you find recall collapsed and losses over budget, the classic leakage trap.",
+      "Leakage only makes offline exceed production, so production is worse not better — the direction is reversed.",
+      "It directly sets thresholds and budget allocation, so wrong metrics cause real fraud losses, not a cosmetic issue."
+    ],
+    "termDefinitions": [
+      {
+        "term": "offline metric inflation / 离线指标虚高",
+        "meaning": "评估方法泄漏未来信息，使离线分数系统性高于线上真实表现。",
+        "meaningEn": "Offline metric inflation is when an evaluation leaks future info, making offline scores systematically exceed real production performance."
+      }
+    ]
+  },
+  {
+    "id": "llm-090-fraud-detection-evaluation-adversarial-dynamics-030",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "seasonal-fraud",
+    "scenario": "欺诈有明显季节性：节假日购物高峰、报税季身份欺诈激增。你在做时间切分评估。",
+    "scenario_en": "Fraud is seasonal: holiday shopping spikes, tax-season identity-fraud surges. You're doing time-based evaluation.",
+    "q": "随机 k-fold 相比时间切分，在季节性上还多丢了什么？",
+    "q_en": "Beyond leakage, what else does random k-fold lose on seasonality versus time splits?",
+    "why": "随机打乱把不同季节的样本混匀，抹掉了季节性结构，模型看不到「节假日/报税季」这种成块的时序模式。时间切分（walk-forward）保留季节顺序，能暴露模型在特定季节的薄弱，正确评估季节性欺诈。",
+    "why_en": "Random shuffling blends different seasons together and erases seasonal structure, so the model never sees block-shaped patterns like holiday or tax-season fraud, whereas time splits preserve season order and expose seasonal weaknesses.",
+    "tags": [
+      "llm-sd",
+      "fraud-detection",
+      "seasonality"
+    ],
+    "options": [
+      "什么都不丢，季节性对欺诈评估无关紧要",
+      "只丢了一点样本量，对季节性没影响",
+      "打乱抹掉季节性结构，模型看不到节假日/报税季的成块时序模式；时间切分才能暴露季节性薄弱",
+      "随机 k-fold 反而更能捕捉季节性，因为每折都均匀含各季节"
+    ],
+    "options_en": [
+      "Nothing; seasonality is irrelevant to fraud evaluation.",
+      "Only a little sample size, with no seasonal impact.",
+      "Shuffling erases seasonal structure so the model never sees block-shaped holiday/tax-season patterns; only time splits expose seasonal weakness.",
+      "Random k-fold captures seasonality better because every fold evenly contains all seasons."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "季节性欺诈（节假日、报税季）是真实且成块的，忽略它会在高峰期大量漏抓。",
+      "问题不是样本量而是结构：打乱破坏了时序的季节块，这才是关键损失。",
+      "对；时间切分保留季节顺序，能测出模型在特定季节的表现，随机切分把这信息糊掉了。",
+      "每折均匀含各季节恰恰是问题——它抹平了季节差异，让模型评估看不出季节性弱点。"
+    ],
+    "optionExplanations_en": [
+      "Seasonal fraud (holidays, tax season) is real and block-shaped; ignoring it means heavy misses at peaks.",
+      "The issue isn't sample size but structure: shuffling destroys the time-ordered seasonal blocks, the key loss.",
+      "Correct — time splits preserve season order and reveal per-season performance, which random splits smear away.",
+      "Evenly containing all seasons per fold is the problem — it flattens seasonal differences and hides seasonal weakness in evaluation."
+    ],
+    "termDefinitions": [
+      {
+        "term": "seasonal fraud / 季节性欺诈",
+        "meaning": "随时段规律性起伏的欺诈（节假日购物、报税季身份欺诈），随机切分会掩盖。",
+        "meaningEn": "Seasonal fraud rises and falls with the calendar (holiday shopping, tax-season identity fraud) and is masked by random splits."
+      }
+    ]
+  }
+]

@@ -47,7 +47,25 @@
       "分布式锁用于互斥写冲突，不是读扩展手段。",
       "只有完全不需要高可用和读扩展时才会这样做。"
     ],
-    "codeSample": "# App picks a follower for reads, the leader for writes\nreadDsn  = \"postgresql://app@replica1.db.internal/shop?target_session_attrs=read-only\"\nwriteDsn = \"postgresql://app@primary.db.internal/shop\"\n\n# target_session_attrs=read-only: libpq refuses this host if it\n# turns out to be the primary, and tries the next replica instead.",
+    "optionMeanings_en": [
+      "Add one or more asynchronous read-only followers behind the leader.",
+      "Do not scale horizontally; rely on a larger single leader.",
+      "Acquire a cross-node mutex before each read request.",
+      "Remove followers and send all traffic to one machine."
+    ],
+    "optionScenarioImpacts_en": [
+      "Reads spread across followers, so read throughput grows with replica count.",
+      "Vertical scaling has a hardware ceiling, and reads still compete with writes.",
+      "The lock protects write conflicts; it adds latency to concurrent reads.",
+      "Without followers, all reads and writes bottleneck on one node."
+    ],
+    "optionDirectness_en": [
+      "Use this when reads dominate and slight replica lag is acceptable.",
+      "Use this only while the whole workload fits comfortably on one box.",
+      "Use this for mutual exclusion, not read scaling.",
+      "Use this only when neither high availability nor read scaling matters."
+    ],
+    "codeSample": "# App picks a follower for reads, the leader for writes\nreadDsn  = \"postgresql://app@replica1.db.internal/shop?target_session_attrs=read-only\"\nwriteDsn = \"postgresql://app@primary.db.internal/shop\"\n\n# target_session_attrs=read-only: the Postgres client rejects\n# a primary host and tries the next read-only replica instead.",
     "lang": "text",
     "tags": [
       "replication",
@@ -120,7 +138,7 @@
       2
     ],
     "why": "同步复制等从库确认才算写成功，主库挂了也不丢已确认的写，代价是写延迟高；异步不等确认，写更快、可用性更好，但主库崩溃可能丢掉还没复制出去的写。",
-    "why_en": "Synchronous replication trades write latency for safety since no confirmed write is lost, while asynchronous is faster but can lose the newest writes on a leader crash.",
+    "why_en": "Synchronous replication waits for follower acknowledgment, so writes are safer but slower; asynchronous is faster but can lose recent writes.",
     "tradeoff": "写延迟与可用性 vs 已确认写的数据安全",
     "table": {
       "headers": [
@@ -163,6 +181,24 @@
       "异步复制会丢最近未复制的写，不是零丢失，方向说反了。",
       "需要在数据安全和写延迟之间做选择时，这句话保留了两边代价。",
       "两者在延迟和丢失风险上有明确差异，这个说法不成立。"
+    ],
+    "optionMeanings_en": [
+      "This reverses synchronous replication's safety benefit and asynchronous replication's speed benefit.",
+      "This treats asynchronous replication as lossless and misses its main risk.",
+      "Synchronous pays write latency for safety; asynchronous pays loss risk for speed.",
+      "This assumes both modes have the same latency and data-loss risk."
+    ],
+    "optionScenarioImpacts_en": [
+      "You might choose asynchronous replication for speed while wrongly believing it is safer.",
+      "You would underestimate write loss after a leader crash.",
+      "You can pick synchronous replication for money-like writes and asynchronous replication for logs or metrics.",
+      "You would treat the replication mode as irrelevant."
+    ],
+    "optionDirectness_en": [
+      "Synchronous replication gets slower, not less durable, so the direction is wrong.",
+      "Asynchronous replication can lose unreplicated writes, so zero loss is the wrong claim.",
+      "Use this framing when choosing between write safety and write latency.",
+      "The two modes differ directly on latency and loss risk."
     ],
     "tags": [
       "replication",
@@ -239,6 +275,24 @@
       "复制延迟不会让读请求失败，只会返回旧数据。",
       "复制延迟不影响主库上已经提交的写，不会被回滚。"
     ],
+    "optionMeanings_en": [
+      "This assumes replication is synchronous or instant.",
+      "This recognizes the lag window before a follower catches up.",
+      "This assumes replication lag turns a read into an error.",
+      "This assumes a read-side issue can undo a committed leader write."
+    ],
+    "optionScenarioImpacts_en": [
+      "You would overpromise read-your-writes after a follower read.",
+      "You can justify sticky routing or temporary leader reads after a write.",
+      "You would expect an error, but the system usually returns stale data.",
+      "You would expect automatic rollback for a consistency symptom."
+    ],
+    "optionDirectness_en": [
+      "This only holds with synchronous replication or leader reads.",
+      "Follower staleness during lag is the direct consequence here.",
+      "Lag does not fail the read; it returns an older value.",
+      "Lag does not roll back a write already committed on the leader."
+    ],
     "tags": [
       "replication",
       "replication-lag",
@@ -303,8 +357,8 @@
     "answer": [
       3
     ],
-    "why": "无主复制用 W+R>N 让读写法定数必然相交；在同一副本集合且读端能选最新版本时，这个交集会把最近写入带回读路径。N=3 时 W=R=2 是最小过半配置。",
-    "why_en": "Use W + R > N in leaderless replication so read and write quorums overlap; with N=3, W=R=2 is the smallest majority pair.",
+    "why": "无主复制用 W+R>N 让读写法定数必然相交；在同一副本集合、无并发冲突且读端能选最新版本时，这个交集会把最近写入带回读路径。N=3 时 W=R=2 是最小过半配置。",
+    "why_en": "Use W+R>N so quorums overlap; with version resolution, N=3 needs W=R=2.",
     "tradeoff": "更强的读新鲜度保证 vs 更高的读写延迟和副本压力",
     "whenOtherWins": "若只要最终一致、不追求每次读到最新写，W=R=1 延迟最低；要更强安全可把 W 提到 N。",
     "table": {
@@ -312,8 +366,8 @@
         "N",
         "W",
         "R",
-        "W+R>N?",
-        "保证读到最新?"
+        "相交?",
+        "代价"
       ],
       "rows": [
         [
@@ -321,21 +375,21 @@
           "2",
           "2",
           "是 (4>3)",
-          "是"
+          "读写都过半"
         ],
         [
           "3",
           "1",
           "1",
           "否 (2<3)",
-          "否"
+          "最低延迟"
         ],
         [
           "3",
           "3",
           "1",
           "是 (4>3)",
-          "是，但写慢"
+          "写最慢"
         ]
       ]
     },
@@ -351,13 +405,31 @@
       "W+R=2≤N=3，读写集合可能不重叠，易读到旧值。",
       "关闭复制后从库根本拿不到任何写入，数据完全不同步。",
       "没有约束，读到最新值全凭运气，无法给出一致性保证。",
-      "W+R=4>N=3，读写集合必然相交，能读到最新值。"
+      "W+R=4>N=3，读写集合相交，读端可用版本挑最新值。"
     ],
     "optionDirectness": [
       "只有能接受经常读到旧值时才可用，不满足题目要求。",
       "关闭复制等于放弃多副本本身，违背了本题的前提。",
       "没有法定数规则时无法保证一致性，不满足题目要求。",
       "N=3 时，这是满足 W+R>N 的最小配置。"
+    ],
+    "optionMeanings_en": [
+      "Only one replica must acknowledge the write and one must answer the read.",
+      "This combines the weakest quorum with no replication at all.",
+      "This does not define a quantitative quorum relationship.",
+      "Both read and write quorums are majorities, so they overlap."
+    ],
+    "optionScenarioImpacts_en": [
+      "W+R=2 <= N=3, so read and write sets may miss each other.",
+      "With replication off, followers never receive the write.",
+      "Fresh reads become luck, not a consistency guarantee.",
+      "W+R=4 > N=3, so the reader can compare versions at the overlap."
+    ],
+    "optionDirectness_en": [
+      "Use this only when frequent stale reads are acceptable.",
+      "This abandons the multi-replica premise of the question.",
+      "Without quorum rules, you cannot reason about consistency.",
+      "For N=3, this is the smallest pair that satisfies W+R>N."
     ],
     "tags": [
       "replication",
@@ -415,7 +487,7 @@
     "text": "在同一副本集合、无并发冲突且读端能解析版本时，要让读写 quorum 相交，需满足 {{W}} + {{R}} > {{N}}。",
     "text_en": "With the same replica set, no concurrent conflicts, and a reader that can resolve versions, overlapping read/write quorums require {{W}} + {{R}} > {{N}}.",
     "why": "W+R>N 是选 W/R 时的检查式：它保证读法定数和写法定数重叠。读到最新还依赖同一副本集合、无 sloppy quorum、无并发写，并由读端用版本/时间戳挑最新值。",
-    "why_en": "Use W + R > N as the quorum check: it forces overlap, but freshness still needs a stable replica set, no sloppy quorum, and version resolution.",
+    "why_en": "W+R>N forces quorum overlap; freshness still needs stable replicas, no sloppy quorum, and version resolution.",
     "tags": [
       "replication",
       "quorum",
@@ -487,7 +559,7 @@
       1
     ],
     "why": "主库宕机后进入故障转移：从库检测到主库失联→发起/参与选举→胜出者成为新主库并接管写入。代价是选举窗口内短暂不可写，异步复制下还可能丢掉老主库没复制出去的写。",
-    "why_en": "On leader failure, followers elect a new leader to restore writes after a brief outage, but async replication can lose unreplicated writes.",
+    "why_en": "On leader failure, followers elect a new leader to restore writes after a brief outage, but asynchronous replication can lose unreplicated writes.",
     "diagram": "stateDiagram-v2\n  [*] --> Follower\n  Follower --> Candidate: 检测到主库失联\n  Candidate --> Leader: 赢得选举\n  Candidate --> Follower: 收到更高任期\n  Leader --> Follower: 发现更高任期",
     "codeSample": "# Redis Sentinel manually triggering / observing failover\nSENTINEL failover mymaster\n# Sentinels promote a replica to master once quorum sentinels agree\n# the old master is down; clients reconnect via\n# SENTINEL get-master-addr-by-name mymaster",
     "lang": "redis",
@@ -508,6 +580,24 @@
       "这是主从复制故障转移的标准恢复路径。",
       "正常运维不会让客户端直接碰复制的数据文件。",
       "故障转移只是换一个主库，不会改变复制架构本身。"
+    ],
+    "optionMeanings_en": [
+      "This treats leader failure as permanent and unrecoverable.",
+      "This is the standard failover path: elect a new leader.",
+      "This bypasses the replication protocol and edits replica files directly.",
+      "This assumes the system changes into a leaderless architecture."
+    ],
+    "optionScenarioImpacts_en": [
+      "You would miss the self-healing path in leader-follower systems.",
+      "Writes resume after the election window closes.",
+      "Manual file edits can split the data into inconsistent copies.",
+      "You would confuse failover with changing the replication model."
+    ],
+    "optionDirectness_en": [
+      "Leader-follower systems normally include a failover mechanism.",
+      "This is the normal recovery path for leader-follower replication.",
+      "Clients should not write directly into replication data files.",
+      "Failover changes the leader; it does not change the architecture."
     ],
     "tags": [
       "replication",
@@ -538,6 +628,18 @@
         "fullName": "Leader Election",
         "meaning": "多个从库之间协商产生一个新主库的协议过程。",
         "meaningEn": "Leader election is the protocol followers run to agree on which one becomes the new leader."
+      },
+      {
+        "term": "候选节点",
+        "fullName": "Candidate",
+        "meaning": "选举过程中请求成为新主库的从库节点。",
+        "meaningEn": "A candidate is a follower that asks to become the new leader during an election."
+      },
+      {
+        "term": "任期",
+        "fullName": "Term",
+        "meaning": "选举协议里的单调递增轮次编号，用来识别更新的主库声明。",
+        "meaningEn": "A term is a monotonically increasing election number used to identify the newest leadership claim."
       },
       {
         "term": "Redis Sentinel",

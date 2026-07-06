@@ -1,0 +1,721 @@
+[
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-001",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "pipeline",
+    "q": "把视觉搜索的数据+embedding 摄取管线按正确顺序排列：",
+    "q_en": "Order the visual-search data and embedding ingestion pipeline correctly:",
+    "scenario": "为 Pinterest Lens 式系统设计数据层：一张新图从爬取到进索引要经过哪些阶段。",
+    "scenario_en": "Designing the data layer for a Pinterest Lens-style system: the stages a new image passes from crawl to index.",
+    "steps": [
+      "去重：pHash/dHash 粗筛→桶内 embedding 聚类→选代表图",
+      "摄取：爬取图像、抽取元数据",
+      "索引：ANN 建库(HNSW/IVF)、蓝绿部署、多模态元数据存储",
+      "安全过滤：NSFW+政策检测器→隔离/人工复核",
+      "embedding 生成：选架构、embedding 版本化、批量推理"
+    ],
+    "answerOrder": [1, 3, 0, 4, 2],
+    "why": "顺序：摄取→安全过滤(必须在 embedding 前，别把不安全内容白算白存)→去重→embedding 生成→索引。安全过滤前置是关键：放在最前才不浪费算力和索引容量在会被删的内容上。",
+    "why_en": "Ingest, then safety-filter before embedding (so you never waste compute/storage on unsafe content), then dedup, then generate embeddings, then index.",
+    "tags": ["llm-sd", "visual-search", "pipeline"],
+    "diagram": "flowchart LR\n  I[摄取] --> S[安全过滤] --> D[去重] --> E[embedding 生成] --> X[索引]",
+    "termDefinitions": [
+      { "term": "embedding generation / 向量生成", "meaning": "用选定编码器把图像批量编码成向量，是数据层最高杠杆的决策(决定向量空间质量)。", "meaningEn": "Embedding generation encodes images into vectors with a chosen encoder, the highest-leverage data-layer decision as it sets vector-space quality." },
+      { "term": "ingestion / 摄取", "meaning": "管线入口：爬取图像并抽取元数据(标题/标签/价格等)。", "meaningEn": "Ingestion is the pipeline entry: crawling images and extracting metadata (title, tags, price)." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-arch",
+    "scenario": "移动端视觉搜索，延迟预算极紧(需 ~10ms 编码)、微调预算有限，主要做同域内图搜图。",
+    "scenario_en": "Mobile visual search with a very tight latency budget (~10ms encode), limited fine-tuning budget, mostly in-domain image-to-image.",
+    "q": "该选哪种 embedding 编码器？",
+    "q_en": "Which embedding encoder should you pick?",
+    "why": "选 ResNet：卷积自带平移不变性等强归纳偏置，预训练 checkpoint 收敛快、微调成本低，推理约 10ms/GPU 适合移动端延迟约束。代价是跨域泛化弱、无原生文本，跨模态要另配文本编码器。",
+    "why_en": "Pick ResNet: convolutional inductive biases and fast-converging pretrained checkpoints give low fine-tune cost and ~10ms inference, fitting the mobile latency budget.",
+    "tags": ["llm-sd", "visual-search", "embedding-arch"],
+    "tradeoff": "ResNet(约 10ms、微调便宜) vs ViT/CLIP(更准/跨模态但 30–50ms、更贵)",
+    "whenOtherWins": "若要跨域泛化或原生图文跨模态检索(图搜商品)，CLIP 更合适；若不缺预训练数据、追求大规模图搜图精度上限，ViT 更合适。",
+    "options": [
+      "ResNet：强归纳偏置、微调便宜、约 10ms/GPU 推理，适配移动端延迟约束",
+      "CLIP：因为它零样本跨模态最强，延迟不重要",
+      "ViT：因为大 benchmark 精度最高，移动端也该用最准的",
+      "都不选，直接暴力像素比对省掉编码器"
+    ],
+    "options_en": [
+      "ResNet: strong inductive biases, cheap fine-tuning, ~10ms/GPU inference, fitting the mobile latency budget.",
+      "CLIP: because it is best at zero-shot cross-modal, and latency does not matter.",
+      "ViT: because it has the highest large-benchmark accuracy, so mobile should use the most accurate too.",
+      "None: just do brute-force pixel comparison and skip the encoder."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；移动端延迟约束是硬约束，ResNet 的约 10ms 推理+低微调成本+同域够用，正好卡这个 profile。",
+      "错；场景是同域图搜图且延迟极紧，CLIP 的 30–50ms 超预算、跨模态能力这里也用不上。",
+      "错；ViT 约 20–40ms 且 data-hungry，移动端延迟和微调预算都不允许，精度最高≠这里最合适。",
+      "错；像素比对不具语义、也不省算力，十亿级更不可行，答非所问。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the mobile latency budget is a hard constraint, and ResNet's ~10ms inference plus low fine-tune cost plus in-domain sufficiency fits this profile exactly.",
+      "Wrong — the scenario is in-domain image-to-image with a very tight budget, where CLIP's 30–50ms overshoots and its cross-modal power is unused.",
+      "Wrong — ViT at ~20–40ms and data-hungry violates both the mobile latency and fine-tune budgets; highest accuracy is not most-fit here.",
+      "Wrong — pixel comparison lacks semantics, saves no compute, and is infeasible at a billion scale, missing the point."
+    ],
+    "termDefinitions": [
+      { "term": "ResNet", "fullName": "Residual Network", "meaning": "残差卷积网络，靠卷积的平移不变性等强归纳偏置，微调成本低、推理快，适合延迟约束场景。", "meaningEn": "ResNet (Residual Network) is a convolutional net whose inductive biases like translation invariance make it cheap to fine-tune and fast to run, fitting latency-constrained settings." },
+      { "term": "inductive bias / 归纳偏置", "meaning": "模型结构自带的先验假设(如 CNN 的平移不变性)，让它用更少数据学得更快。", "meaningEn": "An inductive bias is a structural prior a model carries (e.g. CNN translation invariance) that lets it learn faster with less data." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-arch",
+    "scenario": "图搜商品，需要跨域(真实照片↔目录图)且原生支持图文跨模态检索，微调资源较充足。",
+    "scenario_en": "Image-to-product needing cross-domain (real photo↔catalog) and native image-text cross-modal retrieval, with ample fine-tune resources.",
+    "q": "这种跨模态场景该选哪种编码器？",
+    "q_en": "Which encoder fits this cross-modal scenario?",
+    "why": "选 CLIP：双编码器(图+文)用对比学习训进共享潜空间，天然支持零样本跨模态检索、跨域泛化好。代价是约 30–50ms、微调吃资源，且只微调图像编码器会 alignment drift。这里跨模态是核心需求，CLIP 最匹配。",
+    "why_en": "Pick CLIP: its dual image-text encoders trained contrastively into a shared latent space give native zero-shot cross-modal retrieval and strong cross-domain generalization.",
+    "tags": ["llm-sd", "visual-search", "embedding-arch"],
+    "tradeoff": "CLIP(原生跨模态/跨域强) vs ResNet(快但无文本、跨域弱)",
+    "whenOtherWins": "若延迟预算极紧且只做同域图搜图，ResNet 的约 10ms 更合适；不需要文本模态时上 CLIP 是浪费。",
+    "options": [
+      "ResNet：最快，跨模态可以后面再拼个文本编码器凑合",
+      "ViT：精度最高，跨模态需求可以忽略",
+      "CLIP：双编码器对比学习进共享潜空间，原生零样本跨模态+跨域泛化强，正合此场景",
+      "随便选，编码器对跨模态检索没有影响"
+    ],
+    "options_en": [
+      "ResNet: fastest, and cross-modal can be bolted on later with a text encoder.",
+      "ViT: highest accuracy, and the cross-modal need can be ignored.",
+      "CLIP: dual encoders contrastively trained into a shared latent space, native zero-shot cross-modal plus strong cross-domain, fitting this scenario.",
+      "Any encoder; it makes no difference to cross-modal retrieval."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；ResNet 无原生文本，硬拼文本编码器还要额外对齐层，跨模态不是它的强项，事倍功半。",
+      "错；场景核心就是跨模态，忽略它等于答错题；ViT 也无原生多模态。",
+      "对；共享潜空间让图和文本可直接比对，跨域泛化又好，恰好命中图搜商品的跨模态核心需求。",
+      "错；编码器决定向量空间是否跨模态可比，选错直接决定能不能做图文检索，影响巨大。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — ResNet has no native text; bolting on a text encoder plus an alignment layer is not its strength, a lot of effort for little.",
+      "Wrong — the scenario's core is cross-modal, so ignoring it answers the wrong question, and ViT also lacks native multi-modality.",
+      "Correct — the shared latent space lets image and text be compared directly with good cross-domain transfer, hitting image-to-product's cross-modal core need.",
+      "Wrong — the encoder decides whether the vector space is cross-modal comparable, so the choice directly governs whether image-text retrieval works, a huge impact."
+    ],
+    "termDefinitions": [
+      { "term": "CLIP", "fullName": "Contrastive Language-Image Pretraining", "meaning": "双编码器(图+文)对比学习模型，把图文映射进共享潜空间，支持零样本跨模态检索。", "meaningEn": "CLIP (Contrastive Language-Image Pretraining) is a dual image-text encoder trained contrastively into a shared latent space for zero-shot cross-modal retrieval." },
+      { "term": "zero-shot retrieval / 零样本检索", "meaning": "无需在目标任务上微调即可直接检索，靠预训练学到的通用图文对齐。", "meaningEn": "Zero-shot retrieval works without task-specific fine-tuning, relying on general image-text alignment learned in pretraining." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-004",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "embedding-arch",
+    "scenario": "要在 ResNet、ViT、CLIP 之间按泛化、微调成本、多模态能力做取舍，而非排名。",
+    "scenario_en": "You must trade off ResNet, ViT, and CLIP on generalization, fine-tune cost, and multi-modality, not rank them.",
+    "q": "ResNet / ViT / CLIP 在泛化、微调成本、多模态上如何对比？",
+    "q_en": "How do ResNet, ViT, and CLIP compare on generalization, fine-tune cost, and multi-modality?",
+    "why": "ResNet：同域内泛化好、微调便宜、无多模态，适合移动端延迟约束；ViT：大预训练下泛化强、微调中等、无原生多模态，适合大规模图搜图；CLIP：零样本跨域最强、微调贵、原生图文，适合跨模态/图搜商品。是三条 profile 的取舍不是排名。",
+    "why_en": "ResNet is good in-domain, cheap to fine-tune, no multi-modal (mobile); ViT is strong with large pretraining, medium cost, no native multi-modal (large-scale image-to-image); CLIP is best zero-shot cross-domain, expensive, native image-text (cross-modal).",
+    "tags": ["llm-sd", "visual-search", "embedding-arch"],
+    "tradeoff": "ResNet(便宜快、同域) vs ViT(准但 data-hungry) vs CLIP(跨模态但贵)",
+    "table": {
+      "headers": ["架构", "泛化", "微调成本", "多模态", "最佳场景"],
+      "rows": [
+        ["ResNet", "同域好", "低", "无", "移动端延迟约束"],
+        ["ViT", "大预训练强", "中", "无原生", "大规模图搜图"],
+        ["CLIP", "零样本跨域优", "高", "原生图文", "跨模态/图搜商品"]
+      ]
+    },
+    "options": [
+      "三者优劣绝对：CLIP 永远最好，其次 ViT，ResNet 最差",
+      "ResNet 同域好/微调低/无多模态；ViT 泛化强/成本中/无原生多模态；CLIP 零样本跨域优/成本高/原生图文",
+      "三者能力完全相同，选哪个只看代码好不好写",
+      "ViT 微调最便宜、数据需求最低，任何场景都优先选它"
+    ],
+    "options_en": [
+      "There is an absolute ranking: CLIP is always best, then ViT, then ResNet worst.",
+      "ResNet is in-domain/low cost/no multi-modal; ViT is strong-generalization/medium cost/no native multi-modal; CLIP is zero-shot cross-domain/high cost/native image-text.",
+      "All three are identical in capability; choose by which is easiest to code.",
+      "ViT is cheapest to fine-tune with the lowest data need, so always prefer it."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；不存在绝对排名，本课明确说是按延迟/规模/微调资源匹配 profile 的取舍。",
+      "对；每种架构有清晰的 profile，按延迟预算、索引规模、微调资源匹配，而非分高下。",
+      "错；三者能力差异巨大(跨模态/泛化/成本),不是编码难易问题。",
+      "错；ViT 恰恰 data-hungry、微调成本中等，不是最便宜也非万能首选。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — there is no absolute ranking; the lesson says to match a profile by latency/scale/fine-tune resources as a trade-off.",
+      "Correct — each architecture has a clear profile, matched by latency budget, index scale, and fine-tune resources rather than ranked.",
+      "Wrong — the three differ enormously (cross-modal/generalization/cost), not a coding-ease question.",
+      "Wrong — ViT is actually data-hungry with medium fine-tune cost, neither cheapest nor a universal default."
+    ],
+    "termDefinitions": [
+      { "term": "ViT", "fullName": "Vision Transformer", "meaning": "视觉 Transformer，用自注意力让每个 patch 关注全局，大预训练下检索精度高但 data-hungry。", "meaningEn": "ViT (Vision Transformer) uses self-attention so every patch attends globally, giving high retrieval accuracy with large pretraining but is data-hungry." },
+      { "term": "receptive field / 感受野", "meaning": "一个特征能看到的输入范围；ViT 靠自注意力实现全局感受野，CNN 靠堆卷积逐层扩大。", "meaningEn": "The receptive field is how much input a feature can see; ViT gets a global one via self-attention while CNNs grow it by stacking convolutions." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-005",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "alignment-drift",
+    "scenario": "用领域数据微调 CLIP 提升目录检索，但为省事只微调了图像编码器，文本编码器冻结不动。",
+    "scenario_en": "Fine-tuning CLIP on domain data to improve catalog retrieval, but to save effort only the image encoder is trained while the text encoder is frozen.",
+    "q": "只微调 CLIP 的图像编码器会导致什么问题？",
+    "q_en": "What problem arises from fine-tuning only CLIP's image encoder?",
+    "why": "alignment drift：图像 embedding 在微调中漂移，而文本 embedding 冻结不动，两个空间失去对齐→跨模态余弦不再可靠，图文检索退化。要么图文联合微调(两空间一起动、保持对齐)，要么用 adapter 层限制漂移。",
+    "why_en": "Alignment drift: the image embeddings shift during fine-tuning while the text embeddings stay fixed, desyncing the two spaces so cross-modal cosine becomes unreliable.",
+    "tags": ["llm-sd", "visual-search", "alignment-drift"],
+    "tradeoff": "只微调图像编码器(省事但 drift) vs 图文联合微调(保持对齐但成本高)",
+    "diagram": "flowchart LR\n  I[图像编码器<br/>微调后漂移] -.失去对齐.-> T[文本编码器<br/>冻结不动]\n  I --> X[跨模态余弦不可靠]",
+    "options": [
+      "没问题，只动图像编码器更省算力，检索质量不受影响",
+      "会让文本编码器过拟合，图搜图反而变差",
+      "alignment drift：图像 embedding 漂移、文本冻结，两空间失对齐→跨模态余弦不可靠，图文检索退化",
+      "会导致模型无法收敛，训练直接崩溃"
+    ],
+    "options_en": [
+      "No problem; training only the image encoder saves compute and retrieval quality is unaffected.",
+      "It overfits the text encoder and makes image-to-image worse.",
+      "Alignment drift: image embeddings shift while text is frozen, desyncing the two spaces so cross-modal cosine is unreliable and image-text retrieval degrades.",
+      "It prevents the model from converging and training crashes outright."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；省了算力却毁了对齐，跨模态检索质量恰恰受重创，不是不受影响。",
+      "错；文本编码器是冻结的不会过拟合，问题出在图像侧漂移离开了文本空间。",
+      "对；共享空间的价值靠两侧对齐维持，单动一侧就撕裂对齐，跨模态余弦失真是直接后果。",
+      "错；训练照常收敛，问题是收敛到一个与文本空间错位的图像空间,不是崩溃。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — it saves compute but wrecks alignment, so cross-modal retrieval quality is badly hurt, not unaffected.",
+      "Wrong — the text encoder is frozen and cannot overfit; the issue is the image side drifting away from the text space.",
+      "Correct — the shared space's value depends on both sides staying aligned, so moving only one tears the alignment and distorts cross-modal cosine.",
+      "Wrong — training converges fine; the problem is converging to an image space misaligned with the text space, not a crash."
+    ],
+    "termDefinitions": [
+      { "term": "alignment drift / 对齐漂移", "meaning": "只微调 CLIP 一侧编码器使图、文 embedding 空间不再对齐，跨模态相似度失真。", "meaningEn": "Alignment drift is when fine-tuning only one CLIP encoder desyncs the image and text embedding spaces, distorting cross-modal similarity." },
+      { "term": "adapter layer / 适配层", "meaning": "在冻结主干上插入的小可训练层，以低成本适配领域并限制对齐漂移。", "meaningEn": "An adapter layer is a small trainable layer inserted on a frozen backbone to adapt to a domain cheaply while limiting alignment drift." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "multimodal-rerank",
+    "scenario": "红色皮革钱包和红色皮革手袋在 embedding 空间里几乎重合，但它们是不同品类。",
+    "scenario_en": "A red leather wallet and a red leather handbag sit almost on top of each other in embedding space, yet are different categories.",
+    "q": "为什么只靠视觉相似度做检索不够，要怎么补？",
+    "q_en": "Why is visual similarity alone insufficient, and how do you fix it?",
+    "why": "纯视觉 embedding 会把'看起来像'的错品类拉到一起(红钱包≈红手袋)，检回对但不对款。补法：两阶段——检索只用视觉快速取候选，重排再融合文本相关性(品类/元数据)把错品类压下去。视觉负责快召回，文本负责纠品类。",
+    "why_en": "Pure visual embeddings pull look-alike wrong categories together (wallet≈handbag), so add a re-ranking stage that fuses text relevance to correct the category.",
+    "tags": ["llm-sd", "visual-search", "multimodal-rerank"],
+    "tradeoff": "只用视觉(快但混品类) vs 加文本重排(纠品类但多一阶段成本)",
+    "options": [
+      "只靠视觉就够，红钱包和红手袋本来就该算相似",
+      "换更大的图像编码器就能区分品类，不需要文本信号",
+      "纯视觉会把错品类拉到一起(红钱包≈红手袋)；用两阶段+文本重排融合品类/元数据纠正",
+      "把相似度阈值调到极高，只留一模一样的图,品类问题自然消失"
+    ],
+    "options_en": [
+      "Visual alone is enough; a red wallet and a red handbag should count as similar anyway.",
+      "A bigger image encoder can tell categories apart, so no text signal is needed.",
+      "Pure visual pulls wrong categories together (wallet≈handbag); a two-stage pipeline with text re-ranking fuses category/metadata to fix it.",
+      "Set the similarity threshold extremely high to keep only identical images, and category issues vanish."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；用户要的是对的品类不是纯视觉像，把钱包当手袋推正是要避免的失败。",
+      "错；再大的视觉模型也难仅凭外观分清同色异类,文本元数据是更直接的品类信号。",
+      "对；视觉快召回+文本重排纠品类分工明确，直接解决 look-alike 错品类问题。",
+      "错；阈值拉到极高会暴增空结果、扼杀召回，且同色异类仍可能极相似,治标不治本。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — users want the correct category, not mere visual likeness, and pushing a wallet as a handbag is exactly the failure to avoid.",
+      "Wrong — even a bigger visual model struggles to separate same-color different-category by appearance alone; text metadata is a more direct category signal.",
+      "Correct — visual for fast recall plus text re-ranking for category correction is a clean split that directly solves look-alike wrong categories.",
+      "Wrong — an extreme threshold explodes zero-results and kills recall, and same-color different-category can still look nearly identical, treating symptoms not cause."
+    ],
+    "termDefinitions": [
+      { "term": "multi-modal re-ranking / 多模态重排", "meaning": "在视觉检索候选上再融合文本相关性等信号重新排序,纠正纯视觉的错品类。", "meaningEn": "Multi-modal re-ranking rescores visual-retrieval candidates by fusing text relevance and other signals, correcting pure-visual category errors." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "two-stage",
+    "scenario": "检索要在十亿向量里 <10ms 出候选,重排要在小候选集上精排且落在 10–30ms 预算。",
+    "scenario_en": "Retrieval must return candidates from a billion vectors in <10ms, while re-ranking must precisely reorder a small set within a 10–30ms budget.",
+    "q": "两阶段管线里,视觉和文本信号该怎么分工?",
+    "q_en": "In the two-stage pipeline, how should visual and text signals be divided?",
+    "why": "检索阶段只用视觉 embedding:纯视觉余弦快、能在十亿向量里 <10ms 近似召回 top-k。重排阶段在小得多的 top-k(100–500)上融合视觉+文本(BM25 或轻量 cross-encoder),拼接分数过小 MLP/GBDT 得融合相关性,落 10–30ms。快而近似 vs 精而多模态。",
+    "why_en": "Retrieval uses vision-only embeddings for a fast <10ms ANN recall of top-k, then re-ranking on the small top-k (100–500) fuses visual plus text via a small MLP/GBDT within 10–30ms.",
+    "tags": ["llm-sd", "visual-search", "two-stage"],
+    "tradeoff": "检索(视觉-only、快、近似、十亿级) vs 重排(多模态、精、小候选集)",
+    "diagram": "flowchart LR\n  Q[查询图] --> R[\"检索: 视觉-only ANN<br/><10ms, 十亿级\"] --> K[\"top-k 100-500\"] --> RR[\"重排: 视觉+文本融合<br/>10-30ms\"]",
+    "whenOtherWins": "若候选集本就很小(千级以下)且延迟宽松,可跳过两阶段直接用多模态精排;两阶段的价值在十亿级召回必须先快后精。",
+    "options": [
+      "检索和重排都用视觉+文本全信号,保证每步都最准",
+      "检索只用文本 BM25,重排才引入视觉,反过来分工",
+      "检索用视觉-only ANN 在十亿级 <10ms 召回 top-k;重排在小候选集融合视觉+文本(MLP/GBDT),10–30ms",
+      "只做检索不做重排,靠视觉召回直接返回,省掉一阶段"
+    ],
+    "options_en": [
+      "Use full visual+text signals in both retrieval and re-ranking so every step is maximally accurate.",
+      "Retrieval uses text BM25 only and visual is added at re-ranking — the reverse division.",
+      "Retrieval uses vision-only ANN to recall top-k in <10ms at billion scale; re-ranking fuses visual+text (MLP/GBDT) on the small set within 10–30ms.",
+      "Do only retrieval and skip re-ranking, returning visual recall directly to save a stage."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错;十亿级用全信号精排跑不进 <10ms,重信号必须留给小候选集,否则延迟爆表。",
+      "错;十亿级用文本 BM25 主召回既慢又丢视觉主线,分工反了。",
+      "对;先用便宜的视觉余弦大规模快召回,再在小集合上花得起多模态精排,各自卡住自己的延迟预算。",
+      "错;省掉重排就回到纯视觉错品类问题(红钱包≈红手袋),质量代价太大。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — full-signal precise ranking over a billion cannot fit <10ms; heavy signals must be reserved for the small set or latency blows up.",
+      "Wrong — text BM25 as the billion-scale primary recall is slow and drops the visual main line, reversing the division.",
+      "Correct — cheap visual cosine for large-scale fast recall, then affordable multi-modal precision on the small set, each within its own latency budget.",
+      "Wrong — skipping re-ranking reverts to pure-visual category errors (wallet≈handbag), too large a quality cost."
+    ],
+    "termDefinitions": [
+      { "term": "two-stage retrieval / 两阶段检索", "meaning": "先视觉-only ANN 快召回 top-k,再多模态重排精排小候选集,兼顾规模与精度。", "meaningEn": "Two-stage retrieval first recalls top-k with vision-only ANN, then precisely re-ranks the small set multi-modally, balancing scale and precision." },
+      { "term": "BM25", "fullName": "Best Matching 25", "meaning": "经典文本检索打分函数,按词频/逆文档频率衡量查询与文档的相关性。", "meaningEn": "BM25 (Best Matching 25) is a classic text-retrieval scoring function ranking query-document relevance by term frequency and inverse document frequency." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "fusion-model",
+    "scenario": "重排阶段要把视觉相似度分和文本相关度分拼在一起,学一个融合相关性分,团队要在 MLP 和 GBDT 间选。",
+    "scenario_en": "Re-ranking must fuse visual and text scores into one learned relevance, and the team chooses between an MLP and a GBDT.",
+    "q": "拼接视觉+文本分做融合打分,MLP 和 GBDT 怎么选?",
+    "q_en": "To fuse visual and text scores, how do you choose between MLP and GBDT?",
+    "why": "把视觉分+文本分拼成特征向量喂一个小融合模型:MLP 端到端可微、能与编码器联合训、相关性更好但难调试;GBDT(LambdaMART)把分当表格特征,迭代快、可解释(特征重要性)、易调试,但不能联合训。按需要联合训还是要可解释来选。",
+    "why_en": "Concatenate visual and text scores into a small fusion model: an MLP is end-to-end differentiable and jointly trainable but harder to debug, while a GBDT is fast to iterate and interpretable but not jointly trainable.",
+    "tags": ["llm-sd", "visual-search", "fusion-model"],
+    "tradeoff": "MLP(可微/可联合训/难调试) vs GBDT(可解释/迭代快/不能联合训)",
+    "whenOtherWins": "若想端到端与编码器联合优化、追求相关性上限,选 MLP;若要快速迭代、特征可解释、易线上调试,选 GBDT。",
+    "options": [
+      "MLP:端到端可微、能与编码器联合训、相关性更好但难调试;GBDT:迭代快、可解释、易调试但不能联合训",
+      "两者完全等价,随便选,融合效果一样",
+      "GBDT 是深度模型可端到端联合训,MLP 是树模型不能微分",
+      "只能用规则加权求和,MLP 和 GBDT 都不适合做融合"
+    ],
+    "options_en": [
+      "MLP: end-to-end differentiable, jointly trainable with encoders, better relevance but harder to debug; GBDT: fast to iterate, interpretable, easy to debug but not jointly trainable.",
+      "They are equivalent; pick either and fusion works the same.",
+      "GBDT is a deep model trainable end-to-end, and MLP is a tree model that cannot differentiate.",
+      "Only rule-based weighted sums work; neither MLP nor GBDT suits fusion."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对;两者是不同取舍轴——要联合优化/相关性上限选 MLP,要可解释/快迭代/易调试选 GBDT。",
+      "错;二者在可微性、可解释性、能否联合训上差别明显,不是随便选。",
+      "说反了;MLP 才是可微的神经网络,GBDT 是梯度提升树、不能与编码器端到端联合训。",
+      "错;规则加权太死板学不到复杂交互,MLP/GBDT 正是为学融合分而用,这条否定了正解。"
+    ],
+    "optionExplanations_en": [
+      "Correct — they are different trade-off axes: MLP for joint optimization and relevance ceiling, GBDT for interpretability, fast iteration, and easy debugging.",
+      "Wrong — they differ clearly in differentiability, interpretability, and joint trainability, not interchangeable.",
+      "Backwards — the MLP is the differentiable neural net, while GBDT is gradient-boosted trees that cannot train end-to-end with encoders.",
+      "Wrong — rule-based sums are too rigid to learn complex interactions; MLP/GBDT exist precisely to learn the fusion score, so this denies the right answer."
+    ],
+    "termDefinitions": [
+      { "term": "MLP", "fullName": "Multi-Layer Perceptron", "meaning": "多层感知机,可微神经网络,可与编码器端到端联合训练学融合相关性。", "meaningEn": "MLP (Multi-Layer Perceptron) is a differentiable neural net trainable end-to-end with encoders to learn fused relevance." },
+      { "term": "GBDT", "fullName": "Gradient Boosted Decision Trees", "meaning": "梯度提升决策树,把分数当表格特征,迭代快、可解释,但不能与编码器联合训。", "meaningEn": "GBDT (Gradient Boosted Decision Trees) treats scores as tabular features, fast and interpretable, but not jointly trainable with encoders." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "dedup",
+    "scenario": "十亿级图库里,同一张图有大量精确重复,还有裁剪/加水印/调色的近重复。",
+    "scenario_en": "In a billion-image library, exact duplicates abound plus near-duplicates from crops, watermarks, and color shifts.",
+    "q": "重复和近重复不处理会带来什么后果?",
+    "q_en": "What happens if duplicates and near-duplicates go unhandled?",
+    "why": "精确重复白占存储、还挤掉结果多样性;近重复(裁剪/水印/调色)会虚高召回、让 top-10 全是几乎一样的图,惹恼用户。所以去重既省索引又提体验,是十亿级的关键管线问题。",
+    "why_en": "Exact dupes waste storage and hurt diversity, while near-dupes (crops, watermarks, color shifts) inflate recall and fill the top-10 with near-identical images, frustrating users.",
+    "tags": ["llm-sd", "visual-search", "dedup"],
+    "options": [
+      "重复无害,反而能加强热门图的曝光,不用处理",
+      "只影响存储成本,对检索结果质量没有任何影响",
+      "精确重复浪费存储+损多样性;近重复虚高召回、top-10 near-identical 惹恼用户,去重省索引又提体验",
+      "近重复会自动被 ANN 过滤掉,不需要专门去重"
+    ],
+    "options_en": [
+      "Duplicates are harmless and even boost exposure of popular images, so no handling is needed.",
+      "It only affects storage cost with no impact on retrieval result quality.",
+      "Exact dupes waste storage and hurt diversity; near-dupes inflate recall and fill the top-10 with near-identical results frustrating users, so dedup saves index and improves experience.",
+      "Near-duplicates are automatically filtered by ANN, so no dedicated dedup is needed."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错;重复堆曝光只会让结果单调、多样性崩,用户体验变差不是变好。",
+      "错;近重复直接毁 top-10 多样性,是结果质量问题不只是存储。",
+      "对;两类重复分别打击存储/多样性和召回/体验,去重是同时省成本、提质量的关键步骤。",
+      "错;ANN 只找最近邻,近重复恰恰是最近邻,会被原样召回,不会自动去掉。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — piling on exposure makes results monotonous and collapses diversity, worsening experience not improving it.",
+      "Wrong — near-dupes directly ruin top-10 diversity, a result-quality issue, not just storage.",
+      "Correct — the two dup types hit storage/diversity and recall/experience respectively, so dedup both saves cost and raises quality.",
+      "Wrong — ANN finds nearest neighbors, and near-dupes are exactly the nearest neighbors, so they get recalled as-is, not auto-removed."
+    ],
+    "termDefinitions": [
+      { "term": "near-duplicate / 近重复", "meaning": "非逐像素相同但内容几乎一样的图(裁剪/水印/调色),会虚高召回、损结果多样性。", "meaningEn": "A near-duplicate is not pixel-identical but nearly the same content (crop, watermark, color shift), inflating recall and hurting diversity." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-010",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "dedup",
+    "q": "把两遍去重管线按执行顺序排列:",
+    "q_en": "Order the two-pass deduplication pipeline:",
+    "scenario": "十亿级图库要既高效又准确地去重,先粗筛再精聚类。",
+    "scenario_en": "A billion-image library must dedup both efficiently and accurately, coarse-filter first then precisely cluster.",
+    "steps": [
+      "桶内计算两两 embedding 余弦相似度,低于阈值聚成一簇",
+      "用感知哈希(pHash/dHash)对全库做 O(1) 粗筛,分到哈希桶",
+      "每簇按质量(分辨率、无水印)选一张 canonical 代表图保留"
+    ],
+    "answerOrder": [1, 0, 2],
+    "why": "先用 pHash/dHash 做 O(1) 粗筛把候选分桶(便宜、能挡掉精确/近精确重复),再在桶内算两两 embedding 余弦精聚类,最后每簇按质量选 canonical 代表。先便宜粗筛再贵精算,是十亿级可行的关键。",
+    "why_en": "First perceptual-hash the whole library O(1) into buckets, then compute pairwise embedding cosine within each bucket to cluster, then pick a quality canonical per cluster.",
+    "tags": ["llm-sd", "visual-search", "dedup"],
+    "diagram": "flowchart LR\n  H[\"pHash/dHash 粗筛<br/>O(1) 分桶\"] --> C[\"桶内余弦聚类\"] --> R[\"选 canonical 代表\"]",
+    "termDefinitions": [
+      { "term": "pHash", "fullName": "perceptual hash", "meaning": "感知哈希:对图像内容算指纹,内容相近哈希也相近,O(1) 比对可快速筛重复。", "meaningEn": "pHash (perceptual hash) fingerprints image content so similar images have similar hashes, enabling O(1) duplicate screening." },
+      { "term": "dHash", "fullName": "difference hash", "meaning": "差值哈希:更轻量的感知哈希,按相邻像素梯度方向生成指纹。", "meaningEn": "dHash (difference hash) is a lighter perceptual hash that fingerprints images by the gradient direction between adjacent pixels." },
+      { "term": "canonical representative / 代表图", "meaning": "一个重复簇里按质量(分辨率、无水印)选出的唯一保留图。", "meaningEn": "A canonical representative is the single image kept per duplicate cluster, chosen by quality like resolution and no watermark." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "dedup",
+    "scenario": "去重的相似度阈值要定:一个商品有 5 种颜色,理应各自出现;但裁剪/水印近重复该合并。",
+    "scenario_en": "You must set the dedup similarity threshold: a product in 5 colors should each appear, but crop/watermark near-dupes should merge.",
+    "q": "去重阈值太激进(太紧)会有什么代价?",
+    "q_en": "What is the cost of an over-aggressive (too-tight) dedup threshold?",
+    "why": "阈值太紧会把合法变体误合(5 色商品塌成 1 个),损失应有的多样性和商品覆盖。阈值太松又漏掉近重复、top-10 全一样。所以要在已知变体组的留出集上校验阈值,再上线。Pinterest 去重砍了约 15% 索引同时提升感知质量。",
+    "why_en": "A too-tight threshold collapses legitimate variants (5 colors into 1), losing diversity and coverage, so validate the threshold against held-out known-variant groups before deploying.",
+    "tags": ["llm-sd", "visual-search", "dedup"],
+    "tradeoff": "阈值太紧(误合法变体、损多样性) vs 太松(漏近重复、top-10 雷同)",
+    "whenOtherWins": "若库里几乎没有合法变体、只有纯拷贝(如证件照库),可用更紧阈值多去重;有多色/多角度合法变体时必须放宽并做变体组校验。",
+    "options": [
+      "太紧只会更干净,没有任何代价,能紧就尽量紧",
+      "太紧会把合法变体(如 5 色商品)误合成 1 个,损多样性/覆盖;要用已知变体留出集校验阈值",
+      "阈值和多样性无关,只影响去重速度",
+      "太紧会漏掉近重复,让 top-10 变得雷同"
+    ],
+    "options_en": [
+      "Tighter is only cleaner with no cost, so tighten as much as possible.",
+      "Too tight merges legitimate variants (e.g. 5 colors into 1), losing diversity/coverage, so validate the threshold on held-out known-variant groups.",
+      "The threshold is unrelated to diversity and only affects dedup speed.",
+      "Too tight lets near-duplicates through, making the top-10 look identical."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错;太紧会误杀合法变体,牺牲多样性与商品覆盖,代价真实存在。",
+      "对;紧阈值把该保留的多色变体塌掉,必须靠变体组留出集把阈值校准到既去重又保变体。",
+      "错;阈值直接决定哪些图被合并,深刻影响多样性,不只是速度。",
+      "说反了;漏近重复、top-10 雷同是阈值太松的后果,不是太紧。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — too tight kills legitimate variants, sacrificing diversity and product coverage, a real cost.",
+      "Correct — a tight threshold collapses multi-color variants that should stay, so a variant-group held-out set is needed to calibrate between deduping and preserving variants.",
+      "Wrong — the threshold decides which images merge and deeply affects diversity, not just speed.",
+      "Backwards — missing near-dupes and an identical top-10 is the consequence of too loose, not too tight."
+    ],
+    "termDefinitions": [
+      { "term": "legitimate variant / 合法变体", "meaning": "同一商品的正当不同版本(多颜色/多角度),应各自保留而非被去重合并。", "meaningEn": "A legitimate variant is a valid different version of the same product (color, angle) that should be kept, not merged away by dedup." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-012",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "dedup",
+    "scenario": "离线 recall 很高,但用户反馈 top-10 结果几乎一模一样(同图的不同裁剪/水印版)。",
+    "scenario_en": "Offline recall is high, but users report the top-10 results look nearly identical (crop/watermark versions of one image).",
+    "q": "这个症状指向什么问题?",
+    "q_en": "What does this symptom point to?",
+    "why": "去重相似度阈值太宽松(permissive):近重复没被合并,同一张图的多个版本一起挤进 top-10,recall 看着高实则多样性崩。修法是收紧阈值/补近重复检测,让每个内容只保留 canonical 代表。",
+    "why_en": "The dedup similarity threshold is too permissive: near-duplicates were not merged, so multiple versions of one image crowd the top-10, inflating recall while diversity collapses.",
+    "tags": ["llm-sd", "visual-search", "dedup"],
+    "options": [
+      "编码器太弱,换更大模型就能让 top-10 更多样",
+      "ANN 召回不足,加大 top-k 就能提升多样性",
+      "去重阈值太宽松:近重复没合并,同图多版本挤进 top-10,recall 虚高但多样性崩",
+      "延迟太高导致结果重复,优化速度即可"
+    ],
+    "options_en": [
+      "The encoder is too weak; a bigger model would diversify the top-10.",
+      "ANN recall is insufficient; increasing top-k would improve diversity.",
+      "The dedup threshold is too permissive: near-dupes were not merged, so one image's versions crowd the top-10, inflating recall while diversity collapses.",
+      "Latency is too high causing duplicate results; optimizing speed fixes it."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错;换大模型不解决重复项没被去掉的问题,近重复照样最近邻,top-10 仍雷同。",
+      "错;加大 top-k 只会召回更多同图版本,多样性更差不是更好。",
+      "对;症状(高 recall+雷同 top-10)正是去重太松的特征,收紧阈值/补近重复检测即可。",
+      "错;延迟与结果是否重复无关,速度救不了去重阈值太松。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — a bigger model does not remove un-deduped copies; near-dupes remain nearest neighbors and the top-10 stays identical.",
+      "Wrong — increasing top-k recalls more versions of the same image, worsening diversity not improving it.",
+      "Correct — the symptom (high recall plus identical top-10) is the signature of too-permissive dedup, fixed by tightening the threshold or adding near-dup detection.",
+      "Wrong — latency is unrelated to result duplication; speed cannot fix a too-loose dedup threshold."
+    ],
+    "termDefinitions": [
+      { "term": "permissive threshold / 宽松阈值", "meaning": "去重相似度门槛太低,近重复不被判为重复,导致同图多版本共存于结果。", "meaningEn": "A permissive threshold is too low a dedup bar, so near-duplicates are not caught and multiple versions of one image coexist in results." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-013",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "dedup",
+    "scenario": "评审问去重到底值不值得做,你要给一个可信的行业量级。",
+    "scenario_en": "Review asks whether dedup is worth it, and you need a credible industry magnitude.",
+    "q": "去重能带来多大量级的收益?说明什么?",
+    "q_en": "What magnitude of benefit does dedup bring, and what does it show?",
+    "why": "Pinterest 报告去重砍了约 15% 索引规模,同时提升了感知质量(结果更多样)。这个约 15% 是经验观测,说明去重不是可选优化——它同时省存储/索引成本又提体验,是十亿级数据层的必要一环。",
+    "why_en": "Pinterest reports dedup cut the index by about 15% while improving perceived quality, showing dedup both saves cost and improves experience, not an optional add-on.",
+    "tags": ["llm-sd", "visual-search", "dedup"],
+    "options": [
+      "去重只省不到 0.1% 索引,基本没用,可以跳过",
+      "去重会让索引变大约 15%,是净成本,得不偿失",
+      "Pinterest 去重砍约 15% 索引同时提升感知质量,说明它同时省成本又提体验,是必要一环",
+      "去重收益无法量化,纯靠感觉,不值得投入"
+    ],
+    "options_en": [
+      "Dedup saves under 0.1% of the index, basically useless, so skip it.",
+      "Dedup grows the index by about 15% as a net cost, not worth it.",
+      "Pinterest's dedup cut about 15% of the index while improving perceived quality, showing it both saves cost and improves experience, a necessary step.",
+      "Dedup's benefit cannot be quantified, purely a feeling, not worth investing in."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错;约 15% 的索引缩减在十亿级是巨大存储/成本节省,远非可忽略。",
+      "说反了;去重是缩小索引不是增大,方向搞反。",
+      "对;约 15% 的经验数字把'省成本+提体验'量化,论证去重是数据层必要环节而非可选。",
+      "错;Pinterest 已给出约 15% 的可量化收益,并非无法衡量。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — a ~15% index reduction at a billion scale is huge storage/cost savings, far from negligible.",
+      "Backwards — dedup shrinks the index, not grows it; the direction is reversed.",
+      "Correct — the ~15% empirical figure quantifies 'save cost plus improve experience,' arguing dedup is a necessary data-layer step, not optional.",
+      "Wrong — Pinterest gives a quantifiable ~15% benefit, so it is not unmeasurable."
+    ],
+    "termDefinitions": [
+      { "term": "index reduction / 索引缩减", "meaning": "去重去掉冗余图后索引规模的下降比例(Pinterest 约 15%),直接省存储与检索成本。", "meaningEn": "Index reduction is the drop in index size after dedup removes redundant images (Pinterest ~15%), directly saving storage and retrieval cost." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "safety-gate",
+    "scenario": "要给十亿级图库加 NSFW/政策过滤,有人提议在检索返回结果后再过滤,反正最终会挡住。",
+    "scenario_en": "Adding NSFW/policy filtering to a billion-image library, someone proposes filtering after retrieval returns results since it blocks in the end anyway.",
+    "q": "安全过滤该放在管线的哪一步?",
+    "q_en": "Where in the pipeline should safety filtering sit?",
+    "why": "放在 embedding+索引之前的摄取阶段做上游门禁:过滤放在索引后会白白在不安全内容上耗存储/算力/索引容量;而检索后过滤一旦失败或延迟抖动,不安全内容就直达用户。前置门禁既省资源又堵住泄露路径。",
+    "why_en": "Filter upstream at ingestion, before embedding and indexing: post-index filtering wastes storage/compute/index on unsafe content, and post-retrieval filtering lets unsafe content reach users on any failure.",
+    "tags": ["llm-sd", "visual-search", "safety-gate"],
+    "tradeoff": "上游门禁(省资源+堵泄露) vs 检索后过滤(白耗索引且失败即泄露)",
+    "diagram": "flowchart LR\n  I[摄取] --> S{NSFW/政策检测}\n  S -->|超阈值| Q[隔离/人工复核]\n  S -->|通过| E[embedding+索引]",
+    "whenOtherWins": "对已受信、来源可控的私有目录(如自家审核过的商品库),前置门禁可轻量化;开放爬取内容必须严格前置。",
+    "options": [
+      "检索返回后再过滤,反正最终会挡住不安全内容,简单省事",
+      "放在 embedding+索引之前的摄取门禁:否则白耗索引资源,且检索后过滤失败即泄露给用户",
+      "过滤放在最后展示层的前端,让浏览器判断是否显示",
+      "不过滤,靠用户举报事后删除即可"
+    ],
+    "options_en": [
+      "Filter after retrieval returns, since it blocks unsafe content in the end, simple and easy.",
+      "Put it as an ingestion gate before embedding and indexing: otherwise index resources are wasted and post-retrieval filtering leaks to users on failure.",
+      "Filter at the front-end display layer and let the browser decide whether to show.",
+      "Do not filter; rely on user reports to delete afterward."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错;检索后过滤先把不安全内容 embedding、索引了,浪费资源,还留下过滤失败即泄露的窗口。",
+      "对;前置门禁在摄取就挡住,既不浪费下游算力/索引,又根除检索后泄露风险,是 Staff+ 的平台思维。",
+      "错;把安全判断丢给前端不可靠、易被绕过,不安全内容已进系统,门禁太靠后。",
+      "错;事后删除意味着不安全内容已触达用户,安全过滤必须前置预防而非补救。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — post-retrieval filtering first embeds and indexes unsafe content, wasting resources and leaving a leak window on filter failure.",
+      "Correct — an ingestion gate blocks at entry, wasting no downstream compute/index and eliminating post-retrieval leakage, the Staff+ platform view.",
+      "Wrong — delegating safety to the front-end is unreliable and bypassable, and unsafe content already entered the system, gating far too late.",
+      "Wrong — deleting afterward means unsafe content already reached users; safety filtering must prevent upstream, not remediate."
+    ],
+    "termDefinitions": [
+      { "term": "NSFW", "fullName": "Not Safe For Work", "meaning": "不适宜公开展示的内容(色情/暴力等),需在摄取阶段由分类器检出并隔离。", "meaningEn": "NSFW (Not Safe For Work) is content unsuitable for public display (explicit/violent), detected and quarantined by a classifier at ingestion." },
+      { "term": "upstream gate / 上游门禁", "meaning": "在管线早期(摄取)就拦截不合规内容,避免下游浪费资源与泄露风险。", "meaningEn": "An upstream gate blocks non-compliant content early (at ingestion), avoiding downstream resource waste and leakage risk." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-015",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "safety-gate",
+    "scenario": "要在摄取阶段对每张图判 NSFW+政策违规(暴力/仇恨符号/版权),且不能拖慢管线太多。",
+    "scenario_en": "At ingestion you must score each image for NSFW plus policy violations (violence, hate symbols, copyright) without slowing the pipeline much.",
+    "q": "上游安全过滤该用什么设计?",
+    "q_en": "What design should upstream safety filtering use?",
+    "why": "用轻量二分类器(小/蒸馏 CNN)在摄取时对每张图打 NSFW+政策分:超阈值→进隔离队列人工复核;低于→放行进 embedding 管线。轻量是为了不拖慢十亿级摄取,人工复核兜住边界样本。",
+    "why_en": "Use a lightweight binary classifier (small/distilled CNN) at ingestion to score each image for NSFW+policy: above threshold goes to a human-review quarantine queue, below proceeds to embedding.",
+    "tags": ["llm-sd", "visual-search", "safety-gate"],
+    "options": [
+      "用一个几十亿参数的大模型逐张精判,慢一点没关系",
+      "轻量二分类器(小/蒸馏 CNN)摄取时打分:超阈值进隔离队列人工复核,低于放行进 embedding",
+      "靠关键词过滤文件名,不看图像内容",
+      "让用户上传时自己勾选是否安全,系统信任其声明"
+    ],
+    "options_en": [
+      "Use a multi-billion-parameter model to judge each image precisely; a bit slow is fine.",
+      "A lightweight binary classifier (small/distilled CNN) scores at ingestion: above threshold goes to a human-review quarantine queue, below proceeds to embedding.",
+      "Filter by keywords in the filename without looking at image content.",
+      "Let users self-declare safety at upload and trust their claim."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错;十亿级摄取用超大模型逐张精判会成瓶颈,过滤器要轻量才跟得上吞吐。",
+      "对;蒸馏小 CNN 快速打分、超阈值转人工复核,兼顾吞吐与边界样本的准确,是标准上游门禁设计。",
+      "错;文件名关键词绕不过改名,也看不懂图像内容,挡不住真正的违规图。",
+      "错;信任用户自我声明等于没有门禁,不安全内容会大量混入。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — a giant model judging each image at billion-scale ingestion becomes a bottleneck; the filter must be lightweight to match throughput.",
+      "Correct — a distilled small CNN scores fast and routes above-threshold to human review, balancing throughput and borderline accuracy, the standard upstream gate.",
+      "Wrong — filename keywords are defeated by renaming and cannot read image content, missing real violations.",
+      "Wrong — trusting user self-declaration is no gate at all, and unsafe content floods in."
+    ],
+    "termDefinitions": [
+      { "term": "quarantine queue / 隔离队列", "meaning": "被安全分类器判为可疑的图暂存于此,等待人工复核再决定删除或放行。", "meaningEn": "A quarantine queue holds images flagged suspicious by the safety classifier for human review before deletion or release." },
+      { "term": "distilled CNN / 蒸馏 CNN", "meaning": "由大模型蒸馏出的小卷积网络,推理快、成本低,适合摄取阶段高吞吐打分。", "meaningEn": "A distilled CNN is a small convolutional net distilled from a large model, fast and cheap for high-throughput scoring at ingestion." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-016",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "safety-gate",
+    "scenario": "安全过滤阈值定太严,把医学影像、艺术裸体等合法内容也误判成违规删掉了。",
+    "scenario_en": "The safety threshold is set too strict, wrongly removing legitimate content like medical imagery and fine-art nudes as violations.",
+    "q": "安全过滤的核心张力是什么,误报太多会怎样?",
+    "q_en": "What is safety filtering's central tension, and what does over-flagging cause?",
+    "why": "核心张力是 false positive:太严会误删合法内容(医学影像、艺术),抬高空结果率(zero-result rate);太松又放不安全内容过关。安全过滤的误报率直接驱动 zero-result 指标。业界(Google SafeSearch)用分级阈值+边界样本人工复核折中。",
+    "why_en": "The tension is false positives: too strict removes legitimate content (medical, fine art) and raises zero-result rate, while too permissive lets unsafe through, so tiered thresholds plus human review balance it.",
+    "tags": ["llm-sd", "visual-search", "safety-gate"],
+    "tradeoff": "太严(误删合法、升 zero-result) vs 太松(放行不安全内容)",
+    "options": [
+      "没有张力,阈值越严越好,宁可错杀不可放过",
+      "核心张力是 false positive:太严误删合法内容、抬高 zero-result;太松放不安全内容;用分级阈值+人工复核折中",
+      "误报只影响存储,不影响任何检索指标",
+      "误报会降低延迟,所以其实是好事"
+    ],
+    "options_en": [
+      "There is no tension; stricter is always better, better to over-remove than let through.",
+      "The tension is false positives: too strict removes legitimate content and raises zero-result, too permissive lets unsafe through; balance with tiered thresholds plus human review.",
+      "False positives only affect storage, not any retrieval metric.",
+      "False positives reduce latency, so they are actually good."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错;宁可错杀会误删医学/艺术等合法内容,推高空结果率、伤害覆盖,不是越严越好。",
+      "对;误报把合法内容挡在门外直接抬高 zero-result,漏报又放不安全内容,分级阈值+人工复核是标准折中。",
+      "错;误删合法内容直接推高 zero-result rate,是明确的检索指标恶化,不只是存储。",
+      "错;误报与延迟无关,还会恶化覆盖与用户体验,绝非好事。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — over-removing kills legitimate medical/art content, raising zero-result and hurting coverage; stricter is not always better.",
+      "Correct — false positives bar legitimate content and directly raise zero-result while false negatives let unsafe through, so tiered thresholds plus human review are the standard balance.",
+      "Wrong — removing legitimate content directly raises zero-result rate, a clear retrieval-metric degradation, not just storage.",
+      "Wrong — false positives are unrelated to latency and worsen coverage and experience, far from good."
+    ],
+    "termDefinitions": [
+      { "term": "false positive (safety) / 误报", "meaning": "把合法内容误判为违规删掉,直接推高 zero-result rate、损害覆盖。", "meaningEn": "A safety false positive wrongly flags legitimate content as a violation and removes it, directly raising zero-result rate and hurting coverage." },
+      { "term": "human-in-the-loop / 人工复核", "meaning": "对分类器判不准的边界样本引入人工判定,平衡误报与漏报。", "meaningEn": "Human-in-the-loop routes borderline classifier cases to human judgment, balancing false positives and false negatives." }
+    ]
+  },
+  {
+    "id": "llm-082-visual-search-data-strategy-embedding-generation-017",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "interconnections",
+    "scenario": "数据层各阶段不是孤立的,一个阶段的质量会传导到另一个阶段。",
+    "scenario_en": "Data-layer stages are not isolated; one stage's quality propagates to another.",
+    "q": "数据层各阶段之间有哪些真实的相互影响?(多选)",
+    "q_en": "Which real cross-stage interconnections exist in the data layer? (multiple)",
+    "why": "两条真实传导:①更好的 embedding→去重簇更紧(同物聚得更准);②安全过滤的误报率直接驱动 zero-result rate(误删合法内容=更多空结果)。这些串联说明数据层要整体设计,不能各管一段。",
+    "why_en": "Better embeddings make dedup clusters tighter, and the safety-filter false-positive rate directly drives the zero-result rate, so the data layer must be designed as a whole.",
+    "tags": ["llm-sd", "visual-search", "interconnections"],
+    "options": [
+      "更好的 embedding → 去重簇更紧(同一物体聚得更准)",
+      "安全过滤误报率 → 直接抬高 zero-result rate(误删合法内容)",
+      "去重阈值 → 影响 top-10 结果的多样性",
+      "GPU 品牌 → 决定 embedding 的语义质量"
+    ],
+    "options_en": [
+      "Better embeddings → tighter dedup clusters (same object groups more accurately).",
+      "Safety-filter false-positive rate → directly raises zero-result rate (removes legitimate content).",
+      "Dedup threshold → affects the diversity of the top-10 results.",
+      "GPU brand → determines the semantic quality of embeddings."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对;embedding 空间更好,同物体距离更近,去重聚类更准更紧,是真实传导。",
+      "对;安全误报=误删合法图,合法内容变少直接推高空结果率,是明确的跨阶段影响。",
+      "对;去重阈值松紧直接决定 top-10 里保留多少同图版本,影响多样性。",
+      "错;GPU 品牌只影响算力/速度,embedding 的语义质量由模型与训练数据决定,与品牌无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a better embedding space brings same objects closer, making dedup clustering more accurate and tighter, a real propagation.",
+      "Correct — safety false positives remove legitimate images, and fewer legitimate items directly raise zero-result, a clear cross-stage effect.",
+      "Correct — the dedup threshold's tightness decides how many versions of one image remain in the top-10, affecting diversity.",
+      "Incorrect — GPU brand only affects compute/speed; embedding semantic quality comes from the model and training data, unrelated to brand."
+    ],
+    "termDefinitions": [
+      { "term": "cross-stage interconnection / 跨阶段传导", "meaning": "数据层一个阶段的质量或参数影响另一个阶段的指标,要求整体协同设计。", "meaningEn": "A cross-stage interconnection is when one data-layer stage's quality or parameter affects another stage's metric, demanding holistic design." }
+    ]
+  }
+]

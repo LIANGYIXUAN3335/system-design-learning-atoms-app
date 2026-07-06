@@ -1,0 +1,1127 @@
+[
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-pipeline",
+    "scenario": "视频推荐要在总延迟 <200ms 内，从数百万视频里选出并排好一屏推荐。",
+    "scenario_en": "Video recommendation must select and order a screen of recommendations from millions of videos within <200ms total latency.",
+    "q": "在线服务的两阶段流水线由哪几段组成，各自的量级延迟是多少？",
+    "q_en": "What stages make up the two-stage serving pipeline, and roughly how much latency does each take?",
+    "why": "三段：候选生成(~20ms，ANN 召回~500个)→排序(~50ms，W&D/DCN 精排)→重排(~10ms，多样性+硬过滤)。核心计算约 80ms，留余量给网络/特征拉取，凑成 <200ms 预算。",
+    "why_en": "Three stages: candidate generation (~20ms, ANN pulls ~500), ranking (~50ms, Wide&Deep/DCN), re-ranking (~10ms, diversity + hard filters), about 80ms of core compute inside the <200ms budget.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "diagram": "flowchart LR\n  U[\"用户请求\"] --> C[\"候选生成<br/>~20ms · ANN→~500\"]\n  C --> R[\"排序<br/>~50ms · W&D/DCN\"]\n  R --> RR[\"重排<br/>~10ms · 多样性+过滤\"]\n  RR --> F[\"返回一屏\"]",
+    "options": [
+      "单阶段：一个大模型直接对数百万视频逐个打分排序",
+      "两阶段：先排序精算全量、再召回粗筛，最后不做重排",
+      "候选生成(~20ms)→排序(~50ms)→重排(~10ms)，共约 80ms 核心计算，落在 <200ms 预算内",
+      "召回→排序→召回→排序 反复迭代直到收敛，不设延迟预算"
+    ],
+    "options_en": [
+      "Single stage: one big model scores and orders all millions of videos directly.",
+      "Two stages: rank the full corpus first, then coarse-retrieve, with no re-ranking.",
+      "Candidate generation (~20ms) → ranking (~50ms) → re-ranking (~10ms), ~80ms core compute inside the <200ms budget.",
+      "Retrieve → rank → retrieve → rank repeatedly until convergence, with no latency budget."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "对数百万逐个跑重模型远超 200ms，正是两阶段漏斗要避免的；必须先召回缩小候选。",
+      "顺序反了：先召回粗筛把数百万压到几百，再排序精算；且生产系统一定有重排。",
+      "对；漏斗把重计算限制在几百候选上，各段延迟相加还留出网络/特征的余量。",
+      "反复迭代无界会爆延迟；在线服务是单向漏斗且有硬延迟预算。"
+    ],
+    "optionExplanations_en": [
+      "Running a heavy model over millions blows past 200ms—exactly what the two-stage funnel avoids; retrieve first to shrink candidates.",
+      "Order is reversed: retrieval coarse-filters millions to hundreds first, then ranking; production always has re-ranking.",
+      "Correct — the funnel confines heavy compute to a few hundred candidates, and the summed stage latencies leave headroom for network/features.",
+      "Unbounded iteration explodes latency; online serving is a one-way funnel with a hard latency budget."
+    ],
+    "termDefinitions": [
+      {
+        "term": "candidate generation / 候选生成",
+        "meaning": "服务第一阶段，用 ANN 从数百万里召回约 500 个候选，追求召回和吞吐。",
+        "meaningEn": "Candidate generation is stage one: ANN pulls ~500 candidates from millions, optimizing recall and throughput."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "recall-at-k",
+    "scenario": "要评估候选生成阶段本身好不好，而不是评估最终排序。",
+    "scenario_en": "You need to evaluate the candidate-generation stage itself, not the final ordering.",
+    "q": "Recall@K 衡量的是什么？",
+    "q_en": "What does Recall@K measure?",
+    "why": "Recall@K = 从数百万里检索出的 top-K 中，真正相关视频所占的比例。它只看「有没有被召回进 top-K」，不看排序顺序，是候选生成阶段的核心指标。",
+    "why_en": "Recall@K is the fraction of truly relevant videos captured in the top-K retrieved from millions; it measures coverage, not ordering, and is the candidate-generation metric.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "offline-eval"
+    ],
+    "options": [
+      "top-K 检索结果里真正相关视频所占的比例，衡量候选生成的覆盖率",
+      "把相关视频排在越靠前得分越高的位置加权质量",
+      "用户看完一个视频后的平均观看时长",
+      "模型推理一次的平均延迟"
+    ],
+    "options_en": [
+      "The fraction of truly relevant videos in the top-K retrieved, measuring candidate-generation coverage.",
+      "A position-weighted quality that scores relevant videos higher when ranked earlier.",
+      "The average watch time after a user finishes a video.",
+      "The average latency of one model inference."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；Recall@K 只问「相关的有没有进 top-K」，是覆盖率指标，忽略顺序。",
+      "位置加权是 NDCG@K 的定义，不是 Recall@K；Recall 不看顺序。",
+      "观看时长是在线参与度指标，不是离线召回覆盖率。",
+      "延迟是服务性能指标，和召回覆盖率无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — Recall@K only asks whether the relevant items made the top-K; it is a coverage metric ignoring order.",
+      "Position weighting defines NDCG@K, not Recall@K; recall ignores order.",
+      "Watch time is an online engagement metric, not offline retrieval coverage.",
+      "Latency is a serving-performance metric, unrelated to retrieval coverage."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Recall@K",
+        "fullName": "Recall at K",
+        "meaning": "检索出的前 K 个里，真正相关物料所占的比例，衡量召回覆盖率。",
+        "meaningEn": "Recall@K is the fraction of truly relevant items among the top-K retrieved, measuring retrieval coverage."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-003",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "recall-starvation",
+    "scenario": "候选生成的 Recall@K 很低，很多真正相关的视频根本没进召回结果。",
+    "scenario_en": "Candidate generation has low Recall@K—many truly relevant videos never make it into the retrieved set.",
+    "q": "低 Recall@K 会对整条流水线产生什么后果？",
+    "q_en": "What does a low Recall@K do to the whole pipeline?",
+    "why": "召回是漏斗上游：没被召回的视频，排序永远看不到，也就没机会被推。低 Recall@K 会「饿死」整条流水线，再强的排序也救不回漏掉的候选。",
+    "why_en": "Retrieval is the funnel's top: videos not retrieved are never seen by the ranker, so low Recall@K starves the whole pipeline, and no ranker can recover missed candidates.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "offline-eval"
+    ],
+    "options": [
+      "没影响，排序模型会自动补回漏掉的相关视频",
+      "排序永远看不到漏掉的候选，整条流水线被饿死，强排序也救不回",
+      "只会略微增加延迟，推荐质量不变",
+      "会提高多样性，因为候选更少更集中"
+    ],
+    "options_en": [
+      "No impact, the ranker automatically recovers missed relevant videos.",
+      "The ranker never sees missed candidates, starving the whole pipeline, and even a strong ranker cannot recover them.",
+      "It only slightly increases latency, with unchanged recommendation quality.",
+      "It improves diversity because fewer, more focused candidates remain."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "排序只能给召回给它的东西排序，看不到没召回的，补不回来。",
+      "对；这是漏斗的硬约束——上游漏了，下游无从弥补，Recall@K 决定天花板。",
+      "问题不是延迟而是覆盖率：好内容根本没进候选，质量直接受损。",
+      "漏掉相关视频不是多样性，是覆盖缺口，会降低相关性而非提升多样性。"
+    ],
+    "optionExplanations_en": [
+      "The ranker can only order what retrieval hands it; it cannot see or recover what was never retrieved.",
+      "Correct — this is the funnel's hard constraint: what the top misses, downstream cannot fix; Recall@K sets the ceiling.",
+      "The issue is coverage, not latency: good content never entered candidates, directly hurting quality.",
+      "Missing relevant videos is a coverage gap, not diversity; it lowers relevance rather than raising diversity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "pipeline starvation / 流水线饿死",
+        "meaning": "上游召回漏掉的候选，下游排序永远拿不到，质量被上游封顶。",
+        "meaningEn": "Pipeline starvation is when candidates missed by upstream retrieval never reach downstream ranking, capping quality."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ndcg",
+    "scenario": "要评估排序阶段的好坏，且第 1 位的相关视频应该比第 10 位的更值钱。",
+    "scenario_en": "You need to evaluate the ranking stage, where a relevant video at position 1 should count far more than at position 10.",
+    "q": "NDCG@K 相比 Recall@K 多考虑了什么？",
+    "q_en": "What does NDCG@K account for that Recall@K does not?",
+    "why": "NDCG@K 是位置加权的相关性：排在前面的相关视频得分远高于排在后面的，模拟用户注意力随位置衰减。Recall@K 只看在不在 top-K，不看顺序。",
+    "why_en": "NDCG@K is position-weighted relevance—a relevant video ranked earlier scores far higher, mirroring attention decay—whereas Recall@K ignores order.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "offline-eval"
+    ],
+    "options": [
+      "只看相关视频有没有进 top-K，忽略顺序",
+      "衡量模型推理延迟随位置的变化",
+      "统计用户对每个位置的绝对打星数",
+      "位置加权的相关性：越靠前的相关视频得分越高，模拟注意力衰减"
+    ],
+    "options_en": [
+      "Only whether relevant videos entered the top-K, ignoring order.",
+      "How inference latency varies by position.",
+      "Users' absolute star ratings at each position.",
+      "Position-weighted relevance: earlier relevant videos score higher, modeling attention decay."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "只看在不在 top-K 是 Recall@K；NDCG 的关键增量正是位置权重。",
+      "延迟是服务指标，NDCG 是排序质量指标，不相关。",
+      "NDCG 用的是隐式反馈标签，不是绝对打星；且它按位置加权而非计星。",
+      "对；位置折扣是 NDCG 的核心，让「把相关的排前面」得到奖励。"
+    ],
+    "optionExplanations_en": [
+      "Whether items are in the top-K is Recall@K; NDCG's added value is exactly the position weighting.",
+      "Latency is a serving metric; NDCG is a ranking-quality metric, unrelated.",
+      "NDCG uses implicit-feedback labels, not absolute stars, and weights by position rather than counting stars.",
+      "Correct — the position discount is NDCG's core, rewarding putting relevant items earlier."
+    ],
+    "termDefinitions": [
+      {
+        "term": "NDCG@K",
+        "fullName": "Normalized Discounted Cumulative Gain at K",
+        "meaning": "位置加权的排序质量指标，越靠前的相关结果贡献越大，再对理想排序归一化。",
+        "meaningEn": "NDCG@K (Normalized Discounted Cumulative Gain at K) is a position-weighted ranking metric where earlier relevant results contribute more, normalized to the ideal order."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "recall-vs-ndcg",
+    "scenario": "离线评估要同时衡量「召回够不够全」和「排得好不好」，需要两个不同指标。",
+    "scenario_en": "Offline evaluation must measure both 'did retrieval cover enough' and 'is the order good', needing two different metrics.",
+    "q": "Recall@K 和 NDCG@K 分别评估哪个阶段、有何互补？",
+    "q_en": "Which stage does each of Recall@K and NDCG@K evaluate, and how are they complementary?",
+    "why": "Recall@K 评候选生成，只看覆盖率、不看顺序；NDCG@K 评排序，位置加权看顺序质量。前者定天花板、后者定天花板内的排列质量，两者互补。",
+    "why_en": "Recall@K evaluates candidate generation (coverage, order-agnostic); NDCG@K evaluates ranking (position-weighted order quality)—one sets the ceiling, the other the ordering quality within it.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "offline-eval"
+    ],
+    "tradeoff": "Recall@K 管覆盖(不看序) vs NDCG@K 管排序质量(看序)",
+    "table": {
+      "headers": [
+        "指标",
+        "评估阶段",
+        "衡量",
+        "局限"
+      ],
+      "rows": [
+        [
+          "Recall@K",
+          "候选生成",
+          "top-K 覆盖率",
+          "忽略排序顺序"
+        ],
+        [
+          "NDCG@K",
+          "排序",
+          "位置加权质量",
+          "历史标签·漏新颖性"
+        ]
+      ]
+    },
+    "options": [
+      "两者都评排序阶段，只是 K 取值不同",
+      "Recall@K 评排序、NDCG@K 评候选生成",
+      "Recall@K 评候选生成(看覆盖率)，NDCG@K 评排序(看位置加权质量)，互补定天花板与排列质量",
+      "两者都评候选生成，NDCG 只是 Recall 的归一化版本"
+    ],
+    "options_en": [
+      "Both evaluate the ranking stage, differing only in the value of K.",
+      "Recall@K evaluates ranking and NDCG@K evaluates candidate generation.",
+      "Recall@K evaluates candidate generation (coverage), NDCG@K evaluates ranking (position-weighted quality), complementary as ceiling vs ordering quality.",
+      "Both evaluate candidate generation, and NDCG is just a normalized version of Recall."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "两者评的是不同阶段(召回 vs 排序)，不是同指标换 K。",
+      "说反了：Recall 管召回覆盖、NDCG 管排序顺序。",
+      "对；覆盖率定上限，位置加权质量定上限内的好坏，正好互补。",
+      "NDCG 不是 Recall 的归一化；它引入位置折扣、评的是排序阶段。"
+    ],
+    "optionExplanations_en": [
+      "They evaluate different stages (retrieval vs ranking), not the same metric with a different K.",
+      "Backwards: Recall covers retrieval coverage, NDCG covers ranking order.",
+      "Correct — coverage sets the ceiling and position-weighted quality sets the goodness within it, complementary.",
+      "NDCG is not a normalized Recall; it introduces a position discount and evaluates the ranking stage."
+    ],
+    "termDefinitions": [
+      {
+        "term": "offline evaluation / 离线评估",
+        "meaning": "用历史数据(不上线)衡量模型质量，如 Recall@K、NDCG@K。",
+        "meaningEn": "Offline evaluation measures model quality on historical data without deploying, e.g. Recall@K, NDCG@K."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-006",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "implicit-labels",
+    "scenario": "要为 NDCG@K 构造 ground-truth 相关性标签，但用户几乎不会显式打星，且打星样本极少。",
+    "scenario_en": "You must build ground-truth relevance labels for NDCG@K, but users rarely give explicit star ratings and such samples are scarce.",
+    "q": "相关性标签该用显式打星还是隐式反馈来构造？",
+    "q_en": "Should relevance labels come from explicit stars or implicit feedback?",
+    "why": "用隐式反馈(观看时长分桶、点赞、转发)构造标签：显式打星稀疏、有偏、大多数用户不打。隐式信号量大、覆盖全，但要小心它也带偏差(如标题党骗点)。标签构造本身就是设计决策。",
+    "why_en": "Build labels from implicit feedback (watch-time buckets, likes, shares): explicit stars are sparse and biased since most users never rate, while implicit signals are abundant but carry their own biases—label construction is itself a design choice.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "offline-eval"
+    ],
+    "tradeoff": "隐式反馈(量大全覆盖但有偏) vs 显式打星(直接但稀疏有偏)",
+    "options": [
+      "用显式打星，因为它最直接反映用户真实评价",
+      "用隐式反馈(观看时长分桶、点赞、转发)构造标签，因显式打星稀疏且大多不打",
+      "随机采样一批视频人工标注，忽略用户行为",
+      "只用视频元数据(时长、分辨率)推断相关性"
+    ],
+    "options_en": [
+      "Use explicit stars, since they most directly reflect the user's true evaluation.",
+      "Build labels from implicit feedback (watch-time buckets, likes, shares) because explicit stars are sparse and mostly unrated.",
+      "Randomly sample videos for human annotation, ignoring user behavior.",
+      "Infer relevance only from video metadata (duration, resolution)."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若产品本身有强显式评分文化(如电影评分站、明确 1-5 星)且样本充足，显式标签更干净、可直接当 ground truth。",
+    "optionExplanations": [
+      "显式打星虽直接但极稀疏、只有少数活跃用户打，样本量撑不起训练。",
+      "对；隐式反馈量大覆盖全，是主流做法；但要意识到它带偏差，标签构造是设计决策。",
+      "人工标注不可扩展、且脱离真实用户偏好，不适合数百万视频规模。",
+      "元数据不反映相关性——分辨率高不等于用户想看，信号错位。"
+    ],
+    "optionExplanations_en": [
+      "Explicit stars are direct but extremely sparse—only a few active users rate—so the sample size cannot support training.",
+      "Correct — implicit feedback is abundant and full-coverage, the mainstream approach; but recognize its bias, and label construction is a design choice.",
+      "Human annotation does not scale and detaches from real user preference, unfit for millions of videos.",
+      "Metadata does not reflect relevance—high resolution does not mean the user wants it, a mismatched signal."
+    ],
+    "termDefinitions": [
+      {
+        "term": "implicit feedback / 隐式反馈",
+        "meaning": "从用户行为(观看时长、点赞、转发)间接推断偏好，无需用户主动评分。",
+        "meaningEn": "Implicit feedback infers preference from behavior (watch time, likes, shares) without users actively rating."
+      },
+      {
+        "term": "ground truth / 基准真值",
+        "meaning": "被当作正确答案的参考标签，这里由隐式反馈构造。",
+        "meaningEn": "Ground truth is the reference label treated as correct, here built from implicit feedback."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "offline-limits",
+    "scenario": "团队只跑离线指标(Recall@K、NDCG@K)就想直接上线新模型。",
+    "scenario_en": "The team wants to ship a new model based on offline metrics (Recall@K, NDCG@K) alone.",
+    "q": "为什么离线指标是「必要但不充分」，必须再做在线评估？",
+    "q_en": "Why are offline metrics 'necessary but not sufficient', requiring online evaluation?",
+    "why": "离线指标只衡量与历史行为的相关性，抓不住新颖性、多样性、长期满意度。历史标签里没有的行为(如用户对全新内容的反应)离线看不到，必须靠在线 A/B 才能测真实因果影响。",
+    "why_en": "Offline metrics only measure correlation with historical behavior and miss novelty, diversity, and long-term satisfaction, so real causal impact must be tested with online A/B.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "evaluation"
+    ],
+    "options": [
+      "离线指标只衡量与历史行为的相关性，抓不住新颖性/多样性/长期满意，需在线 A/B 测真实影响",
+      "离线指标已经覆盖一切，在线评估纯属浪费流量",
+      "在线评估只是为了测延迟，和推荐质量无关",
+      "离线指标不可信，应完全弃用，只看在线"
+    ],
+    "options_en": [
+      "Offline metrics only measure correlation with historical behavior, missing novelty/diversity/long-term satisfaction, so online A/B is needed for real impact.",
+      "Offline metrics already cover everything, so online evaluation just wastes traffic.",
+      "Online evaluation only tests latency and is unrelated to recommendation quality.",
+      "Offline metrics are untrustworthy and should be dropped entirely in favor of online only."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；离线是历史相关性，抓不到新颖/多样/长期满意这些只有真实上线才暴露的维度。",
+      "离线看不到用户对全新内容的反应，也测不了长期满意，覆盖不了一切。",
+      "在线评估的核心是真实用户行为的因果影响，不只是延迟。",
+      "离线便宜、能快速筛掉坏模型，是必要的第一道关，不该弃用。"
+    ],
+    "optionExplanations_en": [
+      "Correct — offline is historical correlation and misses novelty/diversity/long-term satisfaction, dimensions only real deployment exposes.",
+      "Offline cannot see how users react to brand-new content nor measure long-term satisfaction, so it does not cover everything.",
+      "Online evaluation is about causal impact on real user behavior, not just latency.",
+      "Offline is cheap and quickly filters bad models, a necessary first gate, not to be discarded."
+    ],
+    "termDefinitions": [
+      {
+        "term": "novelty / 新颖性",
+        "meaning": "推荐内容对用户的新鲜程度，离线历史标签无法衡量。",
+        "meaningEn": "Novelty is how fresh recommended content is to the user, which offline historical labels cannot measure."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "ab-setup",
+    "scenario": "新排序模型通过了离线评估，要在真实流量上验证，但不想拿全量用户冒险。",
+    "scenario_en": "A new ranker passed offline evaluation and needs live validation, but you don't want to risk all users.",
+    "q": "A/B 测试初期该怎么设置对照/实验组和流量比例？",
+    "q_en": "How should you set up control/treatment and traffic split for an early A/B?",
+    "why": "对照组看现网模型、实验组看候选模型，随机分流，初期只放 1–5% 小流量灰度。小比例把风险控制住，出问题只影响少数用户，指标稳了再逐步放量。",
+    "why_en": "Control sees the production model, treatment sees the candidate, split randomly, ramping only 1–5% initially so a bad model hits few users before scaling up.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "ab-testing"
+    ],
+    "tradeoff": "小流量灰度(风险可控但样本慢) vs 大流量(统计快但风险大)",
+    "options": [
+      "直接全量切到新模型，最快拿到统计显著结果",
+      "对照和实验各占 50%，一上来就对半分",
+      "只在内部员工账号上测，不放任何真实用户",
+      "对照看现网、实验看候选，随机分流，初期只放 1–5% 小流量灰度"
+    ],
+    "options_en": [
+      "Switch all traffic to the new model at once for the fastest significant result.",
+      "Split control and treatment 50/50 right from the start.",
+      "Test only on internal employee accounts, exposing no real users.",
+      "Control sees production, treatment sees the candidate, split randomly, ramping only 1–5% initially."
+    ],
+    "answer": [
+      3
+    ],
+    "whenOtherWins": "若改动极小、风险低且需要尽快达到统计功效(如微小 UI 文案)，可直接用较大比例甚至对半分加速实验。",
+    "optionExplanations": [
+      "全量切换一旦模型坏了会伤害所有用户，风险太大，违背灰度原则。",
+      "初期就对半分暴露过多用户，坏模型影响面太大；应先小流量确认安全。",
+      "只测员工样本无代表性、样本量小，测不出真实用户的行为差异。",
+      "对；小流量灰度是标准做法——先小规模验证安全和信号，再逐步放量。"
+    ],
+    "optionExplanations_en": [
+      "Full switch harms all users if the model is bad—too risky, against ramp-up principle.",
+      "A 50/50 split up front exposes too many users; confirm safety at small traffic first.",
+      "Employee-only samples are unrepresentative and too small to detect real user differences.",
+      "Correct — small-traffic ramp is standard: validate safety and signal at small scale, then scale up."
+    ],
+    "termDefinitions": [
+      {
+        "term": "control / treatment",
+        "meaning": "对照组用现网模型、实验组用候选模型，随机分流后比较指标。",
+        "meaningEn": "Control uses the production model and treatment the candidate; users are split randomly and metrics compared."
+      },
+      {
+        "term": "ramp / 灰度放量",
+        "meaning": "从小流量比例开始逐步扩大实验组，控制风险。",
+        "meaningEn": "A ramp gradually grows the treatment traffic from a small percentage to control risk."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-009",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "primary-vs-guardrail",
+    "scenario": "A/B 里既有想拉高的指标，也有绝不能恶化的红线指标。",
+    "scenario_en": "An A/B has both metrics to lift and red-line metrics that must never regress.",
+    "q": "在线 A/B 的 primary metric 和 guardrail metric 有什么区别？",
+    "q_en": "What distinguishes a primary metric from a guardrail metric in online A/B?",
+    "why": "Primary(观看时长/session、满意度代理)是主动优化目标；guardrail(不喜欢率、举报、退订、session 放弃)不直接优化，但不能越过阈值恶化——越线就叫停实验，无论参与度涨多少。",
+    "why_en": "Primary metrics (watch time/session, satisfaction proxies) are actively optimized; guardrail metrics (dislike, report, unsubscribe, abandonment) are not optimized but must not regress past a threshold—breach kills the experiment regardless of engagement gains.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "ab-testing"
+    ],
+    "tradeoff": "primary(要拉高) vs guardrail(只守不恶化，越线即叫停)",
+    "options": [
+      "primary 和 guardrail 都是要最大化的目标，只是优先级不同",
+      "primary 是要主动优化拉高的目标；guardrail 不优化但不能越阈值恶化，越线即叫停实验",
+      "guardrail 是主动优化目标，primary 只是背景监控",
+      "两者都只在离线评估用，在线不看"
+    ],
+    "options_en": [
+      "Both primary and guardrail are metrics to maximize, differing only in priority.",
+      "Primary is actively optimized to rise; guardrail is not optimized but must not regress past a threshold—breach kills the experiment.",
+      "Guardrail is the actively optimized metric and primary is just background monitoring.",
+      "Both are used only in offline evaluation, not online."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "guardrail 不是要最大化的，而是「不能变坏」的红线，二者角色不同。",
+      "对；primary 拉高、guardrail 守底线，guardrail 越线即杀实验是硬安全网。",
+      "说反了：guardrail 只守不优化，primary 才是主动拉高的目标。",
+      "两者都是在线 A/B 的核心指标，恰恰是上线前的真实检验。"
+    ],
+    "optionExplanations_en": [
+      "Guardrails are not to be maximized but are a red line that 'must not worsen'; the roles differ.",
+      "Correct — primary rises, guardrail holds the floor, and a guardrail breach kills the experiment as a hard safety net.",
+      "Backwards: guardrails only hold and are not optimized; primary is the metric actively lifted.",
+      "Both are core online A/B metrics, exactly the real pre-launch test."
+    ],
+    "termDefinitions": [
+      {
+        "term": "guardrail metric / 护栏指标",
+        "meaning": "不被直接优化但不能恶化的红线指标(不喜欢率、退订、放弃率)。",
+        "meaningEn": "A guardrail metric is a red-line metric that is not optimized directly but must not regress (dislike, unsubscribe, abandonment)."
+      },
+      {
+        "term": "session abandonment / 会话放弃",
+        "meaning": "用户在一次会话中提前离开的比例，是护栏指标之一。",
+        "meaningEn": "Session abandonment is the rate at which users leave a session early, one guardrail metric."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "guardrail-kill",
+    "scenario": "A/B 结果：观看时长 +3%，但不喜欢率 +15%、7 天回访 −2%(护栏指标越过阈值)。",
+    "scenario_en": "A/B result: watch time +3%, but dislike rate +15% and 7-day return −2% (guardrails past threshold).",
+    "q": "这个实验该怎么处理？",
+    "q_en": "How should this experiment be handled?",
+    "why": "护栏(不喜欢、7 天回访)已越阈值恶化，无论观看时长涨多少都该叫停。+3% 参与度换 +15% 不喜欢、−2% 回访是净亏，护栏就是拦这种「短期涨、长期崩」的安全网。",
+    "why_en": "Guardrails (dislike, 7-day return) regressed past threshold, so kill the experiment regardless of the +3% watch time—it is a net loss and guardrails exist to block short-term-up long-term-down trades.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "ab-testing"
+    ],
+    "tradeoff": "护栏越线即叫停(护长期) vs 只看主指标上线(赚短期赔长期)",
+    "options": [
+      "上线：观看时长涨了 +3%，主指标为正就够了",
+      "把不喜欢阈值调宽，让实验通过后再上线",
+      "叫停实验：护栏(不喜欢、7 天回访)越阈值恶化，参与度增益不足以抵消",
+      "延长实验到 3 个月，等护栏指标自己回落"
+    ],
+    "options_en": [
+      "Ship it: watch time rose +3%, a positive primary metric is enough.",
+      "Widen the dislike threshold so the experiment passes, then ship.",
+      "Kill the experiment: guardrails (dislike, 7-day return) regressed past threshold, and the engagement gain does not offset it.",
+      "Extend the experiment to 3 months and wait for guardrails to recover on their own."
+    ],
+    "answer": [
+      2
+    ],
+    "whenOtherWins": "若护栏波动只是新鲜效应导致的短期噪声、且在 1–2 周内回到阈值内，可继续观察而非立即杀掉。",
+    "optionExplanations": [
+      "只看主指标会放任 cannibalization：+3% 观看时长换来 +15% 不喜欢和回访下降，得不偿失。",
+      "为通过而放宽护栏是自欺欺人，护栏的意义正是拦住这种交易。",
+      "对；护栏越线即杀是硬安全网，短期参与度增益盖不住长期满意度崩塌。",
+      "拖 3 个月既伤害用户又浪费流量，护栏恶化不会因为等待而自愈。"
+    ],
+    "optionExplanations_en": [
+      "Looking at the primary metric alone lets cannibalization run: +3% watch time for +15% dislike and lower return is a bad trade.",
+      "Widening guardrails to pass is self-deception; guardrails exist precisely to block this trade.",
+      "Correct — breach-kill is a hard safety net; short-term engagement gains cannot cover long-term satisfaction collapse.",
+      "Dragging on 3 months harms users and wastes traffic; a guardrail regression will not self-heal by waiting."
+    ],
+    "termDefinitions": [
+      {
+        "term": "7-day return rate / 7 天回访率",
+        "meaning": "用户在 7 天内再次回来的比例，是长期满意度的护栏代理。",
+        "meaningEn": "7-day return rate is the share of users who come back within 7 days, a guardrail proxy for long-term satisfaction."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-011",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "ab-duration",
+    "scenario": "有人想把 A/B 只跑 2 天就下结论，因为实验组观看时长立刻大涨。",
+    "scenario_en": "Someone wants to conclude an A/B after just 2 days because treatment watch time jumped immediately.",
+    "q": "A/B 一般要跑多久，为什么不能只跑两天？",
+    "q_en": "How long should an A/B usually run, and why not just two days?",
+    "why": "典型跑 1–2 周(经验值，非公式)来吸收新颖效应——用户对任何新东西头几天都更爱互动，过早下结论会把这段虚高当成真实收益，得到误导性的「假赢」。",
+    "why_en": "Run 1–2 weeks (a rule of thumb, not a formula) to absorb novelty effects—users engage more with anything new in the first days, so cutting short mistakes that spike for real gains, a misleading false win.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "ab-testing"
+    ],
+    "options": [
+      "典型 1–2 周，用来吸收新颖效应，避免把头几天的虚高当真实收益",
+      "只需几小时，指标一转正就能下结论",
+      "至少一整年，短于一年的实验都不可信",
+      "跑到样本量正好 100 条为止，与时间无关"
+    ],
+    "options_en": [
+      "Typically 1–2 weeks, to absorb novelty effects and avoid mistaking a first-days spike for real gains.",
+      "Just a few hours—once the metric turns positive you can conclude.",
+      "At least a full year; anything shorter is untrustworthy.",
+      "Until the sample size is exactly 100, regardless of time."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "novelty effect / 新鲜效应",
+        "meaning": "用户对任何新东西头几天都更爱互动的短期现象，会虚高实验指标。",
+        "meaningEn": "The novelty effect is users engaging more with anything new in its first days, transiently inflating experiment metrics."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "interleaving",
+    "scenario": "早期迭代流量有限，想更快、用更小样本比较两个排序模型的相对优劣。",
+    "scenario_en": "Early iterations have limited traffic, and you want a faster, smaller-sample comparison of two rankers.",
+    "q": "流量有限的早期迭代，interleaving 相比标准 A/B 有什么优势？",
+    "q_en": "For early iterations with limited traffic, what advantage does interleaving have over standard A/B?",
+    "why": "Interleaving 把对照和实验的排序在同一次会话里交错混排，让同一用户直接比较两者，控制了用户异质性，所以用更小样本就能得出偏好，适合流量有限的早期迭代。",
+    "why_en": "Interleaving mixes control and treatment rankings within one session so the same user directly compares both, controlling user heterogeneity and needing smaller samples—good for early low-traffic iterations.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "ab-testing"
+    ],
+    "tradeoff": "interleaving(同人对比·省样本·比相对偏好) vs A/B(分人对比·需大样本·测绝对指标)",
+    "options": [
+      "interleaving 能测长期留存这种绝对指标，A/B 不能",
+      "interleaving 把两模型排序在同一会话交错，同一用户直接比较，样本更小就能定偏好",
+      "interleaving 不需要现网模型做对照，直接单独跑候选",
+      "interleaving 完全取代 A/B，任何阶段都优于分组实验"
+    ],
+    "options_en": [
+      "Interleaving can measure absolute metrics like long-term retention, which A/B cannot.",
+      "Interleaving mixes both rankings within one session so the same user compares directly, needing smaller samples to settle preference.",
+      "Interleaving needs no production model as control and just runs the candidate alone.",
+      "Interleaving fully replaces A/B and beats split experiments at every stage."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若要测长期留存、收入这类绝对业务指标或需要护栏监控，标准 A/B 更合适——interleaving 只给相对排序偏好。",
+    "optionExplanations": [
+      "反了：绝对指标(长期留存)是 A/B 的强项，interleaving 给的是相对偏好。",
+      "对；同一用户内对比消除了个体差异，统计功效高，小样本即可比出谁更好。",
+      "interleaving 恰恰是把对照和实验混在一起比较，仍需两个排序来源。",
+      "interleaving 只测相对偏好、盖不了绝对指标和护栏，不能全面取代 A/B。"
+    ],
+    "optionExplanations_en": [
+      "Reversed: absolute metrics (long-term retention) are A/B's strength; interleaving gives relative preference.",
+      "Correct — within-user comparison removes individual variance, giving high power so a small sample settles which is better.",
+      "Interleaving specifically mixes control and treatment for comparison; it still needs both ranking sources.",
+      "Interleaving only measures relative preference and cannot cover absolute metrics or guardrails, so it cannot fully replace A/B."
+    ],
+    "termDefinitions": [
+      {
+        "term": "interleaving / 交错实验",
+        "meaning": "把两个模型的排序在同一会话交错混排，让同一用户直接比较，样本效率高。",
+        "meaningEn": "Interleaving mixes two models' rankings within one session so the same user compares both, giving high sample efficiency."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-013",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "端到端延迟预算是 <200ms，要分配给候选生成、排序、重排三段。",
+    "scenario_en": "The end-to-end budget is <200ms, split across candidate generation, ranking, and re-ranking.",
+    "q": "<200ms 是怎样的预算，各阶段大致怎么分，对模型有什么约束？",
+    "q_en": "What kind of budget is <200ms, how is it split, and what does it constrain?",
+    "why": "<200ms 是给定的产品/SLO 目标(不是公式推出来的)。核心分配约候选生成 ~20ms + 排序 ~50ms + 重排 ~10ms，其余留给网络和特征拉取。它直接约束排序模型大小——大到跑不进预算就得压缩。",
+    "why_en": "The <200ms is a given product/SLO target (not derived), split roughly ~20ms candidate gen + ~50ms ranking + ~10ms re-rank with the rest for network/features, and it directly caps the ranker's size.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "options": [
+      "候选生成 ~20ms + 排序 ~50ms + 重排 ~10ms，其余留给网络/特征；预算直接约束排序模型大小",
+      "预算是训练时长上限，与在线延迟无关",
+      "200ms 全部给排序，召回和重排不占时间",
+      "它是模型准确率的下限阈值，不是延迟约束"
+    ],
+    "options_en": [
+      "~20ms candidate gen + ~50ms ranking + ~10ms re-rank, the rest for network/features; the budget directly caps the ranker's size.",
+      "The budget is a training-time ceiling, unrelated to online latency.",
+      "All 200ms goes to ranking; retrieval and re-ranking take no time.",
+      "It is a lower-bound threshold on model accuracy, not a latency constraint."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "latency budget / 延迟预算",
+        "meaning": "端到端允许的最大响应时间，超了会增加会话放弃，是给定 SLO 而非算出来的。",
+        "meaningEn": "A latency budget is the max end-to-end response time allowed; exceeding it raises abandonment, and it is a given SLO rather than a computed value."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-014",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "candidate-gen-serving",
+    "scenario": "候选生成要在 ~20ms 内从数百万视频里选出 ~500 个候选。",
+    "scenario_en": "Candidate generation must select ~500 candidates from millions of videos within ~20ms.",
+    "q": "候选生成为什么能在 ~20ms 内跑完，在线主要花在哪？",
+    "q_en": "How does candidate generation finish in ~20ms, and where does its online cost go?",
+    "why": "视频 embedding 离线预计算好、建成索引，在线只需把用户上下文编码成 query embedding，再用 ANN 查最近邻。在线成本 = 一次 query 编码 + 一次索引查找，所以能压到 ~20ms，优先保召回和吞吐。",
+    "why_en": "Video embeddings are precomputed offline into an index, so online cost is just encoding the user context into a query embedding plus one ANN lookup, keeping it near ~20ms while prioritizing recall and throughput.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "tradeoff": "视频侧离线预计算(在线只查) vs 在线实时算视频 embedding(准但太慢)",
+    "options": [
+      "在线对每个视频实时重算 embedding，再逐个和用户比对",
+      "视频 embedding 离线预计算成索引，在线只做 query 编码 + ANN 查找",
+      "把数百万视频全量灌进排序模型逐个打分",
+      "在数据库里用 SQL 关键词匹配标题挑候选"
+    ],
+    "options_en": [
+      "Recompute each video's embedding online in real time and compare with the user one by one.",
+      "Video embeddings are precomputed offline into an index; online does only query encoding plus an ANN lookup.",
+      "Feed all millions of videos into the ranking model to score each one.",
+      "Use SQL keyword matching on titles in the database to pick candidates."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若物料库极小或视频特征高频变化到无法预计算，才考虑在线实时算 embedding；一般规模下预计算+ANN 才跑得进预算。",
+    "optionExplanations": [
+      "在线实时算数百万 embedding 远超 20ms，正是预计算要避免的。",
+      "对；预计算把重活挪到离线，在线只剩编码+查找，才压得进 ~20ms。",
+      "全量灌排序模型是数百万次重推理，秒级都不止，违背两阶段设计。",
+      "关键词匹配抓不到语义相似，召回质量差，也不是 embedding 检索。"
+    ],
+    "optionExplanations_en": [
+      "Computing millions of embeddings online far exceeds 20ms—exactly what precomputation avoids.",
+      "Correct — precomputation moves the heavy work offline, leaving only encode plus lookup online to fit ~20ms.",
+      "Feeding all into the ranker is millions of heavy inferences, seconds not ms, violating the two-stage design.",
+      "Keyword matching misses semantic similarity, giving poor recall, and is not embedding retrieval."
+    ],
+    "termDefinitions": [
+      {
+        "term": "query embedding / 查询向量",
+        "meaning": "把用户上下文编码成的向量，用它在视频索引里做 ANN 最近邻查找。",
+        "meaningEn": "A query embedding encodes the user context into a vector used for ANN nearest-neighbor lookup in the video index."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-015",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "ranking-latency-techniques",
+    "scenario": "排序阶段的 Wide&Deep/DCN 模型要在 ~50ms 内给几百候选打分，模型大小被延迟卡住。",
+    "scenario_en": "The ranking-stage Wide&Deep/DCN must score hundreds of candidates within ~50ms, its size capped by latency.",
+    "q": "哪些技术能让排序模型在延迟预算内跑得动？(多选)",
+    "q_en": "Which techniques help the ranking model fit within the latency budget? (multiple)",
+    "why": "压延迟的三招：模型蒸馏(小学生模型模仿大老师)、量化(FP32→INT8 减算力)、embedding table distribution(把稀疏 embedding 表分片到多机并行查)。加大 batch 上限不是降延迟手段。",
+    "why_en": "Three levers: model distillation (small student mimics big teacher), quantization (FP32→INT8), and embedding-table distribution (shard sparse tables across machines for parallel lookup); raising the batch cap is not a latency reducer.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "options": [
+      "模型蒸馏：小学生模型模仿大老师，参数更少推理更快",
+      "量化：把权重从 FP32 降到 INT8，减少算力和内存",
+      "embedding table distribution：把稀疏 embedding 表分片到多机，并行查找",
+      "把推理 batch 上限调大，让单次处理更多请求"
+    ],
+    "options_en": [
+      "Model distillation: a small student mimics a big teacher, fewer params and faster inference.",
+      "Quantization: drop weights from FP32 to INT8, cutting compute and memory.",
+      "Embedding-table distribution: shard sparse embedding tables across machines for parallel lookup.",
+      "Raise the inference batch cap so one pass handles more requests."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；蒸馏用小模型逼近大模型精度，直接砍推理成本，是压延迟主力。",
+      "对；INT8 让每次乘加更快、内存更省，是常见的推理加速手段。",
+      "对；YouTube 规模稀疏表装不下单机，分片并行查是必需，也带来分布式推理的容错课题。",
+      "错；加大 batch 提高吞吐但通常增加单请求延迟(等凑批)，不是降延迟。"
+    ],
+    "optionExplanations_en": [
+      "Correct — distillation approximates the big model's accuracy with a small one, directly cutting inference cost, a primary latency lever.",
+      "Correct — INT8 makes each multiply-add faster and saves memory, a common inference speedup.",
+      "Correct — at YouTube scale sparse tables cannot fit one machine, so sharded parallel lookup is required, introducing distributed-inference fault-tolerance concerns.",
+      "Wrong — a larger batch raises throughput but usually increases per-request latency (waiting to fill the batch), not reduces it."
+    ],
+    "termDefinitions": [
+      {
+        "term": "quantization / 量化",
+        "meaning": "把模型权重从高精度(FP32)降到低精度(INT8)，减少算力和内存、略损精度。",
+        "meaningEn": "Quantization lowers model weights from high precision (FP32) to low (INT8), cutting compute and memory with slight accuracy loss."
+      },
+      {
+        "term": "model distillation / 模型蒸馏",
+        "meaning": "训练一个小的学生模型去模仿大的老师模型输出，换取更快推理。",
+        "meaningEn": "Model distillation trains a small student model to mimic a large teacher's outputs for faster inference."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "embedding-table-distribution",
+    "scenario": "YouTube 规模的稀疏特征 embedding 表(数亿 ID)大到一台机器的内存装不下。",
+    "scenario_en": "At YouTube scale, sparse-feature embedding tables (hundreds of millions of IDs) are too big for one machine's memory.",
+    "q": "稀疏 embedding 表装不下单机时，怎么在服务里处理？代价是什么？",
+    "q_en": "When sparse embedding tables don't fit one machine, how is this handled at serving, and at what cost?",
+    "why": "把 embedding 表分片(shard)到多台机器，推理时并行查各分片再汇总(分布式推理)。代价：跨机通信增加延迟，且引入容错问题——某个分片机器挂了要有降级/副本，否则查不到那部分特征。",
+    "why_en": "Shard the embedding table across machines and do parallel lookups gathered at inference (distributed inference); the cost is added cross-machine latency plus fault-tolerance concerns if a shard host fails.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "tradeoff": "分片分布式推理(装得下大表但加通信+容错) vs 单机(简单但装不下)",
+    "options": [
+      "把 embedding 表分片到多机、并行查找汇总；代价是跨机通信延迟 + 容错问题",
+      "把稀疏 ID 全哈希进一个小表，接受大量冲突以塞进单机",
+      "干脆不用稀疏特征，只留稠密特征以缩小模型",
+      "把整张表复制到每台机器上，靠冗余提速"
+    ],
+    "options_en": [
+      "Shard the embedding table across machines with parallel gathered lookups; the cost is cross-machine latency plus fault tolerance.",
+      "Hash all sparse IDs into one small table, accepting heavy collisions to fit one machine.",
+      "Just drop sparse features and keep only dense ones to shrink the model.",
+      "Replicate the whole table onto every machine for redundancy-based speedup."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若稀疏表小到能装进单机内存，就别上分布式——单机查找没有跨机通信和分片容错开销，更简单更快。",
+    "optionExplanations": [
+      "对；分片+分布式推理是装下大表的标准解，代价是通信延迟和分片容错，Staff+ 要点名。",
+      "全哈希进小表冲突严重、信息大量丢失，损精度换空间不是这里的正解。",
+      "丢掉稀疏特征会损失关键个性化信号，是削足适履。",
+      "整表复制到每机内存翻倍更装不下，也不解决单机放不下的根本问题。"
+    ],
+    "optionExplanations_en": [
+      "Correct — sharding plus distributed inference is the standard way to fit a large table; the cost is communication latency and shard fault tolerance, a Staff+ point.",
+      "Hashing everything into a small table causes heavy collisions and information loss, trading accuracy for space, not the fix here.",
+      "Dropping sparse features loses key personalization signal, cutting the foot to fit the shoe.",
+      "Replicating the whole table onto every machine doubles memory and still cannot fit, not solving the root problem."
+    ],
+    "termDefinitions": [
+      {
+        "term": "embedding table distribution / embedding 表分布",
+        "meaning": "把巨大的稀疏 embedding 表分片到多台机器，推理时并行查找。",
+        "meaningEn": "Embedding-table distribution shards a huge sparse embedding table across machines for parallel lookup at inference."
+      },
+      {
+        "term": "distributed inference / 分布式推理",
+        "meaning": "推理跨多台机器协同完成，带来通信延迟和容错需求。",
+        "meaningEn": "Distributed inference splits one inference across machines, adding communication latency and fault-tolerance needs."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "cannibalization",
+    "scenario": "团队一路加大观看时长权重，指标持续上涨，但用户自报满意度悄悄下滑。",
+    "scenario_en": "The team keeps raising the watch-time weight and the metric keeps climbing, but self-reported satisfaction quietly slips.",
+    "q": "指标相食(metric cannibalization)最典型的一对是什么，本质是什么问题？",
+    "q_en": "What is the canonical cannibalization pair, and what kind of problem is it fundamentally?",
+    "why": "最典型是观看时长 vs 长期满意度：最大化观看时长会顶起自动播放友好的煽动内容，人一直看却不满意；YouTube 自己的研究证实纯参与度优化拉低了自报满意度。它没有银弹，是需要持续校准的问题，不是一次性可解。",
+    "why_en": "The canonical pair is watch time vs long-term satisfaction: maximizing watch time surfaces autoplay-friendly sensational content that keeps users watching yet dissatisfied, a continuous calibration problem with no silver bullet.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "cannibalization"
+    ],
+    "options": [
+      "延迟 vs 吞吐：压低延迟必然降吞吐，属硬件权衡",
+      "召回 vs 精度：多召回必然掉精度，靠调 K 解决",
+      "观看时长 vs 长期满意度：最大化观看时长顶起煽动内容、人看却不满，需持续校准",
+      "训练成本 vs 推理成本：省训练必然贵推理"
+    ],
+    "options_en": [
+      "Latency vs throughput: cutting latency must lower throughput, a hardware tradeoff.",
+      "Recall vs precision: more recall must drop precision, fixed by tuning K.",
+      "Watch time vs long-term satisfaction: maximizing watch time surfaces sensational content that users watch yet dislike, needing continuous calibration.",
+      "Training cost vs inference cost: saving training must raise inference."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "延迟-吞吐是资源权衡，不是「优化一个业务指标拖垮另一个业务指标」的相食。",
+      "召回-精度是检索权衡，不涉及长期满意度被短期参与度侵蚀。",
+      "对；观看时长顶起煽动内容侵蚀长期满意，是相食的教科书案例，需持续校准。",
+      "训练-推理成本是工程成本权衡，不是指标相食。"
+    ],
+    "optionExplanations_en": [
+      "Latency-throughput is a resource tradeoff, not one business metric systematically degrading another.",
+      "Recall-precision is a retrieval tradeoff and does not involve long-term satisfaction eroded by short-term engagement.",
+      "Correct — watch time surfacing sensational content that erodes long-term satisfaction is the textbook cannibalization case, needing continuous calibration.",
+      "Training-inference cost is an engineering-cost tradeoff, not metric cannibalization."
+    ],
+    "termDefinitions": [
+      {
+        "term": "metric cannibalization / 指标相食",
+        "meaning": "优化一个指标系统性地拖垮另一个，如观看时长涨但长期满意度掉。",
+        "meaningEn": "Metric cannibalization is when optimizing one metric systematically degrades another, e.g. watch time up but long-term satisfaction down."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-018",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "cannibalization-mitigations",
+    "scenario": "已知观看时长在蚕食长期满意度，要在建模和部署层面缓解。",
+    "scenario_en": "Given that watch time is cannibalizing long-term satisfaction, you need modeling and deployment-level mitigations.",
+    "q": "缓解指标相食有哪些正当手段？(多选)",
+    "q_en": "Which are legitimate ways to mitigate metric cannibalization? (multiple)",
+    "why": "四类缓解里的三类：多目标标量化(加满意度头、按 surface 调权)、长视野奖励建模(预测 N 天回访、用 RL 处理延迟奖励)、护栏门控部署(满意度护栏恶化就不上线)。「删掉满意度指标」是掩耳盗铃，不是缓解。",
+    "why_en": "Three legitimate levers: multi-objective scalarization (satisfaction heads, per-surface weights), long-horizon reward modeling (predicted N-day return, RL for delayed rewards), and guardrail-gated deployment; deleting the satisfaction metric is not a mitigation.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "cannibalization"
+    ],
+    "options": [
+      "多目标标量化：加满意度预测头、按 surface 调权",
+      "长视野奖励建模：预测 N 天回访率，用 RL 处理延迟奖励",
+      "护栏门控部署：满意度护栏(不喜欢、放弃率)恶化就不上线",
+      "干脆不再统计满意度指标，眼不见为净"
+    ],
+    "options_en": [
+      "Multi-objective scalarization: add satisfaction heads and tune weights per surface.",
+      "Long-horizon reward modeling: predict N-day return rate and use RL for delayed rewards.",
+      "Guardrail-gated deployment: do not ship if satisfaction guardrails (dislike, abandonment) regress.",
+      "Just stop tracking the satisfaction metric to keep it out of sight."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；标量化加满意度头把长期满意变成可优化信号，是最直接的缓解。",
+      "对；长视野奖励把 N 天回访纳入目标，缓解只看即时观看时长的短视。",
+      "对；护栏门控是硬安全网，满意度恶化直接拦下上线。",
+      "错；停统计不解决问题，只是让相食无人察觉，是反面做法。"
+    ],
+    "optionExplanations_en": [
+      "Correct — scalarization with satisfaction heads turns long-term satisfaction into an optimizable signal, the most direct mitigation.",
+      "Correct — long-horizon rewards fold N-day return into the objective, easing the short-sightedness of raw watch time.",
+      "Correct — guardrail gating is a hard safety net that blocks shipping when satisfaction regresses.",
+      "Wrong — not tracking it solves nothing and just lets cannibalization go unnoticed, an anti-pattern."
+    ],
+    "termDefinitions": [
+      {
+        "term": "long-horizon reward / 长视野奖励",
+        "meaning": "把 N 天回访等延迟结果纳入优化目标，对抗只看即时观看的短视。",
+        "meaningEn": "A long-horizon reward folds delayed outcomes like N-day return into the objective to counter short-term myopia."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-019",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "per-segment-tuning",
+    "scenario": "一部分用户出现明显不满信号(打开频率下降、不喜欢上升)，另一部分仍很活跃满意。",
+    "scenario_en": "Some users show clear dissatisfaction (declining frequency, rising dislikes) while others remain active and satisfied.",
+    "q": "怎么用「按用户分群调权」缓解这部分用户的相食？",
+    "q_en": "How does per-user-segment weight tuning mitigate cannibalization for these users?",
+    "why": "对出现不满信号的分群提高满意度目标的权重、压低纯观看时长权重，让排序对他们更保守；满意用户维持原权重。分群调权把全局一刀切换成因人而异的校准。",
+    "why_en": "Raise the satisfaction weight (and lower raw watch-time weight) for the dissatisfied segment so ranking is gentler for them, while keeping other segments' weights, turning a global knob into per-segment calibration.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "cannibalization"
+    ],
+    "tradeoff": "按分群调权(精准但更复杂) vs 全局一套权重(简单但对不满用户失灵)",
+    "options": [
+      "给出现不满信号的分群提高满意度权重、降低观看时长权重，其余分群维持原权重",
+      "对所有用户统一把观看时长权重再调高，摊平差异",
+      "把不满用户直接从推荐系统里剔除，不再服务",
+      "只按用户地理位置分群，与满意信号无关"
+    ],
+    "options_en": [
+      "For the segment showing dissatisfaction, raise the satisfaction weight and lower the watch-time weight, keeping other segments as is.",
+      "Uniformly raise the watch-time weight for all users to flatten differences.",
+      "Remove dissatisfied users from the system entirely and stop serving them.",
+      "Segment only by geography, unrelated to the satisfaction signal."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若各分群的不满模式差别不大、或分群带来的复杂度/数据稀疏得不偿失，一套全局权重反而更稳更好维护。",
+    "optionExplanations": [
+      "对；对不满分群定向加满意度权重，是把校准做到人群粒度，正对相食。",
+      "全局再调高观看时长权重会让不满用户更糟，方向反了。",
+      "剔除用户是放弃而非缓解，还会流失用户，不是调权手段。",
+      "只按地理分群抓不到「谁在不满」，与缓解相食的目标脱节。"
+    ],
+    "optionExplanations_en": [
+      "Correct — targeting the dissatisfied segment with a higher satisfaction weight brings calibration down to the segment level, directly addressing cannibalization.",
+      "Raising the watch-time weight globally makes dissatisfied users worse—the wrong direction.",
+      "Removing users is giving up, not mitigating, and churns users, not a weighting lever.",
+      "Segmenting by geography alone cannot capture who is dissatisfied, detached from the mitigation goal."
+    ],
+    "termDefinitions": [
+      {
+        "term": "per-segment weight tuning / 分群调权",
+        "meaning": "对不同用户分群使用不同的目标权重，对不满群体加大满意度权重。",
+        "meaningEn": "Per-segment weight tuning uses different objective weights for different user segments, boosting satisfaction weight for dissatisfied groups."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-020",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "serving-flow",
+    "scenario": "一次在线请求进来，要在 <200ms 内走完两阶段服务并返回一屏推荐。",
+    "scenario_en": "One online request arrives and must traverse two-stage serving within <200ms to return a screen.",
+    "q": "把在线服务一次请求的处理步骤排成正确顺序：",
+    "q_en": "Order the steps of serving one online request correctly:",
+    "steps": [
+      "把用户上下文编码成 query embedding",
+      "用 ANN 查预计算的视频索引，召回 ~500 候选",
+      "排序模型对候选算多目标分并排序",
+      "重排注入多样性并施加硬性政策过滤，返回一屏"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "顺序：编码 query→ANN 召回~500→排序精算打分→重排(多样性+硬过滤)出屏。前两步是候选生成(~20ms)、第三步排序(~50ms)、第四步重排(~10ms)，合计核心~80ms 落进 <200ms。",
+    "why_en": "Order: encode query, ANN-retrieve ~500, rank with multi-objective scores, then re-rank (diversity + hard filters), i.e. ~20ms + ~50ms + ~10ms of core compute inside <200ms.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "serving"
+    ],
+    "diagram": "flowchart LR\n  E[\"编码 query embedding\"] --> A[\"ANN 召回 ~500\"]\n  A --> R[\"排序多目标打分\"]\n  R --> RR[\"重排+硬过滤→出屏\"]",
+    "termDefinitions": [
+      {
+        "term": "two-stage serving / 两阶段服务",
+        "meaning": "候选生成(召回)+排序(精排)的在线漏斗，末端加重排，整体受延迟预算约束。",
+        "meaningEn": "Two-stage serving is the online funnel of candidate generation (retrieval) plus ranking, with re-ranking at the end, all under a latency budget."
+      }
+    ]
+  },
+  {
+    "id": "llm-052-video-recommendation-evaluation-serving-trade-offs-021",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "level-calibration",
+    "scenario": "同一道视频推荐题，L4、L5、Staff+ 候选人的答法差在哪。",
+    "scenario_en": "For the same video-rec question, how do L4, L5, and Staff+ answers differ.",
+    "q": "区分 Staff+ 与更初级答案的核心是什么？",
+    "q_en": "What core thing separates a Staff+ answer from more junior ones?",
+    "why": "Staff+ 的差异不是「知道更多事实」，而是能跨整个生命周期(训练→服务→评估→迭代)做取舍推理：把系统框成持续校准回路，讲相食缓解、embedding 表分布、评估里的公平监控。L4 只认出两阶段+基本指标。",
+    "why_en": "The Staff+ differentiator is not knowing more facts but reasoning about trade-offs across the whole lifecycle (training, serving, evaluation, iteration) and framing the system as a continuous calibration loop.",
+    "tags": [
+      "llm-sd",
+      "video-rec",
+      "interview"
+    ],
+    "tradeoff": "Staff+ 全生命周期取舍推理 vs L4 罗列组件与指标",
+    "options": [
+      "背下更多算法名词和公式细节",
+      "能跨训练/服务/评估/迭代全生命周期做取舍推理，把系统框成持续校准回路",
+      "把两阶段流水线和 NDCG/Recall 名字说全就够",
+      "画出最复杂的架构图，组件越多越好"
+    ],
+    "options_en": [
+      "Memorizing more algorithm names and formula details.",
+      "Reasoning about trade-offs across the full training/serving/evaluation/iteration lifecycle, framing the system as a continuous calibration loop.",
+      "Just naming the two-stage pipeline and NDCG/Recall.",
+      "Drawing the most complex architecture with as many components as possible."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "多背名词是知识堆砌，Staff+ 看的是判断和取舍，不是词汇量。",
+      "对；全生命周期的取舍推理 + 持续校准框架，才是 Staff+ 的分水岭。",
+      "认出两阶段和基本指标是 L4 层次，还谈不上取舍深度。",
+      "组件堆得多不等于想得深，复杂度不是信号，取舍才是。"
+    ],
+    "optionExplanations_en": [
+      "Memorizing terms is knowledge stacking; Staff+ is judged on judgment and trade-offs, not vocabulary.",
+      "Correct — full-lifecycle trade-off reasoning plus a continuous-calibration framing is the Staff+ divide.",
+      "Naming the two stages and basic metrics is the L4 level, not yet trade-off depth.",
+      "More components is not deeper thinking; complexity is not the signal, trade-offs are."
+    ],
+    "termDefinitions": [
+      {
+        "term": "continuous calibration loop / 持续校准回路",
+        "meaning": "把推荐系统当作永远在调、never done 的反馈优化过程，而非一次性交付。",
+        "meaningEn": "A continuous calibration loop treats the recommender as never-done, always being retuned rather than a one-off delivery."
+      }
+    ]
+  }
+]

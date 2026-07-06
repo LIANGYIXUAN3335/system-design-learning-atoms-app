@@ -1,0 +1,1510 @@
+[
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-stack",
+    "scenario": "法律 Q&A 系统要同时服务 500 个并发用户，每个请求共享 2,000-token 系统提示 + 各自检索的 chunk + 生成。",
+    "scenario_en": "A legal QA system serves 500 concurrent users; each request shares a 2,000-token system prompt plus its own retrieved chunks plus generation.",
+    "q": "构成一个高效 LLM 推理服务栈的四个相互依赖的技术是什么？",
+    "q_en": "What four interdependent techniques make up an efficient LLM inference serving stack?",
+    "why": "KV caching（含前缀复用降 TTFT）、PagedAttention（分页解决显存碎片）、speculative decoding（草稿-验证攻延迟）、continuous batching（迭代级填批提利用率）。它们不是独立开关，而是一层套一层的依赖栈。",
+    "why_en": "KV caching (with prefix reuse for TTFT), PagedAttention (paging to fix fragmentation), speculative decoding (draft-verify for latency), and continuous batching (iteration-level batching for utilization) — one interdependent stack.",
+    "tags": [
+      "llm-sd",
+      "llm-serving",
+      "vllm"
+    ],
+    "diagram": "flowchart TD\n  KV[\"KV caching<br/>前缀复用→降 TTFT\"] --> PA[\"PagedAttention<br/>分页去碎片\"]\n  PA --> CB[\"continuous batching<br/>迭代级填批\"]\n  SD[\"speculative decoding<br/>草稿-验证攻延迟\"] --> CB",
+    "options": [
+      "数据并行、张量并行、流水线并行、专家并行——四种模型并行",
+      "量化、剪枝、蒸馏、稀疏化——四种模型压缩",
+      "KV caching、PagedAttention、speculative decoding、continuous batching",
+      "负载均衡、限流、熔断、重试——四种流量治理"
+    ],
+    "options_en": [
+      "Data, tensor, pipeline, expert parallelism — four model-parallel schemes.",
+      "Quantization, pruning, distillation, sparsification — four compression methods.",
+      "KV caching, PagedAttention, speculative decoding, continuous batching.",
+      "Load balancing, rate limiting, circuit breaking, retries — four traffic controls."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "并行策略解决的是「模型放不下单卡」，不是本题的单机高并发推理服务优化。",
+      "压缩缩小模型体积，但不解决前缀重算、显存碎片、落后请求空等这些服务侧问题。",
+      "对；这四项正是攻 prefill 重算、显存碎片、解码延迟、GPU 空转的服务栈，且彼此依赖。",
+      "流量治理是网关层的事，不触及 KV cache/显存/解码这些推理内核问题。"
+    ],
+    "optionExplanations_en": [
+      "Parallelism addresses 'model too big for one GPU,' not this problem's single-node high-concurrency serving optimization.",
+      "Compression shrinks the model but doesn't solve prefix recompute, memory fragmentation, or stragglers idling the batch.",
+      "Correct — these four attack prefill recompute, memory fragmentation, decode latency, and GPU idling as one interdependent stack.",
+      "Traffic control lives at the gateway and never touches KV cache/memory/decoding inference internals."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TTFT",
+        "fullName": "Time To First Token",
+        "meaning": "从收到请求到吐出第一个 token 的延迟，主要由 prefill 决定。",
+        "meaningEn": "TTFT (Time To First Token) is the latency from request arrival to the first output token, dominated by prefill."
+      },
+      {
+        "term": "vLLM",
+        "meaning": "开源高吞吐 LLM 推理引擎，实现了 PagedAttention、自动前缀缓存、连续批处理。",
+        "meaningEn": "vLLM is an open-source high-throughput LLM inference engine implementing PagedAttention, automatic prefix caching, and continuous batching."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-002",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "no-optimization",
+    "scenario": "500 并发共享 2,000-token 系统提示，若不做任何服务优化直接跑。",
+    "scenario_en": "500 concurrent requests sharing a 2,000-token system prompt, run with no serving optimization at all.",
+    "q": "不做任何优化时，这个 LLM 服务会出现哪些具体问题？",
+    "q_en": "With no optimization, what concrete problems does this LLM service hit?",
+    "why": "三大浪费：共享系统提示的 KV 张量被重复计算 500 次（无前缀复用）；按最大长度静态分配显存造成碎片；批内短请求要等最长请求跑完，GPU 空转。四项优化正是分别针对这三处。",
+    "why_en": "The shared prompt's KV tensors are recomputed 500 times, static allocation fragments GPU memory, and short responses idle while waiting for the longest — the three wastes the four techniques target.",
+    "tags": [
+      "llm-sd",
+      "llm-serving",
+      "motivation"
+    ],
+    "options": [
+      "共享前缀的 KV 被重算 500 次、显存碎片化、短请求等最长请求导致 GPU 空转",
+      "模型权重被复制 500 份，显存直接爆掉，根本无法启动",
+      "网络带宽不足，请求排队但 GPU 利用率反而 100%",
+      "磁盘 IO 成为瓶颈，因为每次都要从磁盘重新加载模型"
+    ],
+    "options_en": [
+      "The shared prefix's KV is recomputed 500 times, memory fragments, and short requests idle the GPU waiting for the longest.",
+      "Model weights are copied 500 times, memory blows up, and it can't even start.",
+      "Network bandwidth is insufficient, requests queue but GPU stays at 100%.",
+      "Disk IO bottlenecks because the model reloads from disk every time."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；这正是三处浪费——前缀重算、静态分配碎片、落后请求拖住批，四项优化逐一对症。",
+      "权重是共享只读的，不会每请求复制一份，这个描述不成立。",
+      "瓶颈在计算和显存而非网络，无优化时 GPU 恰恰是空转而非 100%。",
+      "模型常驻显存，不会每请求从磁盘重载，磁盘不是这里的瓶颈。"
+    ],
+    "optionExplanations_en": [
+      "Correct — these are the three wastes: prefix recompute, static-allocation fragmentation, and stragglers stalling the batch, each addressed by one technique.",
+      "Weights are shared read-only, not copied per request, so this doesn't hold.",
+      "The bottleneck is compute and memory, not network, and unoptimized the GPU idles rather than sits at 100%.",
+      "The model stays resident in memory and doesn't reload from disk per request; disk isn't the bottleneck."
+    ],
+    "termDefinitions": [
+      {
+        "term": "prefill / 预填充",
+        "meaning": "对输入提示一次性并行计算所有 token 的 K/V，决定 TTFT。",
+        "meaningEn": "Prefill computes K/V for all input-prompt tokens in parallel and determines TTFT."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-003",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "kv-cache",
+    "scenario": "自回归生成每一步都要用到前面所有 token 的 Key/Value 张量。",
+    "scenario_en": "Autoregressive generation needs the Key/Value tensors of all preceding tokens at every step.",
+    "q": "KV cache 是什么，解决了什么开销？",
+    "q_en": "What is a KV cache and what cost does it eliminate?",
+    "why": "自回归生成每步都需要历史 token 的 K/V；不缓存的话每步都重算全部历史，开销随序列长度平方增长。KV cache 把已算的 K/V 存下来，每步只处理新 token，把重算摊平成线性。",
+    "why_en": "Without caching, each step recomputes all prior tokens' K/V so cost grows quadratically with length; a KV cache stores them so each step only processes the new token.",
+    "tags": [
+      "llm-sd",
+      "kv-cache",
+      "llm-serving"
+    ],
+    "options": [
+      "把模型权重量化成 INT8 存起来，减少显存占用",
+      "缓存历史 token 的 K/V 张量，让每步只算新 token，避免平方级重算",
+      "把用户历史对话存进 Redis，供下次会话召回",
+      "把检索到的文档 chunk 缓存到本地，减少向量库查询"
+    ],
+    "options_en": [
+      "Quantize model weights to INT8 and store them to cut memory.",
+      "Cache prior tokens' K/V tensors so each step only computes the new token, avoiding quadratic recompute.",
+      "Store user conversation history in Redis for recall next session.",
+      "Cache retrieved document chunks locally to reduce vector-DB queries."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "那是权重量化，跟缓存注意力 K/V 无关，解决的是不同问题。",
+      "对；KV cache 存历史 K/V，每步只处理新 token，把随长度平方增长的重算降为线性增量。",
+      "对话历史缓存是应用层记忆，不是注意力层的 K/V 张量缓存。",
+      "chunk 缓存属于检索侧，与解码时的 K/V 重算无关。"
+    ],
+    "optionExplanations_en": [
+      "That's weight quantization, unrelated to caching attention K/V — a different problem.",
+      "Correct — the KV cache stores prior K/V so each step handles only the new token, turning quadratic recompute into a linear increment.",
+      "Conversation-history caching is app-level memory, not attention-layer K/V tensor caching.",
+      "Chunk caching is retrieval-side, unrelated to K/V recompute during decoding."
+    ],
+    "termDefinitions": [
+      {
+        "term": "KV cache",
+        "fullName": "Key-Value cache",
+        "meaning": "缓存自回归生成中历史 token 的注意力 Key/Value 张量，避免每步重算。",
+        "meaningEn": "A KV (Key-Value) cache stores prior tokens' attention Key/Value tensors so each decode step avoids recomputing them."
+      },
+      {
+        "term": "autoregressive / 自回归",
+        "meaning": "逐个 token 生成，每个新 token 依赖之前所有 token。",
+        "meaningEn": "Autoregressive generation produces one token at a time, each depending on all previous tokens."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-004",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "kv-cache-complexity",
+    "scenario": "分析不加 KV cache 时，生成一条长序列的计算量随长度如何增长。",
+    "scenario_en": "Analyzing how compute for a long sequence grows with length when there is no KV cache.",
+    "q": "填空：无 KV 缓存与有缓存时的计算复杂度对比。",
+    "q_en": "Fill in the blanks: compute complexity without versus with a KV cache.",
+    "text": "不缓存时，每步都要重算全部历史 token 的 K/V，总开销随序列长度呈 {{平方(quadratic)}} 增长；加上 KV cache 后，每步只处理 {{新 token}}，把重算摊成线性增量。",
+    "text_en": "Without caching, each step recomputes all prior tokens' K/V, so total cost grows {{quadratically}} with sequence length; with a KV cache each step only processes the {{new token}}, flattening it to a linear increment.",
+    "why": "复杂度差异是 KV cache 的根本理由：长上下文 RAG 序列越长，平方项越致命；缓存把「每步重算全历史」变成「每步只算新 token」，这是长上下文能跑得动的前提。",
+    "why_en": "The quadratic-versus-linear gap is the whole reason for a KV cache: for long-context RAG the quadratic term dominates, so caching is what makes long contexts tractable.",
+    "tags": [
+      "llm-sd",
+      "kv-cache",
+      "complexity"
+    ],
+    "termDefinitions": [
+      {
+        "term": "quadratic growth / 平方增长",
+        "meaning": "开销随规模的平方上升，序列翻倍开销约四倍。",
+        "meaningEn": "Quadratic growth means cost rises with the square of size — doubling length roughly quadruples cost."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "prefix-caching",
+    "scenario": "500 个并发请求都以同一段 2,000-token 系统提示开头，只是后面拼接的检索 chunk 不同。",
+    "scenario_en": "500 concurrent requests all begin with the same 2,000-token system prompt, differing only in the retrieved chunks appended after.",
+    "q": "利用「共享系统提示」这一结构，最该做什么优化？",
+    "q_en": "Given the shared system prompt structure, what optimization should you apply?",
+    "why": "前缀感知缓存：把共享的 2,000-token 前缀只算一次 K/V，跨并发请求复用缓存张量，而不是每个请求各算一遍。这样每个请求省掉重复的 prefill，直接压低 TTFT。",
+    "why_en": "Prefix-aware caching computes the shared 2,000-token prefix's K/V once and reuses it across concurrent requests, saving each request's redundant prefill and cutting TTFT.",
+    "tags": [
+      "llm-sd",
+      "prefix-caching",
+      "kv-cache"
+    ],
+    "whenOtherWins": "如果请求之间没有共享前缀（每条提示都完全不同），前缀缓存无从复用，重点就该转向 PagedAttention 提批量或投机解码降延迟。",
+    "options": [
+      "给每个请求单独复制一份系统提示，保证隔离",
+      "把系统提示压缩成更短的摘要，牺牲信息换速度",
+      "调大 batch size，靠更多并发摊薄成本",
+      "前缀感知缓存：共享前缀只算一次 K/V，跨请求复用，降 TTFT"
+    ],
+    "options_en": [
+      "Copy the system prompt separately for each request to guarantee isolation.",
+      "Compress the system prompt into a shorter summary, trading information for speed.",
+      "Increase the batch size and amortize cost via more concurrency.",
+      "Prefix-aware caching: compute the shared prefix's K/V once, reuse across requests, cut TTFT."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "各复制一份正好放弃了共享结构带来的复用机会，等于白算 500 遍前缀。",
+      "压缩提示会丢信息，且没触及「同一前缀被重算」这个真正的浪费点。",
+      "加大批量提吞吐但不消除前缀重算，每个请求仍各算一遍 2,000 token。",
+      "对；共享前缀只算一次、跨请求复用缓存，正是省掉重复 prefill、直接降 TTFT 的做法。"
+    ],
+    "optionExplanations_en": [
+      "Copying per request throws away the reuse the shared structure offers — recomputing the prefix 500 times.",
+      "Compressing the prompt loses information and never touches the real waste: recomputing the same prefix.",
+      "Bigger batches raise throughput but don't remove prefix recompute; each request still recomputes 2,000 tokens.",
+      "Correct — compute the shared prefix once and reuse the cache across requests, exactly what removes redundant prefill and cuts TTFT."
+    ],
+    "termDefinitions": [
+      {
+        "term": "prefix-aware caching / 前缀感知缓存",
+        "meaning": "识别多请求共享的相同前缀，只计算一次其 K/V 并跨请求复用。",
+        "meaningEn": "Prefix-aware caching detects a prefix shared by many requests, computes its K/V once, and reuses it across them."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "prefix-caching-ttft",
+    "scenario": "对 2,000-token 共享系统提示做前缀缓存后，测得每个请求的 prefill 计算减少了约 60–70%。",
+    "scenario_en": "After prefix-caching the 2,000-token shared system prompt, each request's prefill compute drops by roughly 60–70%.",
+    "q": "「prefill 减少 60–70%」这个数字对用户体验意味着什么？",
+    "q_en": "What does 'prefill cut by 60–70%' mean for user experience?",
+    "why": "prefill 主导 TTFT（首 token 延迟），共享前缀占了每个请求输入的大头，缓存掉它就把 prefill 砍掉 60–70%，用户明显更快看到第一个字。这是共享结构越强、收益越大的优化，不改变生成本身的质量。",
+    "why_en": "Prefill dominates TTFT, so cutting the shared prefix's prefill by 60–70% makes the first token appear markedly sooner, with no change to generation quality.",
+    "tags": [
+      "llm-sd",
+      "prefix-caching",
+      "ttft"
+    ],
+    "options": [
+      "生成的答案会更长，因为省下的算力用来多生成 token",
+      "首 token 延迟(TTFT)显著下降，用户更快看到回复开始",
+      "答案质量会下降，因为跳过了前缀的计算",
+      "吞吐不变，只是显存占用增加了"
+    ],
+    "options_en": [
+      "Answers get longer because the saved compute produces more tokens.",
+      "TTFT drops sharply, so users see the reply begin much sooner.",
+      "Answer quality drops because prefix computation is skipped.",
+      "Throughput is unchanged, only memory usage rises."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "省下的算力用来服务更多请求或更快响应，不是让单个答案变长。",
+      "对；prefill 是 TTFT 的主要成分，砍掉 60–70% 前缀重算直接让首 token 更快出现。",
+      "前缀 K/V 只是被复用而非跳过计算，结果完全等价，质量不变。",
+      "TTFT 下降本身就改善了延迟，且缓存复用还提升有效吞吐，不是「不变」。"
+    ],
+    "optionExplanations_en": [
+      "The saved compute serves more requests or responds faster, not lengthen a single answer.",
+      "Correct — prefill is the main component of TTFT, so removing 60–70% of prefix recompute makes the first token appear sooner.",
+      "The prefix K/V is reused, not skipped, so results are equivalent and quality is unchanged.",
+      "Lower TTFT already improves latency, and cache reuse also raises effective throughput — not 'unchanged.'"
+    ],
+    "termDefinitions": [
+      {
+        "term": "prefill vs decode / 预填充与解码",
+        "meaning": "prefill 并行算输入提示的 K/V（定 TTFT），decode 逐 token 生成（定每-token 延迟）。",
+        "meaningEn": "Prefill computes the prompt's K/V in parallel (sets TTFT); decode generates token by token (sets per-token latency)."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-007",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "vllm-auto-prefix",
+    "scenario": "不想手工标注哪段是共享前缀，希望引擎自动识别并复用缓存。",
+    "scenario_en": "You don't want to manually mark which span is the shared prefix; you want the engine to detect and reuse cache automatically.",
+    "q": "vLLM 的 automatic prefix caching 是怎么自动命中缓存的？",
+    "q_en": "How does vLLM's automatic prefix caching hit the cache automatically?",
+    "why": "vLLM 对 token 序列做哈希，把新来请求的前缀哈希去匹配已缓存的 KV block，命中就直接复用，无需人工配置哪段是共享前缀。开发者不用手动切分前缀，引擎按 token 内容自动去重。",
+    "why_en": "vLLM hashes token sequences and matches an incoming request's prefix against cached KV blocks, reusing on a hit with no manual configuration of what the shared prefix is.",
+    "tags": [
+      "llm-sd",
+      "vllm",
+      "prefix-caching"
+    ],
+    "options": [
+      "对 token 序列哈希，用哈希匹配已缓存的 KV block，命中即复用，无需手工配置",
+      "要求开发者在请求里显式标注 prefix 字段，引擎照标注切分",
+      "靠定时全量扫描所有请求找相同子串，离线合并缓存",
+      "把所有请求的前 2,000 token 一律当共享前缀，不做匹配"
+    ],
+    "options_en": [
+      "Hash token sequences and match the hash against cached KV blocks, reusing on a hit — no manual config.",
+      "Require developers to tag a prefix field in the request and split by that tag.",
+      "Periodically full-scan all requests for common substrings and merge caches offline.",
+      "Always treat every request's first 2,000 tokens as the shared prefix without matching."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；哈希 token 序列 + 匹配 KV block，是 vLLM 免配置自动命中前缀缓存的机制。",
+      "自动前缀缓存的卖点正是无需手工标注 prefix，这条与其自动性矛盾。",
+      "定时离线扫描太慢，无法在请求实时路径上命中缓存。",
+      "一律取前 2,000 token 会误判——前缀不一定同长同内容，必须按哈希匹配。"
+    ],
+    "optionExplanations_en": [
+      "Correct — hashing token sequences and matching KV blocks is how vLLM hits prefix cache automatically with no config.",
+      "The whole point of automatic prefix caching is no manual prefix tagging, which contradicts this.",
+      "Periodic offline scanning is too slow to hit the cache on the real-time request path.",
+      "Always taking the first 2,000 tokens misjudges — prefixes vary in length and content, so it must match by hash."
+    ],
+    "termDefinitions": [
+      {
+        "term": "automatic prefix caching / 自动前缀缓存",
+        "meaning": "引擎哈希 token 序列自动识别共享前缀并复用其 KV，无需人工配置。",
+        "meaningEn": "Automatic prefix caching hashes token sequences to detect shared prefixes and reuse their KV with no manual setup."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-008",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "kv-cache-memory",
+    "scenario": "评估长上下文 RAG 下 KV cache 会吃掉多少显存，好做容量规划。",
+    "scenario_en": "Estimating how much GPU memory the KV cache consumes under long-context RAG for capacity planning.",
+    "q": "填空：KV cache 显存占用的增长因子与量级。",
+    "q_en": "Fill in the blanks: what the KV cache memory scales with, and its magnitude.",
+    "text": "KV cache 显存随 序列长度 × {{batch size}} × 层数 × 隐藏维度 线性增长；一个 {{70B}} 模型在长上下文 RAG 下，光 KV cache 就可能吃掉 数十 GB 显存。",
+    "text_en": "KV cache memory grows linearly with sequence length × {{batch size}} × layers × hidden dim; a {{70B}} model under long-context RAG can consume tens of GB of KV cache alone.",
+    "why": "这几个因子相乘决定 KV cache 显存，是容量规划的基数：并发越高、上下文越长、模型越大，KV cache 越吃显存。70B + 长上下文能到数十 GB，直接决定单卡能同时装多少请求，也是为什么要 PagedAttention 精打细算显存。",
+    "why_en": "Memory equals sequence length × batch × layers × hidden dim, so higher concurrency, longer context, and bigger models all inflate it — tens of GB for a 70B — which caps how many requests fit on a GPU.",
+    "tags": [
+      "llm-sd",
+      "kv-cache",
+      "capacity"
+    ],
+    "termDefinitions": [
+      {
+        "term": "hidden dim / 隐藏维度",
+        "meaning": "模型每层向量表示的宽度，越大 K/V 张量越大。",
+        "meaningEn": "Hidden dim is the width of each layer's vector representation; larger means bigger K/V tensors."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "fragmentation",
+    "scenario": "RAG 请求的上下文长度差异很大（有的 500 token，有的 4,000 token），但引擎按最大长度给每个请求预留一整块连续显存。",
+    "scenario_en": "RAG contexts vary a lot (500 vs 4,000 tokens), yet the engine reserves one contiguous block sized for the max length per request.",
+    "q": "按最大长度静态预留连续显存，会带来什么后果？",
+    "q_en": "What does statically reserving a contiguous max-length block per request cause?",
+    "why": "按最坏情况（最大长度）给每个请求留连续大块，实际只用一小部分的请求会浪费大量预留空间——内部碎片（像给 3 人的一桌永远摆 12 座）。碎片吃掉显存，能同时装的请求数被压得很低。",
+    "why_en": "Sizing every request's contiguous block for the worst case wastes most of the reservation for short requests — internal fragmentation (a 12-seat table for a 3-person party) — which caps how many requests fit.",
+    "tags": [
+      "llm-sd",
+      "fragmentation",
+      "memory"
+    ],
+    "options": [
+      "显存利用率提高，因为连续块访问更快",
+      "请求之间隔离更好，几乎没有副作用",
+      "大量内部碎片：短请求浪费预留空间，能同时装的请求数骤降",
+      "只影响吞吐，不影响能装多少请求"
+    ],
+    "options_en": [
+      "Memory utilization improves because contiguous blocks are faster to access.",
+      "Better isolation between requests with almost no downside.",
+      "Massive internal fragmentation: short requests waste reserved space, sharply cutting how many requests fit.",
+      "It only affects throughput, not how many requests fit."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "连续访问快一点，但按最大长度预留反而浪费显存，利用率是降不是升。",
+      "隔离好听，代价却是巨大的内部碎片，副作用非常明显。",
+      "对；按最坏情况预留、短请求用不满，浪费的预留就是内部碎片，直接压低有效批量。",
+      "碎片吃掉显存，能同时容纳的请求数被压低，正是影响并发容量，不只是吞吐。"
+    ],
+    "optionExplanations_en": [
+      "Contiguous access is slightly faster, but max-length reservation wastes memory, lowering utilization not raising it.",
+      "Isolation sounds nice but the cost is huge internal fragmentation — a very real downside.",
+      "Correct — worst-case reservation leaves short requests underfilled, and that wasted reservation is internal fragmentation, capping effective batch.",
+      "Fragmentation eats memory and lowers concurrent request capacity — it hits concurrency, not just throughput."
+    ],
+    "termDefinitions": [
+      {
+        "term": "internal fragmentation / 内部碎片",
+        "meaning": "预留的连续空间里未被使用的那部分，按最大长度分配时尤其严重。",
+        "meaningEn": "Internal fragmentation is the unused portion inside a reserved contiguous block, worst under max-length allocation."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "paged-attention",
+    "scenario": "RAG 上下文长度高度可变，静态按最大长度分配把 GPU 显存切得七零八落、有效批量上不去。",
+    "scenario_en": "Highly variable RAG context lengths make static max-length allocation fragment GPU memory and cap effective batch size.",
+    "q": "要消除这种显存碎片，最对症的机制是什么？",
+    "q_en": "What mechanism most directly eliminates this memory fragmentation?",
+    "why": "PagedAttention 借鉴操作系统虚拟内存：把 KV cache 切成固定大小的 page，按需非连续分配，每个请求的缓存是一串 page 的链表，请求完成立刻把 page 还回空闲池。近零浪费，同硬件有效批量提升 2–4 倍。",
+    "why_en": "PagedAttention borrows OS virtual memory: split the KV cache into fixed-size pages allocated non-contiguously on demand, giving near-zero waste and 2–4x effective batch on the same hardware.",
+    "tags": [
+      "llm-sd",
+      "paged-attention",
+      "memory"
+    ],
+    "whenOtherWins": "如果所有请求上下文长度几乎一致、碎片本来就很小，分页管理的额外复杂度收益不大，简单静态分配反而省心。",
+    "options": [
+      "把 batch size 调小，让每个请求都能拿到连续大块",
+      "PagedAttention：把 KV cache 切成固定大小 page，按需非连续分配，近零碎片",
+      "增大 GPU 显存，用更贵的卡硬扛碎片",
+      "对每个请求都按最短长度分配，超了再报错重试"
+    ],
+    "options_en": [
+      "Shrink the batch size so each request gets a contiguous block.",
+      "PagedAttention: split the KV cache into fixed-size pages, allocate non-contiguously on demand, near-zero fragmentation.",
+      "Buy bigger GPUs and brute-force through fragmentation with pricier cards.",
+      "Allocate each request at the shortest length and error-retry when it overflows."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "调小批量牺牲吞吐，也没根治碎片，是回避不是解决。",
+      "对；固定大小 page + 按需非连续分配，把连续块的浪费彻底消掉，还能提 2–4 倍有效批量。",
+      "堆更贵的卡只是掩盖浪费，成本上升、碎片依旧存在。",
+      "按最短分配会频繁溢出重试，抖动严重，不是稳妥方案。"
+    ],
+    "optionExplanations_en": [
+      "Shrinking the batch sacrifices throughput and doesn't cure fragmentation — avoidance, not a fix.",
+      "Correct — fixed-size pages plus on-demand non-contiguous allocation kill contiguous-block waste and add 2–4x effective batch.",
+      "Bigger pricier cards only mask the waste; cost rises and fragmentation remains.",
+      "Shortest-length allocation causes frequent overflow-retries and jitter — not robust."
+    ],
+    "termDefinitions": [
+      {
+        "term": "PagedAttention",
+        "meaning": "受操作系统虚拟内存启发，把 KV cache 分成固定大小 page 按需分配，消除碎片。",
+        "meaningEn": "PagedAttention, inspired by OS virtual memory, splits the KV cache into fixed-size pages allocated on demand to eliminate fragmentation."
+      },
+      {
+        "term": "page / 页",
+        "meaning": "固定大小的显存块，KV cache 以 page 为单位非连续分配。",
+        "meaningEn": "A page is a fixed-size memory block; the KV cache is allocated non-contiguously in pages."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-011",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "paged-attention-mechanism",
+    "scenario": "深入 PagedAttention 的内部：一个请求的 KV cache 具体怎么组织、请求结束后显存怎么回收。",
+    "scenario_en": "Inside PagedAttention: how a request's KV cache is organized and how memory is reclaimed when it finishes.",
+    "q": "PagedAttention 下，单个请求的 KV cache 如何组织、如何回收显存？",
+    "q_en": "Under PagedAttention, how is a request's KV cache organized and reclaimed?",
+    "why": "每个请求的缓存 = 一串 page 组成的链表（逻辑连续、物理分散），靠 block table 记录逻辑页到物理页的映射；请求一完成，它的 page 立刻还回空闲池，可被别的请求马上复用——page 级即时回收，而非等整批结束。",
+    "why_en": "Each request's cache is a linked list of pages (logically contiguous, physically scattered) via a block table, and on completion its pages return to the free pool immediately for page-level reclamation.",
+    "tags": [
+      "llm-sd",
+      "paged-attention",
+      "memory"
+    ],
+    "options": [
+      "缓存必须是一整块连续显存，请求结束才能整块释放",
+      "缓存分散在磁盘上，用到时再从磁盘换入",
+      "每请求缓存要等到全批完成后统一回收，回收粒度是整批",
+      "缓存是一串 page 的链表，靠 block table 映射，完成后 page 即时还回空闲池"
+    ],
+    "options_en": [
+      "The cache must be one contiguous block, freed whole only when the request finishes.",
+      "The cache is scattered on disk and paged in from disk when needed.",
+      "Per-request cache is reclaimed only after the whole batch finishes, at batch granularity.",
+      "The cache is a linked list of pages via a block table; on completion pages return to the free pool immediately."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "PagedAttention 的核心恰恰是打破「必须连续」，用分页非连续管理。",
+      "page 在显存里非连续，不是换到磁盘；磁盘换入会慢到无法接受。",
+      "回收是 page 级即时的，不等整批，这正是它比静态分配灵活的地方。",
+      "对；逻辑连续物理分散的 page 链表 + block table 映射，完成即时还池，支持 page 级复用。"
+    ],
+    "optionExplanations_en": [
+      "PagedAttention's core is breaking the 'must be contiguous' rule with paged non-contiguous management.",
+      "Pages are non-contiguous in GPU memory, not swapped to disk; disk swap would be unacceptably slow.",
+      "Reclamation is per-page and immediate, not batch-wide — that's exactly its edge over static allocation.",
+      "Correct — a logically-contiguous, physically-scattered page list plus a block table, returning pages to the pool on completion for page-level reuse."
+    ],
+    "termDefinitions": [
+      {
+        "term": "block table / 块表",
+        "meaning": "记录逻辑页到物理页映射的表，让分散的 page 对模型呈现为连续序列。",
+        "meaningEn": "A block table maps logical to physical pages so scattered pages appear as a contiguous sequence to the model."
+      },
+      {
+        "term": "free pool / 空闲池",
+        "meaning": "已释放 page 的回收池，供后续请求即时再分配。",
+        "meaningEn": "The free pool holds released pages for immediate reallocation to later requests."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-012",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "static-vs-paged",
+    "scenario": "在同一张 A100 80GB 上跑 7B 模型，比较静态分配与 PagedAttention 能同时装多少请求。",
+    "scenario_en": "On one A100 80GB running a 7B model, compare how many requests static allocation versus PagedAttention can fit.",
+    "q": "静态分配 vs PagedAttention，在碎片和有效批量上差多少？",
+    "q_en": "Static allocation vs PagedAttention — how different are fragmentation and effective batch?",
+    "why": "静态分配按最大长度连续预留，内部碎片可高达 ~97.5% 浪费，A100 80GB/7B 只能装约 120 请求；PagedAttention 分页按需分配、近零碎片，同硬件能装约 350 请求，还支持前缀页共享和 page 级即时回收。",
+    "why_en": "Static allocation reserves contiguous max-length blocks with up to ~97.5% waste (~120 requests on A100 80GB/7B), while PagedAttention pages on demand with near-zero waste (~350 requests) and supports shared prefix pages.",
+    "tags": [
+      "llm-sd",
+      "paged-attention",
+      "memory"
+    ],
+    "tradeoff": "静态分配（简单但碎片高、批量小）vs PagedAttention（近零碎片、批量大但要管 block table）",
+    "table": {
+      "headers": [
+        "方案",
+        "分配",
+        "内部碎片",
+        "有效批量",
+        "回收"
+      ],
+      "rows": [
+        [
+          "静态",
+          "连续/按最大长",
+          "高(至97.5%)",
+          "~120",
+          "请求完才释放"
+        ],
+        [
+          "PagedAttention",
+          "分页/按需",
+          "近零",
+          "~350",
+          "page 级即时"
+        ]
+      ]
+    },
+    "options": [
+      "静态碎片高(至97.5%)、约装120；PagedAttention近零碎片、约装350，且支持前缀页共享",
+      "两者有效批量几乎一样，PagedAttention 只是代码更复杂",
+      "静态分配碎片更小、批量更大，PagedAttention 反而浪费更多",
+      "PagedAttention 需要更大显存才能达到和静态一样的批量"
+    ],
+    "options_en": [
+      "Static has high fragmentation (up to 97.5%), fits ~120; PagedAttention near-zero, fits ~350 and shares prefix pages.",
+      "Their effective batch is nearly identical; PagedAttention is just more code.",
+      "Static allocation fragments less and fits more; PagedAttention wastes more.",
+      "PagedAttention needs more memory to reach the same batch as static."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；静态按最大长预留浪费到近 97.5%、只装约 120，分页近零碎片装约 350，差距约 3 倍。",
+      "两者批量差近 3 倍（120 vs 350），说「几乎一样」与数据矛盾。",
+      "说反了：静态碎片高、批量小；分页才是碎片低、批量大。",
+      "分页在同硬件上就能装更多，不需要更大显存，理解反了。"
+    ],
+    "optionExplanations_en": [
+      "Correct — static wastes up to ~97.5% and fits ~120, paging is near-zero and fits ~350, roughly a 3x gap.",
+      "The batch differs ~3x (120 vs 350), so 'nearly identical' contradicts the data.",
+      "Backwards: static fragments more with smaller batch; paging is low-fragmentation, large-batch.",
+      "Paging fits more on the same hardware — it needs no extra memory; this reverses it."
+    ],
+    "termDefinitions": [
+      {
+        "term": "effective batch size / 有效批量",
+        "meaning": "同一硬件上能同时在跑的请求数，受显存和碎片限制。",
+        "meaningEn": "Effective batch size is how many requests run concurrently on the same hardware, limited by memory and fragmentation."
+      },
+      {
+        "term": "A100",
+        "meaning": "NVIDIA 数据中心 GPU，常见 40GB/80GB 版本，用于 LLM 推理与训练。",
+        "meaningEn": "The A100 is an NVIDIA data-center GPU (40GB/80GB) used for LLM inference and training."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-013",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "copy-on-write",
+    "scenario": "500 个请求共享同一段系统提示前缀，你既想复用前缀的 KV，又用了 PagedAttention 分页显存。",
+    "scenario_en": "500 requests share the same system-prompt prefix; you want to reuse the prefix KV while also using PagedAttention paged memory.",
+    "q": "怎么把「前缀缓存」和「分页显存」结合，让共享前缀既省算又省显存？",
+    "q_en": "How do you combine prefix caching with paged memory so the shared prefix saves both compute and memory?",
+    "why": "对共享前缀的 page 用 copy-on-write：这些 page 通过引用计数被多请求共享，只有当某请求生成分叉、超出前缀时才为它单独分配新 page。于是前缀既只算一次（省算），又只存一份（省显存），两个优化叠加。",
+    "why_en": "Copy-on-write the shared-prefix pages: they are shared via reference counting, and a request gets its own pages only when it diverges past the prefix, so the prefix is computed once and stored once.",
+    "tags": [
+      "llm-sd",
+      "copy-on-write",
+      "paged-attention"
+    ],
+    "whenOtherWins": "如果请求之间没有共享前缀，copy-on-write 无可共享的页，此时分页仍去碎片，但节省来自别处而非前缀共享。",
+    "options": [
+      "给每个请求各复制一份前缀 page，保证互不干扰",
+      "把前缀存到 CPU 内存，需要时再拷回 GPU",
+      "copy-on-write：前缀 page 用引用计数共享，请求分叉超出前缀才单独分配新页",
+      "禁用分页，只对前缀用连续大块，其余请求排队"
+    ],
+    "options_en": [
+      "Copy the prefix pages separately for each request to guarantee no interference.",
+      "Store the prefix in CPU memory and copy it back to GPU when needed.",
+      "Copy-on-write: share prefix pages via reference counting, allocating new pages only when a request diverges past the prefix.",
+      "Disable paging and use a contiguous block for the prefix only, queuing the rest."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "各复制一份就放弃了共享，前缀被存 500 遍，显存又浪费回去了。",
+      "拷到 CPU 再拷回来会引入 PCIe 拷贝延迟，得不偿失，也非本机制。",
+      "对；引用计数共享前缀页、分叉才分新页，前缀只算一次只存一份，省算又省显存。",
+      "禁用分页把碎片问题又请回来了，且排队伤并发，不是组合两者的办法。"
+    ],
+    "optionExplanations_en": [
+      "Copying per request abandons sharing — the prefix is stored 500 times and memory is wasted again.",
+      "Copying to CPU and back adds PCIe transfer latency for no gain and isn't this mechanism.",
+      "Correct — reference-counted shared prefix pages with new pages only on divergence: prefix computed once, stored once, saving compute and memory.",
+      "Disabling paging brings fragmentation back and queuing hurts concurrency — not a way to combine the two."
+    ],
+    "termDefinitions": [
+      {
+        "term": "copy-on-write / 写时复制",
+        "meaning": "多请求共享同一份只读页，只有当某请求要写入分叉时才为它复制新页。",
+        "meaningEn": "Copy-on-write shares one read-only page across requests, copying a new page only when a request writes/diverges."
+      },
+      {
+        "term": "reference counting / 引用计数",
+        "meaning": "记录一个共享页被多少请求引用，计数归零才回收。",
+        "meaningEn": "Reference counting tracks how many requests use a shared page, reclaiming it when the count hits zero."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-014",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "decode-bottleneck",
+    "scenario": "生成阶段每吐一个 token 都要走一次完整前向，但每次只算一个 token，GPU 算力用不满。",
+    "scenario_en": "In the decode phase, each token needs a full forward pass but computes only one token, leaving GPU compute underused.",
+    "q": "解码阶段的瓶颈是什么，为什么会催生 speculative decoding？",
+    "q_en": "What is the decode-phase bottleneck, and why does it motivate speculative decoding?",
+    "why": "解码是 memory-bandwidth bound：每步为了生成一个 token 要把整套权重从显存搬进计算单元，算力只用到一小部分，卡在带宽而非算力。speculative decoding 就利用这点——让大模型一次前向并行验证多个候选 token，把闲置算力用起来。",
+    "why_en": "Decode is memory-bandwidth bound — each token loads full weights from memory to emit one token, using little compute — so speculative decoding fills the idle compute by verifying many candidate tokens in one forward pass.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "decode"
+    ],
+    "options": [
+      "瓶颈是算力不足，只能靠加卡解决",
+      "解码是内存带宽瓶颈：每 token 一次完整前向却只产一个，算力闲置；投机解码借此并行验证多 token",
+      "瓶颈是网络延迟，投机解码通过压缩传输解决",
+      "瓶颈是磁盘 IO，投机解码把权重预取到内存"
+    ],
+    "options_en": [
+      "The bottleneck is insufficient compute, solvable only by adding GPUs.",
+      "Decode is memory-bandwidth bound: each token is a full forward for one token so compute idles; speculative decoding verifies many tokens in parallel.",
+      "The bottleneck is network latency, which speculative decoding solves by compressing transfers.",
+      "The bottleneck is disk IO, which speculative decoding fixes by prefetching weights to memory."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "问题不是算力不够，恰恰是算力闲置、卡在带宽，加卡不对症。",
+      "对；解码卡在把权重从显存搬进来的带宽上，算力空着；投机解码一次前向并行验证多个候选正好把它填满。",
+      "解码瓶颈在显存带宽不在网络，压缩传输解决不了它。",
+      "权重常驻显存不走磁盘，磁盘 IO 不是解码瓶颈。"
+    ],
+    "optionExplanations_en": [
+      "The issue isn't too little compute — compute idles while bandwidth binds, so adding GPUs misses the point.",
+      "Correct — decode binds on moving weights from memory while compute sits idle, and speculative decoding fills it by verifying many candidates in one forward pass.",
+      "The decode bottleneck is memory bandwidth, not network, so compressing transfers won't fix it.",
+      "Weights are resident in memory, not on disk, so disk IO isn't the decode bottleneck."
+    ],
+    "termDefinitions": [
+      {
+        "term": "memory-bandwidth bound / 内存带宽受限",
+        "meaning": "性能受限于从显存搬数据的带宽，而非计算单元的算力。",
+        "meaningEn": "Memory-bandwidth bound means performance is limited by moving data from memory, not by compute throughput."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-015",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "speculative-decoding",
+    "scenario": "想在不换大模型、不掉质量的前提下加快解码。",
+    "scenario_en": "You want faster decoding without changing the large model or losing quality.",
+    "q": "speculative decoding 的 draft-then-verify 机制是怎么运作的？",
+    "q_en": "How does speculative decoding's draft-then-verify mechanism work?",
+    "why": "小草稿模型（如 1B）便宜地一口气猜出 K 个候选 token；大目标模型（如 70B）用一次前向并行验证这 K 个（成本约等于自己生成一个 token）。被接受的 token 跳过了各自的解码步，加速正比于连续被接受的数量。",
+    "why_en": "A small draft model (e.g. 1B) cheaply proposes K candidate tokens, then the large target model (e.g. 70B) verifies all K in one forward pass, and accepted tokens skip their own decode steps.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "decode"
+    ],
+    "diagram": "flowchart LR\n  D[\"draft 1B<br/>猜 K 个 token\"] --> V[\"target 70B<br/>一次前向验证 K 个\"]\n  V --> A[\"接受的跳过解码\"]\n  V --> R[\"拒绝点重采样\"]",
+    "options": [
+      "小草稿模型猜 K 个 token，大目标模型一次前向并行验证这 K 个，接受的跳过解码步",
+      "两个同样大的模型各生成一半 token，最后拼起来",
+      "先用大模型生成，再用小模型润色缩短",
+      "把大模型拆成多张卡并行，每卡出一个 token"
+    ],
+    "options_en": [
+      "A small draft model proposes K tokens; the large target verifies all K in one forward pass; accepted tokens skip decode steps.",
+      "Two equally large models each generate half the tokens and concatenate.",
+      "The large model generates first, then a small model polishes and shortens.",
+      "Split the large model across GPUs so each emits one token."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；小模型便宜地提猜、大模型一次并行验证 K 个，接受的连续 token 直接跳过逐步解码。",
+      "两个大模型各出一半没有加速逻辑，也不保证一致性。",
+      "先大后小润色是另一回事，不是用小模型提速大模型的解码。",
+      "拆卡是模型并行，与草稿-验证的加速机制无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a cheap draft proposes and the large model verifies K in parallel, so accepted consecutive tokens skip step-by-step decode.",
+      "Two large models each doing half has no speedup logic and no equivalence guarantee.",
+      "Large-then-small polishing is different, not using a small model to speed the large model's decode.",
+      "Splitting across GPUs is model parallelism, unrelated to draft-verify speedup."
+    ],
+    "termDefinitions": [
+      {
+        "term": "draft model / 草稿模型",
+        "meaning": "一个小而快的模型，先猜出多个候选 token 供大模型验证。",
+        "meaningEn": "A draft model is a small fast model that proposes multiple candidate tokens for the large model to verify."
+      },
+      {
+        "term": "target model / 目标模型",
+        "meaning": "真正要用的大模型，负责一次前向并行验证草稿 token。",
+        "meaningEn": "The target model is the large model you actually want, which verifies the draft tokens in one forward pass."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "speculative-why",
+    "scenario": "70B 模型解码卡在内存带宽、算力闲置，你想在不掉质量的情况下降低单请求解码延迟。",
+    "scenario_en": "A 70B model's decode is memory-bandwidth bound with idle compute, and you want lower per-request decode latency without quality loss.",
+    "q": "为什么 speculative decoding 能降解码延迟而不掉质量？",
+    "q_en": "Why does speculative decoding cut decode latency without hurting quality?",
+    "why": "它把「一次前向只产一个 token」变成「一次前向并行验证多个候选」，正好利用解码阶段闲置的算力。被接受的连续 token 一次搞定，多个 token 只花约一个 token 的时间；而拒绝采样保证最终分布与仅用目标模型完全一致，故无质量损失。",
+    "why_en": "It turns one forward pass into parallel verification of many candidates, using idle decode-phase compute, while rejection sampling keeps the output distribution identical to the target alone.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "latency"
+    ],
+    "whenOtherWins": "如果草稿模型和目标模型很不匹配、接受率很低，几乎每个候选都被拒，反而多花验证成本，此时不如直接用目标模型解码。",
+    "options": [
+      "靠把 70B 量化成更小精度换速度，因此会略掉质量",
+      "靠减少生成的 token 数，答案变短所以更快",
+      "靠缓存历史答案，遇到相似问题直接返回",
+      "把闲置算力用于并行验证多个候选 token，拒绝采样保证分布与目标模型一致故不掉质量"
+    ],
+    "options_en": [
+      "By quantizing the 70B to lower precision for speed, which slightly loses quality.",
+      "By generating fewer tokens so shorter answers are faster.",
+      "By caching past answers and returning them for similar questions.",
+      "By using idle compute to verify many candidate tokens in parallel, with rejection sampling keeping the distribution identical so quality is preserved."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "投机解码不改精度、不动目标模型权重，跟量化是两回事，也不掉质量。",
+      "它不改变答案长度或内容，只是更快得到同样的 token 序列。",
+      "缓存整答案是另一种优化，且相似≠相同，投机解码逐 token 精确等价。",
+      "对；用闲置算力并行验证多候选降延迟，拒绝采样保证输出分布与目标模型逐 token 等价，零质量损失。"
+    ],
+    "optionExplanations_en": [
+      "Speculative decoding changes no precision and no target weights — unlike quantization — and loses no quality.",
+      "It doesn't change answer length or content, just reaches the same token sequence faster.",
+      "Caching whole answers is a different optimization, and similar isn't identical; speculative decoding is exactly token-equivalent.",
+      "Correct — idle compute verifies candidates in parallel to cut latency, and rejection sampling keeps the output distribution token-equivalent to the target, so zero quality loss."
+    ],
+    "termDefinitions": [
+      {
+        "term": "acceptance rate / 接受率",
+        "meaning": "草稿模型提出的候选 token 被目标模型接受的比例，越高加速越大。",
+        "meaningEn": "Acceptance rate is the fraction of draft-proposed tokens the target accepts; higher means more speedup."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "rejection-handling",
+    "scenario": "草稿模型一口气提了 5 个候选 token，目标模型验证时在第 3 个 token 处判为拒绝。",
+    "scenario_en": "The draft model proposes 5 candidate tokens, and the target rejects at the 3rd during verification.",
+    "q": "草稿提了 5 个、目标在第 3 个拒绝，之后怎么处理这 5 个 token？",
+    "q_en": "Draft proposes 5, target rejects the 3rd — what happens to the 5 tokens?",
+    "why": "第 1、2 个已通过验证，保留；第 3 个在拒绝点从目标模型「校正后的分布」重新采样一个正确 token；第 4、5 个基于被否的第 3 个而来，全部丢弃。下一轮草稿从新的正确位置继续。这套拒绝采样正是保证输出等价的关键。",
+    "why_en": "Tokens 1–2 are accepted, token 3 is resampled from the target's adjusted distribution at the rejection point, and tokens 4–5 (built on the rejected token 3) are discarded.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "decode"
+    ],
+    "options": [
+      "全部 5 个都丢弃，草稿模型从头重来",
+      "全部 5 个都保留，因为草稿模型通常是对的",
+      "1、2 接受；3 在拒绝点从目标校正分布重采样；4、5 丢弃",
+      "只丢弃第 3 个，4、5 照常保留"
+    ],
+    "options_en": [
+      "Discard all 5 and the draft restarts from scratch.",
+      "Keep all 5 because the draft model is usually right.",
+      "Accept 1–2; resample 3 from the target's adjusted distribution; discard 4–5.",
+      "Discard only token 3 and keep 4–5 as usual."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "1、2 已通过验证不该丢，全丢会白白浪费已确认的加速。",
+      "全保留会破坏等价性——第 3 个被否，其后的都建立在错的前提上。",
+      "对；前两个保留、拒绝点重采样一个正确 token、其后作废，正是保证输出与目标一致的处理。",
+      "4、5 是基于被否的第 3 个生成的，前提已错，必须一起丢弃。"
+    ],
+    "optionExplanations_en": [
+      "Tokens 1–2 already passed and shouldn't be dropped; discarding all wastes confirmed speedup.",
+      "Keeping all breaks equivalence — token 3 was rejected so everything after rests on a wrong premise.",
+      "Correct — keep the first two, resample a correct token at the rejection point, discard the rest, preserving equivalence to the target.",
+      "Tokens 4–5 were generated from the rejected token 3, so their premise is wrong and they must be discarded too."
+    ],
+    "termDefinitions": [
+      {
+        "term": "rejection sampling / 拒绝采样",
+        "meaning": "按目标模型分布决定接受/拒绝草稿 token，拒绝处从校正分布重采，保证最终分布等价。",
+        "meaningEn": "Rejection sampling accepts/rejects draft tokens per the target distribution and resamples at rejections, keeping the final distribution equivalent."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-018",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "output-equivalence",
+    "scenario": "有人担心：加了个小草稿模型，输出会不会跟只用大模型不一样、偷偷降质。",
+    "scenario_en": "Someone worries that adding a small draft model makes the output differ from the large model alone and quietly lowers quality.",
+    "q": "speculative decoding 为什么能保证输出与「仅用目标模型」完全等价？",
+    "q_en": "Why does speculative decoding guarantee output equivalent to the target model alone?",
+    "why": "关键在拒绝采样：接受/拒绝的概率经过精心设计，使得整套流程产生的 token 分布与目标模型单独逐 token 采样完全相同。草稿模型只影响速度、不影响分布，所以是零质量损失的加速，而非近似。",
+    "why_en": "Rejection sampling is designed so the accept/reject probabilities make the produced token distribution identical to sampling the target alone, so the draft affects only speed, not the distribution.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "quality"
+    ],
+    "options": [
+      "因为草稿模型和目标模型是同一个，本来就一样",
+      "拒绝采样让产生的 token 分布与目标模型单独采样完全相同，草稿只影响速度不影响分布",
+      "因为最后会用目标模型把草稿的答案整段重写一遍",
+      "因为差异很小，实践中可以忽略不计"
+    ],
+    "options_en": [
+      "Because the draft and target are the same model, so they match anyway.",
+      "Rejection sampling makes the produced token distribution identical to sampling the target alone; the draft affects only speed.",
+      "Because the target model rewrites the draft's whole answer at the end.",
+      "Because the difference is tiny and negligible in practice."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "草稿和目标是两个不同大小的模型，不是同一个。",
+      "对；拒绝采样的接受概率经设计，使输出分布严格等于目标模型单采，故是精确等价而非近似。",
+      "不会整段重写，验证是逐 token 的接受/拒绝，不是事后重写。",
+      "不是「差异小可忽略」，而是数学上严格等价、零质量损失。"
+    ],
+    "optionExplanations_en": [
+      "The draft and target are two different-size models, not the same one.",
+      "Correct — rejection-sampling accept probabilities are designed so the output distribution strictly equals the target alone: exact equivalence, not approximate.",
+      "There is no whole-answer rewrite; verification is per-token accept/reject, not post-hoc rewriting.",
+      "It's not 'small and negligible' — it is mathematically exact equivalence with zero quality loss."
+    ],
+    "termDefinitions": [
+      {
+        "term": "output equivalence / 输出等价",
+        "meaning": "投机解码的最终 token 分布与仅用目标模型逐 token 采样严格相同。",
+        "meaningEn": "Output equivalence means speculative decoding's final token distribution strictly matches sampling the target model alone."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-019",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "acceptance-speedup",
+    "scenario": "评估一个和目标模型良好匹配的草稿模型能带来多大解码加速。",
+    "scenario_en": "Estimating the decode speedup from a draft model well-matched to the target.",
+    "q": "填空：良好匹配的草稿模型的接受率与加速。",
+    "q_en": "Fill in the blanks: acceptance rate and speedup for a well-matched draft.",
+    "text": "草稿与目标良好匹配时，接受率约 {{70–80%}}，可带来约 {{2–3x}} 的解码加速，且零质量损失；加速大致正比于连续被接受的 token 数。",
+    "text_en": "With a well-matched draft, acceptance is about {{70–80%}}, giving roughly {{2–3x}} decode speedup at zero quality loss; speedup scales with consecutive accepted tokens.",
+    "why": "接受率是加速的核心杠杆：接受得越多、越连续，越多 token 摊在一次前向里。70–80% 接受对应约 2–3x 解码加速，是经验值不是定律；提升接受率的办法是让草稿模型贴近目标（如领域微调）。",
+    "why_en": "Acceptance rate is the key lever — more consecutive accepts pack more tokens into one forward pass — and about 70–80% gives roughly 2–3x, an empirical figure, not a law.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "acceptance"
+    ],
+    "termDefinitions": [
+      {
+        "term": "consecutive acceptances / 连续接受",
+        "meaning": "草稿 token 从头连续被接受的个数，决定一轮跳过多少解码步。",
+        "meaningEn": "Consecutive acceptances is how many draft tokens are accepted in a row, setting how many decode steps a round skips."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-020",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "draft-finetune",
+    "scenario": "你的服务专攻法律/医疗领域，投机解码的接受率偏低，想把它提上去。",
+    "scenario_en": "Your service specializes in legal/medical, and speculative decoding's acceptance is low; you want to raise it.",
+    "q": "在专门领域里，怎么提高 speculative decoding 的接受率？",
+    "q_en": "How do you raise speculative decoding's acceptance rate in a specialized domain?",
+    "why": "在领域数据（法律/医疗）上微调草稿模型，让它的预测分布更贴近目标模型在该领域的输出，接受率就上去，加速更大。草稿越像目标，连续被接受的越多；这不改目标模型也不影响等价性。",
+    "why_en": "Fine-tune the draft model on domain data so its predictions better match the target's in that domain, raising acceptance and speedup without touching the target or equivalence.",
+    "tags": [
+      "llm-sd",
+      "speculative-decoding",
+      "fine-tuning"
+    ],
+    "whenOtherWins": "如果流量是通用杂域、没有集中领域分布，专门领域微调草稿收益不明显，不如换个更通用、和目标更匹配的草稿。",
+    "options": [
+      "在领域数据上微调草稿模型，让它更贴近目标模型在该领域的输出，提高接受率",
+      "把草稿模型换成和目标一样大的模型，保证预测一致",
+      "关掉投机解码，直接用目标模型解码更稳",
+      "把接受阈值调低，强行接受更多草稿 token"
+    ],
+    "options_en": [
+      "Fine-tune the draft on domain data so it better matches the target's domain outputs, raising acceptance.",
+      "Replace the draft with a model as large as the target to guarantee matching predictions.",
+      "Turn off speculative decoding and just decode with the target for stability.",
+      "Lower the acceptance threshold to force-accept more draft tokens."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；领域微调让草稿在该领域更像目标，连续接受更多，加速提升且不动等价性。",
+      "把草稿做得和目标一样大就失去了「便宜提猜」的意义，加速无从谈起。",
+      "关掉投机解码是放弃加速，不是提升接受率的办法。",
+      "拒绝采样是保证等价的核心，人为放宽阈值会破坏输出等价、引入质量损失。"
+    ],
+    "optionExplanations_en": [
+      "Correct — domain fine-tuning makes the draft resemble the target in that domain, raising consecutive acceptance and speedup without breaking equivalence.",
+      "Making the draft as large as the target defeats the cheap-proposal purpose, so there's no speedup.",
+      "Turning it off abandons speedup rather than raising acceptance.",
+      "Rejection sampling is what guarantees equivalence; loosening the threshold breaks output equivalence and adds quality loss."
+    ],
+    "termDefinitions": [
+      {
+        "term": "domain fine-tuning / 领域微调",
+        "meaning": "在特定领域数据上继续训练模型，使其在该领域分布上更准。",
+        "meaningEn": "Domain fine-tuning continues training a model on a specific domain's data to align it with that domain's distribution."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-021",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "static-vs-continuous-batching",
+    "scenario": "企业流量里既有 50-token 的事实型短问，也有 500-token 的分析型长答，生成长度差异很大。",
+    "scenario_en": "Enterprise traffic mixes 50-token factoid answers and 500-token analytical answers, with large generation-length variance.",
+    "q": "static batching 和 continuous batching 在混合长度流量下差在哪？",
+    "q_en": "How do static and continuous batching differ under mixed-length traffic?",
+    "why": "static batching 攒一批一起处理、一起返回，整批要等最长的那条跑完，短答案生成完只能干等，GPU 空转。continuous batching 在迭代级别，任何请求一完成就把新请求插进活跃批，GPU 不为落后者空转，混合长度下吞吐高 2–5 倍。",
+    "why_en": "Static batching processes and returns a batch together so it waits for the longest sequence and short answers idle, while continuous batching inserts new requests at iteration level as any finishes, keeping the GPU busy for 2–5x throughput.",
+    "tags": [
+      "llm-sd",
+      "batching",
+      "throughput"
+    ],
+    "tradeoff": "static（简单但整批等最长、短请求空等）vs continuous（迭代级填新、不空等但要动态管批）",
+    "table": {
+      "headers": [
+        "方案",
+        "加入时机",
+        "落后请求",
+        "吞吐"
+      ],
+      "rows": [
+        [
+          "static",
+          "整批一起收",
+          "全批等最长",
+          "低"
+        ],
+        [
+          "continuous",
+          "完成即插新",
+          "不空等",
+          "高(2-5x)"
+        ]
+      ]
+    },
+    "options": [
+      "两者吞吐差不多，continuous 只是实现更复杂",
+      "static 吞吐更高，因为整批一起算更省调度",
+      "static 用于长答案、continuous 用于短答案，按长度二选一",
+      "static 整批等最长、短请求空等；continuous 完成即插新请求，不空转、混合流量吞吐高 2–5x"
+    ],
+    "options_en": [
+      "Their throughput is similar; continuous is just more complex to implement.",
+      "Static has higher throughput because processing a batch together saves scheduling.",
+      "Static is for long answers and continuous for short answers, chosen by length.",
+      "Static waits for the longest and idles short requests; continuous inserts new requests on completion, no idling, 2–5x throughput on mixed traffic."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "吞吐差 2–5 倍，说「差不多」与数据不符。",
+      "整批一起算恰恰因等最长而空转，吞吐更低不是更高。",
+      "不是按答案长度二选一，continuous 正是为处理长度混合而生。",
+      "对；static 整批同步、短请求空等；continuous 迭代级填新、GPU 不空转，混合流量吞吐高 2–5 倍。"
+    ],
+    "optionExplanations_en": [
+      "Throughput differs 2–5x, so 'similar' contradicts the data.",
+      "Processing a batch together idles waiting for the longest, so throughput is lower not higher.",
+      "It's not a length-based either/or; continuous exists precisely to handle mixed lengths.",
+      "Correct — static is synchronous and idles short requests, while continuous inserts new requests at iteration level so the GPU never idles, 2–5x on mixed traffic."
+    ],
+    "termDefinitions": [
+      {
+        "term": "static batching / 静态批处理",
+        "meaning": "攒够一批一起处理、一起返回，整批等最长序列完成。",
+        "meaningEn": "Static batching gathers a batch, processes and returns it together, waiting for the longest sequence."
+      },
+      {
+        "term": "continuous batching / 连续批处理",
+        "meaning": "迭代级(in-flight)地在任一请求完成时把新请求插入活跃批，GPU 不为落后者空转。",
+        "meaningEn": "Continuous (in-flight) batching inserts new requests into the active batch as any completes, so the GPU never idles for stragglers."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-022",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "static-batching-idle",
+    "scenario": "static batching 里同一批混了一个 50-token 短答和一个 500-token 长答。",
+    "scenario_en": "In static batching, one batch mixes a 50-token short answer and a 500-token long answer.",
+    "q": "static batching 下，短答案跑完后会发生什么？",
+    "q_en": "Under static batching, what happens after the short answer finishes?",
+    "why": "整批一起返回，短答案哪怕早就生成完，也必须干等最长的 500-token 请求跑完才能一起交付，这段时间它占着显存、GPU 却在为它空转。流量长度越参差，这种空等和利用率损失越严重。",
+    "why_en": "The batch returns together, so the finished short answer must wait idle for the 500-token request to complete, holding memory while the GPU idles for it.",
+    "tags": [
+      "llm-sd",
+      "batching",
+      "utilization"
+    ],
+    "options": [
+      "短答案立刻单独返回，不影响其他请求",
+      "短答案跑完仍要空等最长请求完成才一起返回，期间 GPU 为它空转",
+      "短答案会被自动合并进下一批继续生成",
+      "系统自动把长答案截断到和短答案一样长"
+    ],
+    "options_en": [
+      "The short answer returns immediately on its own, unaffected.",
+      "The finished short answer idles until the longest completes, then returns together, wasting GPU on it.",
+      "The short answer is merged into the next batch to keep generating.",
+      "The system auto-truncates the long answer to the short one's length."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "static 的定义就是整批同步返回，短答案无法提前单独交付。",
+      "对；短答案必须陪跑到最长请求结束，这段空等正是 static batching 的利用率损失来源。",
+      "static 不会把已完成请求塞进下一批，它是整批一起收一起走。",
+      "系统不会截断长答案，长请求该跑多长跑多长，短请求只能等。"
+    ],
+    "optionExplanations_en": [
+      "Static by definition returns the whole batch together, so the short answer can't be delivered early.",
+      "Correct — the short answer must wait for the longest to finish, and that idle time is static batching's utilization loss.",
+      "Static doesn't push a completed request into the next batch; it collects and releases the whole batch together.",
+      "The system doesn't truncate the long answer; the long request runs its full length while the short one waits."
+    ],
+    "termDefinitions": [
+      {
+        "term": "straggler / 落后请求",
+        "meaning": "批内耗时最长的请求，拖住整批的完成时间。",
+        "meaningEn": "A straggler is the longest-running request in a batch, holding up the whole batch's completion."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-023",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "continuous-batching",
+    "scenario": "企业流量生成长度方差极大，你要在不牺牲短请求延迟的前提下把 GPU 喂满。",
+    "scenario_en": "Enterprise traffic has huge generation-length variance, and you must keep the GPU full without hurting short-request latency.",
+    "q": "面对高方差生成长度，怎么让 GPU 不为落后请求空转？",
+    "q_en": "With high generation-length variance, how do you stop the GPU idling for stragglers?",
+    "why": "continuous batching：在每个生成迭代结束后，只要有请求完成就把它移出、把排队的新请求插进活跃批，批的组成每一步都在变。短请求一完成就腾位给新请求，GPU 不必陪最长请求空转，混合流量利用率大幅提升。",
+    "why_en": "Continuous batching evicts finished requests and inserts queued ones into the active batch every iteration, so a finished short request frees its slot immediately and the GPU never idles for the longest.",
+    "tags": [
+      "llm-sd",
+      "batching",
+      "utilization"
+    ],
+    "whenOtherWins": "如果所有请求生成长度几乎一致、几乎同时结束，static batching 的简单性就够了，连续批处理的动态管理收益不大。",
+    "options": [
+      "把所有请求按长度排序，长的单独排一批",
+      "continuous batching：每次迭代后完成即移出、新请求即插入活跃批，GPU 不空转",
+      "统一限制每个请求最多生成 50 token，消除长度差异",
+      "给每个请求分配一张独立 GPU，互不等待"
+    ],
+    "options_en": [
+      "Sort all requests by length and batch the long ones separately.",
+      "Continuous batching: each iteration, evict finished and insert new requests into the active batch, so the GPU never idles.",
+      "Cap every request at 50 tokens to remove length variance.",
+      "Give each request its own dedicated GPU so none waits."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "按长度分批仍是静态的，批内最长者照样拖住，且需预知长度不现实。",
+      "对；迭代级动态增删请求，短请求完成即腾位、新请求即补入，GPU 持续满载。",
+      "限死 50 token 会截断需要长回答的请求，牺牲质量换利用率，不可取。",
+      "每请求一张 GPU 成本爆炸且利用率极低，与「喂满 GPU」目标相悖。"
+    ],
+    "optionExplanations_en": [
+      "Length-based batching is still static; the longest in a batch still stalls it, and you can't know length in advance.",
+      "Correct — iteration-level add/remove frees a finished short request's slot and refills it, keeping the GPU saturated.",
+      "Capping at 50 tokens truncates answers that need to be long, trading quality for utilization — unacceptable.",
+      "One GPU per request explodes cost and slashes utilization, the opposite of keeping the GPU full."
+    ],
+    "termDefinitions": [
+      {
+        "term": "iteration-level scheduling / 迭代级调度",
+        "meaning": "以每个生成步为单位调整批组成，而非整批同进同出。",
+        "meaningEn": "Iteration-level scheduling adjusts batch composition per generation step rather than all-in all-out."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-024",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "continuous-batching-dependency",
+    "scenario": "你想上线 continuous batching：每个迭代批的组成都在变，请求随时加入、随时离开。",
+    "scenario_en": "You want continuous batching, where the batch composition changes every iteration with requests joining and leaving anytime.",
+    "q": "为什么说 continuous batching 依赖 PagedAttention 才可行？",
+    "q_en": "Why is continuous batching said to depend on PagedAttention to be feasible?",
+    "why": "连续批处理每步都在增删请求，需要动态、细粒度地分配和回收显存。静态连续分配下，中途加入的请求要不到合适的连续大块，直接触发分配失败。PagedAttention 的按需分页正好提供这种无碎片的动态分配，是连续批处理落地的前提。",
+    "why_en": "Continuous batching adds and drops requests every step, needing dynamic fine-grained memory allocation, and static contiguous allocation makes mid-batch joiners fail; PagedAttention's on-demand paging is what makes it feasible.",
+    "tags": [
+      "llm-sd",
+      "batching",
+      "paged-attention"
+    ],
+    "tradeoff": "连续批处理要动态显存 → PagedAttention 提供无碎片按需分配（没它则中途加入触发分配失败）",
+    "options": [
+      "因为 PagedAttention 让模型跑得更准，批处理才敢开",
+      "因为 continuous batching 只在长上下文时需要显存",
+      "它们其实互不依赖，只是常被一起提及",
+      "连续批处理需动态显存分配，静态连续分配会让中途加入的请求分配失败，PagedAttention 提供无碎片按需分配"
+    ],
+    "options_en": [
+      "Because PagedAttention makes the model more accurate, so batching dares to turn on.",
+      "Because continuous batching only needs memory for long contexts.",
+      "They are actually independent and just often mentioned together.",
+      "Continuous batching needs dynamic allocation; static contiguous allocation fails mid-batch joiners, and PagedAttention provides fragmentation-free on-demand allocation."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "PagedAttention 管的是显存分配，不改变模型准确性，因果错位。",
+      "连续批处理是为处理长度方差和填批，不是只在长上下文才需显存。",
+      "两者强依赖：没有分页的动态分配，连续批处理会因碎片/分配失败无法落地。",
+      "对；每迭代增删请求需要按需动态显存，PagedAttention 无碎片按需分配正是它可行的前提。"
+    ],
+    "optionExplanations_en": [
+      "PagedAttention manages memory, not model accuracy — cause and effect are misplaced.",
+      "Continuous batching handles length variance and batch filling, not memory only for long contexts.",
+      "They are strongly dependent: without paged dynamic allocation, continuous batching fails on fragmentation/allocation.",
+      "Correct — adding/dropping requests each iteration needs on-demand dynamic memory, and PagedAttention's fragmentation-free allocation is the prerequisite."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dynamic memory allocation / 动态显存分配",
+        "meaning": "运行中随请求进出实时分配/回收显存，而非预先固定。",
+        "meaningEn": "Dynamic memory allocation allocates/reclaims memory at runtime as requests come and go, not fixed in advance."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-025",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "prefill-vs-decode-targeting",
+    "scenario": "用户抱怨两件事：一是等很久才看到第一个字，二是字一个个蹦出来太慢。",
+    "scenario_en": "Users complain about two things: waiting long to see the first character, and characters appearing one by one too slowly.",
+    "q": "「首字慢」和「逐字慢」分别该用哪个技术攻？",
+    "q_en": "Which technique attacks 'slow first token' versus 'slow token-by-token'?",
+    "why": "首字慢 = TTFT 高，瓶颈在 prefill，用前缀感知 KV 缓存把共享前缀的 prefill 省掉；逐字慢 = 解码延迟，瓶颈在内存带宽，用 speculative decoding 一次前向验证多 token。两个瓶颈在不同阶段，对症下不同药。",
+    "why_en": "Slow first token is high TTFT (a prefill problem) fixed by prefix caching, while slow token-by-token is decode latency (memory-bandwidth) fixed by speculative decoding.",
+    "tags": [
+      "llm-sd",
+      "latency",
+      "serving"
+    ],
+    "whenOtherWins": "如果请求间没有共享前缀，前缀缓存救不了 TTFT，此时降 TTFT 更多靠减小 prompt 或换更小模型；解码慢仍归投机解码。",
+    "options": [
+      "首字慢用前缀感知 KV 缓存降 prefill；逐字慢用 speculative decoding 降解码延迟",
+      "两者都靠加大 batch size 解决",
+      "首字慢用 speculative decoding；逐字慢用前缀缓存（正好反过来）",
+      "两者都只能靠换更大的 GPU 硬扛"
+    ],
+    "options_en": [
+      "Slow first token: prefix-aware KV caching to cut prefill; slow token-by-token: speculative decoding to cut decode latency.",
+      "Both are solved by increasing batch size.",
+      "Slow first token: speculative decoding; slow token-by-token: prefix caching (exactly reversed).",
+      "Both can only be brute-forced with bigger GPUs."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；TTFT 归 prefill、用前缀缓存，解码延迟归内存带宽、用投机解码，两阶段两药对症。",
+      "加大 batch 提吞吐不直接降单请求的 TTFT 或逐 token 延迟，甚至可能加剧排队。",
+      "反了：前缀缓存降的是 prefill/TTFT，投机解码降的是解码延迟。",
+      "换大 GPU 是砸钱，且解码卡在带宽，未必线性改善，不对症。"
+    ],
+    "optionExplanations_en": [
+      "Correct — TTFT is prefill (prefix caching) and decode latency is memory-bandwidth (speculative decoding): two phases, two matched fixes.",
+      "Bigger batches raise throughput but don't directly cut a single request's TTFT or per-token latency, and may worsen queuing.",
+      "Reversed: prefix caching cuts prefill/TTFT, speculative decoding cuts decode latency.",
+      "Bigger GPUs just spend money, and decode binds on bandwidth so improvement isn't guaranteed linear — not targeted."
+    ],
+    "termDefinitions": [
+      {
+        "term": "decode latency / 解码延迟",
+        "meaning": "逐 token 生成的每-token 时间，受内存带宽限制。",
+        "meaningEn": "Decode latency is the per-token time of autoregressive generation, limited by memory bandwidth."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-026",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "composition-chain",
+    "q": "把这套服务栈的「组合依赖链」从底层能力到顶层收益排好：",
+    "q_en": "Order the serving stack's composition chain from the base capability to the top-level payoff:",
+    "steps": [
+      "共享前缀页用 copy-on-write 引用计数共享，前缀只算一次只存一份",
+      "PagedAttention 分页按需分配、近零碎片，提供动态显存",
+      "有了无碎片的动态显存，continuous batching 才能每迭代增删请求",
+      "GPU 不为落后请求空转，混合流量吞吐提升 2–5x"
+    ],
+    "answerOrder": [
+      1,
+      0,
+      2,
+      3
+    ],
+    "why": "先有 PagedAttention 的无碎片动态显存做地基；在此之上共享前缀页可 copy-on-write 复用；动态显存让 continuous batching 能迭代级增删请求；最终 GPU 不空转、混合流量吞吐提升 2–5 倍。讲清这条依赖链正是 L5+ 的信号。",
+    "why_en": "PagedAttention's fragmentation-free dynamic memory is the base, on which shared prefix pages copy-on-write, which lets continuous batching add/drop requests per iteration, finally keeping the GPU busy for 2–5x throughput.",
+    "tags": [
+      "llm-sd",
+      "serving-stack",
+      "composition"
+    ],
+    "diagram": "flowchart LR\n  PA[\"PagedAttention<br/>无碎片动态显存\"] --> COW[\"前缀页 copy-on-write<br/>只算一次\"]\n  PA --> CB[\"continuous batching<br/>迭代级增删\"]\n  CB --> T[\"吞吐 2-5x<br/>GPU 不空转\"]",
+    "termDefinitions": [
+      {
+        "term": "composition / 组合依赖",
+        "meaning": "各优化不是独立开关，而是层层依赖：底层能力使能上层收益。",
+        "meaningEn": "Composition means the optimizations aren't independent switches but layered dependencies where a base capability enables higher-level gains."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-027",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "answer-depth",
+    "scenario": "面试里聊 LLM 服务优化，L4、L5、Staff+ 的回答深度差在哪。",
+    "scenario_en": "Discussing LLM serving optimization in an interview, how do L4, L5, and Staff+ answers differ in depth.",
+    "q": "同样讲这套服务栈，L4 与 L5+ 回答的关键差别是什么？",
+    "q_en": "Explaining this serving stack, what key difference separates an L4 from an L5+ answer?",
+    "why": "L4 把 KV caching、batching、vLLM 当成互相独立的选择罗列出来；L5+ 讲清它们的相互依赖——「PagedAttention 是 continuous batching 可行的前提」、量化前缀缓存带来的 TTFT 收益、分析投机解码的接受率权衡。能说出依赖链是拿 offer 的分水岭。",
+    "why_en": "L4 lists KV caching, batching, and vLLM as independent choices, while L5+ explains their interdependence — 'PagedAttention is what makes continuous batching feasible' — with quantified TTFT and acceptance trade-offs.",
+    "tags": [
+      "llm-sd",
+      "interview",
+      "serving"
+    ],
+    "tradeoff": "L4（技术点独立罗列）vs L5+（讲清彼此依赖链 + 量化收益/权衡）",
+    "options": [
+      "L4 用 vLLM、L5 手写 CUDA，差别在是否造轮子",
+      "L4 把各技术当独立选择罗列；L5+ 讲清依赖链（PagedAttention 使能 continuous batching）并量化收益/权衡",
+      "L4 关注质量、L5+ 只关注成本，二者不重叠",
+      "L4 讲得更细，L5+ 反而只说结论"
+    ],
+    "options_en": [
+      "L4 uses vLLM, L5 hand-writes CUDA — the difference is whether you reinvent the wheel.",
+      "L4 lists techniques as independent choices; L5+ explains the dependency chain (PagedAttention enables continuous batching) with quantified trade-offs.",
+      "L4 focuses on quality and L5+ only on cost, with no overlap.",
+      "L4 gives more detail while L5+ only states conclusions."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "是否手写 CUDA 不是分水岭，L5+ 照样用 vLLM，关键在能否讲清组合关系。",
+      "对；把技术连成依赖链并量化 TTFT/接受率权衡，是 L4 罗列升到 L5+ 系统思维的标志。",
+      "L5+ 同时关注质量、延迟、成本，不是只谈成本，这个二分是错的。",
+      "L5+ 是更深更系统，不是更笼统，说反了。"
+    ],
+    "optionExplanations_en": [
+      "Hand-writing CUDA isn't the divide; L5+ still uses vLLM — the key is explaining how pieces compose.",
+      "Correct — chaining techniques into dependencies with quantified TTFT/acceptance trade-offs is the leap from L4 listing to L5+ systems thinking.",
+      "L5+ weighs quality, latency, and cost together, not cost only — the dichotomy is wrong.",
+      "L5+ is deeper and more systematic, not vaguer — this is backwards."
+    ],
+    "termDefinitions": [
+      {
+        "term": "dependency chain / 依赖链",
+        "meaning": "把各技术按「谁使能谁」串起来讲，而非孤立罗列。",
+        "meaningEn": "A dependency chain explains techniques by which enables which, rather than listing them in isolation."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-028",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "staffplus-stack",
+    "scenario": "要给这套 LLM 服务给出 Staff+ 级别的完整方案，而不只是罗列技术点。",
+    "scenario_en": "You must give a Staff+ level complete plan for this LLM service, not just list techniques.",
+    "q": "Staff+ 级别的服务方案还应包含哪些要素？(多选)",
+    "q_en": "Which elements should a Staff+ level serving plan also include? (multiple)",
+    "why": "Staff+ 会把四项组合成一体：前缀缓存+copy-on-write 喂给 continuous batching+PagedAttention；用领域微调的草稿模型；按流量/SLA 分级做自适应批处理；做容量规划（P99 下某 QPS 要几张 A100）；让评估框架反哺（复杂 query 路由到更大模型）。",
+    "why_en": "Staff+ integrates the stack, adds a domain-fine-tuned draft, adaptive batching by traffic/SLA tiers, capacity planning (A100 count for a QPS at P99), and an evaluation loop routing complex queries to larger models.",
+    "tags": [
+      "llm-sd",
+      "staff-plus",
+      "serving"
+    ],
+    "options": [
+      "按流量/SLA 分级做自适应批处理",
+      "容量规划：在 P99 延迟下某 QPS 需要几张 A100",
+      "评估框架反哺，把复杂 query 路由到更大模型",
+      "把所有请求都改成同步阻塞调用以简化系统"
+    ],
+    "options_en": [
+      "Adaptive batching by traffic/SLA tiers.",
+      "Capacity planning: how many A100s for a given QPS at P99 latency.",
+      "An evaluation loop routing complex queries to larger models.",
+      "Make every request a synchronous blocking call to simplify the system."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "对；不同 SLA 层用不同批处理策略，是 Staff+ 把工程贴着业务约束的体现。",
+      "对；把「多少 QPS、P99 多少」翻译成 A100 张数，是容量与成本规划的硬功夫。",
+      "对；评估结果反哺路由（难题给大模型）闭合质量-成本环，是系统级思维。",
+      "错；同步阻塞会牺牲并发和吞吐，与高并发服务目标相悖，不是 Staff+ 做法。"
+    ],
+    "optionExplanations_en": [
+      "Correct — different SLA tiers get different batching, showing Staff+ engineering tied to business constraints.",
+      "Correct — translating 'this QPS at this P99' into an A100 count is the hard part of capacity and cost planning.",
+      "Correct — feeding evaluation into routing (hard queries to bigger models) closes the quality-cost loop, systems-level thinking.",
+      "Wrong — synchronous blocking sacrifices concurrency and throughput, against a high-concurrency goal — not a Staff+ move."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SLA",
+        "fullName": "Service Level Agreement",
+        "meaning": "对外承诺的服务指标（如 P99 延迟、可用性），据此分级设计。",
+        "meaningEn": "An SLA (Service Level Agreement) is a committed service target (e.g. P99 latency, availability) that shapes tiered design."
+      },
+      {
+        "term": "P99",
+        "meaning": "第 99 百分位延迟：99% 请求快于该值，反映尾部体验。",
+        "meaningEn": "P99 is the 99th-percentile latency — 99% of requests are faster than it — reflecting tail experience."
+      },
+      {
+        "term": "QPS",
+        "fullName": "Queries Per Second",
+        "meaning": "每秒请求数，容量规划的基础流量指标。",
+        "meaningEn": "QPS (Queries Per Second) is the request rate, the base traffic metric for capacity planning."
+      }
+    ]
+  },
+  {
+    "id": "llm-097-enterprise-rag-serving-llm-infrastructure-029",
+    "format": "cloze",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "technique-to-problem",
+    "scenario": "把四项服务技术各自对应到它主要解决的那个瓶颈，方便面试时一句话说清。",
+    "scenario_en": "Mapping each of the four serving techniques to the bottleneck it mainly solves, for a one-line interview answer.",
+    "q": "填空：四项服务技术各自解决什么瓶颈。",
+    "q_en": "Fill in the blanks: which bottleneck each of the four techniques solves.",
+    "text": "前缀感知 KV 缓存 → 省重复 prefill、降 {{TTFT}}；PagedAttention → 消除显存 {{碎片(fragmentation)}}、提有效批量；speculative decoding → 攻 {{内存带宽(memory-bandwidth)}} 瓶颈、降解码延迟；continuous batching → 让 GPU 不为 {{落后请求(stragglers)}} 空转、提吞吐。",
+    "text_en": "Prefix-aware KV caching → cut redundant prefill, lower {{TTFT}}; PagedAttention → eliminate memory {{fragmentation}}, raise effective batch; speculative decoding → attack the {{memory-bandwidth}} bottleneck, cut decode latency; continuous batching → stop the GPU idling for {{stragglers}}, raise throughput.",
+    "why": "一句话的对应关系是这课的骨架：prefill→TTFT 归前缀缓存，显存碎片归 PagedAttention，解码带宽归投机解码，落后请求空转归连续批处理。记住「哪个技术打哪个瓶颈」，才谈得上讲它们如何组合。",
+    "why_en": "This one-line mapping is the lesson's skeleton — prefill/TTFT to prefix caching, fragmentation to PagedAttention, decode bandwidth to speculative decoding, stragglers to continuous batching — before you can discuss how they compose.",
+    "tags": [
+      "llm-sd",
+      "serving-stack",
+      "summary"
+    ],
+    "termDefinitions": [
+      {
+        "term": "bottleneck mapping / 瓶颈对应",
+        "meaning": "把每项优化对准它主要缓解的那个性能瓶颈。",
+        "meaningEn": "Bottleneck mapping aligns each optimization to the specific performance bottleneck it mainly relieves."
+      }
+    ]
+  }
+]

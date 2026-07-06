@@ -8,6 +8,7 @@
 |---|---|---|
 | **查一张卡算不算好**（成功/失败标准） | card-quality-rubric.md | `docs/` |
 | **从文章写新卡**（schema、拆卡法、id 规则） | AUTHORING_SPEC.md | `scripts/` |
+| **从面试复盘生成新卡**（检测新 marker 块 → 造卡 → accept） | REVIEW_INGEST_SPEC.md | `docs/` |
 | **批量重写存量卡**（五步循环 + Codex 启动 prompt） | REGEN_FLOW.md | `docs/` |
 | **只给卡补字段**（选项解析/tradeoff/table，patch 制；REGEN 完成后退役） | ENRICH_SPEC.md | `scripts/` |
 | **查某条机检规则什么意思** | card-quality-rubric.md **附录 A** | `docs/` |
@@ -63,13 +64,14 @@ docs/feedback-triage-rubric.md ←—— content update cron 的反馈路由/忽
 
 **规则：新标准先进 rubric，再同步各手册的转述段；只改手册不改 rubric = 漂移，禁止。**
 
-## 内容三管线（共用 rubric，操作范围不同）
+## 内容四管线（共用 rubric，操作范围不同）
 
 | 管线 | 干什么 | 改动范围 | 规范 |
 |---|---|---|---|
-| AUTHORING | 从 HelloInterview 文章造全新 deck | 新建 `src/content/<track>/*.json` | AUTHORING_SPEC.md |
+| AUTHORING | 从文章造全新 deck（HelloInterview / docs），或从面试复盘 action item 造卡 | 新建 `src/content/<track>/*.json` | AUTHORING_SPEC.md（Mode A / Mode B） |
 | REGEN | 按 rubric 整卡重写存量（Gate 0 可删卡） | 直接编辑 deck JSON（禁改 id） | REGEN_FLOW.md |
 | ENRICH | 只补解析/tradeoff/table 等字段 | 只产 `scripts/enrich-patches/`，apply-enrich.mjs 合并 | ENRICH_SPEC.md |
+| REVIEW-INGEST | 每次面试复盘后，检测 3 个复盘文件的新 marker 块 → 交给 AUTHORING（Mode B）造卡；人工 accept 门 | 检测器改 ledger；造卡走 AUTHORING | REVIEW_INGEST_SPEC.md + `scripts/review-ingest-cron.mjs` |
 
 ## Content Update System（P0 rubric backfill + P1 feedback cron）
 

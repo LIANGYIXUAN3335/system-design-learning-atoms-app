@@ -1,0 +1,1391 @@
+[
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "eval-layers",
+    "scenario": "你要证明一个内联代码补全模型「确实有用」，单靠离线跑分说服不了发布评审。",
+    "scenario_en": "You must prove an inline code-completion model is actually useful, and offline scores alone won't convince the launch review.",
+    "q": "评估为什么要分离线基准、生产代理、A/B 三层？",
+    "q_en": "Why split evaluation into offline benchmarks, production proxy metrics, and A/B testing?",
+    "why": "三层是信号保真度递增的漏斗：离线基准便宜能天天跑但离真实远，ACR 反映真实行为却易被触发策略灌水，A/B 看留存最接近真实收益但最慢最贵。少任何一层，都会拿更弱的信号做上线决策。",
+    "why_en": "The three layers form a funnel of rising signal fidelity — cheap offline benchmarks, behavioral ACR, then costly A/B retention closest to real value — so dropping one means launching on weaker evidence.",
+    "tags": ["llm-sd", "code-gen", "evaluation"],
+    "diagram": "flowchart TB\n  O[\"离线基准<br/>pass@k 便宜快\"] --> P[\"生产代理<br/>ACR 反映行为\"]\n  P --> A[\"A/B 实验<br/>28天留存 最接近真实\"]",
+    "options": [
+      "三层可互相替代，选信号最强的 A/B 一个就够，离线基准和 ACR 更弱都能省掉",
+      "三层是信号保真度递增的漏斗：离线基准快而便宜但离真实远，A/B 最贵却最接近真实收益",
+      "三层按成本从低到高排，但衡量的是同一件事，跑最贵的那层就覆盖了另外两层的结论",
+      "三层其实对应训练/验证/测试集，是同一次训练的数据划分，和上线决策没关系"
+    ],
+    "options_en": [
+      "The three layers are interchangeable; just pick the strongest (A/B) and skip the weaker offline benchmarks and ACR.",
+      "The three layers are a funnel of rising signal fidelity: offline benchmarks are cheap but far from reality, A/B is costliest but closest to real value.",
+      "The three layers are ordered by cost but measure the same thing, so running the most expensive one covers the other two.",
+      "The three layers are really train/validation/test splits of one training run, unrelated to the launch decision."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "A/B 虽最可信但最慢最贵，天天靠它筛模型不现实；离线基准和 ACR 是廉价的前置过滤，省不得。",
+      "对；每层比上一层更接近「开发者真的因此写得更好吗」，代价是越来越慢越贵，所以逐层收窄候选。",
+      "三层衡量的不是同一件事：pass@k 是功能正确率，ACR 是接受行为，留存是长期真实收益，不能互相替代。",
+      "这是把评估层和训练数据划分搞混了；三层说的是上线前不同保真度的验证信号，不是数据集切分。"
+    ],
+    "optionExplanations_en": [
+      "A/B is most trusted but slowest and costliest; you cannot screen models with it daily, so cheap offline benchmarks and ACR are needed as pre-filters.",
+      "Correct — each layer is closer to 'did the developer actually write better because of this', at rising cost, so you narrow candidates layer by layer.",
+      "The three do not measure the same thing: pass@k is functional correctness, ACR is acceptance behavior, retention is long-run real value — not interchangeable.",
+      "This confuses evaluation layers with training-data splits; the three layers are pre-launch validation signals of differing fidelity, not dataset partitions."
+    ],
+    "termDefinitions": [
+      { "term": "pass@k", "meaning": "从模型采样 k 个候选，只要有一个通过全部单元测试就算成功的概率，是功能正确性基准的指标。", "meaningEn": "pass@k is the probability that at least one of k sampled completions passes all unit tests — the metric for functional-correctness benchmarks." },
+      { "term": "ACR", "fullName": "Accepted Completion Rate", "meaning": "展示给开发者的补全里被接受（按 Tab）的比例，一个廉价的生产代理指标。", "meaningEn": "ACR (Accepted Completion Rate) is the fraction of shown completions a developer accepts (hits Tab), a cheap production proxy metric." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-002",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "functional-correctness",
+    "scenario": "面试官问：离线怎么判断一段生成代码「对不对」？你要给一个无歧义的判据。",
+    "scenario_en": "Interviewer: offline, how do you decide whether a generated snippet is 'correct'? Give an unambiguous criterion.",
+    "q": "代码生成的离线金标准判据是什么？",
+    "q_en": "What is the offline gold-standard criterion for code correctness?",
+    "why": "金标准是功能正确性：一段代码「对」当且仅当它通过全部单元测试，二元、无歧义。文本相似度（如 BLEU）会把「长得像但跑不通」判成对，不能反映代码是否真的工作。",
+    "why_en": "The gold standard is functional correctness — a snippet is correct iff it passes all unit tests, which is binary and unambiguous, unlike text similarity that rewards code that merely looks right.",
+    "tags": ["llm-sd", "code-gen", "correctness"],
+    "options": [
+      "生成代码与参考答案的文本相似度（BLEU/编辑距离）越高越算正确",
+      "只要能编译通过、没有语法错误就算正确，运行结果不重要",
+      "功能正确性：当且仅当通过全部单元测试才算正确，二元且无歧义",
+      "由资深工程师人工评审打 1-5 分，取平均分作为正确性得分"
+    ],
+    "options_en": [
+      "Higher text similarity (BLEU/edit distance) to a reference answer counts as more correct.",
+      "As long as it compiles with no syntax errors it is correct; runtime behavior does not matter.",
+      "Functional correctness: correct iff it passes all unit tests — binary and unambiguous.",
+      "Senior engineers manually rate it 1-5 and the average score is the correctness measure."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "文本相似度只看字面像不像，长得像却跑不通照样高分，量不出「代码到底能不能工作」。",
+      "能编译不等于逻辑对：一段编译通过但结果错的函数在功能正确性下直接判错。",
+      "对；用测试通过与否把「对不对」压成二元信号，无歧义、可自动化、可规模化，是代码评估的金标准。",
+      "人工打分主观、噪声大、跨评审不可校准，且贵而慢，不适合当离线自动判据。"
+    ],
+    "optionExplanations_en": [
+      "Text similarity only checks surface resemblance; code that looks alike but fails still scores high, so it can't measure whether the code actually works.",
+      "Compiling is not correctness: a function that compiles but returns wrong results is judged wrong under functional correctness.",
+      "Correct — pass/fail on tests compresses correctness into a binary, unambiguous, automatable, scalable signal, the gold standard for code eval.",
+      "Manual rating is subjective, noisy, uncalibrated across reviewers, and slow/costly — unfit as an automated offline criterion."
+    ],
+    "termDefinitions": [
+      { "term": "functional correctness / 功能正确性", "meaning": "以「是否通过全部单元测试」为唯一判据的代码正确性定义，结果是二元的对/错。", "meaningEn": "Functional correctness defines a snippet as correct iff it passes all unit tests — a binary pass/fail judgment." },
+      { "term": "BLEU", "fullName": "Bilingual Evaluation Understudy", "meaning": "源自机器翻译的 n-gram 文本相似度指标，用在代码上会奖励「长得像但跑不通」的输出。", "meaningEn": "BLEU (Bilingual Evaluation Understudy) is an n-gram text-similarity metric from machine translation that, applied to code, rewards output that looks right but may not run." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-003",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "benchmarks",
+    "scenario": "选公开的功能正确性基准来评估代码模型，你在 HumanEval 和 MBPP 之间权衡覆盖面与测试质量。",
+    "scenario_en": "Choosing a public functional-correctness benchmark, you weigh coverage against test quality between HumanEval and MBPP.",
+    "q": "HumanEval 和 MBPP 在题量与测试质量上怎么对比？",
+    "q_en": "How do HumanEval and MBPP contrast on task count and test quality?",
+    "why": "HumanEval 164 题、手写测试质量高但覆盖窄；MBPP 974 题覆盖更广但测试更嘈杂。两者都只有 Python、都用 pass@k，取舍轴是「测试精度 vs 覆盖广度」。",
+    "why_en": "HumanEval has 164 tasks with high-quality hand-written tests but narrow coverage, while MBPP has 974 tasks with broader but noisier tests — the axis is test precision versus coverage.",
+    "tags": ["llm-sd", "code-gen", "benchmarks"],
+    "tradeoff": "HumanEval 手写测试精度高、题量小 vs MBPP 覆盖广、题量大但测试更嘈杂",
+    "table": {
+      "headers": ["基准", "题量", "语言", "测试质量"],
+      "rows": [
+        ["HumanEval", "164", "仅 Python", "手写，高质量"],
+        ["MBPP", "974", "仅 Python", "更广但更嘈杂"]
+      ]
+    },
+    "options": [
+      "HumanEval 164 题、手写测试质量高但覆盖窄；MBPP 974 题覆盖更广但测试更嘈杂",
+      "HumanEval 覆盖几十种语言，MBPP 只覆盖 Python，所以 HumanEval 更适合多语言产品",
+      "MBPP 974 题但测试都是手工精修的黄金测试，比 HumanEval 更权威、没有噪声",
+      "两者题量相同，唯一区别是 HumanEval 用 pass@k、MBPP 用 BLEU 文本相似度"
+    ],
+    "options_en": [
+      "HumanEval has 164 tasks with high-quality hand-written tests but narrow coverage; MBPP has 974 tasks with broader but noisier tests.",
+      "HumanEval covers dozens of languages while MBPP is Python-only, so HumanEval fits multi-language products better.",
+      "MBPP has 974 tasks but all hand-polished golden tests, making it more authoritative and noise-free than HumanEval.",
+      "They have the same number of tasks; the only difference is HumanEval uses pass@k while MBPP uses BLEU similarity."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；这正是取舍——HumanEval 精而少、MBPP 广而嘈，都只有 Python、都用 pass@k，选哪个看你更看重测试精度还是题量覆盖。",
+      "两者都只覆盖 Python，不是多语言基准；「窄语言覆盖」恰是它们共同的局限，不是区分点。",
+      "说反了：MBPP 题量大但测试更嘈杂，正因量大难保证每题测试都精修；HumanEval 才是手写高质量。",
+      "题量不同（164 vs 974），且两者都用 pass@k 而非 BLEU；功能正确性基准不看文本相似度。"
+    ],
+    "optionExplanations_en": [
+      "Correct — that is the tradeoff: HumanEval is precise but small, MBPP is broad but noisy; both are Python-only with pass@k, so pick by whether you value test precision or coverage.",
+      "Both are Python-only, not multi-language; narrow language scope is their shared limitation, not a differentiator.",
+      "Backwards: MBPP has more tasks but noisier tests precisely because volume makes per-task polishing hard; HumanEval is the hand-written high-quality one.",
+      "Task counts differ (164 vs 974), and both use pass@k, not BLEU; functional-correctness benchmarks don't use text similarity."
+    ],
+    "termDefinitions": [
+      { "term": "HumanEval", "meaning": "164 道 Python 编程题的功能正确性基准，测试为手写高质量，指标是 pass@k。", "meaningEn": "HumanEval is a 164-task Python functional-correctness benchmark with high-quality hand-written tests, scored by pass@k." },
+      { "term": "MBPP", "fullName": "Mostly Basic Python Problems", "meaning": "974 道基础 Python 题的功能正确性基准，覆盖更广但测试更嘈杂，指标同样是 pass@k。", "meaningEn": "MBPP (Mostly Basic Python Problems) is a 974-task Python benchmark with broader but noisier tests, also scored by pass@k." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-004",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "pass-at-k",
+    "scenario": "报告代码模型分数时你用 pass@k，需要向面试官解释这个数字量的是什么、对采样策略有什么含义。",
+    "scenario_en": "Reporting a code model's score with pass@k, you must explain what the number measures and what it implies for sampling.",
+    "q": "pass@k 度量什么，k 变大意味着什么？",
+    "q_en": "What does pass@k measure, and what does a larger k imply?",
+    "why": "pass@k = 从模型采样 k 个候选、至少有一个通过全部单元测试的概率，不是准确率百分比。k 越大越宽容（相当于允许多次尝试），所以比较模型必须固定同一个 k，否则数字不可比。",
+    "why_en": "pass@k is the probability that at least one of k sampled completions passes all tests, so a larger k is more lenient and models must be compared at the same k to stay comparable.",
+    "tags": ["llm-sd", "code-gen", "metrics"],
+    "options": [
+      "pass@k 是一次生成就正确的准确率，k 只是数据集里题目的数量，和采样无关",
+      "pass@k 是模型参数量的 k 次方，用来衡量模型规模，越大代表模型越强",
+      "pass@k 是 k 个不同基准的平均分，把 HumanEval、MBPP 等混合成一个总分",
+      "pass@k = 采样 k 个候选、至少一个全测试通过的概率；k 越大越宽容，比较时必须固定同一 k"
+    ],
+    "options_en": [
+      "pass@k is single-shot accuracy, and k is just the number of tasks in the dataset, unrelated to sampling.",
+      "pass@k is model parameter count raised to the k-th power, measuring model size — larger means stronger.",
+      "pass@k is the average score over k different benchmarks, blending HumanEval, MBPP, etc. into one total.",
+      "pass@k is the probability that at least one of k sampled completions passes all tests; larger k is more lenient, so comparisons must fix the same k."
+    ],
+    "answer": [3],
+    "termDefinitions": [
+      { "term": "pass@k", "meaning": "采样 k 个候选补全，至少一个通过全部单元测试的概率；k 越大越宽容，跨模型比较必须用同一个 k。", "meaningEn": "pass@k is the probability that at least one of k sampled completions passes all unit tests; larger k is more lenient, so cross-model comparison must fix k." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "custom-benchmark",
+    "scenario": "企业代码库大量用内部 API、多文件依赖和领域约定，公开基准（HumanEval/MBPP）测不出模型在这套代码里的表现。",
+    "scenario_en": "An enterprise codebase leans on internal APIs, multi-file deps, and domain conventions that public benchmarks (HumanEval/MBPP) can't measure.",
+    "q": "该继续只用公开基准，还是自建内部基准？",
+    "q_en": "Keep relying on public benchmarks, or build a custom internal one?",
+    "why": "公开基准是单文件、通用 Python，测不出内部 API、多文件依赖、领域约定，得从脱敏内部仓库curated一套内部基准，匹配真实语言分布与 API 面。代价是贵、要持续维护。",
+    "why_en": "Public benchmarks are single-file generic Python and miss internal APIs and multi-file deps, so curate a custom benchmark from anonymized internal repos to match the real API surface, at the cost of expense and maintenance.",
+    "tags": ["llm-sd", "code-gen", "benchmarks"],
+    "tradeoff": "内部基准（贴合真实 API/多文件，但贵且要维护）vs 公开基准（免费现成，但测不到企业模式）",
+    "whenOtherWins": "早期只需粗筛「模型会不会写通用 Python」、或还没有内部数据/预算时，先用免费的 HumanEval/MBPP 拿方向性信号即可。",
+    "options": [
+      "继续只用公开基准，分数高就代表企业场景也没问题，自建基准是浪费",
+      "放弃基准评估，直接把新模型推到全量生产用真实流量当测试",
+      "从脱敏内部仓库 curated 一套内部基准，匹配真实语言分布、内部 API 与多文件依赖",
+      "把内部代码原样上传到公开基准平台，让第三方帮忙评测省成本"
+    ],
+    "options_en": [
+      "Keep using only public benchmarks; a high score means enterprise scenarios are fine too, so a custom one is wasteful.",
+      "Drop benchmark evaluation and push the new model straight to full production, using live traffic as the test.",
+      "Curate a custom benchmark from anonymized internal repos matching the real language distribution, internal APIs, and multi-file deps.",
+      "Upload the internal code as-is to a public benchmark platform and let a third party evaluate it to save cost."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "公开基准是单文件通用 Python，跟内部 API、多文件依赖脱节，高分不代表企业场景也行——这正是「与企业模式不对齐」的局限。",
+      "跳过离线基准直接全量上线，等于把生产当测试台，功能明显不行的模型也会漏进真实用户，风险不可控。",
+      "对；内部基准贴合真实语言分布、内部 API 与依赖，给的是公开基准给不了的信号，代价是贵且要持续维护。",
+      "把专有代码原样外传本身就是隐私/许可事故，且第三方也没有你的内部 API 上下文，测不出真实表现。"
+    ],
+    "optionExplanations_en": [
+      "Public benchmarks are single-file generic Python, disconnected from internal APIs and multi-file deps; a high score doesn't transfer — this is the enterprise-misalignment limitation.",
+      "Skipping offline benchmarks and shipping to everyone treats production as a test bench, letting clearly broken models reach real users — uncontrolled risk.",
+      "Correct — a custom benchmark matches the real language distribution, internal APIs, and deps, giving signal public benchmarks can't, at the cost of expense and upkeep.",
+      "Shipping proprietary code out is itself a privacy/license incident, and a third party lacks your internal-API context, so it can't measure real performance."
+    ],
+    "termDefinitions": [
+      { "term": "custom internal benchmark / 内部基准", "meaning": "从脱敏内部仓库整理出的功能正确性题集，匹配真实语言分布、内部 API 与多文件依赖，弥补公开基准的盲区。", "meaningEn": "A custom internal benchmark is a functional-correctness set curated from anonymized internal repos to match the real language distribution, internal APIs, and multi-file deps that public benchmarks miss." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-006",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "benchmark-limitations",
+    "scenario": "面试官问：公开代码基准（HumanEval/MBPP）分数很高，为什么不能直接当上线依据？",
+    "scenario_en": "Interviewer: public code benchmarks (HumanEval/MBPP) score high — why can't that alone justify launch?",
+    "q": "公开代码基准有哪些共同局限？(多选)",
+    "q_en": "Which limitations do public code benchmarks share? (multiple)",
+    "why": "三条共同局限：语言覆盖窄（只有 Python，生产是几十种语言）、污染风险（训练数据可能含基准解，分数虚高）、与企业模式不对齐（无多文件依赖、内部 API、领域约定）。GPU 贵不贵是训练侧成本，与基准局限无关。",
+    "why_en": "The shared limits are narrow language scope, contamination risk, and misalignment with enterprise patterns; GPU cost is a training-side concern, not a benchmark limitation.",
+    "tags": ["llm-sd", "code-gen", "benchmarks"],
+    "options": [
+      "语言覆盖窄——只有 Python，而生产环境是几十种语言",
+      "污染风险——训练数据可能包含基准题解，导致分数虚高",
+      "与企业模式不对齐——没有多文件依赖、内部 API、领域约定",
+      "GPU 价格太高，导致基准跑一次很贵"
+    ],
+    "options_en": [
+      "Narrow language scope — Python only, while production spans dozens of languages.",
+      "Contamination risk — training data may include benchmark solutions, inflating scores.",
+      "Misalignment with enterprise patterns — no multi-file deps, internal APIs, or domain conventions.",
+      "GPU prices are too high, making each benchmark run expensive."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；只测 Python 就无法保证 Go/Java/TS 也行，语言覆盖窄是最直白的盲区。",
+      "对；若训练语料混入了基准题解，模型是「见过答案」而非真会写，分数不可信——务必用held-out内部题去污染。",
+      "对；公开题是单文件通用逻辑，测不到内部 API、跨文件依赖、领域约定，与真实企业代码脱节。",
+      "错；GPU 成本是训练/服务侧的开销，和「基准能不能代表真实能力」这个评估局限无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — testing only Python can't guarantee Go/Java/TS work; narrow language scope is the most obvious blind spot.",
+      "Correct — if benchmark solutions leak into training, the model has 'seen the answers' rather than truly solving, so scores are untrustworthy; use held-out internal tasks.",
+      "Correct — public tasks are single-file generic logic, missing internal APIs, cross-file deps, and domain conventions, disconnected from real enterprise code.",
+      "Wrong — GPU cost is a training/serving expense, unrelated to whether a benchmark represents real capability."
+    ],
+    "termDefinitions": [
+      { "term": "contamination / 数据污染", "meaning": "训练语料混入了评测基准的题目或解答，模型「见过答案」使分数虚高、不可信。", "meaningEn": "Contamination is when benchmark tasks or solutions leak into training data, so the model has seen the answers and scores are inflated and untrustworthy." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "contamination",
+    "scenario": "一个新代码模型 HumanEval 分数异常高，但你怀疑训练语料里混进了 HumanEval 的题解。",
+    "scenario_en": "A new model scores unusually high on HumanEval, but you suspect its training data included HumanEval solutions.",
+    "q": "基准污染带来什么后果，怎么止损？",
+    "q_en": "What does benchmark contamination cause, and how do you mitigate it?",
+    "why": "污染让模型「背过答案」而非真会写，分数虚高、无法反映真实泛化。止损靠去污染：用训练后新出的题、或从内部脱敏仓库现造的 held-out 私有题集重测，看分数是否掉下来。",
+    "why_en": "Contamination inflates scores because the model memorized answers rather than generalizing, so re-test on freshly authored held-out or private tasks to see whether the score drops.",
+    "tags": ["llm-sd", "code-gen", "contamination"],
+    "options": [
+      "污染让模型更强了，虚高的分数正好说明它泛化好，可以放心上线",
+      "污染使公开基准分虚高、不反映真实泛化；应用训练后新题或私有 held-out 题集重测",
+      "污染只影响训练速度，对评测分数没有影响，忽略即可",
+      "污染无法检测也无法缓解，只能换一个从没公开过的模型架构"
+    ],
+    "options_en": [
+      "Contamination makes the model stronger; the inflated score proves good generalization, so launch confidently.",
+      "Contamination inflates public-benchmark scores without reflecting real generalization; re-test on post-training or private held-out tasks.",
+      "Contamination only affects training speed, not evaluation scores, so ignore it.",
+      "Contamination can't be detected or mitigated; the only option is to switch to a never-published model architecture."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "背过答案不是泛化，恰恰相反：虚高分掩盖了真实能力，照此上线会在真实代码上翻车。",
+      "对；污染的核心危害是分数不可信，唯一可靠止损是换一批模型没见过的题（训练后新题/私有 held-out）重测，看分数是否回落。",
+      "污染改变的是分数而非训练速度：模型在见过的题上刷高分，评测结论直接失真。",
+      "污染可检测（held-out 重测掉分即暴露）也可缓解（去污染、私有题集），不必换整个架构。"
+    ],
+    "optionExplanations_en": [
+      "Memorizing answers is not generalization — the opposite; an inflated score hides true ability, and launching on it fails on real code.",
+      "Correct — contamination's core harm is untrustworthy scores; the reliable fix is re-testing on tasks the model hasn't seen (post-training/private held-out) to see if the score falls.",
+      "Contamination changes scores, not training speed: the model tops charts on seen tasks, distorting the evaluation.",
+      "Contamination is both detectable (a held-out drop exposes it) and mitigable (decontamination, private sets); no need to swap the whole architecture."
+    ],
+    "termDefinitions": [
+      { "term": "held-out set / 留出题集", "meaning": "刻意从训练中排除、模型没见过的评测题；用它重测能暴露污染导致的虚高。", "meaningEn": "A held-out set is evaluation tasks deliberately excluded from training; re-testing on it exposes contamination-driven inflation." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-008",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "acr",
+    "scenario": "离线基准过关后，你想在真实 IDE 里用一个廉价、实时的信号看开发者是否买账。",
+    "scenario_en": "After offline benchmarks pass, you want a cheap real-time signal in the real IDE of whether developers buy in.",
+    "q": "ACR 是什么，为什么适合当生产代理指标？",
+    "q_en": "What is ACR, and why is it suited as a production proxy metric?",
+    "why": "ACR = 展示的补全里被开发者按 Tab 接受的比例。它便宜、实时、直接反映真实行为（不是离线打分），所以适合当生产早期的代理信号。但它只是「行为」代理，不等于代码正确或有生产力。",
+    "why_en": "ACR is the fraction of shown completions a developer accepts (Tab), cheap and real-time and reflecting real behavior, which makes it a good production proxy — but a behavioral one, not proof of correctness.",
+    "tags": ["llm-sd", "code-gen", "acr"],
+    "options": [
+      "ACR = 展示的补全被开发者按 Tab 接受的比例，便宜、实时、反映真实行为",
+      "ACR = 模型在 HumanEval 上的 pass@k 分数，是离线正确率指标",
+      "ACR = 每个补全的平均生成延迟，衡量服务的响应速度",
+      "ACR = 开发者手动给每条补全打的 1-5 星满意度平均分"
+    ],
+    "options_en": [
+      "ACR = the fraction of shown completions the developer accepts (Tab), cheap, real-time, reflecting real behavior.",
+      "ACR = the model's pass@k score on HumanEval, an offline correctness metric.",
+      "ACR = the average generation latency per completion, measuring serving responsiveness.",
+      "ACR = the average 1-5 star satisfaction developers manually assign to each completion."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；接受率是开发者用脚投票的真实行为信号，采集成本低、能实时看，适合当生产代理——但只是行为代理。",
+      "pass@k 是离线功能正确率，ACR 是线上接受行为，二者层级不同、不能混为一谈。",
+      "延迟是服务性能指标，不是「补全好不好、被不被接受」的评估信号。",
+      "ACR 是自动统计的接受/展示比，不是人工星级评分；星级又贵又慢，正好是 ACR 想避开的。"
+    ],
+    "optionExplanations_en": [
+      "Correct — acceptance is a real behavioral signal of developers voting with their feet, cheap to collect and real-time, apt as a production proxy — but only behavioral.",
+      "pass@k is offline functional correctness; ACR is online acceptance behavior — different layers, not interchangeable.",
+      "Latency is a serving-performance metric, not a signal of whether a completion is good or accepted.",
+      "ACR is an auto-computed accept/shown ratio, not manual star ratings; star ratings are costly and slow, exactly what ACR avoids."
+    ],
+    "termDefinitions": [
+      { "term": "ACR", "fullName": "Accepted Completion Rate", "meaning": "展示给开发者的补全中被接受（按 Tab）的比例，一个便宜、实时的生产代理指标。", "meaningEn": "ACR (Accepted Completion Rate) is the fraction of shown completions accepted (Tab), a cheap real-time production proxy metric." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-009",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "acr-blindspots",
+    "scenario": "有人提议直接用 ACR 当上线判据，你要说清 ACR 的盲点。",
+    "scenario_en": "Someone proposes ACR as the launch criterion; you must lay out ACR's blind spots.",
+    "q": "ACR 有哪些盲点？(多选)",
+    "q_en": "What are ACR's blind spots? (multiple)",
+    "why": "ACR 的三个盲点：接受≠正确（可能接受后立刻改，或接受了 buggy 代码）；对触发策略敏感（少展示、只展示高置信度会把 ACR 刷高但没多产出）；无反事实（无法知道开发者不用工具是否会更快写出同样代码）。",
+    "why_en": "ACR's blind spots are that acceptance is not correctness, it is sensitive to trigger policy, and it has no counterfactual for what the developer would have done without the tool.",
+    "tags": ["llm-sd", "code-gen", "acr"],
+    "options": [
+      "ACR = 正确率：只要开发者接受了就说明代码一定正确、无需再验",
+      "接受≠正确：开发者可能接受后立刻修改，或接受了有 bug 的代码",
+      "对触发策略敏感：只展示更少、更高置信度的补全会刷高 ACR 却没多产出",
+      "无反事实：无法知道开发者不用工具会不会同样快地写出这段代码"
+    ],
+    "options_en": [
+      "ACR equals correctness: if the developer accepts, the code is definitely correct and needs no further check.",
+      "Acceptance is not correctness: a developer may accept then immediately edit, or accept buggy code.",
+      "Sensitive to trigger policy: showing fewer, higher-confidence suggestions inflates ACR without added output.",
+      "No counterfactual: you can't know whether the developer would have written the same code just as fast unaided."
+    ],
+    "answer": [1, 2, 3],
+    "optionExplanations": [
+      "错；把接受等同于正确正是 ACR 最大的误用——开发者常接受后立刻改，或没细看就 Tab 掉。",
+      "对；接受只是一次点击，代码对不对要另测；接受后立即编辑恰恰说明它不完全正确。",
+      "对；触发策略一收紧，展示的都是稳赢的补全，ACR 虚高但开发者实际得到的帮助没变多。",
+      "对；ACR 没有对照组，测不出「工具到底让开发者更快了吗」，缺反事实就说不清生产力。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — equating acceptance with correctness is ACR's biggest misuse; developers often edit right after accepting, or Tab without inspecting.",
+      "Correct — acceptance is one click; correctness must be tested separately, and an immediate edit shows it wasn't fully right.",
+      "Correct — tighten the trigger policy to show only sure-win completions and ACR inflates while actual help doesn't grow.",
+      "Correct — ACR has no control group, so it can't tell whether the tool actually sped the developer up; without a counterfactual, productivity is unprovable."
+    ],
+    "termDefinitions": [
+      { "term": "counterfactual / 反事实", "meaning": "「如果开发者没用这个工具会怎样」的对照结果；缺它就无法归因生产力提升。", "meaningEn": "A counterfactual is what would have happened without the tool; lacking it, you cannot attribute productivity gains." },
+      { "term": "trigger policy / 触发策略", "meaning": "决定何时向开发者展示补全的规则；收紧它（只展示高置信度）会人为抬高 ACR。", "meaningEn": "A trigger policy decides when to show completions; tightening it (only high-confidence) artificially raises ACR." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "acr-launch",
+    "scenario": "发布评审上有人主张「ACR 涨了 5 个点，可以上线」，把 ACR 当作唯一上线判据。",
+    "scenario_en": "At launch review someone argues 'ACR is up 5 points, ship it', treating ACR as the sole launch criterion.",
+    "q": "该把 ACR 当作充分的上线指标吗？",
+    "q_en": "Should ACR be treated as a sufficient launch metric?",
+    "why": "不该；ACR 只是方向性信号，因为接受不等于正确、还能被触发策略灌水。要把它和更深的度量（A/B 留存、缺陷率、编辑距离）配对，用留存类北极星指标做最终判据。",
+    "why_en": "No — ACR is only a directional signal because acceptance isn't correctness and it can be gamed by trigger policy, so pair it with deeper A/B retention and guardrail metrics for the real decision.",
+    "tags": ["llm-sd", "code-gen", "acr"],
+    "tradeoff": "只看 ACR（便宜实时但可灌水、不等于正确）vs 配对 A/B 留存+护栏（贵慢但反映真实收益）",
+    "whenOtherWins": "在快速迭代的实验期做相对排序、A/B 还来不及跑时，ACR 的即时反馈可作粗筛，但仍不能当最终上线判据。",
+    "options": [
+      "该；ACR 涨就代表开发者更满意、更高产，直接上线最省事",
+      "该；ACR 是唯一能实时拿到的信号，其他指标太慢，只能靠它拍板",
+      "不该；把 ACR 换成缺陷率当唯一上线指标，用缺陷率单指标拍板",
+      "不该；ACR 只是方向性信号，须与 A/B 留存、缺陷率、编辑距离配对，由留存做最终判据"
+    ],
+    "options_en": [
+      "Yes; a rising ACR means developers are happier and more productive, so just ship.",
+      "Yes; ACR is the only real-time signal and other metrics are too slow, so decide on it alone.",
+      "No; replace ACR with defect rate as the single launch metric and decide on defect rate alone.",
+      "No; ACR is only directional and must be paired with A/B retention, defect rate, and edit distance, with retention as the final call."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "ACR 涨可能只是触发策略更保守或开发者接受后就改，跟「更满意更高产」不能划等号，单看它会误判。",
+      "「只有它实时」不代表它充分：慢一点但更可信的 A/B 留存才是上线判据，ACR 只能做前置粗筛。",
+      "换个单指标同样错——缺陷率是护栏而非北极星，任何单指标都会漏掉其它维度，要多指标组合。",
+      "对；ACR 提供便宜的方向性信号，但必须由 A/B 留存这个北极星收口，护栏指标兜底防「快但 buggy」。"
+    ],
+    "optionExplanations_en": [
+      "A rising ACR may just mean a more conservative trigger policy or post-accept edits, not more satisfaction or output; deciding on it alone misjudges.",
+      "'Only it is real-time' doesn't make it sufficient; slower but more trustworthy A/B retention is the launch call, with ACR as a pre-filter.",
+      "Swapping to another single metric is equally wrong — defect rate is a guardrail, not a north star; any lone metric misses other dimensions, so combine them.",
+      "Correct — ACR gives cheap directional signal but must be closed by A/B retention as the north star, with guardrails catching 'fast but buggy'."
+    ],
+    "termDefinitions": [
+      { "term": "directional signal / 方向性信号", "meaning": "能指出趋势、但不足以单独拍板的指标；须与更可信的度量配对使用。", "meaningEn": "A directional signal indicates a trend but is not sufficient to decide alone; it must be paired with more trustworthy measures." },
+      { "term": "north star metric / 北极星指标", "meaning": "把多维收益整合成一个的最终判据，这里是开发者留存。", "meaningEn": "A north-star metric integrates multiple gains into one final criterion — here, developer retention." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-011",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "trigger-gaming",
+    "scenario": "团队为冲 ACR 目标，把触发策略调成「只在高置信度时才展示补全」，展示次数大幅下降。",
+    "scenario_en": "To hit an ACR target, the team tunes the trigger policy to 'only show completions when highly confident', sharply cutting how often suggestions appear.",
+    "q": "只展示高置信度补全会怎样，说明 ACR 的什么问题？",
+    "q_en": "What happens if you only show high-confidence completions, and what ACR problem does it reveal?",
+    "why": "分母（展示次数）变小、留下的都是稳赢的补全，ACR 数字被刷高，但开发者实际拿到的帮助反而变少（很多本可接受的建议没被展示）。这说明 ACR 对触发策略敏感，能被灌水而不带来生产力。",
+    "why_en": "Showing only sure-win suggestions shrinks the denominator and inflates ACR while developers actually get less help, revealing that ACR is gameable via trigger policy without real productivity gain.",
+    "tags": ["llm-sd", "code-gen", "acr"],
+    "options": [
+      "展示更少也没关系，ACR 涨就是真进步，等于开发者更高产了",
+      "ACR 会下降，因为展示少了接受也少了，说明这么调策略没用",
+      "ACR 被刷高但产出没增甚至变少：分母缩小、只留稳赢建议，暴露 ACR 对触发策略敏感、可灌水",
+      "只影响延迟：展示少了服务更快，但对 ACR 数值毫无影响"
+    ],
+    "options_en": [
+      "Showing less is fine — a rising ACR is real progress and means developers are more productive.",
+      "ACR will drop because fewer shown means fewer accepted, proving this tuning is useless.",
+      "ACR inflates but output doesn't rise (may fall): shrinking the denominator to sure-win suggestions exposes ACR's sensitivity to trigger policy and gameability.",
+      "It only affects latency: fewer shown means faster serving, with no effect on the ACR value."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "ACR 涨≠更高产：这里靠藏起不确定的建议冲高比率，开发者反而少收到了本可采纳的补全。",
+      "方向说反了：只展示高置信度会让接受/展示比率上升（ACR 涨），不是下降。",
+      "对；这是典型的指标灌水——比率虚高、真实帮助缩水，正说明 ACR 必须配深度指标，不能单独当目标。",
+      "触发策略改的是「展示哪些」，直接改变 ACR 的分子分母，不是只影响延迟。"
+    ],
+    "optionExplanations_en": [
+      "A rising ACR isn't more productivity: here you hide uncertain suggestions to lift the ratio, so developers receive fewer acceptable completions.",
+      "Backwards: showing only high-confidence raises the accept/shown ratio (ACR up), not down.",
+      "Correct — this is classic metric gaming: the ratio inflates while real help shrinks, showing ACR needs deeper metrics and can't be a standalone target.",
+      "Trigger policy changes which suggestions appear, directly altering ACR's numerator and denominator, not just latency."
+    ],
+    "termDefinitions": [
+      { "term": "metric gaming / 指标灌水", "meaning": "通过改变度量方式抬高数字而不带来真实收益，如收紧触发策略刷高 ACR。", "meaningEn": "Metric gaming raises a number by changing how it's measured without real gain, e.g. tightening the trigger policy to inflate ACR." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "north-star",
+    "scenario": "你要给代码补全产品定一个能整合正确性、延迟、相关性、信任的单一「北极星」指标。",
+    "scenario_en": "You need one north-star metric for the completion product that integrates correctness, latency, relevance, and trust.",
+    "q": "北极星指标该选 ACR 还是开发者留存？",
+    "q_en": "Should the north star be ACR or developer retention?",
+    "why": "选开发者留存（一段时间内仍在主动使用补全的比例）。它是行为化的综合信号，把正确性、延迟、相关性、信任整合进「他们是否一直用」这一个结果里；ACR 只是其中一个可被灌水的方向性输入。",
+    "why_en": "Pick developer retention — the fraction still actively using completions over a period — because it integrates correctness, latency, relevance, and trust into whether they keep using it, while ACR is just one gameable input.",
+    "tags": ["llm-sd", "code-gen", "north-star"],
+    "tradeoff": "开发者留存（综合、抗灌水但慢）vs ACR（即时、便宜但单维、可灌水）",
+    "whenOtherWins": "需要小时级/天级的快速迭代反馈、A/B 留存要几周才出结果时，用 ACR 做即时代理；但最终上线判据仍是留存。",
+    "options": [
+      "选 ACR：它实时、便宜，数字一涨就能立刻说明产品成功，比留存更适合当北极星",
+      "选开发者留存：一段时间仍在主动使用的比例，把正确性/延迟/相关性/信任整合进一个行为结果",
+      "选 pass@k：离线功能正确率最客观，直接当北极星最省事",
+      "选生成延迟：只要够快开发者就会一直用，延迟就是最好的综合指标"
+    ],
+    "options_en": [
+      "Pick ACR: real-time and cheap, a rising number instantly proves success, better as a north star than retention.",
+      "Pick developer retention: the fraction still actively using over a period, integrating correctness/latency/relevance/trust into one behavioral outcome.",
+      "Pick pass@k: offline functional correctness is most objective, so make it the north star for simplicity.",
+      "Pick generation latency: if it's fast enough developers keep using it, so latency is the best composite metric."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "ACR 单维且可被触发策略灌水，涨了未必是真成功；它是留存的输入之一，不足以当北极星。",
+      "对；留存是「他们是否一直用」的综合行为信号，一个指标里就压进了正确、够快、相关、可信，抗单点灌水。",
+      "pass@k 只测离线功能正确，测不到延迟、相关性、信任，也不反映长期真实使用，做不了北极星。",
+      "延迟只是体验的一个维度：够快但补全没用照样没人留下来，单看延迟会漏掉质量与信任。"
+    ],
+    "optionExplanations_en": [
+      "ACR is one-dimensional and gameable via trigger policy; a rise may not be real success — it's an input to retention, not a north star.",
+      "Correct — retention is the composite behavioral signal of whether they keep using it, packing correctness, speed, relevance, and trust into one number, resistant to single-point gaming.",
+      "pass@k only measures offline correctness, missing latency, relevance, trust, and long-run real usage — unfit as a north star.",
+      "Latency is one experience dimension: fast but useless completions still lose users, so latency alone misses quality and trust."
+    ],
+    "termDefinitions": [
+      { "term": "developer retention / 开发者留存", "meaning": "一段时间内仍在主动使用补全功能的开发者比例，代码补全评估的北极星指标。", "meaningEn": "Developer retention is the fraction of developers still actively using completions over a period — the north-star metric for code-completion evaluation." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-013",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "ab-stratify",
+    "scenario": "A/B 实验把开发者随机分成开补全（treatment）和关补全（control），但你担心不同语言、经验、仓库规模的人分布不均。",
+    "scenario_en": "An A/B test randomizes developers into completions-on (treatment) vs off (control), but you worry about uneven language, experience, and repo-size mixes.",
+    "q": "A/B 为什么要按语言/经验/仓库规模分层？",
+    "q_en": "Why stratify the A/B by language, experience, and repo size?",
+    "why": "这些是混淆变量：若 treatment 组恰好资深、写 Python、小仓库偏多，留存差异可能来自人群而非模型。分层随机化让每层内组间可比，把差异归因到模型而不是人群构成。",
+    "why_en": "Language, experience, and repo size are confounders, so stratified randomization keeps groups comparable within each stratum and attributes the retention difference to the model, not the population mix.",
+    "tags": ["llm-sd", "code-gen", "ab-testing"],
+    "options": [
+      "不分层：随机分组后混淆变量分布不均，留存差异可能来自人群而非模型，导致误判",
+      "分层是为了让 treatment 组集中资深开发者，好让补全效果看起来更强",
+      "分层能减少所需样本量，让 A/B 一两天就能出结论，不必跑数周",
+      "分层是把 control 组也开启补全，只是用旧模型，方便直接对比"
+    ],
+    "options_en": [
+      "Without stratification, confounders are unevenly distributed, so the retention gap may come from the population, not the model — a misattribution.",
+      "Stratification concentrates senior developers in the treatment group to make completions look more effective.",
+      "Stratification cuts the sample size needed so the A/B concludes in a day or two instead of weeks.",
+      "Stratification means the control group also has completions on, just with the old model, for easy comparison."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；语言/经验/仓库规模都会独立影响留存，分层让每层内两组同质，才能把留存差异干净地归因到模型。",
+      "把资深开发者堆进 treatment 正是要避免的偏倚，那会制造虚假的正效应，不是分层的目的。",
+      "分层控制混淆、提升估计精度，但留存高方差仍要大样本、跑数周，不是为了缩短到一两天。",
+      "分层说的是随机分配前先按协变量分块，不是让 control 也开补全；control 是关闭或用基线模型。"
+    ],
+    "optionExplanations_en": [
+      "Correct — language/experience/repo size each independently affect retention, so stratifying makes the two arms homogeneous within a stratum, cleanly attributing the gap to the model.",
+      "Stacking seniors into treatment is the bias to avoid — it manufactures a false positive, not the goal of stratification.",
+      "Stratification controls confounders and sharpens estimates, but noisy retention still needs large samples over weeks, not a one-day shortcut.",
+      "Stratification means blocking by covariates before randomizing, not turning completions on for control; control is off or baseline."
+    ],
+    "termDefinitions": [
+      { "term": "confounder / 混淆变量", "meaning": "同时影响分组和结果的变量（如经验、语言），不控制就会让因果归因失真。", "meaningEn": "A confounder is a variable affecting both group assignment and outcome (e.g. experience, language); uncontrolled, it distorts causal attribution." },
+      { "term": "stratified randomization / 分层随机化", "meaning": "先按协变量把人分块，再在每块内随机分组，使各组在这些协变量上均衡。", "meaningEn": "Stratified randomization blocks subjects by covariates, then randomizes within each block so groups are balanced on those covariates." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-014",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "retention-endpoint",
+    "scenario": "A/B 实验要定主终点，有人想看 3 天数据就下结论，但生产力信号噪声大、方差高。",
+    "scenario_en": "The A/B needs a primary endpoint; someone wants to conclude after 3 days, but productivity signals are noisy and high-variance.",
+    "q": "主终点为什么定 28 天留存、而不是跑三天？",
+    "q_en": "Why set the primary endpoint at 28-day retention instead of three days?",
+    "why": "28 天留存是产品目标（SLO 式的观察窗），不是公式推出的数；生产力/留存本身噪声大、方差高，短窗抓到的多是随机波动。所以要大样本、跑数周才有统计功效，次级指标看 ACR、任务完成时间、每次会话接受行数。",
+    "why_en": "28-day retention is a product-target window, not a formula, and because productivity is noisy and high-variance you need large samples over weeks for statistical power, with ACR and task-completion time as secondary.",
+    "tags": ["llm-sd", "code-gen", "ab-testing"],
+    "options": [
+      "因为 28 天是由用户数和 QPS 算出的精确公式结果，改了参数这个数就会变",
+      "因为三天就能得到统计显著结论，28 天只是保守地多留缓冲",
+      "28 天留存是产品目标观察窗；留存/生产力方差大，短窗多是噪声，需大样本跑数周才有统计功效",
+      "因为模型每 28 天才更新一次，终点必须对齐模型发布周期"
+    ],
+    "options_en": [
+      "Because 28 days is an exact formula result from user count and QPS; change the params and the number changes.",
+      "Because three days already gives a statistically significant result, and 28 days is just conservative buffer.",
+      "28-day retention is a product-target window; retention/productivity is high-variance, short windows are mostly noise, so large samples over weeks are needed for power.",
+      "Because the model only updates every 28 days, so the endpoint must align with the release cadence."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "28 天不是公式推导，是选定的产品目标窗口；把它说成 QPS 算出来的数是搞错了性质。",
+      "生产力信号方差大，三天基本抓不到稳定效应，多半是随机波动，不足以下结论。",
+      "对；它是给定的观察目标而非公式；因为方差高，必须靠大样本+数周窗口把噪声平均掉，才有统计功效。",
+      "终点长度取决于信号方差和统计功效，不是绑定模型发布节奏；发布周期与留存窗口是两回事。"
+    ],
+    "optionExplanations_en": [
+      "28 days isn't a formula; it's a chosen product-target window — calling it a QPS-derived number mistakes its nature.",
+      "Productivity signals are high-variance; three days rarely captures a stable effect and is mostly random noise, too weak to conclude.",
+      "Correct — it's a given observation target, not a formula; high variance means large samples over weeks to average out noise for statistical power.",
+      "Endpoint length depends on signal variance and power, not the release cadence; release cycle and retention window are separate things."
+    ],
+    "termDefinitions": [
+      { "term": "28-day retention / 28 天留存", "meaning": "以 28 天为窗口、仍在主动使用补全的开发者比例；这是产品目标窗口而非公式推导值。", "meaningEn": "28-day retention is the fraction of developers still actively using completions over a 28-day window — a product-target window, not a formula result." },
+      { "term": "statistical power / 统计功效", "meaning": "真有效应时实验能检测出来的概率；信号方差大就需更大样本、更长窗口才够。", "meaningEn": "Statistical power is the probability of detecting a real effect; higher signal variance demands larger samples and longer windows." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-015",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "guardrail-metrics",
+    "scenario": "A/B 里 treatment 组留存更高，但你担心它是「更快但更 buggy」的假阳性，需要护栏指标兜底。",
+    "scenario_en": "Treatment retention is higher, but you fear a 'faster but buggier' false positive and need guardrail metrics.",
+    "q": "哪些是防「快但 buggy」的护栏指标？(多选)",
+    "q_en": "Which are guardrail metrics against 'fast but buggy'? (multiple)",
+    "why": "护栏指标监控质量，防止北极星涨是靠牺牲质量换来的：代码缺陷率、构建失败率、补全编辑距离（开发者接受后改了多少，是超越裸接受率的质量代理）。把 ACR 设成硬门槛不是护栏，反而会诱导灌水。",
+    "why_en": "Guardrails watch quality so a north-star gain isn't bought by degrading it — defect rate, build-failure rate, and suggestion edit distance — while making ACR a hard gate is not a guardrail and invites gaming.",
+    "tags": ["llm-sd", "code-gen", "guardrails"],
+    "options": [
+      "代码缺陷率——衡量补全是否引入更多 bug",
+      "构建失败率——衡量补全是否让编译/CI 更常失败",
+      "补全编辑距离——开发者接受后改了多少，是超越裸接受率的质量代理",
+      "把 ACR 设成必须达到的硬门槛，用它当护栏就能防 buggy"
+    ],
+    "options_en": [
+      "Code defect rate — whether completions introduce more bugs.",
+      "Build-failure rate — whether completions make compilation/CI fail more often.",
+      "Suggestion edit distance — how much developers modify accepted suggestions, a quality proxy beyond raw acceptance.",
+      "Setting ACR as a mandatory hard gate — using it as a guardrail prevents buggy code."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；缺陷率直接盯质量，若留存涨但缺陷率也涨，就是「快但 buggy」的假阳性，护栏该拦。",
+      "对；构建/CI 更常失败说明补全在破坏可编译性，是质量退化的硬信号。",
+      "对；编辑距离量的是「接受后还改了多少」，接受但大改说明质量不够，比裸接受率更细。",
+      "错；ACR 本身可被灌水，把它当门槛只会激励收紧触发策略刷分，防不了 buggy，反而制造假阳性。"
+    ],
+    "optionExplanations_en": [
+      "Correct — defect rate watches quality directly; if retention rises but defects rise too, that's the 'fast but buggy' false positive a guardrail must catch.",
+      "Correct — more build/CI failures show completions are breaking compilability, a hard signal of quality regression.",
+      "Correct — edit distance measures how much is changed after acceptance; accept-then-heavily-edit signals low quality, finer than raw acceptance.",
+      "Wrong — ACR is gameable, so gating on it just rewards tightening the trigger policy and doesn't prevent buggy code — it creates false positives."
+    ],
+    "termDefinitions": [
+      { "term": "guardrail metric / 护栏指标", "meaning": "监控质量、防止北极星以牺牲质量为代价上升的辅助指标，如缺陷率、构建失败率。", "meaningEn": "A guardrail metric watches quality to prevent a north-star gain bought by degrading it, e.g. defect rate, build-failure rate." },
+      { "term": "suggestion edit distance / 补全编辑距离", "meaning": "开发者接受补全后又修改的量，作为超越裸接受率的质量代理。", "meaningEn": "Suggestion edit distance is how much a developer modifies an accepted completion, a quality proxy beyond raw acceptance." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-016",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "edit-distance",
+    "scenario": "两个模型 ACR 相同，但你想分辨哪个补全真的更贴合意图、开发者接受后几乎不改。",
+    "scenario_en": "Two models have equal ACR, but you want to tell which completions truly fit intent with little post-accept editing.",
+    "q": "补全编辑距离比裸接受率多告诉你什么？",
+    "q_en": "What does suggestion edit distance tell you beyond raw acceptance?",
+    "why": "编辑距离量的是「接受后开发者又改了多少」。ACR 相同的两个模型里，编辑距离更小的那个补全更贴合意图、更少返工；接受但大改说明质量其实不够，这是裸接受率看不出的。",
+    "why_en": "Edit distance measures how much a developer changes an accepted completion, so between two equal-ACR models the smaller-edit one fits intent better — something raw acceptance can't reveal.",
+    "tags": ["llm-sd", "code-gen", "quality"],
+    "options": [
+      "它衡量生成延迟：编辑距离越小说明模型响应越快",
+      "它等价于 ACR，只是换个名字，不提供额外信息",
+      "它衡量补全的字符长度，越长的补全编辑距离一定越大",
+      "它衡量接受后开发者又改了多少：编辑越少越贴合意图，是超越裸接受率的质量代理"
+    ],
+    "options_en": [
+      "It measures generation latency: smaller edit distance means faster response.",
+      "It is equivalent to ACR, just renamed, adding no extra information.",
+      "It measures the completion's character length; longer completions always have larger edit distance.",
+      "It measures how much a developer edits after accepting: less editing means better intent fit, a quality proxy beyond raw acceptance."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "编辑距离跟延迟无关，它看的是接受后的修改量，不是响应速度。",
+      "ACR 只记「接受没接受」，编辑距离记「接受后改了多少」，两者信息不同，后者更细。",
+      "编辑距离量的是修改幅度而非长度；短补全若被大改，编辑距离照样大。",
+      "对；ACR 相同也可能一个几乎不改、一个大改，编辑距离把这层质量差别显出来。"
+    ],
+    "optionExplanations_en": [
+      "Edit distance is unrelated to latency; it looks at post-accept modification, not response speed.",
+      "ACR records only accept/not-accept, while edit distance records how much was changed after — different, finer information.",
+      "Edit distance measures modification magnitude, not length; a short completion heavily rewritten still has large edit distance.",
+      "Correct — with equal ACR, one may barely change while another is heavily rewritten; edit distance surfaces that quality gap."
+    ],
+    "termDefinitions": [
+      { "term": "suggestion edit distance / 补全编辑距离", "meaning": "开发者接受补全后又修改的量；ACR 相同时，编辑越少代表补全越贴合意图。", "meaningEn": "Suggestion edit distance is how much a developer modifies an accepted completion; at equal ACR, less editing means better intent fit." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-017",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "launch-funnel",
+    "q": "把代码补全模型的「评估漏斗」排成从筛选到上线的正确顺序：",
+    "q_en": "Order the code-completion evaluation funnel from screening to launch:",
+    "steps": [
+      "按语言/经验/仓库规模分层做 A/B，主指标看 28 天留存",
+      "离线跑 pass@k 功能正确性基准，先筛掉明显不行的候选模型",
+      "护栏指标（缺陷率、构建失败率、编辑距离）不退化才放量上线",
+      "小流量 canary 观察 ACR，看真实开发者接不接受"
+    ],
+    "answerOrder": [1, 3, 0, 2],
+    "why": "顺序是保真度递增的漏斗：先用便宜的离线基准粗筛，再上小流量看 ACR 行为，再做分层 A/B 用留存拍板，最后确认护栏不退化才放量。跳过前面的廉价筛选直接 A/B，会浪费实验预算在明显不行的模型上。",
+    "why_en": "The order is a fidelity-rising funnel: cheap offline benchmarks screen first, then ACR behavior in canary, then stratified A/B on retention decides, then guardrails clear before rollout.",
+    "tags": ["llm-sd", "code-gen", "evaluation"],
+    "diagram": "flowchart LR\n  B[\"离线 pass@k\"] --> C[\"canary ACR\"]\n  C --> A[\"分层 A/B 留存\"]\n  A --> G[\"护栏指标\"]\n  G --> L[\"放量上线\"]",
+    "termDefinitions": [
+      { "term": "canary / 灰度小流量", "meaning": "先把新模型放给一小撮用户观察真实行为，无问题再逐步放量的发布方式。", "meaningEn": "A canary release exposes a new model to a small slice of users to observe real behavior before gradual rollout." },
+      { "term": "pass@k", "meaning": "采样 k 个候选、至少一个通过全部单元测试的概率，评估漏斗最上层的离线指标。", "meaningEn": "pass@k is the probability that at least one of k sampled completions passes all tests — the top offline layer of the funnel." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-018",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "memorization",
+    "scenario": "Copilot 曾原样吐出开源代码块、许可头、甚至 API key，引发法律审查。",
+    "scenario_en": "Copilot has verbatim emitted open-source blocks, license headers, even API keys, drawing legal scrutiny.",
+    "q": "什么是记忆化，为什么代码模型尤其易犯？",
+    "q_en": "What is memorization, and why are code models especially prone to it?",
+    "why": "记忆化 = 模型逐字/近似逐字复现训练序列（受版权代码、API key、内部 URL、专有逻辑）。代码模型尤其易犯，因为 GitHub 语料里工具函数、许可头、样板代码高度重复，重复越多越容易被背下来。",
+    "why_en": "Memorization is the model reproducing training sequences verbatim, and code models are especially prone because GitHub corpora have heavily repeated utility functions, license headers, and boilerplate.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "记忆化是模型把训练数据压缩进权重的正常现象，不会泄露原文，无需担心",
+      "记忆化 = 逐字复现训练序列；代码模型尤其易犯，因 GitHub 语料工具函数/许可头/样板高度重复",
+      "记忆化只发生在过拟合的小模型上，大模型参数多反而不会记住具体样本",
+      "记忆化指模型记住了用户的对话历史，和训练数据里的版权代码无关"
+    ],
+    "options_en": [
+      "Memorization is the normal compression of training data into weights; it never leaks originals, so no concern.",
+      "Memorization = reproducing training sequences verbatim; code models are especially prone because GitHub corpora heavily repeat utility functions, license headers, and boilerplate.",
+      "Memorization only happens in small overfit models; large models with many params don't memorize specific samples.",
+      "Memorization means the model remembers a user's chat history, unrelated to copyrighted training code."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "记忆化恰恰会泄露原文——Copilot 吐出许可头和 API key 就是实证，说「无需担心」是错的。",
+      "对；重复是关键成因，一段代码在语料里出现几百次就极易被逐字背下，代码语料充满这种重复。",
+      "大模型同样会记忆化，尤其对高频重复样本；这不是小模型专属，参数多反而能记更多。",
+      "这里的记忆化指训练数据的复现（版权代码/密钥），不是对话历史，二者是不同问题。"
+    ],
+    "optionExplanations_en": [
+      "Memorization does leak originals — Copilot emitting license headers and API keys is proof; 'no concern' is wrong.",
+      "Correct — repetition is the key cause; a snippet appearing hundreds of times is easily reproduced verbatim, and code corpora are full of such repetition.",
+      "Large models memorize too, especially high-frequency repeats; it's not small-model-only, and more params can store more.",
+      "Here memorization means reproducing training data (copyrighted code/keys), not chat history — different problems."
+    ],
+    "termDefinitions": [
+      { "term": "memorization / 记忆化", "meaning": "模型逐字或近似逐字复现训练序列（受版权代码、API key、内部 URL、专有逻辑）的现象。", "meaningEn": "Memorization is a model reproducing training sequences verbatim or near-verbatim, e.g. copyrighted code, API keys, internal URLs, proprietary logic." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-019",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "memorization-threat",
+    "q": "把「记忆化 → 法律/安全暴露」的威胁链排成正确顺序：",
+    "q_en": "Order the 'memorization → legal/security exposure' threat chain:",
+    "steps": [
+      "模型吐出从某个具体仓库逐字复制的代码块",
+      "引发法律与安全暴露：GPL 许可污染，可能连带泄露密钥或内部 URL",
+      "开发者敲入一个常见的函数签名/前缀",
+      "这段带 GPL 许可的代码被注入到专有代码库"
+    ],
+    "answerOrder": [2, 0, 3, 1],
+    "why": "威胁链：常见签名触发 → 模型复现某仓库的记忆片段 → GPL 代码进入专有库 → 许可污染+安全暴露。链条说明危害不是「代码写错」，而是把外部许可/秘密带进你的代码库，这是能卡住发布的合规风险。",
+    "why_en": "A common signature triggers a memorized block from a specific repo, injecting GPL code into a proprietary codebase, causing license contamination and security exposure — a compliance risk that can block launch.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "diagram": "flowchart LR\n  S[\"常见函数签名\"] --> E[\"逐字复现某仓库代码块\"]\n  E --> I[\"GPL 代码注入专有库\"]\n  I --> X[\"许可污染 + 安全暴露\"]",
+    "termDefinitions": [
+      { "term": "GPL", "fullName": "GNU General Public License", "meaning": "一种「传染性」开源许可：衍生作品也须以 GPL 开源，混入专有代码库会造成许可污染。", "meaningEn": "GPL (GNU General Public License) is a copyleft license: derivative works must also be GPL, so mixing it into proprietary code causes license contamination." },
+      { "term": "license contamination / 许可污染", "meaning": "受限许可（如 GPL）的代码混入专有代码库，迫使其承担开源义务或引发侵权风险。", "meaningEn": "License contamination is restricted-license (e.g. GPL) code entering proprietary code, forcing open-source obligations or infringement risk." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "memorization-detection",
+    "scenario": "你要审计一个代码模型到底记住了多少训练数据，有两条常用手段。",
+    "scenario_en": "You need to audit how much training data a code model memorized, with two common techniques.",
+    "q": "成员推断测试与抽取攻击审计有什么区别？",
+    "q_en": "How do membership-inference testing and extraction-attack auditing differ?",
+    "why": "成员推断问「这段代码在不在训练集里」——靠分析模型对它的置信度判断；抽取攻击问「能被套出多少记忆内容」——用常见前缀系统性地提示、量化可被诱出的记忆量。前者判成员归属，后者量泄露规模。",
+    "why_en": "Membership inference asks whether a snippet was in the training set by analyzing the model's confidence on it, while extraction auditing prompts with common prefixes to quantify how much memorized content can be elicited.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "tradeoff": "成员推断（判某样本是否被训练过）vs 抽取攻击审计（量化能被套出多少记忆内容）",
+    "options": [
+      "两者是同一种方法的不同叫法，都只是重新跑一遍 pass@k",
+      "成员推断给模型加噪声训练，抽取攻击给推理加噪声输出，都属于防御手段",
+      "成员推断靠置信度判断某段是否在训练集里；抽取攻击用常见前缀提示、量化能被诱出的记忆量",
+      "成员推断衡量延迟，抽取攻击衡量吞吐，都是性能测试"
+    ],
+    "options_en": [
+      "They're two names for one method, both just re-running pass@k.",
+      "Membership inference trains the model with noise; extraction attacks add noise at inference — both are defenses.",
+      "Membership inference uses confidence to judge whether a snippet was in training; extraction auditing prompts with common prefixes to quantify elicitable memorized content.",
+      "Membership inference measures latency and extraction measures throughput — both performance tests."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "两者目标不同：一个判成员归属、一个量泄露规模，都不是重跑 pass@k（那是正确性基准）。",
+      "这两个是检测/审计手段，不是加噪防御；加噪声是 DP 那条防线，别混了。",
+      "对；成员推断判「在不在训练集」、抽取攻击量「能套出多少」，一个定性归属、一个定量规模，互补。",
+      "两者审计的是记忆/泄露风险，不是延迟或吞吐这类性能指标。"
+    ],
+    "optionExplanations_en": [
+      "Their goals differ: one judges membership, the other quantifies leakage; neither is re-running pass@k (that's a correctness benchmark).",
+      "These are detection/audit techniques, not noise defenses; adding noise is the DP line — don't conflate.",
+      "Correct — membership inference judges 'in the training set or not' while extraction quantifies 'how much can be elicited', one qualitative, one quantitative, complementary.",
+      "Both audit memorization/leakage risk, not latency or throughput performance metrics."
+    ],
+    "termDefinitions": [
+      { "term": "membership inference / 成员推断", "meaning": "通过分析模型对某样本的置信度，推断它是否出现在训练集中的检测手段。", "meaningEn": "Membership inference detects whether a sample was in the training set by analyzing the model's confidence on it." },
+      { "term": "extraction attack / 抽取攻击审计", "meaning": "用常见前缀系统性提示模型，量化能被诱出多少记忆内容的审计手段。", "meaningEn": "Extraction-attack auditing systematically prompts with common prefixes to quantify how much memorized content can be elicited." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-021",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "membership-inference",
+    "scenario": "你怀疑某段专有代码进了训练集，想不重训就验证它是否被模型「见过」。",
+    "scenario_en": "You suspect a proprietary snippet entered training and want to verify the model 'saw' it without retraining.",
+    "q": "成员推断测试怎么判断一段代码是否在训练集里？",
+    "q_en": "How does membership-inference testing judge if a snippet was in the training set?",
+    "why": "看模型对这段代码的置信度：训练时见过的序列，模型往往给出异常高的置信度/低损失（因为它被拟合过）。据此推断该样本是训练集成员，用来审计记忆化和数据泄露。",
+    "why_en": "It analyzes the model's confidence on the snippet — trained-on sequences tend to get abnormally high confidence/low loss, indicating training-set membership.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "分析模型对这段代码的置信度：见过的序列置信度异常高，据此推断它是训练集成员",
+      "把这段代码提交到公开搜索引擎，能搜到就说明在训练集里",
+      "重新训练一个新模型看结果是否一样，一样就说明在训练集里",
+      "统计这段代码在生产日志里出现的次数，次数多就是训练集成员"
+    ],
+    "options_en": [
+      "Analyze the model's confidence on the snippet: trained-on sequences get abnormally high confidence, indicating training-set membership.",
+      "Submit the snippet to a public search engine; if found, it was in the training set.",
+      "Retrain a fresh model and check if results match; a match means it was in the training set.",
+      "Count how often the snippet appears in production logs; frequent means training-set membership."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；核心信号是置信度/损失异常——模型对拟合过的序列格外「自信」，无需重训就能推断成员归属。",
+      "搜索引擎查的是公网存在性，跟「这个模型的训练集里有没有」是两回事，可能全错。",
+      "重训代价极大且不确定，成员推断的价值正是不重训、只看现成模型的置信度。",
+      "生产日志频次反映使用，不反映训练成员归属；模型可能从没在训练里见过高频日志代码。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the core signal is abnormal confidence/loss; the model is unusually 'sure' about fitted sequences, so membership is inferred without retraining.",
+      "A search engine checks public existence, a different question from 'was it in this model's training set' — could be entirely wrong.",
+      "Retraining is hugely costly and uncertain; membership inference's value is using the existing model's confidence without retraining.",
+      "Log frequency reflects usage, not training membership; the model may never have trained on frequently logged code."
+    ],
+    "termDefinitions": [
+      { "term": "membership inference / 成员推断", "meaning": "通过模型对样本的置信度/损失异常，判断该样本是否属于训练集的检测方法。", "meaningEn": "Membership inference judges whether a sample is in the training set from the model's abnormal confidence/loss on it." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-022",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "extraction-audit",
+    "scenario": "上线前你要量化「模型到底能被套出多少记忆内容」，作为泄露风险的规模评估。",
+    "scenario_en": "Before launch you must quantify how much memorized content the model can be made to reveal, as a leakage-scale assessment.",
+    "q": "抽取攻击审计怎么量化可被诱出的记忆内容？",
+    "q_en": "How does extraction-attack auditing quantify elicitable memorized content?",
+    "why": "用常见前缀系统性地提示模型（比如典型的许可头开头、常见函数签名），看它会不会续写出逐字的记忆片段，统计能诱出多少。这把「泄露风险」从定性变成可度量的规模数字，指导要不要加强防御。",
+    "why_en": "It systematically prompts with common prefixes and measures how much verbatim memorized content the model completes, turning leakage risk into a measurable scale.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "统计模型参数量，参数越多可被套出的记忆一定越多",
+      "让模型自己声明记住了哪些代码，按它的自述统计",
+      "跑 HumanEval pass@k，分数越高说明记忆内容越多",
+      "用常见前缀系统性提示模型，看它续写出多少逐字记忆片段，把泄露风险量化成规模"
+    ],
+    "options_en": [
+      "Count model parameters; more params always means more extractable memorization.",
+      "Ask the model to declare which code it memorized and tally its self-report.",
+      "Run HumanEval pass@k; a higher score means more memorized content.",
+      "Systematically prompt with common prefixes and measure how much verbatim memorized content it completes, quantifying leakage as a scale."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "参数量与实际泄露量不是简单正比，靠它估记忆规模不可靠；要直接用前缀去「套」。",
+      "模型不会可靠地自述记住了什么，自述既不完整也不可信，量化不了泄露。",
+      "pass@k 是功能正确率，和「记住多少训练片段」是两码事，高分不代表记忆多。",
+      "对；用常见前缀主动诱导、统计能被逐字续写出的记忆量，把泄露风险变成可比较的规模数字。"
+    ],
+    "optionExplanations_en": [
+      "Param count isn't a simple proxy for actual leakage; estimating memorization from it is unreliable — probe with prefixes instead.",
+      "Models don't reliably self-report what they memorized; the self-report is neither complete nor trustworthy for quantification.",
+      "pass@k is functional correctness, distinct from how many training snippets are memorized; a high score doesn't imply more memorization.",
+      "Correct — actively elicit with common prefixes and count how much verbatim content is completed, turning leakage risk into a comparable scale."
+    ],
+    "termDefinitions": [
+      { "term": "extraction attack auditing / 抽取攻击审计", "meaning": "用常见前缀系统性提示模型，量化能被诱出多少逐字记忆内容的泄露评估方法。", "meaningEn": "Extraction-attack auditing systematically prompts with common prefixes to quantify how much verbatim memorized content can be elicited." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-023",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "dp-sgd",
+    "scenario": "你想给训练一个形式化保证：删掉任意单个代码文件，训练出的模型在统计上不可区分。",
+    "scenario_en": "You want a formal guarantee that removing any single code file yields a statistically indistinguishable model.",
+    "q": "DP-SGD 靠哪两步给出差分隐私保证？",
+    "q_en": "Which two steps give DP-SGD its differential-privacy guarantee?",
+    "why": "DP-SGD 两步：对每条样本的梯度做裁剪（限制单个样本的最大影响）+ 加标定过的高斯噪声（模糊掉个体贡献）。合起来保证任意单个训练样本对参数的影响被限制，删掉它后模型统计上不可区分。",
+    "why_en": "DP-SGD clips each per-example gradient to bound any single sample's influence, then adds calibrated Gaussian noise to mask individual contributions, so removing one sample leaves a statistically indistinguishable model.",
+    "tags": ["llm-sd", "code-gen", "differential-privacy"],
+    "diagram": "flowchart LR\n  G[\"每条样本梯度\"] --> C[\"裁剪 clip<br/>限制单样本影响\"]\n  C --> N[\"加高斯噪声<br/>模糊个体贡献\"]\n  N --> U[\"更新参数\"]",
+    "options": [
+      "增大 batch size + 提高学习率，让训练更快收敛从而少记住样本",
+      "对每条样本梯度裁剪（限制单样本影响）+ 加标定的高斯噪声（模糊个体贡献）",
+      "训练后删掉一半参数（剪枝）+ 量化到 int8，减小模型容量",
+      "对输入代码做加密 + 对输出做哈希，保证明文不进模型"
+    ],
+    "options_en": [
+      "Increase batch size and learning rate so training converges faster and memorizes less.",
+      "Clip each per-example gradient (bound single-sample influence) and add calibrated Gaussian noise (mask individual contribution).",
+      "Prune half the parameters after training and quantize to int8 to shrink model capacity.",
+      "Encrypt input code and hash outputs so plaintext never enters the model."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "加大 batch/学习率是普通调参，给不了任何形式化隐私保证，也不限制单样本影响。",
+      "对；裁剪把每个样本的梯度范数压到上限、噪声再糊掉个体贡献，二者合起来才有 ε 级别的形式化保证。",
+      "剪枝量化是压缩模型、省算力，与「限制单样本对参数的影响」这个隐私目标无关。",
+      "加密/哈希保护传输存储，但模型仍在明文梯度上学习，给不了差分隐私那种参数级保证。"
+    ],
+    "optionExplanations_en": [
+      "Bigger batch/learning rate is ordinary tuning; it gives no formal privacy guarantee and doesn't bound single-sample influence.",
+      "Correct — clipping caps each sample's gradient norm and noise masks its contribution; together they yield the formal ε-level guarantee.",
+      "Pruning/quantization compresses the model to save compute, unrelated to bounding a sample's parameter influence.",
+      "Encryption/hashing protects transport/storage, but the model still learns on plaintext gradients — no parameter-level DP guarantee."
+    ],
+    "termDefinitions": [
+      { "term": "DP-SGD", "fullName": "Differentially Private Stochastic Gradient Descent", "meaning": "在 SGD 中对每条样本梯度裁剪并加高斯噪声，给出差分隐私形式化保证的训练法。", "meaningEn": "DP-SGD (Differentially Private Stochastic Gradient Descent) clips per-example gradients and adds Gaussian noise in SGD to provide a formal differential-privacy guarantee." },
+      { "term": "differential privacy / 差分隐私", "fullName": "Differential Privacy (DP)", "meaning": "形式化保证：任意单个训练样本对模型参数的影响被限制，删掉它模型统计上不可区分。", "meaningEn": "Differential privacy (DP) formally bounds how much any single training sample influences the model, so removing it leaves a statistically indistinguishable model." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-024",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "privacy-budget",
+    "scenario": "面试官问：说「我们用了差分隐私」为什么不够，要给出隐私预算 ε 的取值和权衡。",
+    "scenario_en": "Interviewer: why is 'we use differential privacy' insufficient — give the privacy budget ε and its tradeoff.",
+    "q": "隐私预算 ε 怎么控制隐私-效用权衡，生产取多少？",
+    "q_en": "How does the privacy budget ε govern the privacy-utility tradeoff, and what value in production?",
+    "why": "ε 越小隐私越强但加的噪声越多、效用越差；ε<1 会明显拉低 pass@k。生产通常运行在中等 ε≈3–10，既显著降低记忆化又保住可用性。所以要说清楚落在曲线哪一点，而不是只说「我们用了 DP」。",
+    "why_en": "Lower ε means stronger privacy but more noise and worse utility (ε<1 notably cuts pass@k), so production runs at moderate ε≈3–10 to reduce memorization while preserving utility.",
+    "tags": ["llm-sd", "code-gen", "differential-privacy"],
+    "options": [
+      "ε 越大隐私越强、噪声越多，所以生产该把 ε 设得越大越好",
+      "ε 只影响训练速度，跟隐私和 pass@k 都没关系，取多少无所谓",
+      "ε 越小隐私越强但噪声越多、效用越差；ε<1 明显拉低 pass@k，生产常取中等 ε≈3–10",
+      "ε 是模型参数量的单位，ε 越大模型越大、记住的越多"
+    ],
+    "options_en": [
+      "Larger ε means stronger privacy and more noise, so production should set ε as large as possible.",
+      "ε only affects training speed, unrelated to privacy or pass@k, so its value doesn't matter.",
+      "Smaller ε means stronger privacy but more noise and worse utility; ε<1 notably cuts pass@k, so production uses moderate ε≈3–10.",
+      "ε is a unit of parameter count; larger ε means a bigger model that memorizes more."
+    ],
+    "answer": [2],
+    "termDefinitions": [
+      { "term": "privacy budget ε / 隐私预算", "meaning": "差分隐私的强度旋钮：ε 越小隐私越强、噪声越多、效用越差；生产常取中等 ε≈3–10。", "meaningEn": "The privacy budget ε is DP's strength knob: smaller ε means stronger privacy, more noise, and worse utility; production often uses moderate ε≈3–10." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-025",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "dp-operating-point",
+    "scenario": "评审问你的代码模型隐私方案，你答「我们应用了差分隐私」，对方追问「哪种强度、代价多大」。",
+    "scenario_en": "Asked about your model's privacy, you say 'we apply differential privacy', and they press: 'what strength, at what cost?'",
+    "q": "只说「我们用了 DP」为什么不够，该补什么？",
+    "q_en": "Why is 'we use DP' not enough, and what must you add?",
+    "why": "DP 不是开关而是一条隐私-效用曲线，不给 ε 就等于没说强度和代价。要讲清运行在曲线哪一点（如中等 ε≈3–10）、为什么这样选（显著降记忆化又保住 pass@k），才是完整答案。",
+    "why_en": "DP is a privacy-utility curve, not an on/off switch, so you must state where on it you operate (e.g. moderate ε≈3–10) and why that point balances memorization reduction against utility.",
+    "tags": ["llm-sd", "code-gen", "differential-privacy"],
+    "tradeoff": "低 ε（隐私强但 pass@k 掉）vs 高 ε（效用好但记忆化防不住）——要指明落点",
+    "whenOtherWins": "若合规红线要求近乎零泄露、可以接受较大质量损失（如涉密代码），才把 ε 压到 <1 那一端。",
+    "options": [
+      "补上运行的隐私预算 ε（如中等 ε≈3–10）和为什么这样选，指明落在隐私-效用曲线哪一点",
+      "补上模型的参数量和训练用的 GPU 数量，证明投入够大",
+      "补上 pass@k 分数就够了，隐私强度不用量化，DP 是开关型的",
+      "补上一句「我们也做了去重」，用去重替代 ε 的说明"
+    ],
+    "options_en": [
+      "Add the operating privacy budget ε (e.g. moderate ε≈3–10) and why, stating where on the privacy-utility curve you sit.",
+      "Add the parameter count and number of training GPUs to prove enough investment.",
+      "Add the pass@k score and that's enough; privacy strength needn't be quantified since DP is on/off.",
+      "Add 'we also did dedup' and let dedup stand in for stating ε."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；ε 才是隐私强度的坐标，讲清落点+理由（降记忆化 vs 保 pass@k）才算完整回答，而不是「用了 DP」四个字。",
+      "参数量和 GPU 数是规模投入，回答不了「隐私多强、牺牲多少效用」这个具体权衡。",
+      "DP 不是开关而是曲线，只给 pass@k 不给 ε 等于没说隐私代价，评审要的正是这个落点。",
+      "去重是另一条防线，能补充但替代不了 ε 的说明；被追问 DP 强度就该给 ε。"
+    ],
+    "optionExplanations_en": [
+      "Correct — ε is the coordinate of privacy strength; stating the operating point plus rationale (less memorization vs preserving pass@k) is the complete answer, not just 'we use DP'.",
+      "Param count and GPUs are scale of investment, not an answer to 'how strong is privacy and how much utility is sacrificed'.",
+      "DP is a curve, not a switch; giving pass@k without ε omits the privacy cost, which is exactly the operating point they want.",
+      "Dedup is another defense line that complements but can't replace stating ε; when asked about DP strength, give ε."
+    ],
+    "termDefinitions": [
+      { "term": "privacy-utility curve / 隐私-效用曲线", "meaning": "由 ε 参数化的连续权衡：一端隐私强效用低，另一端效用高隐私弱，须指明运行落点。", "meaningEn": "The privacy-utility curve is the ε-parameterized continuum from strong-privacy/low-utility to high-utility/weak-privacy; you must state the operating point." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-026",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "aggressive-epsilon",
+    "scenario": "为追求最强隐私，团队把训练的 ε 压到 <1，结果 pass@k 明显下滑。",
+    "scenario_en": "Chasing maximum privacy, the team pushes training ε below 1, and pass@k drops noticeably.",
+    "q": "把 ε 压到 <1 会怎样，怎么权衡回来？",
+    "q_en": "What happens at ε<1, and how do you rebalance?",
+    "why": "ε<1 加入的噪声过大，会明显拉低 pass@k（效用受损）。除非合规要求近乎零泄露，一般应回退到中等 ε≈3–10——它已能显著降低记忆化，同时把质量损失控制在可接受范围。",
+    "why_en": "ε<1 injects too much noise and noticeably cuts pass@k, so unless near-zero leakage is mandated you back off to moderate ε≈3–10, which reduces memorization while keeping quality acceptable.",
+    "tags": ["llm-sd", "code-gen", "differential-privacy"],
+    "options": [
+      "ε<1 不影响质量，pass@k 下滑一定是别的 bug，与隐私预算无关",
+      "ε<1 隐私更弱，所以质量下滑，应把 ε 调得更小来恢复质量",
+      "ε<1 让模型更快，pass@k 下滑说明模型太快跳过了推理，加大 batch 即可",
+      "ε<1 噪声过大明显拉低 pass@k；除非要近零泄露，应回到中等 ε≈3–10 平衡隐私与效用"
+    ],
+    "options_en": [
+      "ε<1 doesn't affect quality; a pass@k drop must be another bug, unrelated to the privacy budget.",
+      "ε<1 means weaker privacy, hence the quality drop, so lower ε further to restore quality.",
+      "ε<1 makes the model faster; the pass@k drop means it skipped reasoning, so just increase batch size.",
+      "ε<1 injects too much noise and cuts pass@k; unless near-zero leakage is required, return to moderate ε≈3–10 to balance privacy and utility."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "pass@k 下滑正是 ε 太小、噪声太大的直接后果，不是无关的别的 bug。",
+      "方向反了：ε 越小隐私越强、噪声越多，再调小只会让质量更差，不会恢复。",
+      "DP 噪声不会让模型「更快跳过推理」，它是加在梯度上的噪声，损的是质量不是速度。",
+      "对；这是典型的隐私-效用权衡，回到 ε≈3–10 通常既保住可用性又显著抑制记忆化。"
+    ],
+    "optionExplanations_en": [
+      "The pass@k drop is the direct result of too-small ε and too much noise, not an unrelated bug.",
+      "Backwards: smaller ε means stronger privacy and more noise; lowering it further worsens quality, not restores it.",
+      "DP noise doesn't make the model 'skip reasoning faster'; it's gradient noise that costs quality, not speed.",
+      "Correct — this is the classic privacy-utility tradeoff; returning to ε≈3–10 usually preserves utility while still curbing memorization."
+    ],
+    "termDefinitions": [
+      { "term": "privacy budget ε / 隐私预算", "meaning": "DP 强度旋钮：ε<1 噪声过大明显损 pass@k；生产常回到中等 ε≈3–10 平衡隐私与效用。", "meaningEn": "The privacy budget ε tunes DP strength: ε<1 adds too much noise and hurts pass@k, so production returns to moderate ε≈3–10." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-027",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "dedup-first-line",
+    "scenario": "要降低代码模型的记忆化风险，团队在「先上差分隐私」和「先做数据去重」之间选第一步。",
+    "scenario_en": "To cut memorization risk, the team chooses a first step between 'apply differential privacy' and 'deduplicate the data'.",
+    "q": "防记忆化的第一步该先做去重还是先上 DP？",
+    "q_en": "As the first step against memorization, do dedup or DP first?",
+    "why": "先做去重：它直接缩小记忆面——一段代码在语料里出现一次，比出现几百次难被记住得多，且比 DP 便宜、不损全局效用。DP 是训练中对残余泄露的数学兜底，成本更高，作为下一层更合适。",
+    "why_en": "Do dedup first — it directly shrinks the memorization surface (a snippet appearing once is far less memorized than one appearing hundreds of times), cheaper and without DP's utility cost, leaving DP as the next layer.",
+    "tags": ["llm-sd", "code-gen", "deduplication"],
+    "tradeoff": "去重（便宜、直接缩小记忆面、不损效用）vs DP（数学保证但加噪损 pass@k、成本高）",
+    "whenOtherWins": "若语料已高度去重、但仍需对任意单样本给出可证明的形式化保证（如受监管数据），就该上 DP 补数学兜底。",
+    "options": [
+      "先上 DP：只有 DP 能防记忆化，去重没用",
+      "先做去重：直接缩小记忆面，便宜且不损全局效用，DP 作为下一层数学兜底",
+      "先做输出过滤：在服务时拦截即可，训练侧不用管",
+      "两者都不做，直接靠减小模型规模来防记忆"
+    ],
+    "options_en": [
+      "Apply DP first: only DP prevents memorization, dedup is useless.",
+      "Deduplicate first: it directly shrinks the memorization surface, cheaply and without utility loss, with DP as the next mathematical backstop.",
+      "Do output filtering first: intercept at serving time, no need to touch training.",
+      "Do neither; just shrink the model to prevent memorization."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "去重非常有用——它从源头减少重复，是最直接的第一道防线；说它没用是错的。",
+      "对；去重把「出现几百次」的样本压到「出现一次」，记忆概率骤降，且不像 DP 那样加噪损效用，最适合当第一步。",
+      "输出过滤是服务时的最后一层，来得太晚且不改训练分布；防记忆应从训练前的去重开始。",
+      "一味缩小模型会牺牲能力，且大模型同样能靠去重降记忆；这不是防记忆的第一步。"
+    ],
+    "optionExplanations_en": [
+      "Dedup is very useful — it cuts repetition at the source and is the most direct first line; calling it useless is wrong.",
+      "Correct — dedup turns 'appears hundreds of times' into 'appears once', sharply cutting memorization, and unlike DP adds no utility-hurting noise, making it the best first step.",
+      "Output filtering is the last serving-time layer, too late and doesn't change the training distribution; anti-memorization starts with pre-training dedup.",
+      "Blindly shrinking the model sacrifices capability, and large models can still dedup to reduce memorization; this isn't the first step."
+    ],
+    "termDefinitions": [
+      { "term": "memorization surface / 记忆面", "meaning": "训练语料中高度重复、易被逐字记住的内容量；去重直接缩小它。", "meaningEn": "The memorization surface is the amount of heavily repeated training content prone to verbatim recall; dedup shrinks it directly." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-028",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "dedup-methods",
+    "scenario": "训练前去重，你要同时清掉完全相同的文件和只差空白/变量名/注释的近似副本。",
+    "scenario_en": "In pre-training dedup you must remove both identical files and near-copies differing only in whitespace, variable names, or comments.",
+    "q": "精确去重和近似去重各用什么、各抓什么？",
+    "q_en": "What do exact dedup and near-dedup each use and catch?",
+    "why": "精确去重用内容哈希（SHA-256）删完全相同的文件/函数——一字不差才算重复；近似去重用 MinHash/LSH，抓只差空白、变量名、注释的变体。前者只抓完全一致，后者抓「实质相同」的变体，二者互补。",
+    "why_en": "Exact dedup uses content hashing (SHA-256) to remove byte-identical files, while near-dedup uses MinHash/LSH to catch variants differing only in whitespace, variable names, or comments.",
+    "tags": ["llm-sd", "code-gen", "deduplication"],
+    "tradeoff": "精确去重（SHA-256，只删逐字相同，快而漏变体）vs 近似去重（MinHash/LSH，抓实质相同的变体）",
+    "table": {
+      "headers": ["方法", "技术", "抓什么"],
+      "rows": [
+        ["精确去重", "内容哈希 SHA-256", "逐字完全相同的文件/函数"],
+        ["近似去重", "MinHash / LSH", "只差空白/变量名/注释的变体"]
+      ]
+    },
+    "options": [
+      "精确去重用 MinHash/LSH，近似去重用 SHA-256，两者只是叫法不同",
+      "两者都用 SHA-256，区别只是近似去重多跑几遍哈希",
+      "精确去重用 SHA-256 抓逐字相同；近似去重用 MinHash/LSH 抓只差空白/变量名/注释的变体",
+      "精确去重靠人工审阅，近似去重靠模型自己判断，都不用算法"
+    ],
+    "options_en": [
+      "Exact dedup uses MinHash/LSH and near-dedup uses SHA-256; they're just different names.",
+      "Both use SHA-256; near-dedup just runs the hash a few more times.",
+      "Exact dedup uses SHA-256 to catch byte-identical code; near-dedup uses MinHash/LSH to catch variants differing only in whitespace/variable names/comments.",
+      "Exact dedup relies on manual review and near-dedup on the model's own judgment, neither using algorithms."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "角色对调了：哈希（SHA-256）是精确去重、MinHash/LSH 才是近似去重。",
+      "SHA-256 只判逐字相同，改一个空白哈希就全变，多跑几遍也抓不到变体；近似去重必须用 MinHash/LSH。",
+      "对；SHA-256 抓「一字不差」，MinHash/LSH 抓「实质相同」的近似变体，一精确一模糊，覆盖不同重复类型。",
+      "工业级去重是算法自动化的（哈希 + LSH），靠人工审阅几十亿文件不现实。"
+    ],
+    "optionExplanations_en": [
+      "Roles swapped: hashing (SHA-256) is exact dedup; MinHash/LSH is near-dedup.",
+      "SHA-256 only flags byte-identical code — change one whitespace and the hash differs entirely, so re-running won't catch variants; near-dedup needs MinHash/LSH.",
+      "Correct — SHA-256 catches byte-identical code and MinHash/LSH catches near-identical variants, one exact and one fuzzy, covering different repetition types.",
+      "Industrial dedup is algorithmic (hashing + LSH); manually reviewing billions of files is infeasible."
+    ],
+    "termDefinitions": [
+      { "term": "SHA-256", "fullName": "Secure Hash Algorithm 256-bit", "meaning": "一种密码学内容哈希：内容一字不差才得到相同哈希，用于精确去重。", "meaningEn": "SHA-256 (Secure Hash Algorithm 256-bit) is a cryptographic content hash where only byte-identical content yields the same hash, used for exact dedup." },
+      { "term": "MinHash / LSH", "fullName": "MinHash / Locality-Sensitive Hashing", "meaning": "近似去重技术：把相似文档映射到相近的哈希桶，抓只差空白/变量名/注释的变体。", "meaningEn": "MinHash / LSH (Locality-Sensitive Hashing) maps similar documents to nearby buckets to catch near-duplicate variants differing in whitespace/names/comments." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-029",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "near-dedup",
+    "scenario": "语料里同一个工具函数有几百份副本，只是缩进、变量名或注释略有不同，精确哈希抓不到。",
+    "scenario_en": "The corpus has hundreds of copies of one utility function differing only in indentation, variable names, or comments, which exact hashing misses.",
+    "q": "近似去重（MinHash/LSH）能抓到精确哈希漏掉的什么？",
+    "q_en": "What does near-dedup (MinHash/LSH) catch that exact hashing misses?",
+    "why": "MinHash/LSH 抓「实质相同、表面略变」的近似副本：只差空白/缩进、变量名、注释的变体。这些在精确哈希下哈希值完全不同、被判成不重复，却正是让高频工具函数被记住的重复来源。",
+    "why_en": "MinHash/LSH catches near-duplicates that differ only in whitespace, variable names, or comments — variants exact hashing sees as distinct but which drive memorization of common utility functions.",
+    "tags": ["llm-sd", "code-gen", "deduplication"],
+    "options": [
+      "只差空白/缩进、变量名、注释的近似副本——精确哈希会当成不同文件漏掉",
+      "语义完全不同但碰巧哈希相同的文件（哈希碰撞）",
+      "跨语言的等价实现，比如 Python 版和 Java 版的同一算法",
+      "运行时才暴露的逻辑 bug，只有跑测试才能发现"
+    ],
+    "options_en": [
+      "Near-copies differing only in whitespace/indentation, variable names, or comments — which exact hashing treats as distinct and misses.",
+      "Semantically different files that happen to share a hash (hash collisions).",
+      "Cross-language equivalent implementations, e.g. the same algorithm in Python and Java.",
+      "Runtime logic bugs that only surface when tests are run."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；这正是近似去重的目标——表面小改、实质相同的变体，是高频工具函数被记住的主要重复源。",
+      "哈希碰撞是不同内容偶得相同哈希，属极小概率异常，不是近似去重要解决的问题。",
+      "MinHash/LSH 基于词/子串相似度，跨语言实现表征差异太大，一般抓不到；那是语义级问题。",
+      "去重看的是文本近似度，不运行代码，逻辑 bug 要靠测试而非去重发现。"
+    ],
+    "optionExplanations_en": [
+      "Correct — this is exactly near-dedup's target: surface-tweaked, substantively identical variants, the main repetition source memorizing common utility functions.",
+      "Hash collisions are different content coincidentally sharing a hash — a rare anomaly, not what near-dedup addresses.",
+      "MinHash/LSH is based on token/substring similarity; cross-language implementations differ too much in representation to catch — that's a semantic problem.",
+      "Dedup looks at textual similarity without running code; logic bugs are found by tests, not dedup."
+    ],
+    "termDefinitions": [
+      { "term": "near-duplicate / 近似副本", "meaning": "实质相同但表面略有差异（空白/变量名/注释）的文档，用 MinHash/LSH 检测。", "meaningEn": "A near-duplicate is substantively identical content with surface differences (whitespace/names/comments), detected via MinHash/LSH." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-030",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "defense-in-depth",
+    "q": "把防记忆化的「纵深防御」按时间线排成正确顺序：",
+    "q_en": "Order the defense-in-depth against memorization along the timeline:",
+    "steps": [
+      "服务时：把生成代码与已知代码索引比对，命中就拦截再返回",
+      "训练前：去重缩小记忆面——一段代码出现一次比出现几百次难被记住",
+      "训练中：用差分隐私（DP）对残余泄露给出数学保证"
+    ],
+    "answerOrder": [1, 2, 0],
+    "why": "三层按时间线：训练前去重缩小记忆面 → 训练中 DP 对残余泄露给数学保证 → 服务时输出过滤把生成代码比对已知代码索引再返回。没有单一技术足够，三层叠加才把泄露风险压到可接受。",
+    "why_en": "Three layers along time: dedup before training shrinks the surface, DP during training bounds residual leakage mathematically, and output filtering at serving checks generated code against a known-code index — no single technique suffices.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "diagram": "flowchart LR\n  D[\"训练前<br/>去重\"] --> P[\"训练中<br/>差分隐私\"]\n  P --> F[\"服务时<br/>输出过滤\"]",
+    "termDefinitions": [
+      { "term": "defense in depth / 纵深防御", "meaning": "用多层互补手段叠加防护，任一层被穿透还有下一层兜底；这里指去重+DP+输出过滤。", "meaningEn": "Defense in depth stacks multiple complementary safeguards so that if one is bypassed another still catches it — here dedup + DP + output filtering." },
+      { "term": "output filtering / 输出过滤", "meaning": "服务时把生成代码与已知代码索引比对，命中就拦截，防止逐字泄露的最后一层。", "meaningEn": "Output filtering checks generated code against a known-code index at serving time and blocks matches — the last layer against verbatim leakage." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-031",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "output-filtering",
+    "scenario": "去重和 DP 都做了，但你仍担心极少数记忆片段在推理时被逐字吐出、带出受版权代码。",
+    "scenario_en": "Dedup and DP are in place, but you still fear a rare memorized snippet is emitted verbatim at inference, leaking copyrighted code.",
+    "q": "服务时的输出过滤怎么补上最后一层防线？",
+    "q_en": "How does serving-time output filtering add the last defense layer?",
+    "why": "输出过滤在返回前把生成代码与已知代码索引（受版权/许可片段库）比对，命中就拦截或替换，挡住训练侧漏网的逐字泄露。代价是增加服务延迟、需维护索引，但它是穿透前两层后的最后兜底。",
+    "why_en": "Output filtering compares generated code against a known-code index before returning and blocks matches, catching verbatim leaks that slip past training-side defenses, at the cost of added latency and index upkeep.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "它在训练前删掉重复文件，是去重的另一个名字",
+      "它给训练加噪声，等价于差分隐私，只是换到服务侧做",
+      "它让模型输出更长的补全以覆盖更多情况，与泄露无关",
+      "它在返回前把生成代码与已知代码索引比对，命中就拦截，挡住漏网的逐字泄露"
+    ],
+    "options_en": [
+      "It deletes duplicate files before training — another name for dedup.",
+      "It adds noise to training, equivalent to DP but done on the serving side.",
+      "It makes the model emit longer completions to cover more cases, unrelated to leakage.",
+      "It compares generated code against a known-code index before returning and blocks matches, catching verbatim leaks that slipped through."
+    ],
+    "answer": [3],
+    "optionExplanations": [
+      "去重发生在训练前、改的是训练数据；输出过滤发生在服务时、检查的是每次生成结果，二者不同层。",
+      "输出过滤不加噪、不改训练，它是推理时的比对拦截，跟 DP 是不同机制。",
+      "补全长度与泄露防护无关；输出过滤的作用是比对已知代码拦截，不是拉长输出。",
+      "对；它是纵深防御的最后一层，专门拦训练侧漏网的逐字记忆，代价是延迟和索引维护。"
+    ],
+    "optionExplanations_en": [
+      "Dedup happens pre-training and changes training data; output filtering happens at serving and checks each generation — different layers.",
+      "Output filtering adds no noise and doesn't touch training; it's an inference-time compare-and-block, a different mechanism from DP.",
+      "Completion length is unrelated to leakage defense; output filtering compares against known code and blocks, it doesn't lengthen output.",
+      "Correct — it's the last defense-in-depth layer, catching verbatim memorization that slipped past training-side defenses, at the cost of latency and index upkeep."
+    ],
+    "termDefinitions": [
+      { "term": "known-code index / 已知代码索引", "meaning": "一个受版权/许可代码片段的可检索库，输出过滤用它比对生成结果并拦截命中。", "meaningEn": "A known-code index is a searchable store of copyrighted/licensed snippets that output filtering matches generations against to block hits." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-032",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "defense-in-depth",
+    "scenario": "面试官问：为什么防训练数据泄露要「纵深防御」而不是靠单一手段？",
+    "scenario_en": "Interviewer: why use defense-in-depth against training-data leakage instead of a single technique?",
+    "q": "防记忆化的纵深防御包含哪几层？(多选)",
+    "q_en": "Which layers make up defense-in-depth against memorization? (multiple)",
+    "why": "三层互补：训练前去重（缩小记忆面）、训练中 DP（对残余泄露给数学保证）、服务时输出过滤（比对已知代码拦截逐字泄露）。没有单一技术足够——去重漏近似、DP 损效用有上限、过滤只挡已知；叠加才稳。",
+    "why_en": "Three complementary layers — pre-training dedup, in-training DP, serving-time output filtering — because no single technique suffices: dedup misses variants, DP costs utility, filtering only blocks known code.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "训练前去重：缩小记忆面，让高频片段不被逐字记住",
+      "训练中差分隐私：对残余泄露给出形式化数学保证",
+      "只用一次 SHA-256 去重就足够，不需要其它层",
+      "服务时输出过滤：比对已知代码索引，拦截逐字泄露"
+    ],
+    "options_en": [
+      "Pre-training dedup: shrink the memorization surface so frequent snippets aren't memorized verbatim.",
+      "In-training differential privacy: give a formal mathematical guarantee on residual leakage.",
+      "A single SHA-256 dedup pass suffices; no other layers are needed.",
+      "Serving-time output filtering: match against a known-code index and block verbatim leaks."
+    ],
+    "answer": [0, 1, 3],
+    "optionExplanations": [
+      "对；去重是第一层，从源头减少重复，直接缩小可被记住的面。",
+      "对；DP 是第二层，即使有残余泄露也把单样本影响限制到可证明的范围。",
+      "错；单靠精确去重漏掉近似变体、也管不了推理时的逐字吐出，正因如此才要三层叠加。",
+      "对；输出过滤是最后一层，兜住训练侧漏网的逐字记忆。"
+    ],
+    "optionExplanations_en": [
+      "Correct — dedup is the first layer, cutting repetition at the source and directly shrinking the memorizable surface.",
+      "Correct — DP is the second layer, bounding any single sample's influence to a provable range even with residual leakage.",
+      "Wrong — exact dedup alone misses near-variants and can't stop verbatim emission at inference, which is exactly why three layers are stacked.",
+      "Correct — output filtering is the last layer, catching verbatim memorization that slipped past training-side defenses."
+    ],
+    "termDefinitions": [
+      { "term": "defense in depth / 纵深防御", "meaning": "叠加去重、DP、输出过滤等互补层，任一层被穿透仍有下一层兜底，无单一技术足够。", "meaningEn": "Defense in depth stacks complementary layers (dedup, DP, output filtering) so a bypass of one is still caught by the next; no single technique suffices." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-033",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "eval-privacy-coupling",
+    "scenario": "一个代码模型 HumanEval 分数很高，但审计发现它会逐字复现受版权的开源代码块。",
+    "scenario_en": "A model scores high on HumanEval, but auditing finds it verbatim reproduces copyrighted open-source blocks.",
+    "q": "基准分很高但会泄露版权代码，对上线意味着什么？",
+    "q_en": "High benchmark scores but leaking copyrighted code — what does it mean for launch?",
+    "why": "评估和隐私是耦合的两根支柱：基准分再高，只要会复现受版权代码就可能被法律/合规卡住发布。所以面试的真问题不是「模型多好」，而是「怎么证明它有用、又保证它不泄露」，两者都过关才能上线。",
+    "why_en": "Evaluation and privacy are coupled pillars: however high the benchmark, reproducing copyrighted code can block launch on legal grounds, so you must prove both usefulness and non-leakage.",
+    "tags": ["llm-sd", "code-gen", "privacy"],
+    "options": [
+      "基准分高就足够上线，版权泄露是法务的事，与模型发布决策无关",
+      "基准分高但会泄露版权代码就可能被合规卡发布；上线要同时证明「有用」和「不泄露」",
+      "只要把 HumanEval 分数再刷高，就能抵消版权泄露的风险",
+      "泄露版权代码说明模型更强大，是记忆力好的正面信号，可以上线"
+    ],
+    "options_en": [
+      "High benchmark scores suffice to launch; copyright leakage is legal's problem, unrelated to the release decision.",
+      "High scores but leaking copyrighted code can block launch on compliance grounds; launching requires proving both 'useful' and 'non-leaking'.",
+      "Just push the HumanEval score even higher and it offsets the copyright-leakage risk.",
+      "Leaking copyrighted code shows a more powerful model — a positive sign of good memory — so launch it."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "版权泄露正是能一票否决发布的合规风险，不是与发布无关的旁支；把它甩给法务不改变上线被卡的事实。",
+      "对；这就是本课的核心框架——评估证明有用、隐私保证不泄露，两根支柱耦合，缺一都上不了线。",
+      "刷高分不能抵消泄露，两者是不同维度：分高说明有用，泄露说明有合规风险，必须各自解决。",
+      "逐字复现版权代码是法律/安全负债，不是能力的正面信号；这种「记忆力」恰恰要被防住。"
+    ],
+    "optionExplanations_en": [
+      "Copyright leakage is exactly the compliance risk that can veto a launch, not an unrelated side issue; handing it to legal doesn't change that launch is blocked.",
+      "Correct — this is the lesson's core frame: evaluation proves usefulness and privacy guarantees non-leakage, two coupled pillars, and failing either blocks launch.",
+      "A higher score can't offset leakage; they're different axes — high score means useful, leakage means compliance risk, each must be solved.",
+      "Verbatim reproduction of copyrighted code is a legal/security liability, not a positive capability signal; this 'memory' is precisely what to prevent."
+    ],
+    "termDefinitions": [
+      { "term": "evaluation-privacy coupling / 评估-隐私耦合", "meaning": "代码补全上线的两根支柱：既要证明模型有用（评估），又要保证不泄露（隐私），缺一不可。", "meaningEn": "Evaluation-privacy coupling means launch rests on two pillars — proving the model useful (evaluation) and guaranteeing non-leakage (privacy) — both required." }
+    ]
+  },
+  {
+    "id": "llm-101-code-generation-evaluation-privacy-034",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "feedback-signal",
+    "scenario": "开发者对补全的接受/拒绝行为每天产生海量事件，你不想让它只停在监控看板上。",
+    "scenario_en": "Developers' accept/reject actions generate massive daily events, and you don't want them stuck on a monitoring dashboard.",
+    "q": "接受/拒绝反馈除了当指标，还能拿来做什么？",
+    "q_en": "Beyond a metric, what else can accept/reject feedback be used for?",
+    "why": "接受/拒绝不只是 ACR 的分子分母，还能转成微调信号：接受当正例、拒绝/接受后编辑当负例或纠偏样本，喂回模型持续改进。这条闭环把静态部署变成会自我提升的生产 ML 系统（细节在服务课）。",
+    "why_en": "Accept/reject isn't just ACR's numerator/denominator — it converts into fine-tuning signal (accepts as positives, rejects/edits as negatives) that feeds back to improve the model, turning static deployment into a self-improving system.",
+    "tags": ["llm-sd", "code-gen", "feedback-loop"],
+    "options": [
+      "转成微调信号：接受当正例、拒绝或接受后编辑当负例/纠偏，喂回模型持续改进",
+      "只能当监控指标，反馈数据不能用于任何训练，否则会泄露隐私",
+      "拿来给开发者做绩效考核，接受率低的开发者要被提醒",
+      "直接删掉，接受/拒绝事件除了算 ACR 没有别的价值"
+    ],
+    "options_en": [
+      "Convert into fine-tuning signal: accepts as positives, rejects or post-accept edits as negatives/corrections, fed back to improve the model.",
+      "Only usable as a monitoring metric; feedback data can never be used for training or it leaks privacy.",
+      "Use it to appraise developers' performance, warning those with low acceptance rates.",
+      "Delete it; accept/reject events have no value beyond computing ACR."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；这正是反馈闭环——把线上接受/拒绝转成训练信号回流，静态模型才会持续变好（隐私靠去重+DP 处理）。",
+      "反馈可以训练，只要先过隐私处理（去重+DP）防止记住敏感代码；一刀切说「不能训练」是错的。",
+      "把接受率用于考核开发者是滥用信号，且会诱导开发者乱接受，污染数据。",
+      "接受/拒绝是宝贵的偏好信号，删掉就丢了让模型自我提升的最重要输入。"
+    ],
+    "optionExplanations_en": [
+      "Correct — this is the feedback loop: turning online accept/reject into training signal that flows back so a static model keeps improving (privacy handled via dedup+DP).",
+      "Feedback can train models, as long as privacy processing (dedup+DP) prevents memorizing sensitive code; a blanket 'never train' is wrong.",
+      "Using acceptance to appraise developers misuses the signal and pushes them to accept indiscriminately, corrupting the data.",
+      "Accept/reject is valuable preference signal; deleting it discards the most important input for self-improvement."
+    ],
+    "termDefinitions": [
+      { "term": "feedback loop / 反馈闭环", "meaning": "把线上接受/拒绝行为转成微调信号回流模型，使静态部署变成自我提升的生产 ML 系统。", "meaningEn": "A feedback loop converts online accept/reject behavior into fine-tuning signal fed back to the model, turning static deployment into a self-improving system." }
+    ]
+  }
+]

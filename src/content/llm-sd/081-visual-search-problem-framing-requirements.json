@@ -1,0 +1,841 @@
+[
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-001",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "pipeline",
+    "q": "把视觉搜索的核心处理管线按查询时的先后排序：",
+    "q_en": "Order the core visual-search pipeline as it runs at query time:",
+    "scenario": "用户上传一张照片，要在 10 亿图索引上 <200ms 返回相似/可购买结果。",
+    "scenario_en": "A user uploads a photo and must get similar/shoppable results in under 200ms over a billion-image index.",
+    "steps": [
+      "ANN 近似最近邻检索，从十亿向量里快速取回 top-k 候选",
+      "把上传图编码成 embedding 向量",
+      "在小得多的 top-k 上做多模态重排(视觉+文本信号)",
+      "全程受 <200ms 延迟预算约束，超时要降级"
+    ],
+    "answerOrder": [1, 0, 2, 3],
+    "why": "管线：先把查询图编码成 embedding→用 ANN 在十亿级向量里近似检索 top-k→在小候选集上多模态重排→整条链受 <200ms 预算约束。框架决策会级联到每个下游选择。",
+    "why_en": "Encode the query image to an embedding, retrieve top-k via ANN over a billion vectors, re-rank the small candidate set with multi-modal signals, all under a sub-200ms budget.",
+    "tags": ["llm-sd", "visual-search", "pipeline"],
+    "diagram": "flowchart LR\n  U[上传图] --> E[生成 embedding] --> A[\"ANN 检索 top-k\"] --> R[多模态重排] --> O[结果]",
+    "termDefinitions": [
+      { "term": "embedding / 向量表示", "meaning": "把图像编码成的定长数值向量，语义相近的图在向量空间里距离近。", "meaningEn": "An embedding is a fixed-length numeric vector encoding an image so semantically similar images are close in vector space." },
+      { "term": "ANN", "fullName": "Approximate Nearest Neighbor", "meaning": "近似最近邻检索：牺牲少量召回换数量级提速，在十亿向量里可行。", "meaningEn": "ANN (Approximate Nearest Neighbor) search trades a little recall for orders-of-magnitude speedup, making billion-vector retrieval feasible." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-002",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "formulation",
+    "scenario": "接到'用户传照片，看相似结果或可购买商品'的题，你还没画任何框图。",
+    "scenario_en": "Given 'user uploads a photo, sees similar results or shoppable products,' before you draw any box.",
+    "q": "开局第一步最该先做什么？",
+    "q_en": "What should you pin down first?",
+    "why": "先明确并说清你解的是 image-to-image(感知相似)还是 image-to-product(语义商品匹配)，以及为什么。混淆二者是最常见的候选人错误——框架决策会级联到索引语料、训练信号、指标、失败模式每一处。",
+    "why_en": "First state which formulation you are solving — image-to-image (perceptual similarity) or image-to-product (semantic product matching) — and why, because conflating them is the most common mistake and cascades into every downstream choice.",
+    "tags": ["llm-sd", "visual-search", "formulation"],
+    "tradeoff": "先定问题表述再画框(下游一致) vs 直接堆模型(表述含糊、指标打架)",
+    "whenOtherWins": "若产品需求已在题面写死(如纯电商'找同款购买')，可略过表述选择、直接按 image-to-product 展开，但仍要一句话点明。",
+    "options": [
+      "先明确解的是 image-to-image 还是 image-to-product 并说明理由，再画框图",
+      "先选定 CNN 还是 ViT 编码器，模型定了再谈需求",
+      "先把 ANN 索引结构(HNSW/IVF)选好，检索是核心",
+      "先估算 GPU 数量和成本，产能定了再设计"
+    ],
+    "options_en": [
+      "First state whether you are solving image-to-image or image-to-product and why, then draw the boxes.",
+      "First pick the encoder (CNN vs ViT); once the model is set, discuss requirements.",
+      "First choose the ANN index structure (HNSW/IVF), since retrieval is the core.",
+      "First estimate GPU count and cost; once capacity is set, design the system."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；表述是一切下游的锚——语料、训练信号、指标、失败模式都由它决定，不先定就会各说各话。",
+      "错；编码器是实现细节，表述没定就选模型，等于不知道要匹配什么就先造匹配器。",
+      "错；索引结构服务于检索目标，目标(感知相似还是商品匹配)未定，选 HNSW/IVF 没有依据。",
+      "错；成本估算是产能准备，回答不了'我们到底在匹配什么'这个框架问题。"
+    ],
+    "optionExplanations_en": [
+      "Correct — the formulation is the anchor for everything downstream — corpus, training signal, metrics, failure modes all follow it — so without it the design talks past itself.",
+      "Wrong — the encoder is an implementation detail; picking a model before the formulation is building a matcher before knowing what to match.",
+      "Wrong — the index structure serves the retrieval goal; with the goal (perceptual vs product) unset, choosing HNSW/IVF has no basis.",
+      "Wrong — cost estimation is capacity prep and cannot answer the framing question of what you are actually matching."
+    ],
+    "termDefinitions": [
+      { "term": "image-to-image / 图搜图", "meaning": "以感知相似为目标：找视觉上像的图(如 Pinterest Lens 探索)。", "meaningEn": "Image-to-image targets perceptual similarity: find visually alike images, like Pinterest Lens explore." },
+      { "term": "image-to-product / 图搜商品", "meaning": "以语义商品匹配为目标：把查询图对到目录里的具体可购买商品(如 Amazon StyleSnap)。", "meaningEn": "Image-to-product targets semantic product matching: map the query image to a specific shoppable catalog item, like Amazon StyleSnap." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-003",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "formulation",
+    "scenario": "同一张'红色皮包'照片，图搜图和图搜商品要的东西不一样，训练信号和索引语料也不同。",
+    "scenario_en": "For the same red-leather-bag photo, image-to-image and image-to-product want different things, with different training signals and index corpora.",
+    "q": "image-to-image 与 image-to-product 在目标、语料、训练信号上有何区别？",
+    "q_en": "How do image-to-image and image-to-product differ in objective, corpus, and training signal?",
+    "why": "图搜图=感知相似，语料是网络爬图，用视觉对比损失，指标是视觉相关性 precision@k；图搜商品=语义商品匹配，语料是结构化目录(带价格/库存)，用跨模态对比损失训练图-商品对，指标是购买转化/命中率。二者失败模式也不同。",
+    "why_en": "Image-to-image is perceptual similarity over web-crawled images with a visual contrastive loss and precision@k, while image-to-product is semantic matching over a structured catalog with cross-modal contrastive loss and purchase conversion.",
+    "tags": ["llm-sd", "visual-search", "formulation"],
+    "tradeoff": "感知相似(视觉对比损失/网络图) vs 语义商品匹配(跨模态对比损失/目录)",
+    "table": {
+      "headers": ["维度", "图搜图", "图搜商品"],
+      "rows": [
+        ["目标", "感知相似", "语义商品匹配"],
+        ["索引语料", "网络爬图", "结构化商品目录"],
+        ["训练信号", "视觉对比损失", "跨模态对比损失"],
+        ["关键指标", "视觉 precision@k", "购买转化/命中率"],
+        ["失败模式", "像但语义无关", "对类目、错具体款"]
+      ]
+    },
+    "options": [
+      "两者只是索引大小不同，目标、训练信号、指标完全一样",
+      "图搜图用跨模态损失，图搜商品用纯视觉损失，正好相反",
+      "图搜图=感知相似/网络图/视觉对比损失/precision@k；图搜商品=语义匹配/目录/跨模态对比损失/购买转化",
+      "图搜商品不需要索引语料，直接实时比对全网商品即可"
+    ],
+    "options_en": [
+      "They differ only in index size; objective, training signal, and metrics are identical.",
+      "Image-to-image uses cross-modal loss and image-to-product uses pure visual loss — exactly reversed.",
+      "Image-to-image is perceptual similarity / web images / visual contrastive loss / precision@k; image-to-product is semantic matching / catalog / cross-modal contrastive loss / purchase conversion.",
+      "Image-to-product needs no index corpus; just compare against all web products in real time."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；恰恰相反，目标不同导致训练信号和指标全都不同，这正是不能混淆的原因。",
+      "说反了；图搜商品才需要跨模态对齐(图对商品文本)，图搜图用视觉对比损失。",
+      "对；每一维都由表述决定，这张对照表就是'混淆表述会级联出错'的具体展开。",
+      "错；十亿级商品实时全比对不可行，必须建结构化目录索引，这条既错又违背延迟预算。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — on the contrary, different objectives make the training signal and metrics differ throughout, which is exactly why they must not be conflated.",
+      "Backwards — image-to-product is the one needing cross-modal alignment (image to product text), while image-to-image uses a visual contrastive loss.",
+      "Correct — every dimension follows from the formulation, and this table is the concrete unfolding of how conflating formulations cascades into errors.",
+      "Wrong — real-time full comparison over a billion products is infeasible; a structured catalog index is required, so this is both wrong and against the latency budget."
+    ],
+    "termDefinitions": [
+      { "term": "cross-modal contrastive loss / 跨模态对比损失", "meaning": "在图-商品(或图-文)成对样本上训练，把匹配对拉近、非匹配对推远，对齐两种模态。", "meaningEn": "Cross-modal contrastive loss trains on paired image-product (or image-text) samples, pulling matches together and pushing non-matches apart to align the two modalities." },
+      { "term": "precision@k", "meaning": "返回前 k 个结果里相关的比例，衡量图搜图的视觉相关性质量。", "meaningEn": "Precision@k is the fraction of the top-k results that are relevant, measuring image-to-image visual relevance quality." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-004",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "formulation",
+    "scenario": "上线后指标显示：视觉相似结果的 precision@10 很高，但购买转化几乎为零。",
+    "scenario_en": "In production, precision@10 on visually similar results is high, but purchase conversion is near zero.",
+    "q": "这个指标组合说明系统哪里错了？",
+    "q_en": "What does this metric combination reveal is wrong?",
+    "why": "高感知精度+零转化=用错了表述：系统按 image-to-image(视觉相似)优化，但业务目标其实需要 image-to-product(语义商品匹配)。视觉上像不等于是用户想买的那件具体商品，症状就是像但不成单。",
+    "why_en": "High perceptual precision with zero conversion is the telltale sign of the wrong formulation: it was optimized for image-to-image but the objective needs image-to-product matching.",
+    "tags": ["llm-sd", "visual-search", "formulation"],
+    "options": [
+      "编码器太弱，换更大的模型就能同时提升 precision 和转化",
+      "ANN 召回不够，加大 top-k 就能把转化拉起来",
+      "按 image-to-image 优化了，但业务目标需要 image-to-product：视觉像≠是想买的那件商品",
+      "延迟太高导致用户流失，优化到 <200ms 转化自然回升"
+    ],
+    "options_en": [
+      "The encoder is too weak; a bigger model would raise both precision and conversion.",
+      "ANN recall is insufficient; increasing top-k would lift conversion.",
+      "It was optimized for image-to-image, but the objective needs image-to-product: visually similar is not the specific item the user wants to buy.",
+      "Latency is too high causing churn; optimizing to sub-200ms would restore conversion."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；precision@10 已经很高说明视觉匹配没问题，换大模型只会更像，转化仍上不去。",
+      "错；召回更多视觉相似图只会加深'像但不对款'的问题，不解决表述错配。",
+      "对；症状(高精度零转化)直指表述用错，要引入语义商品匹配而非继续优化视觉相似。",
+      "错；延迟高会普遍降体验，但不会造出'精度高却零转化'这种表述性错配的特征信号。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — high precision@10 shows visual matching is fine; a bigger model only makes results more alike while conversion stays flat.",
+      "Wrong — recalling more visually similar images deepens the 'similar but wrong item' problem and does not fix the formulation mismatch.",
+      "Correct — the symptom (high precision, zero conversion) points squarely at the wrong formulation, needing semantic product matching, not more visual similarity.",
+      "Wrong — high latency hurts experience broadly but does not produce the signature of a formulation mismatch, high precision with zero conversion."
+    ],
+    "termDefinitions": [
+      { "term": "domain gap / 域差", "meaning": "真实用户照片(光照/背景/遮挡多变)与干净目录图之间的分布差异，图搜商品必须跨越它。", "meaningEn": "The domain gap is the distribution difference between real user photos (varied lighting, backgrounds, occlusion) and clean catalog images that image-to-product must bridge." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "metric-lever",
+    "scenario": "线上 recall 尚可，但 CTR 偏低：用户看到结果却很少点击。",
+    "scenario_en": "Online recall is acceptable but CTR is low: users see results yet rarely click.",
+    "q": "recall 可接受但 CTR 低，最该加哪个设计杠杆？",
+    "q_en": "With acceptable recall but low CTR, which design lever should you add?",
+    "why": "recall 够说明候选检回来了，CTR 低是排序不吸引人→这是重排问题：加第二阶段重排器，用多模态信号(文本元数据、用户历史)把更相关的往前排。CTR 衡量结果的吸引力/相关性。",
+    "why_en": "Acceptable recall means candidates are retrieved, so low CTR is a ranking problem: add a second-stage re-ranker using multi-modal signals like text metadata and user history.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "tradeoff": "加重排器(修排序、提 CTR) vs 动检索(recall 已够，动它无益)",
+    "whenOtherWins": "若 recall 本就不足(候选里根本没有相关项)，先修检索/召回，加重排器也排不出不存在的好结果。",
+    "options": [
+      "加第二阶段重排器，用文本元数据、用户历史等多模态信号把更相关的往前排",
+      "放宽 ANN 阈值召回更多候选，用数量弥补点击率",
+      "换更大的图像编码器，让 embedding 更准",
+      "缩短延迟预算到 <100ms，让结果出得更快"
+    ],
+    "options_en": [
+      "Add a second-stage re-ranker using multi-modal signals like text metadata and user history to surface more relevant items first.",
+      "Loosen the ANN threshold to recall more candidates, compensating click-through with volume.",
+      "Swap in a bigger image encoder for more accurate embeddings.",
+      "Shorten the latency budget to sub-100ms so results appear faster."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；recall 已够、点击不行=排序问题，重排器用多模态信号重新排，是对症的杠杆。",
+      "错；召回更多不解决'排得不吸引人'，只会把更多平庸结果堆上来，CTR 还是低。",
+      "错；embedding 更准提升的是检索，recall 本就可接受，问题在排序不在编码。",
+      "错；更快出结果不改变结果本身是否相关，CTR 低是相关性排序问题不是速度问题。"
+    ],
+    "optionExplanations_en": [
+      "Correct — with recall fine but clicks poor, it is a ranking problem, and a re-ranker with multi-modal signals is the on-target lever.",
+      "Wrong — recalling more does not fix 'ranked unattractively' and just piles on mediocre results, keeping CTR low.",
+      "Wrong — better embeddings improve retrieval, but recall is already acceptable; the problem is ranking, not encoding.",
+      "Wrong — faster results do not change whether results are relevant; low CTR is a relevance-ranking issue, not speed."
+    ],
+    "termDefinitions": [
+      { "term": "CTR", "fullName": "Click-Through Rate", "meaning": "结果被点击的比例，衡量结果的吸引力与相关性。", "meaningEn": "CTR (Click-Through Rate) is the fraction of results clicked, measuring their attractiveness and relevance." },
+      { "term": "second-stage re-ranker / 第二阶段重排器", "meaning": "在检索出的 top-k 上再打分排序的模型，融合视觉+文本+用户信号提升相关性。", "meaningEn": "A second-stage re-ranker rescores the retrieved top-k, fusing visual, text, and user signals to improve relevance." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-006",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "metric-lever",
+    "scenario": "CTR 很高(用户爱点)，但购买转化率低：点得多、买得少。",
+    "scenario_en": "CTR is high (users click a lot) but purchase conversion is low: many clicks, few buys.",
+    "q": "高 CTR 但低转化，该加哪个上游模块？",
+    "q_en": "With high CTR but low conversion, which upstream module should you add?",
+    "why": "高 CTR 说明结果吸引点击，但低转化=相关性对不上真实购买意图。在上游加意图分类模块，把查询路由到正确的索引(如'找同款买'路由到商品索引，'找灵感'路由到探索索引)，消除意图错配。",
+    "why_en": "High CTR with low conversion is a relevance-to-intent mismatch, so add an upstream intent-classification module that routes the query to the correct index.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "tradeoff": "上游意图分类(对齐意图、修转化) vs 继续调重排(只提点击、不解意图错配)",
+    "whenOtherWins": "若 CTR 本身也低，问题在排序相关性而非意图路由，此时先加重排器；意图分类解决的是'点得多买得少'的意图错配。",
+    "options": [
+      "继续加大重排器权重，把更吸引点击的结果排更前",
+      "在上游加意图分类模块，把查询路由到正确的索引，消除相关性-意图错配",
+      "放宽阈值降低 zero-result rate，让更多结果出现",
+      "换更快的 ANN，让转化路径响应更快"
+    ],
+    "options_en": [
+      "Keep increasing the re-ranker weight to push more click-attractive results to the top.",
+      "Add an upstream intent-classification module that routes the query to the correct index, removing the relevance-to-intent mismatch.",
+      "Loosen thresholds to lower zero-result rate so more results appear.",
+      "Switch to a faster ANN so the conversion path responds quicker."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；CTR 已高，继续优化点击只会加剧'点得多买得少'，转化根因是意图错配不是点击不足。",
+      "对；意图分类把查询导向对的索引(购买 vs 探索)，让结果匹配真实意图，直击低转化根因。",
+      "错；zero-result 不是这里的瓶颈，放阈值反而引入更多不相关结果，转化更差。",
+      "错；更快的 ANN 不改变结果是否匹配购买意图，速度救不了意图错配。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — CTR is already high, and optimizing clicks further worsens 'many clicks, few buys'; the root cause is intent mismatch, not too few clicks.",
+      "Correct — intent classification routes the query to the right index (buy vs explore) so results match true intent, hitting the low-conversion root cause.",
+      "Wrong — zero-result is not the bottleneck here, and loosening thresholds injects more irrelevant results, hurting conversion.",
+      "Wrong — a faster ANN does not change whether results match purchase intent; speed cannot fix an intent mismatch."
+    ],
+    "termDefinitions": [
+      { "term": "purchase conversion rate / 购买转化率", "meaning": "产生交易的会话比例，视觉商品搜索的最终营收指标。", "meaningEn": "Purchase conversion rate is the fraction of sessions with a transaction, the ultimate revenue metric for visual product search." },
+      { "term": "intent classification / 意图分类", "meaning": "上游判断用户查询意图(购买/探索/审核)并路由到对应索引的模块。", "meaningEn": "Intent classification is an upstream module that infers the query intent (buy/explore/moderate) and routes it to the matching index." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "metric-lever",
+    "scenario": "zero-result rate 偏高：大量查询没有任何结果越过阈值返回。",
+    "scenario_en": "Zero-result rate is high: many queries return nothing above threshold.",
+    "q": "zero-result rate 高，通常怎么修？",
+    "q_en": "How do you typically fix a high zero-result rate?",
+    "why": "高 zero-result 通常是 embedding 覆盖有缺口或过滤太激进→加 ANN 回退层(fallback tiers)：主索引没命中就退到更宽松的索引/阈值再检一次，兜住覆盖。zero-result rate 衡量索引覆盖+embedding 泛化。",
+    "why_en": "High zero-result usually means embedding gaps or over-aggressive filtering, so add ANN fallback tiers that re-search a looser index/threshold when the primary misses.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "tradeoff": "加回退层(提覆盖、降 zero-result) vs 收紧阈值(高精度但更多空结果)",
+    "whenOtherWins": "若高 zero-result 是安全/NSFW 过滤误杀合法内容造成的，应先调过滤器阈值，而不是加回退层把不该出的也放出来。",
+    "options": [
+      "加 ANN 回退层：主索引未命中就退到更宽松索引/阈值再检一次，兜住覆盖",
+      "直接返回随机热门结果，保证每个查询都有东西显示",
+      "提高相似度阈值，让结果更精准，zero-result 自然下降",
+      "关闭意图分类，减少一层过滤"
+    ],
+    "options_en": [
+      "Add ANN fallback tiers: on a primary miss, re-search a looser index/threshold to cover the query.",
+      "Just return random popular results so every query shows something.",
+      "Raise the similarity threshold for more precise results, which lowers zero-result.",
+      "Turn off intent classification to remove a filtering layer."
+    ],
+    "answer": [0],
+    "optionExplanations": [
+      "对；回退层在主索引失手时用更宽松的检索兜底，直接补覆盖缺口，是对 zero-result 的对症修法。",
+      "错；返回随机热门是掩盖空结果不是修覆盖，会毁掉相关性和信任。",
+      "说反了；提高阈值会让更多查询过不了线，zero-result 只会更高不是更低。",
+      "错；意图分类不是 zero-result 的成因，关掉它反而可能把查询导错索引，覆盖更差。"
+    ],
+    "optionExplanations_en": [
+      "Correct — fallback tiers catch primary misses with a looser search, directly filling the coverage gap, the on-target fix for zero-result.",
+      "Wrong — returning random popular items masks empty results rather than fixing coverage and destroys relevance and trust.",
+      "Backwards — raising the threshold makes more queries fail the bar, so zero-result rises, not falls.",
+      "Wrong — intent classification is not the cause of zero-result; turning it off may misroute queries to the wrong index, worsening coverage."
+    ],
+    "termDefinitions": [
+      { "term": "zero-result rate / 空结果率", "meaning": "没有任何结果越过阈值的查询比例，衡量索引覆盖与 embedding 泛化。", "meaningEn": "Zero-result rate is the fraction of queries with no result above threshold, measuring index coverage and embedding generalization." },
+      { "term": "ANN fallback tiers / ANN 回退层", "meaning": "主索引未命中时依次退到更宽松索引/阈值再检的多级兜底策略。", "meaningEn": "ANN fallback tiers are staged back-offs that re-search progressively looser indexes/thresholds when the primary index misses." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-008",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "metrics",
+    "scenario": "工程师想同时把 zero-result rate、precision、CTR 都做到最好，调一个阈值。",
+    "scenario_en": "An engineer wants to simultaneously maximize zero-result rate, precision, and CTR by tuning one threshold.",
+    "q": "为什么这些指标会互相拉扯，调一个阈值救不了全部？",
+    "q_en": "Why do these metrics pull against each other so one threshold cannot optimize all?",
+    "why": "阈值有内在张力：放松阈值→更多查询有结果，zero-result 降，但混进不相关项，precision/CTR 降；收紧阈值→结果更准，但更多查询变空，zero-result 升。所以是权衡不是同时最优，要按指标层级取舍。",
+    "why_en": "Relaxing the threshold lowers zero-result but admits irrelevant items and cuts precision/CTR, while tightening does the reverse, so it is a trade-off, not a simultaneous optimum.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "tradeoff": "放松阈值(降 zero-result 但降精度) vs 收紧阈值(升精度但升 zero-result)",
+    "options": [
+      "只要模型够好，一个阈值可以让三个指标同时最优，不存在张力",
+      "放松阈值降 zero-result 但混入不相关项降 precision/CTR；收紧则相反——是权衡不能同时最优",
+      "三个指标其实同向变化，调阈值时一起升或一起降",
+      "阈值只影响延迟，不影响这些质量指标"
+    ],
+    "options_en": [
+      "With a good enough model, one threshold optimizes all three at once; there is no tension.",
+      "Relaxing the threshold lowers zero-result but admits irrelevant items cutting precision/CTR, while tightening reverses it — a trade-off, not a joint optimum.",
+      "The three metrics actually move together, rising or falling as one when you tune the threshold.",
+      "The threshold only affects latency, not these quality metrics."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；再好的模型也改变不了阈值的方向性张力，放宽和收紧对覆盖与精度的作用天然相反。",
+      "对；阈值一头连覆盖一头连精度，动一边必然牺牲另一边，所以要靠指标层级决定取舍点。",
+      "说反了；zero-result 与 precision/CTR 恰恰反向，同向是错误直觉。",
+      "错；阈值直接决定哪些结果算数，深刻影响覆盖与精度，不只是延迟。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — no model removes the threshold's directional tension; relaxing and tightening inherently act oppositely on coverage and precision.",
+      "Correct — the threshold links coverage on one side and precision on the other, so moving one sacrifices the other, and a metric hierarchy sets the operating point.",
+      "Backwards — zero-result and precision/CTR move oppositely; treating them as co-directional is the wrong intuition.",
+      "Wrong — the threshold decides which results count and deeply affects coverage and precision, not just latency."
+    ],
+    "termDefinitions": [
+      { "term": "similarity threshold / 相似度阈值", "meaning": "结果被接受所需的最低相似度分；放松增覆盖降精度，收紧反之。", "meaningEn": "The similarity threshold is the minimum score a result needs to be accepted; loosening raises coverage and lowers precision, tightening does the opposite." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-009",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "metric-hierarchy",
+    "q": "把视觉搜索的指标层级从'门槛'到'终极目标'排序：",
+    "q_en": "Order the visual-search metric hierarchy from gating to ultimate objective:",
+    "scenario": "L5+ 要把三个业务指标讲成一个层级，而不是并列可互换。",
+    "scenario_en": "At L5+ you present the three business metrics as a hierarchy, not interchangeable equals.",
+    "steps": [
+      "CTR：结果有没有用(吸引点击、相关)",
+      "zero-result rate：功能能不能用(有没有结果返回)",
+      "购买转化率：有没有达成业务目标(产生交易)"
+    ],
+    "answerOrder": [1, 0, 2],
+    "why": "层级：zero-result rate 先把关功能可用性(连结果都没有就无从谈起)→CTR 衡量结果是否有用→购买转化衡量是否达成业务目标。CTR/转化又能反哺重排器训练形成正循环，但前提是上游检索先surface出足够候选。",
+    "why_en": "Zero-result rate gates whether the feature works at all, CTR measures usefulness, and purchase conversion measures the business objective, forming a hierarchy.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "diagram": "flowchart TB\n  Z[\"zero-result rate<br/>功能可用性(门槛)\"] --> C[\"CTR<br/>结果有用性\"] --> P[\"购买转化<br/>业务目标\"]",
+    "termDefinitions": [
+      { "term": "metric hierarchy / 指标层级", "meaning": "把指标按'先决门槛→有用性→终极目标'分层，而非并列互换，指导优化优先级。", "meaningEn": "A metric hierarchy layers metrics as gating prerequisite, usefulness, and ultimate objective rather than interchangeable equals, guiding optimization priority." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-010",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "scale",
+    "scenario": "要在 10 亿张图上做检索，有人提议直接暴力精确比对查询向量和每一个索引向量。",
+    "scenario_en": "For retrieval over a billion images, someone proposes brute-force exact comparison of the query vector against every index vector.",
+    "q": "十亿级向量的规模，对检索方案意味着什么？",
+    "q_en": "What does billion-vector scale imply for the retrieval approach?",
+    "why": "1B × 256 维 float32 ≈ 1TB 原始向量(10^9 × 256 × 4 字节)。每次查询暴力扫十亿向量在 <200ms 内不可行→必须用 ANN(HNSW/IVF)，牺牲少量召回换数量级提速。这个量级直接否掉暴力精确检索。",
+    "why_en": "1B × 256-dim float32 is about 1TB of raw vectors, and brute-force scanning a billion per query cannot fit sub-200ms, so ANN (HNSW/IVF) is required.",
+    "tags": ["llm-sd", "visual-search", "scale"],
+    "options": [
+      "十亿向量不大，暴力精确检索在 <200ms 内完全可行，无需 ANN",
+      "1B×256维 float32≈1TB，暴力扫十亿向量装不进 <200ms→必须用 ANN 牺牲少量召回换数量级提速",
+      "只要把向量降到 8 维，暴力检索就能达标，不需要专门索引",
+      "规模问题靠加机器线性扩展即可，单次查询延迟不受影响"
+    ],
+    "options_en": [
+      "A billion vectors is small; brute-force exact search fits sub-200ms easily, so no ANN is needed.",
+      "1B×256-dim float32 is about 1TB, and brute-force scanning a billion per query cannot fit sub-200ms, so ANN is required, trading a little recall for orders-of-magnitude speedup.",
+      "Just reduce vectors to 8 dimensions and brute force meets the budget without a special index.",
+      "Scale is solved by adding machines linearly; single-query latency is unaffected."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；十亿向量单查询暴力比对是十亿次距离计算，远超 200ms，量级上就不可行。",
+      "对；把维度×字节×条数一乘就知道是 TB 级，暴力检索延迟爆表，只能上 ANN 近似。",
+      "错；砍到 8 维会严重损失表达力、召回崩塌，是拿相关性换速度的错误取舍。",
+      "错；加机器能分片但单次查询仍要在分片里检索，延迟不会因加机器自动达标。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — brute-forcing a billion vectors per query is a billion distance computations, far over 200ms, infeasible at this scale.",
+      "Correct — multiplying dims × bytes × count gives terabytes, brute-force latency blows up, so ANN approximation is the only way.",
+      "Wrong — cutting to 8 dims cripples expressiveness and collapses recall, a wrong trade of relevance for speed.",
+      "Wrong — adding machines shards data but each query still searches within shards; latency does not auto-comply by adding machines."
+    ],
+    "termDefinitions": [
+      { "term": "brute-force exact search / 暴力精确检索", "meaning": "把查询向量和每一个索引向量都算一遍距离取最近，精确但在十亿级不可行。", "meaningEn": "Brute-force exact search computes the distance to every index vector for the exact nearest neighbors, precise but infeasible at billion scale." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-011",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ann-index",
+    "scenario": "决定十亿级向量索引结构，主要候选是 HNSW 和 IVF(常配 PQ)。",
+    "scenario_en": "Choosing the billion-scale vector index structure, the main candidates are HNSW and IVF (often with PQ).",
+    "q": "HNSW 和 IVF 作为 ANN 索引，共同点和取舍是什么？",
+    "q_en": "As ANN indexes, what do HNSW and IVF share and trade off?",
+    "why": "两者都是 ANN，用牺牲少量召回换数量级提速。HNSW=分层可导航小世界图，图上贪心跳转找近邻，检索快、内存占用高；IVF=倒排文件把向量聚成簇、只搜相关簇，常配 PQ 压缩省内存，适合超大规模但需调 nprobe。选型看内存预算与召回-延迟目标。",
+    "why_en": "Both are ANN trading a little recall for huge speedup; HNSW is a navigable small-world graph (fast, memory-heavy) while IVF clusters vectors and searches only relevant clusters (memory-friendly with PQ, needs nprobe tuning).",
+    "tags": ["llm-sd", "visual-search", "ann-index"],
+    "tradeoff": "HNSW(图检索快但吃内存) vs IVF+PQ(省内存、超大规模但要调 nprobe)",
+    "table": {
+      "headers": ["结构", "机制", "内存", "何时选"],
+      "rows": [
+        ["HNSW", "分层近邻图", "高", "低延迟、内存充裕"],
+        ["IVF+PQ", "聚簇+量化压缩", "低", "超大规模、省内存"]
+      ]
+    },
+    "options": [
+      "两者都是精确检索，区别只是实现语言不同",
+      "HNSW 和 IVF 都是 ANN 用少量召回换提速；HNSW 图检索快但吃内存，IVF+PQ 省内存适合超大规模但要调 nprobe",
+      "HNSW 是暴力检索的别名，IVF 才是 ANN",
+      "IVF 检索一定比 HNSW 更准，因为它搜索所有簇"
+    ],
+    "options_en": [
+      "Both are exact search, differing only in implementation language.",
+      "Both HNSW and IVF are ANN trading a little recall for speed; HNSW's graph search is fast but memory-heavy, while IVF+PQ is memory-friendly for huge scale but needs nprobe tuning.",
+      "HNSW is another name for brute force, and only IVF is ANN.",
+      "IVF is always more accurate than HNSW because it searches all clusters."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；两者都是近似(ANN)不是精确，且区别在数据结构与内存-召回取舍，不是语言。",
+      "对；同为 ANN 但走不同路：图 vs 倒排聚簇，内存与调参代价不同，按预算和目标选。",
+      "错；HNSW 是图结构的 ANN，不是暴力检索，这条把概念搞反了。",
+      "错；IVF 恰恰只搜相关的少数簇(nprobe 控制)以提速，搜所有簇就退化成暴力了。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — both are approximate (ANN), not exact, and they differ in data structure and memory-recall trade-off, not language.",
+      "Correct — both are ANN but take different routes, graph vs inverted clusters, with different memory and tuning costs, chosen by budget and target.",
+      "Wrong — HNSW is a graph-based ANN, not brute force; this reverses the concept.",
+      "Wrong — IVF deliberately searches only a few relevant clusters (controlled by nprobe) for speed; searching all clusters degenerates to brute force."
+    ],
+    "termDefinitions": [
+      { "term": "HNSW", "fullName": "Hierarchical Navigable Small World", "meaning": "分层可导航小世界图：在近邻图上贪心跳转找最近邻，检索快、内存占用较高。", "meaningEn": "HNSW (Hierarchical Navigable Small World) is a layered proximity graph where greedy hops find nearest neighbors, fast but memory-heavy." },
+      { "term": "IVF", "fullName": "Inverted File Index", "meaning": "倒排文件索引：把向量聚成簇，查询只搜最相关的若干簇(nprobe)，常配 PQ 压缩。", "meaningEn": "IVF (Inverted File Index) clusters vectors and searches only the most relevant clusters (nprobe) per query, often with PQ compression." },
+      { "term": "PQ", "fullName": "Product Quantization", "meaning": "乘积量化：把向量切段各自量化压缩，大幅省内存、加速距离近似计算。", "meaningEn": "PQ (Product Quantization) splits vectors into sub-segments and quantizes each, sharply cutting memory and speeding approximate distance computation." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-012",
+    "format": "chain",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "q": "按 <200ms 预算，把各阶段耗时从大到小排(哪个是主导成本)：",
+    "q_en": "Order the sub-200ms budget stages from largest to smallest cost:",
+    "scenario": "要把 <200ms 预算分配到管线各阶段，先认清哪个阶段最吃时间。",
+    "scenario_en": "Allocating the sub-200ms budget across pipeline stages, first see which stage dominates.",
+    "steps": [
+      "重排：10–30ms(多模态打分、业务规则过滤)",
+      "embedding 推理：10–50ms GPU(通常是主导成本，ResNet/ViT/CLIP)",
+      "ANN 检索：1–10ms(HNSW 遍历 / IVF+PQ 查表)"
+    ],
+    "answerOrder": [1, 0, 2],
+    "why": "embedding 推理 10–50ms 通常是主导成本→重排 10–30ms→ANN 检索 1–10ms 最快。剩余给上传+预处理(缩放/归一化)+网络序列化。认清 embedding 是大头，优化才有的放矢(如换更小编码器/批处理)。",
+    "why_en": "Embedding inference (10–50ms) usually dominates, then re-ranking (10–30ms), then ANN retrieval (1–10ms) which is fastest, with the remainder for upload/preprocess/network.",
+    "tags": ["llm-sd", "visual-search", "latency-budget"],
+    "diagram": "flowchart LR\n  E[\"embedding 10-50ms<br/>主导\"] --> R[\"重排 10-30ms\"] --> A[\"ANN 1-10ms\"]",
+    "termDefinitions": [
+      { "term": "latency budget / 延迟预算", "meaning": "端到端总延迟上限(此处 <200ms)拆分到各阶段的分配，指导每段该压到多少。", "meaningEn": "A latency budget is the end-to-end latency ceiling (here <200ms) allocated across stages, guiding how much each must be squeezed to." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-013",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "embedding-drift",
+    "scenario": "团队想升级/重训 embedding 模型以提升召回，索引里已有十亿条旧向量。",
+    "scenario_en": "The team wants to retrain/upgrade the embedding model to improve recall, with a billion old vectors already indexed.",
+    "q": "重训 embedding 模型会带来什么运营风险，怎么缓解？",
+    "q_en": "What operational risk does retraining the embedding model create, and how to mitigate?",
+    "why": "embedding drift：新模型的查询向量和旧索引向量落在不同空间、不可比→必须对十亿级语料全量重建索引(耗时数天)。缓解：embedding 版本化、并行构建新索引、蓝绿部署切换，避免在线中断。",
+    "why_en": "Embedding drift makes new query vectors incompatible with old indexed vectors (spaces misalign), forcing a multi-day full re-index, mitigated by versioning, parallel builds, and blue-green deployment.",
+    "tags": ["llm-sd", "visual-search", "embedding-drift"],
+    "tradeoff": "升级 embedding(提召回) vs 全量重建十亿索引(耗时数天、需蓝绿切换)",
+    "diagram": "flowchart LR\n  Q[新查询向量] -. 空间不对齐 .-> O[旧索引向量]\n  N[并行建新索引 v2] --> BG{蓝绿切换}\n  O --> BG\n  BG --> S[无缝上线]",
+    "options": [
+      "重训后新旧向量自动兼容，直接替换模型即可，无需重建索引",
+      "只有查询侧受影响，索引不用动，混用新旧向量也没问题",
+      "新查询向量与旧索引向量空间不对齐→须全量重建十亿索引(数天)；缓解靠版本化+并行建库+蓝绿部署",
+      "重训只影响精度不影响索引，索引结构与模型版本无关"
+    ],
+    "options_en": [
+      "After retraining, new and old vectors are automatically compatible, so just swap the model with no re-index.",
+      "Only the query side is affected; the index stays put and mixing new and old vectors is fine.",
+      "New query vectors misalign with old indexed vectors, forcing a full multi-day re-index of a billion, mitigated by versioning, parallel builds, and blue-green deployment.",
+      "Retraining only affects accuracy, not the index; index structure is independent of model version."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；不同模型产出不同向量空间，新查询向量对旧索引不可比，混用会检索错乱。",
+      "错；查询侧变了索引侧不变=两套空间硬比，相似度失真，混用恰恰是问题本身。",
+      "对；空间错配逼出全量重建，蓝绿+版本化+并行建库让重建在后台完成再无缝切换，避免停服。",
+      "错；索引里存的正是某版模型的向量，模型换代必然要求索引跟着重建，二者强相关。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — different models produce different vector spaces; new query vectors are incomparable to the old index and mixing causes garbled retrieval.",
+      "Wrong — changing the query side but not the index means two spaces compared head-on, distorting similarity; mixing is exactly the problem.",
+      "Correct — the space mismatch forces a full rebuild, and blue-green plus versioning plus parallel builds let it finish in the background then switch seamlessly, avoiding downtime.",
+      "Wrong — the index stores a specific model version's vectors, so a model change necessarily requires rebuilding the index; they are tightly coupled."
+    ],
+    "termDefinitions": [
+      { "term": "embedding drift / 向量漂移", "meaning": "重训 embedding 模型使向量空间改变，旧索引向量与新查询向量不再可比。", "meaningEn": "Embedding drift is when retraining the embedding model shifts the vector space so old indexed vectors no longer align with new query vectors." },
+      { "term": "blue-green deployment / 蓝绿部署", "meaning": "在后台建好新索引(绿)后与旧索引(蓝)瞬时切换，实现无停机上线与快速回退。", "meaningEn": "Blue-green deployment builds the new index (green) alongside the old (blue) and switches instantly, giving zero-downtime cutover and fast rollback." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-014",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "scale",
+    "scenario": "面试要给'十亿级索引'一个可信的行业锚点，说明这不是纸上谈兵。",
+    "scenario_en": "You want a credible industry anchor for 'billion-scale index' to show it is not hypothetical.",
+    "q": "'十亿级图像索引'的现实量级锚点是什么，说明什么？",
+    "q_en": "What is a real-world anchor for a billion-image index, and what does it establish?",
+    "why": "Pinterest 索引 50 亿+ 图像，是十亿级检索的真实行业锚点(不是推导值)。它说明该规模是生产常态，直接迫使采用 ANN 与十亿级索引架构，而非把'十亿'当纸面假设。",
+    "why_en": "Pinterest indexes 5B+ images, a real industry anchor establishing that billion-scale is a production norm that forces ANN and billion-scale index architecture.",
+    "tags": ["llm-sd", "visual-search", "scale"],
+    "options": [
+      "行业里最大也就百万级图像，十亿是过度设计",
+      "Pinterest 索引 50 亿+ 图像，是十亿级检索的真实锚点，说明该规模是生产常态、逼着上 ANN",
+      "十亿只是理论上限，实际系统从不会超过十万级",
+      "图像数量和索引架构无关，多少张都用同一套暴力检索"
+    ],
+    "options_en": [
+      "The industry maxes out at millions of images; a billion is over-engineering.",
+      "Pinterest indexes 5B+ images, a real anchor establishing that billion-scale is a production norm forcing ANN.",
+      "A billion is only a theoretical ceiling; real systems never exceed hundreds of thousands.",
+      "Image count is unrelated to index architecture; any count uses the same brute-force search."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；主流视觉搜索早已十亿级，把它当过度设计是严重低估现实规模。",
+      "对；50 亿+ 的真实锚点把'十亿'从假设变成生产常态，直接决定必须用 ANN 与专门索引架构。",
+      "错；恰恰相反，生产系统常态就在十亿级以上，十万级是玩具规模。",
+      "错；数量级直接决定能否暴力检索，十亿级下暴力不可行,架构必须随规模变。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — mainstream visual search is already billion-scale, so calling it over-engineering badly underestimates reality.",
+      "Correct — the 5B+ anchor turns 'a billion' from hypothesis into a production norm that directly mandates ANN and a dedicated index architecture.",
+      "Wrong — on the contrary, production systems routinely exceed a billion; hundreds of thousands is toy scale.",
+      "Wrong — the order of magnitude directly decides whether brute force is possible; at a billion it is infeasible, so architecture must scale with size."
+    ],
+    "termDefinitions": [
+      { "term": "billion-scale indexing / 十亿级索引", "meaning": "对十亿量级向量建索引以支持检索，Pinterest 达 50 亿+，是行业真实规模。", "meaningEn": "Billion-scale indexing builds an index over a billion-order vectors for retrieval; Pinterest reaches 5B+, a real industry scale." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "staff-scoping",
+    "scenario": "Staff+ 面试里，要把视觉搜索定位成公司级能力，而不是一个孤立功能。",
+    "scenario_en": "In a Staff+ interview, you position visual search as a company-level capability, not an isolated feature.",
+    "q": "Staff+ 视角下，视觉搜索该被框成什么？",
+    "q_en": "At Staff+, how should visual search be framed?",
+    "why": "框成平台能力：一套共享 embedding 基础设施服务发现/购物/审核多个场景；多索引架构(目录索引+网络索引并行查询)；带量化重建成本的 embedding 版本化；把离线 recall@k→在线 CTR→季度营收串成指标层级。这体现从功能到平台的整合思维。",
+    "why_en": "Frame it as a platform capability on shared embedding infra serving discovery/shopping/moderation, with a multi-index architecture querying catalog and web indexes in parallel and a metric hierarchy from recall@k to CTR to revenue.",
+    "tags": ["llm-sd", "visual-search", "seniority"],
+    "tradeoff": "平台能力(共享 embedding、多索引、指标层级) vs 单点功能(只做一条查询流)",
+    "whenOtherWins": "在早期 MVP、只需验证单一图搜图场景时，做成单一功能更快落地；平台化在多场景复用和规模化时才回本。",
+    "options": [
+      "框成一个独立小功能：只做图搜图一条查询流，够用就行",
+      "框成平台能力：共享 embedding 基础设施服务发现/购物/审核，多索引并行，指标层级串到营收",
+      "框成一次性项目：上线后不再演化，不需要版本化或多索引",
+      "框成纯模型问题：把精力全放在训练更大的编码器上"
+    ],
+    "options_en": [
+      "Frame it as a standalone mini-feature: just one image-to-image query flow, good enough.",
+      "Frame it as a platform capability: shared embedding infra serving discovery/shopping/moderation, multi-index in parallel, metric hierarchy tied to revenue.",
+      "Frame it as a one-off project: no evolution after launch, no versioning or multi-index needed.",
+      "Frame it as a pure model problem: put all effort into training a bigger encoder."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；只做一条查询流是 L4 视角，错过了共享基础设施与多场景复用的平台价值。",
+      "对；共享 embedding+多索引并行+recall→CTR→营收的层级，正是从功能上升到平台的 Staff+ 整合。",
+      "错；embedding drift 与业务演化决定它必须持续版本化，一次性项目框法站不住。",
+      "错；本课明确说多数人过度准备模型层、准备不足 scoping，纯模型框法正踩这个坑。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — one query flow is the L4 view and misses the platform value of shared infra and multi-scenario reuse.",
+      "Correct — shared embeddings plus parallel multi-index plus a recall-to-CTR-to-revenue hierarchy is exactly the Staff+ integration from feature to platform.",
+      "Wrong — embedding drift and business evolution require ongoing versioning, so a one-off framing does not hold.",
+      "Wrong — the lesson explicitly says most people over-prepare the model layer and under-prepare scoping, and a pure-model framing walks into that trap."
+    ],
+    "termDefinitions": [
+      { "term": "multi-index architecture / 多索引架构", "meaning": "并行查询多个专用索引(如商品目录索引+网络图索引)再融合结果，服务不同意图。", "meaningEn": "A multi-index architecture queries multiple specialized indexes in parallel (e.g. catalog and web) and fuses results to serve different intents." },
+      { "term": "platform capability / 平台能力", "meaning": "把某功能建成可被多场景(发现/购物/审核)复用的共享基础设施，而非孤立特性。", "meaningEn": "A platform capability builds a function as shared infrastructure reusable across scenarios (discovery/shopping/moderation) rather than an isolated feature." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-016",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "virtuous-cycle",
+    "scenario": "团队想用点击/购买数据反哺重排器训练，形成越用越准的正循环。",
+    "scenario_en": "The team wants click/purchase data to feed re-ranker training, forming a virtuous cycle that improves with use.",
+    "q": "这个'正循环'成立的前提是什么？",
+    "q_en": "What is the precondition for this virtuous cycle to hold?",
+    "why": "CTR/转化数据能反哺重排器训练形成正循环，但前提是上游检索先 surface 出足够多的相关候选——没有好候选，就没有有意义的点击信号可学，循环空转。所以检索召回是这个飞轮的入口闸门。",
+    "why_en": "CTR/conversion data can train the re-ranker in a virtuous cycle only if upstream retrieval first surfaces enough relevant candidates, otherwise there is no meaningful click signal to learn from.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "options": [
+      "只要有用户流量，循环就自动成立，和检索质量无关",
+      "前提是上游检索先 surface 出足够相关候选，否则没有有意义的点击信号可学，飞轮空转",
+      "前提是把延迟压到 0，用户才会产生足够点击",
+      "前提是关闭 zero-result 兜底，只留最相关的一个结果"
+    ],
+    "options_en": [
+      "Any user traffic makes the cycle self-sustaining, regardless of retrieval quality.",
+      "The precondition is that upstream retrieval first surfaces enough relevant candidates, else there is no meaningful click signal to learn from and the flywheel spins empty.",
+      "The precondition is driving latency to zero so users generate enough clicks.",
+      "The precondition is disabling zero-result fallback and keeping only the single most relevant result."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；有流量但候选都不相关，点击数据也是噪声，学不出更好的排序，循环无从建立。",
+      "对；重排器只能在检索给的候选里重排，候选里没有好结果，反哺信号就无价值，检索召回是入口闸门。",
+      "错；延迟为 0 不可能也非关键,循环的瓶颈是候选相关性不是速度。",
+      "错；只留一个结果反而扼杀探索与点击多样性，采不到足够训练信号，与正循环相悖。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — with traffic but irrelevant candidates, click data is noise that cannot teach better ranking, so the cycle never forms.",
+      "Correct — the re-ranker can only reorder the candidates retrieval gives it; without good ones the feedback signal is worthless, making retrieval recall the entry gate.",
+      "Wrong — zero latency is impossible and not the point; the cycle's bottleneck is candidate relevance, not speed.",
+      "Wrong — keeping a single result kills exploration and click diversity, starving training signal, against the virtuous cycle."
+    ],
+    "termDefinitions": [
+      { "term": "virtuous cycle / 正循环", "meaning": "线上点击/购买数据反哺重排器训练、模型再改善体验的自强化循环，需上游召回足够候选。", "meaningEn": "A virtuous cycle feeds online click/purchase data back into re-ranker training so the model improves the experience, requiring upstream recall to surface enough candidates." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "domain-gap",
+    "scenario": "图搜商品要把用户随手拍的真实照片(杂乱光照/背景/遮挡)对到干净的目录商品图。",
+    "scenario_en": "Image-to-product must map a user's casual real photo (messy lighting, background, occlusion) to a clean catalog product image.",
+    "q": "为什么图搜商品必须跨越'域差'，不跨越会怎样？",
+    "q_en": "Why must image-to-product bridge a domain gap, and what happens if it does not?",
+    "why": "真实照片和目录图分布不同(光照/背景/遮挡差异)=域差。若 embedding 只在干净目录图上学，遇到真实照片就对不准，检回视觉相近但错款的结果。要用真实-目录成对数据做跨模态/域适应训练来跨越它。",
+    "why_en": "Real photos and catalog images have different distributions (lighting, background, occlusion), so an embedding trained only on clean catalog images misaligns on real photos and returns similar-looking wrong products.",
+    "tags": ["llm-sd", "visual-search", "domain-gap"],
+    "tradeoff": "用真实-目录成对数据训练(跨域但贵) vs 只用干净目录图(便宜但真实照片对不准)",
+    "options": [
+      "域差不存在，只要分辨率一致，真实照片和目录图对模型没区别",
+      "真实照片与目录图分布不同(光照/背景/遮挡)；只学目录图会在真实照片上对不准、检回错款",
+      "跨越域差只需把用户照片调成黑白，消除颜色差异即可",
+      "域差只影响延迟不影响准确率，压缩预处理就能解决"
+    ],
+    "options_en": [
+      "There is no domain gap; as long as resolution matches, real photos and catalog images look the same to the model.",
+      "Real photos and catalog images have different distributions (lighting/background/occlusion); training only on catalog images misaligns on real photos and returns wrong products.",
+      "Bridging the gap just needs converting user photos to grayscale to remove color differences.",
+      "The domain gap only affects latency, not accuracy, and compressing preprocessing solves it."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；分辨率一致解决不了光照/背景/遮挡带来的分布差异，域差是真实存在的核心难点。",
+      "对；分布不一致会让 embedding 空间对不齐，必须用真实-目录成对数据训练来弥合，否则错款频出。",
+      "错；转黑白丢信息更糟，域差是多因素分布差异，不是单一颜色问题。",
+      "错；域差是准确率(匹配对不对)问题，不是延迟问题，预处理压缩救不了。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — matching resolution does not fix the distribution difference from lighting/background/occlusion; the domain gap is a real core difficulty.",
+      "Correct — a distribution mismatch misaligns the embedding space, so real-photo-to-catalog paired training is needed to bridge it, or wrong products keep appearing.",
+      "Wrong — grayscale discards information and worsens it; the gap is a multi-factor distribution difference, not a single color issue.",
+      "Wrong — the domain gap is an accuracy (correct-match) problem, not latency, so preprocessing compression cannot solve it."
+    ],
+    "termDefinitions": [
+      { "term": "domain adaptation / 域适应", "meaning": "让模型在源域(干净目录图)学到的能力迁移到目标域(真实用户照片)的训练技术。", "meaningEn": "Domain adaptation is training so a model's ability learned on the source domain (clean catalog images) transfers to the target domain (real user photos)." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-018",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "metrics",
+    "scenario": "面试要你列出视觉搜索的核心业务指标，每个都能连到一个设计杠杆。",
+    "scenario_en": "The interviewer asks you to list visual search's core business metrics, each mapping to a design lever.",
+    "q": "以下哪些是视觉搜索的核心业务指标？(多选)",
+    "q_en": "Which of these are visual search's core business metrics? (multiple)",
+    "why": "三个核心业务指标：CTR(结果吸引力/相关性→重排器)、购买转化率(终极营收→意图分类)、空结果率(索引覆盖→ANN 回退层)。GPU 利用率是基建运维指标，不是衡量搜索质量的业务指标。",
+    "why_en": "The three core business metrics are CTR (attractiveness → re-ranker), purchase conversion (revenue → intent classifier), and zero-result rate (coverage → ANN fallback); GPU utilization is infra ops, not a search-quality business metric.",
+    "tags": ["llm-sd", "visual-search", "metrics"],
+    "options": [
+      "CTR：结果被点击的比例，衡量吸引力/相关性",
+      "购买转化率：产生交易的会话比例，终极营收指标",
+      "空结果率：无结果越阈值的查询比例，衡量索引覆盖",
+      "GPU 利用率：训练集群的算力占用率"
+    ],
+    "options_en": [
+      "CTR: the fraction of results clicked, measuring attractiveness/relevance.",
+      "Purchase conversion rate: the fraction of sessions with a transaction, the ultimate revenue metric.",
+      "Zero-result rate: the fraction of queries with no result above threshold, measuring index coverage.",
+      "GPU utilization: the compute-usage rate of the training cluster."
+    ],
+    "answer": [0, 1, 2],
+    "optionExplanations": [
+      "对；CTR 低(recall 够)指向重排问题，是能连到具体杠杆的业务指标。",
+      "对；转化是最终营收信号，低转化(高 CTR)指向意图错配→上游意图分类。",
+      "对；空结果率衡量覆盖，高则加 ANN 回退层，是功能可用性的门槛指标。",
+      "错；GPU 利用率是基建成本/运维指标，衡量不了搜索结果好不好，不是业务指标。"
+    ],
+    "optionExplanations_en": [
+      "Correct — low CTR with adequate recall points to a ranking problem, a business metric mapping to a concrete lever.",
+      "Correct — conversion is the ultimate revenue signal, and low conversion with high CTR points to intent mismatch and an upstream intent classifier.",
+      "Correct — zero-result rate measures coverage, and high values call for ANN fallback tiers, the functionality-gating metric.",
+      "Incorrect — GPU utilization is an infra cost/ops metric that cannot measure result quality, not a business metric."
+    ],
+    "termDefinitions": [
+      { "term": "design lever / 设计杠杆", "meaning": "每个业务指标异常时对应要动的架构组件(CTR→重排器、转化→意图分类、空结果→回退层)。", "meaningEn": "A design lever is the architectural component to adjust when a business metric is off (CTR→re-ranker, conversion→intent classifier, zero-result→fallback tiers)." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-019",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "<200ms 预算里，embedding 推理占 10–50ms 通常是最大头，团队想知道该优化哪。",
+    "scenario_en": "Within the sub-200ms budget, embedding inference at 10–50ms is usually the biggest chunk, and the team wants to know what to optimize.",
+    "q": "既然 embedding 推理是主导延迟，优化重点该放哪？",
+    "q_en": "Since embedding inference dominates latency, where should optimization focus?",
+    "why": "embedding 推理 10–50ms 是延迟大头，编码器选择(ResNet 更快约 10ms vs ViT/CLIP 更慢约 30–50ms)与批处理、GPU 加速是主要优化点。相比之下 ANN 检索仅 1–10ms，优化它对总延迟收益小。要优化主导项，别去抠已经很快的环节。",
+    "why_en": "Embedding inference at 10–50ms dominates, so encoder choice (ResNet ~10ms vs ViT/CLIP ~30–50ms), batching, and GPU acceleration are the main levers, whereas ANN at 1–10ms is already cheap.",
+    "tags": ["llm-sd", "visual-search", "latency-budget"],
+    "options": [
+      "优先优化 ANN 检索，把 1–10ms 再压一半，收益最大",
+      "优先优化 embedding 推理(选更快编码器/批处理/GPU 加速)，因为它是 10–50ms 的延迟大头",
+      "优先优化网络序列化，那才是绝对的瓶颈",
+      "三个阶段平均用力,不看谁占比大"
+    ],
+    "options_en": [
+      "Optimize ANN retrieval first, halving its 1–10ms for the biggest win.",
+      "Optimize embedding inference first (faster encoder/batching/GPU acceleration) because it is the 10–50ms latency dominator.",
+      "Optimize network serialization first, which is the true bottleneck.",
+      "Spread effort evenly across all three stages regardless of their share."
+    ],
+    "answer": [1],
+    "optionExplanations": [
+      "错；ANN 已经只占 1–10ms，把最快的环节再优化对 <200ms 总预算几乎没影响。",
+      "对；抓延迟大头，换更快编码器或批处理/GPU 加速能实打实压缩总延迟，是对症优化。",
+      "错；网络序列化只占残余预算，不是主导项，先动它是抓错重点。",
+      "错；不看占比平均用力效率低，应把力气压在 10–50ms 的 embedding 推理上。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — ANN is already just 1–10ms, so optimizing the fastest stage barely moves the sub-200ms total.",
+      "Correct — target the dominator; a faster encoder or batching/GPU acceleration truly shrinks total latency, an on-target optimization.",
+      "Wrong — network serialization is only the leftover budget, not the dominator, so starting there misplaces the focus.",
+      "Wrong — spreading evenly ignores shares and is inefficient; effort belongs on the 10–50ms embedding inference."
+    ],
+    "termDefinitions": [
+      { "term": "dominant cost / 主导成本", "meaning": "延迟预算里占比最大的阶段(此处 embedding 推理)，优化它对总延迟收益最高。", "meaningEn": "The dominant cost is the stage taking the largest share of the latency budget (here embedding inference), where optimization yields the most." }
+    ]
+  },
+  {
+    "id": "llm-081-visual-search-problem-framing-requirements-020",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "seniority",
+    "scenario": "同一道视觉搜索题，L4、L5、Staff+ 候选人在'把哪些决策讲明确'上差别很大。",
+    "scenario_en": "On the same visual-search question, L4, L5, and Staff+ candidates differ in which decisions they make explicit.",
+    "q": "L4、L5、Staff+ 在视觉搜索 scoping 上的关键差别是什么？",
+    "q_en": "What is the key difference among L4, L5, and Staff+ in scoping visual search?",
+    "why": "L4：认出 embedding 检索+CNN 编码器+ANN，提 CTR，但不分两种表述、把指标当可互换、不量化规模。L5：明确选并论证表述、定义指标并做冲突分析、给数值延迟预算、点名 HNSW/IVF、标出 embedding drift。Staff+：再上升到平台能力+多索引+版本化+指标层级。差别在'把哪些决策讲明确'。",
+    "why_en": "L4 identifies embedding retrieval, CNN, ANN, and CTR but conflates formulations and metrics and does not quantify scale; L5 justifies the formulation, analyzes metric conflicts, gives a numeric budget, and flags drift; Staff+ rises to platform capability and multi-index.",
+    "tags": ["llm-sd", "visual-search", "seniority"],
+    "tradeoff": "L4(认出组件但不分表述/不量化) vs L5(论证表述+冲突分析+数值预算) vs Staff+(平台化整合)",
+    "table": {
+      "headers": ["级别", "表述", "指标", "规模"],
+      "rows": [
+        ["L4", "不区分两种", "当可互换", "不量化"],
+        ["L5", "明确选并论证", "做冲突分析", "数值延迟预算"],
+        ["Staff+", "平台多场景", "层级到营收", "多索引+版本化"]
+      ]
+    },
+    "options": [
+      "差别只在于 Staff+ 用了更大的模型，L4 模型太小",
+      "L4/L5/Staff+ 答案本质一样，只是表达详略不同",
+      "L4 认出组件但不分表述/不量化；L5 论证表述+指标冲突分析+数值预算；Staff+ 上升到平台+多索引+版本化",
+      "差别在于 L4 只谈业务、Staff+ 只谈模型，正好互补"
+    ],
+    "options_en": [
+      "The difference is only that Staff+ uses a bigger model and L4's is too small.",
+      "L4/L5/Staff+ answers are essentially the same, differing only in verbosity.",
+      "L4 identifies components but does not distinguish formulations or quantify; L5 justifies the formulation with metric-conflict analysis and a numeric budget; Staff+ rises to platform, multi-index, and versioning.",
+      "The difference is that L4 only talks business and Staff+ only talks models, complementing each other."
+    ],
+    "answer": [2],
+    "optionExplanations": [
+      "错；本课强调多数人过度准备模型层，差别不是模型大小而是 scoping 的明确度。",
+      "错；不是详略问题，而是是否区分表述、是否做指标冲突分析、是否量化规模的实质差异。",
+      "对；层级差别是'把哪些决策讲明确'——表述、指标冲突、规模、平台化，逐级上升。",
+      "错；Staff+ 恰恰把业务指标层级与模型/架构整合起来，不是只谈模型。"
+    ],
+    "optionExplanations_en": [
+      "Wrong — the lesson stresses most people over-prepare the model layer; the difference is scoping explicitness, not model size.",
+      "Wrong — it is not about verbosity but the substantive difference of distinguishing formulations, analyzing metric conflicts, and quantifying scale.",
+      "Correct — the level gap is which decisions you make explicit — formulation, metric conflicts, scale, platformization — rising step by step.",
+      "Wrong — Staff+ actually integrates the business-metric hierarchy with model/architecture, not model-only."
+    ],
+    "termDefinitions": [
+      { "term": "scoping / 范围界定", "meaning": "把哪些设计决策(表述、指标、规模)显式讲清，是本课认为多数人准备不足的能力。", "meaningEn": "Scoping is making which design decisions (formulation, metrics, scale) explicit, the ability the lesson says most candidates under-prepare." }
+    ]
+  }
+]

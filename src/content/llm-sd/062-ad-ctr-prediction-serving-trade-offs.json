@@ -1,0 +1,595 @@
+[
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "llm-sd",
+    "sub": "serving-path",
+    "scenario": "每次页面加载触发一次广告竞价，端到端预算约 100ms：要选出候选广告、拼装特征、给数百个候选打分、跑竞价逻辑、返回赢家。",
+    "scenario_en": "Every page load fires an ad auction with a ~100ms end-to-end budget to pick candidates, assemble features, score hundreds of them, run auction logic, and return a winner.",
+    "q": "广告竞价在 100ms 预算内的服务路径按什么顺序执行？",
+    "q_en": "In what order does the ad-auction serving path run within the 100ms budget?",
+    "why": "路径是「检索缩小候选→拼特征→打分→竞价排序→返回」，每一步顺序都由数据依赖钉死：没候选无法拼特征，没特征无法打分，没分无法竞价。",
+    "why_en": "The path goes retrieve candidates, assemble features, score, run the auction, and return, with each step forced by data dependency since you cannot score without features or rank without scores.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "serving-path"
+    ],
+    "diagram": "flowchart LR\n  R[\"候选检索<br/>~10ms\"] --> F[\"特征拼装<br/>~5ms\"]\n  F --> S[\"模型打分<br/>~5ms\"]\n  S --> A[\"竞价排序\"]\n  A --> W[\"返回赢家\"]",
+    "options": [
+      "检索候选 → 模型打分 → 特征拼装 → 竞价 → 返回，先打分再回头补特征",
+      "检索候选 → 特征拼装 → 模型打分 → 竞价排序 → 返回赢家",
+      "特征拼装 → 竞价排序 → 检索候选 → 模型打分 → 返回，最后才检索候选",
+      "竞价排序 → 检索候选 → 特征拼装 → 模型打分 → 返回，先竞价再选候选"
+    ],
+    "options_en": [
+      "Retrieve candidates, score, assemble features, auction, return — score first, then backfill features.",
+      "Retrieve candidates, assemble features, score, run the auction, return the winner.",
+      "Assemble features, auction, retrieve candidates, score, return — retrieval comes last.",
+      "Auction, retrieve candidates, assemble features, score, return — auction before picking candidates."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "打分必须先有特征，把打分排在拼特征前面等于对空气算分，顺序颠倒。",
+      "对；先把库缩到数百个候选，再拼特征、打分，最后竞价排序返回，每步吃掉一段预算。",
+      "竞价要有分才排得了，把检索放最后等于给不存在的候选打分，本末倒置。",
+      "竞价的输入正是打分结果，先竞价再选候选就没有可排的对象。"
+    ],
+    "optionExplanations_en": [
+      "Scoring needs features first, so putting scoring before feature assembly scores nothing — order reversed.",
+      "Correct — narrow to hundreds of candidates, then assemble features, score, and rank in the auction, each eating part of the budget.",
+      "The auction needs scores to rank, so retrieving last means scoring nonexistent candidates.",
+      "The auction's input is the scores, so ranking before picking candidates has nothing to rank."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CTR",
+        "fullName": "Click-Through Rate",
+        "meaning": "点击率：一次广告曝光被点击的概率，是打分模型要预测的目标。",
+        "meaningEn": "CTR (Click-Through Rate) is the probability an ad impression is clicked, the target the scoring model predicts."
+      },
+      {
+        "term": "ad auction / 广告竞价",
+        "meaning": "页面加载时实时挑出赢家广告的过程，按各候选的期望收入排序。",
+        "meaningEn": "An ad auction is the real-time process of picking a winning ad at page load, ranking candidates by expected revenue."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-002",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "llm-sd",
+    "sub": "latency-budget",
+    "scenario": "广告竞价端到端 ~100ms，内部拆成检索候选 ~10ms、特征拼装 ~5ms、模型推理 ~5ms，其余留给网络跳数、竞价排序和渲染。",
+    "scenario_en": "The ad auction is ~100ms end-to-end, split into candidate retrieval ~10ms, feature assembly ~5ms, inference ~5ms, with the rest for network hops, auction ranking, and rendering.",
+    "q": "这个 100ms 是什么性质的数字、怎么分配、下游约束什么？",
+    "q_en": "What kind of number is the 100ms, how is it split, and what does it constrain downstream?",
+    "why": "100ms 是产品级 SLO（给定目标、不是算出来的），像预算一样切给各组件——检索~10、拼特征~5、推理~5ms，剩下留给网络与竞价渲染；任何组件超支都得从别处抠回来。",
+    "why_en": "The 100ms is a product SLO, not a derived figure, split like a budget across retrieval ~10ms, feature assembly ~5ms, inference ~5ms, with the rest for network and auction, so any overspend must be clawed back elsewhere.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "latency-budget"
+    ],
+    "options": [
+      "100ms 是竞价端到端 SLO（给定目标，非公式推导）；检索~10、拼特征~5、推理~5ms，其余给网络+竞价+渲染，它把总预算切成各组件子预算",
+      "100ms 是离线批处理训练一轮的时长上限，决定模型多久更新一次，与在线打分无关",
+      "100ms 是特征缓存的默认 TTL，命中超过它就算失效，用来决定特征刷新频率",
+      "100ms 是单机每秒能处理的请求数上限（QPS），用来做容量规划、决定加多少机器"
+    ],
+    "options_en": [
+      "The 100ms is the auction end-to-end SLO (a given target, not derived); retrieval ~10, features ~5, inference ~5ms, rest for network/auction/render — it splits the total into per-component sub-budgets.",
+      "The 100ms is the max wall-clock for one offline training run, setting how often the model refreshes, unrelated to online scoring.",
+      "The 100ms is the default feature-cache TTL; a hit older than it expires, and it sets the feature refresh cadence.",
+      "The 100ms is the per-machine max requests per second (QPS), used for capacity planning and how many machines to add."
+    ],
+    "answer": [
+      0
+    ],
+    "termDefinitions": [
+      {
+        "term": "SLO",
+        "fullName": "Service Level Objective",
+        "meaning": "服务级目标：给定的性能/可用性目标（如端到端 <100ms），是产品设定不是公式算出的。",
+        "meaningEn": "An SLO (Service Level Objective) is a given performance/availability target like end-to-end under 100ms, set by the product rather than derived."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存存活时长：一条缓存值多久后过期失效。",
+        "meaningEn": "TTL (Time To Live) is how long a cached value stays valid before it expires."
+      },
+      {
+        "term": "QPS",
+        "fullName": "Queries Per Second",
+        "meaning": "每秒查询数：衡量吞吐/负载的单位。",
+        "meaningEn": "QPS (Queries Per Second) measures throughput or load."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-003",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "revenue-miss",
+    "scenario": "广告位靠竞价实时填充；如果 100ms 内没返回赢家，这个位置就空着。系统跑在每天数十亿请求的量级（Google、Meta、TikTok）。",
+    "scenario_en": "Ad slots are filled in real time by the auction; miss the 100ms and the slot stays empty, at a scale of billions of requests per day (Google, Meta, TikTok).",
+    "q": "竞价没在 100ms 内返回赢家会有什么直接后果？为什么这约束这么硬？",
+    "q_en": "What happens if the auction misses the 100ms, and why is the constraint so hard?",
+    "why": "超时=广告位空着=这次曝光的收入直接归零；在数十亿/天的量级上，超时率涨一点点乘以巨大基数就是真金白银的损失，所以延迟预算是硬约束。",
+    "why_en": "A timeout means an empty slot and zero revenue for that impression, and at billions of requests a day a tiny rise in timeout rate times a huge base is real money lost, making the latency budget a hard constraint.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "latency-budget"
+    ],
+    "options": [
+      "只是这一次响应慢一点、体验略降，收入不受影响，可以忽略",
+      "会自动回退展示上一次竞价的赢家广告，收入照常、没有损失",
+      "广告位空着无法变现、这次曝光收入直接归零；数十亿/天量级下超时率小升就是可观损失",
+      "超时请求会排队重试，最终仍能填满广告位，只是这次延迟变大而已"
+    ],
+    "options_en": [
+      "Just a slightly slow response and minor UX dip this once, with no revenue impact, so it can be ignored.",
+      "It auto-falls back to the previous auction's winning ad, so revenue continues with no loss.",
+      "The slot stays empty and this impression's revenue drops to zero; at billions/day a small timeout-rate rise is a sizable loss.",
+      "The timed-out request queues and retries, eventually filling the slot with only added latency this time."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "错在低估后果：空位不是慢一点，而是这次曝光的收入彻底没了，规模上很痛。",
+      "没有免费的回退赢家；上一次的赢家未必竞得当前这次，硬展示会错配且仍算丢当前竞价。",
+      "对；空位=零收入，超时率×数十亿请求就是可观损失，这正是延迟预算不可让步的原因。",
+      "关键路径上没有时间等重试——100ms 过了广告位就已经渲染完，重试来不及填。"
+    ],
+    "optionExplanations_en": [
+      "It underrates the harm: an empty slot is not 'a bit slow' but zero revenue for that impression, painful at scale.",
+      "There is no free fallback winner; last time's winner may not win now, and forcing it misprices while still losing the current auction.",
+      "Correct — empty equals zero revenue, and timeout rate times billions is a real loss, which is why the budget is non-negotiable.",
+      "The critical path has no time to retry — once 100ms passes the slot is already rendered, too late to fill."
+    ],
+    "termDefinitions": [
+      {
+        "term": "impression / 曝光",
+        "meaning": "一次广告被展示给用户的事件，是计费和标签的基本单位。",
+        "meaningEn": "An impression is one event of an ad being shown to a user, the base unit for billing and labeling."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-004",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "feature-fetch",
+    "scenario": "一次打分请求需要 50–200 个特征（用户历史、广告元数据、广告主属性、实时上下文），要在 ~5ms 的特征拼装预算内拿全。",
+    "scenario_en": "One scoring request needs 50–200 features (user history, ad metadata, advertiser attributes, real-time context), all within the ~5ms feature-assembly budget.",
+    "q": "为什么不能对每个特征各发一次 DB 查询？该怎么办？",
+    "q_en": "Why not fire one DB query per feature, and what should you do instead?",
+    "why": "50–200 个特征逐个查就是 N+1 次网络往返，串起来轻松吃穿 ~5ms 预算；所以分层——慢变特征预计算、半静态带 TTL 缓存、其余走特征存储 multi-get 一次取回。",
+    "why_en": "Querying 50–200 features one by one is N+1 round-trips that blow the ~5ms budget, so you layer: pre-compute slow features, TTL-cache semi-static ones, and multi-get the rest in one round-trip.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "tradeoff": "单次 multi-get（一次往返取全） vs 逐特征查询（N+1 次往返、延迟叠加）",
+    "whenOtherWins": "如果一次只需个位数特征、且延迟预算宽松（如离线批量打分），逐个查询简单直接，不必上特征存储的分层机制。",
+    "options": [
+      "逐个查询没问题，只要给 DB 多加些只读副本就能扛住 50–200 次往返",
+      "把 50–200 个特征名直接塞进模型输入即可，特征具体怎么取不影响延迟",
+      "每个特征查询都很快，串起来也在预算内，真正的瓶颈是模型推理不是取特征",
+      "逐个查会产生 50–200 次往返（N+1）累计爆掉 ~5ms 预算；应分层缓存 + 特征存储 multi-get 一次取回"
+    ],
+    "options_en": [
+      "One-by-one is fine — just add read replicas to the DB to withstand 50–200 round-trips.",
+      "Just feed 50–200 feature names into the model; how they are fetched does not affect latency.",
+      "Each query is fast and they sum within budget; the real bottleneck is inference, not fetching.",
+      "One-by-one is 50–200 round-trips (N+1) that blow the ~5ms budget; layer caches plus a feature-store multi-get to fetch in one round-trip."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "加副本提升的是吞吐/可用性，救不了单请求内 50–200 次串行往返累加的延迟。",
+      "取特征就是延迟的大头；把名字塞进模型不改变你仍要发多少次网络请求。",
+      "单次快不代表总量小，200 次亚毫秒往返串起来照样破 5ms，瓶颈恰恰在取数。",
+      "对；N+1 往返是延迟元凶，用分层 + multi-get 把多次往返压成一次是标准解法。"
+    ],
+    "optionExplanations_en": [
+      "Replicas add throughput/availability but cannot fix the summed latency of 50–200 serial round-trips inside one request.",
+      "Fetching is the latency hotspot; feeding names into the model does not change how many network calls you make.",
+      "Fast singles do not mean a small total; 200 sub-ms round-trips still break 5ms, and fetching is exactly the bottleneck.",
+      "Correct — N+1 round-trips are the culprit, and layering plus multi-get collapses many round-trips into one, the standard fix."
+    ],
+    "termDefinitions": [
+      {
+        "term": "N+1",
+        "fullName": "N+1 query problem",
+        "meaning": "为一批数据逐条各发一次查询（1 次列表 + N 次明细），往返次数随 N 线性膨胀。",
+        "meaningEn": "The N+1 query problem is issuing one query per item (1 list + N detail), so round-trips grow linearly with N."
+      },
+      {
+        "term": "feature store / 特征存储",
+        "meaning": "集中存取模型特征的系统，提供统一定义和批量取回接口。",
+        "meaningEn": "A feature store is a system for centrally storing and serving model features, offering shared definitions and batched retrieval."
+      },
+      {
+        "term": "multi-get",
+        "meaning": "一次请求批量取回多个键的值，用一次往返替代多次点查。",
+        "meaningEn": "A multi-get fetches many keys' values in one request, replacing many point queries with a single round-trip."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-005",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "pre-computation",
+    "scenario": "「用户过去 7 天按广告品类的点击率」这类行为聚合变化慢、但按用户算很重，要在 ~5ms 特征预算内拿到。",
+    "scenario_en": "'A user's 7-day click rate by ad category' is a slow-changing but heavy per-user aggregate that must arrive within the ~5ms feature budget.",
+    "q": "这类慢变的用户级聚合特征该用什么服务策略？",
+    "q_en": "Which serving strategy fits slow-changing, per-user aggregate features?",
+    "why": "行为聚合变化慢，小时级刷新完全够用；离线用 Spark/Airflow 算好、按用户 ID 写进 Redis/DynamoDB，服务时一次单键查 <1ms，用「可接受的陈旧」换「极低在线延迟」。",
+    "why_en": "Behavioral aggregates change slowly, so hourly refresh is enough: precompute offline with Spark/Airflow, write to Redis/DynamoDB keyed by user ID, and serve a single-key lookup under 1ms, trading acceptable staleness for very low latency.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "tradeoff": "预计算（单键查 <1ms，代价是小时级陈旧） vs 在线实时计算（最新但吃满延迟预算）",
+    "whenOtherWins": "如果特征必须反映秒级最新状态（如广告主当前剩余预算），小时级陈旧不能接受，得走短 TTL 缓存或实时特征，而不是预计算。",
+    "options": [
+      "预计算：离线用 Spark/Airflow 算好按用户聚合，写进 Redis/DynamoDB（按用户 ID 建键），服务时单键查 <1ms，代价是小时级陈旧",
+      "每次请求现场用 Spark 实时算 7 天点击率，保证绝对最新，延迟由当时算力决定",
+      "把 7 天点击率直接固化进模型权重，训练时写死、服务时完全不用查特征",
+      "对每个用户的每次点击都同步更新聚合并落库，保证秒级最新后再进入打分"
+    ],
+    "options_en": [
+      "Pre-compute: build per-user aggregates offline with Spark/Airflow, write to Redis/DynamoDB keyed by user ID, and serve a single-key lookup under 1ms, at the cost of hours-old staleness.",
+      "Recompute the 7-day rate live with Spark on every request for absolute freshness, with latency set by available compute.",
+      "Bake the 7-day rate into model weights at training time so serving never queries the feature at all.",
+      "Synchronously update and persist the aggregate on every click per user for second-level freshness before scoring."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；慢变特征离线算好、单键取回，是延迟最省的路子，代价只是可接受的小时级陈旧。",
+      "每请求跑 Spark 是重批处理进关键路径，延迟不可控，直接撑爆 5ms 预算。",
+      "写进权重意味着特征永远不更新，模型无法反映用户近 7 天的新行为，等于丢掉时效。",
+      "对每次点击同步更新落库放大了写压力和延迟，为「秒级最新」付出的代价远超收益。"
+    ],
+    "optionExplanations_en": [
+      "Correct — precompute slow features offline and fetch by one key, the cheapest latency path, costing only acceptable hourly staleness.",
+      "Running Spark per request drags heavy batch into the critical path with uncontrollable latency, blowing the 5ms budget.",
+      "Baking into weights freezes the feature forever, so the model cannot reflect the user's recent 7-day behavior — freshness is lost.",
+      "Synchronously persisting on every click amplifies write load and latency, paying far more than second-level freshness is worth."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Spark",
+        "fullName": "Apache Spark",
+        "meaning": "分布式批处理引擎，常用来离线算大规模聚合特征。",
+        "meaningEn": "Apache Spark is a distributed batch engine often used to compute large-scale aggregate features offline."
+      },
+      {
+        "term": "Airflow",
+        "fullName": "Apache Airflow",
+        "meaning": "工作流调度器，按计划编排离线特征计算作业。",
+        "meaningEn": "Apache Airflow is a workflow scheduler that orchestrates offline feature jobs on a schedule."
+      },
+      {
+        "term": "DynamoDB",
+        "meaning": "AWS 的托管键值/宽列数据库，适合按用户 ID 单键低延迟查。",
+        "meaningEn": "DynamoDB is AWS's managed key-value/wide-column store, good for low-latency single-key lookups by user ID."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-006",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "ttl-caching",
+    "scenario": "广告创意 embedding、广告主预算状态这类半静态特征放进内存缓存并设 TTL；TTL 长短要权衡。",
+    "scenario_en": "Semi-static features like ad-creative embeddings and advertiser budget status go in an in-memory cache with a TTL, and TTL length is a tradeoff.",
+    "q": "TTL 设短和设长各自的代价是什么？",
+    "q_en": "What are the costs of a short versus long TTL?",
+    "why": "短 TTL 数据新但 miss 多、回源打特征存储的压力大；长 TTL 命中率高、延迟低但会陈旧，可能展示一条预算已耗尽的广告。要按特征类型调 TTL。",
+    "why_en": "A short TTL keeps data fresh but causes more misses and load on the feature store, while a long TTL raises hit rate and cuts latency but goes stale, possibly showing an ad whose budget is exhausted, so tune TTL per feature type.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "tradeoff": "短 TTL（更新及时，代价是更多 miss + 回源压力） vs 长 TTL（命中率高，代价是数据陈旧）",
+    "table": {
+      "headers": [
+        "TTL",
+        "数据新鲜度",
+        "命中率",
+        "回源压力",
+        "风险"
+      ],
+      "rows": [
+        [
+          "短",
+          "高",
+          "低",
+          "大",
+          "特征存储过载"
+        ],
+        [
+          "长",
+          "低",
+          "高",
+          "小",
+          "陈旧（投已停广告）"
+        ]
+      ]
+    },
+    "options": [
+      "TTL 越长越好——命中率高、延迟低、数据也新鲜，长 TTL 是纯赚没有任何代价",
+      "短 TTL 数据新但 miss 多、回源压力大；长 TTL 命中率高、延迟低但会陈旧（可能展示预算已耗尽的广告）",
+      "TTL 越短越好——数据永远最新，而且短 TTL 不会给特征存储增加任何回源压力",
+      "TTL 只决定缓存占多少内存，长短和数据新鲜度、后端回源压力都没有关系"
+    ],
+    "options_en": [
+      "Longer TTL is always better — high hit rate, low latency, and fresh data, a pure win with no cost.",
+      "Short TTL is fresh but has more misses and backend load; long TTL has high hit rate and low latency but goes stale (may show an ad whose budget is exhausted).",
+      "Shorter TTL is always better — data is always newest and a short TTL adds no load to the feature store.",
+      "TTL only sets how much memory the cache uses, unrelated to freshness or backend load."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "长 TTL 不是纯赚：命中率和延迟是好了，但代价是陈旧，可能投出一条已停投的广告。",
+      "对；这正是 TTL 两难——新鲜 vs 命中率/负载，所以要按特征变化速度分别调 TTL。",
+      "短 TTL 恰恰增加 miss 与回源，把压力打到特征存储上，不是「没有任何压力」。",
+      "TTL 的核心影响是新鲜度与命中/回源，内存占用只是次要副作用，说反了重点。"
+    ],
+    "optionExplanations_en": [
+      "Long TTL is not a pure win: hit rate and latency improve but at the cost of staleness, possibly serving a paused ad.",
+      "Correct — this is the TTL dilemma of freshness versus hit rate/load, so tune TTL by how fast each feature changes.",
+      "Short TTL actually increases misses and backfills, loading the feature store — not 'no load at all.'",
+      "TTL's core effect is freshness and hit/backfill, with memory a minor side effect, so this misstates the point."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存值的存活时长，到期即失效需回源重取。",
+        "meaningEn": "TTL (Time To Live) is how long a cached value lives before expiring and needing a backfill."
+      },
+      {
+        "term": "embedding / 向量表示",
+        "meaning": "把广告创意等对象压成稠密向量，作为模型特征。",
+        "meaningEn": "An embedding compresses objects like ad creatives into dense vectors used as model features."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-007",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "llm-sd",
+    "sub": "stale-ttl",
+    "scenario": "广告主预算状态用缓存 + 长 TTL 服务；某广告的预算刚刚耗尽，但缓存条目还没到期。",
+    "scenario_en": "Advertiser budget status is served from a cache with a long TTL; an ad's budget just ran out but the cache entry has not expired.",
+    "q": "长 TTL 缓存广告主预算状态会导致什么具体故障？",
+    "q_en": "What concrete failure does a long-TTL cache of advertiser budget status cause?",
+    "why": "长 TTL 意味着缓存在过期前看不到「预算已耗尽」这个变化，于是继续投一条本该停的广告——浪费曝光、还可能计费/超投出错；这是长 TTL 陈旧代价的典型体现。",
+    "why_en": "A long TTL means the cache cannot see the 'budget exhausted' change until it expires, so it keeps serving an ad that should be paused — wasting the impression and risking billing/overspend errors, the classic long-TTL staleness cost.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "options": [
+      "缓存里预算仍显示「充足」→继续把这条广告投出去→展示了一条实际已停投的广告，浪费广告位、还可能计费出错",
+      "广告会立刻停止展示，因为缓存能实时感知到预算耗尽这一变化",
+      "只影响这条广告的点击率统计，不影响它是否被继续展示",
+      "长 TTL 会自动缩短以感知预算变化，所以完全不用担心陈旧问题"
+    ],
+    "options_en": [
+      "The cache still shows budget 'available' → keeps serving the ad → shows an ad that is actually paused, wasting the slot and risking billing errors.",
+      "The ad stops showing immediately because the cache senses budget exhaustion in real time.",
+      "It only affects this ad's click-rate stats, not whether it keeps being shown.",
+      "A long TTL auto-shortens to sense budget changes, so staleness is nothing to worry about."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对；陈旧的「充足」让系统继续投一条已停广告，浪费曝光并可能引发超投/计费问题。",
+      "缓存在 TTL 到期前根本看不到新状态，「实时感知」正是长 TTL 做不到的事。",
+      "陈旧影响的是投放决策本身（继续展示），远不止统计口径。",
+      "TTL 不会自己缩短；正因为它固定不变，才会在到期前一直提供陈旧值。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a stale 'available' keeps a paused ad serving, wasting impressions and risking overspend/billing issues.",
+      "The cache cannot see the new state until the TTL expires, and 'real-time sensing' is exactly what a long TTL cannot do.",
+      "Staleness affects the serving decision itself (keep showing), far beyond mere statistics.",
+      "A TTL does not shorten itself; being fixed is precisely why it serves a stale value until expiry."
+    ],
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存值到期前一直被视为有效，期间的真实变化看不见。",
+        "meaningEn": "TTL (Time To Live) keeps a cached value treated as valid until expiry, blind to real changes in between."
+      },
+      {
+        "term": "advertiser budget status / 广告主预算状态",
+        "meaning": "某广告主/广告当前是否还有预算可投，耗尽应立即停投。",
+        "meaningEn": "Advertiser budget status is whether an advertiser/ad still has budget to spend; when exhausted it should stop serving."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "llm-sd",
+    "sub": "multi-get",
+    "scenario": "打分一个「用户-广告」对需要来自多张表的一批特征，你想避免 50–200 次分散点查。",
+    "scenario_en": "Scoring one user-ad pair needs a batch of features from many tables, and you want to avoid 50–200 scattered point queries.",
+    "q": "特征存储的 multi-get API 解决了什么问题、怎么解决？",
+    "q_en": "What problem does a feature-store multi-get API solve, and how?",
+    "why": "multi-get 用一个接口把「用户-广告」对需要的特征打包成一个序列化向量，一次往返返回、一次反序列化，消除 N+1 次分散点查；代价是这套平台 + 治理的运维成本较高。",
+    "why_en": "Multi-get bundles the features a user-ad pair needs into one serialized vector returned in a single round-trip and deserialized once, eliminating N+1 scattered queries, at the cost of higher platform and governance overhead.",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "tradeoff": "multi-get（一次往返取回打包向量，运维/治理成本高） vs 逐特征查询（简单但 N+1 次往返）",
+    "whenOtherWins": "如果只需极少数特征、或特征散在无法统一的异构系统里，硬搭 multi-get 平台不划算，直接点查更简单。",
+    "options": [
+      "multi-get 是把一个大特征拆成多次小查询并行发出，靠并发把单次延迟拉低",
+      "multi-get 让模型一次能预测多个广告，属于打分优化、和特征怎么取无关",
+      "multi-get 给每个特征各建一个缓存，从而加速原来的逐个查询",
+      "一个 multi-get API 把用户-广告对的特征打包成序列化向量，一次往返取回、反序列化一次，消除 N+1 分散点查"
+    ],
+    "options_en": [
+      "Multi-get splits one big feature into many small parallel queries, using concurrency to cut single-call latency.",
+      "Multi-get lets the model predict several ads at once — a scoring optimization unrelated to fetching features.",
+      "Multi-get builds a separate cache per feature to speed up the original one-by-one queries.",
+      "A multi-get API bundles a user-ad pair's features into a serialized vector, returned in one round-trip and deserialized once, eliminating N+1 scattered queries."
+    ],
+    "answer": [
+      3
+    ],
+    "optionExplanations": [
+      "方向反了：multi-get 是把多次查询合成一次，不是把一个查询拆成多次。",
+      "一次预测多广告是打分侧的事；multi-get 解决的是取特征的往返次数。",
+      "给每特征建缓存仍是逐个取；multi-get 的关键是一次往返打包取回、少一次次往返。",
+      "对；打包 + 一次往返 + 一次反序列化，正是消除 N+1、守住特征拼装预算的机制。"
+    ],
+    "optionExplanations_en": [
+      "Backwards: multi-get merges many queries into one, not splits one into many.",
+      "Predicting many ads at once is a scoring concern; multi-get is about round-trips for fetching features.",
+      "Per-feature caches still fetch one by one; multi-get's point is one bundled round-trip, avoiding many.",
+      "Correct — bundling plus one round-trip plus one deserialization is exactly how it kills N+1 and holds the assembly budget."
+    ],
+    "termDefinitions": [
+      {
+        "term": "multi-get",
+        "meaning": "一次请求批量取回多个键，用一次往返替代多次点查。",
+        "meaningEn": "A multi-get fetches many keys in one request, replacing many point queries with a single round-trip."
+      },
+      {
+        "term": "N+1",
+        "fullName": "N+1 query problem",
+        "meaning": "逐条各查一次，往返次数随条数线性增长。",
+        "meaningEn": "The N+1 query problem issues one query per item, so round-trips grow linearly with count."
+      },
+      {
+        "term": "serialization / 序列化",
+        "meaning": "把特征向量打包成一段可传输的字节流，取回后统一反序列化一次。",
+        "meaningEn": "Serialization packs the feature vector into a transmittable byte stream, deserialized once after retrieval."
+      }
+    ]
+  },
+  {
+    "id": "llm-062-ad-ctr-prediction-serving-trade-offs-009",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "llm-sd",
+    "sub": "feature-strategies",
+    "scenario": "你要为不同新鲜度的特征选服务策略：预计算、TTL 缓存、特征存储 multi-get。",
+    "scenario_en": "You must pick serving strategies by freshness: pre-computation, TTL caching, and feature-store multi-get.",
+    "q": "三种特征服务策略各自最适合什么、延迟和陈旧度如何？",
+    "q_en": "What is each of the three feature-serving strategies best for, and how do latency and staleness compare?",
+    "why": "预计算配慢变行为聚合（查<1ms、小时级陈旧）；TTL 缓存配半静态广告/广告主（命中<1ms、随 TTL 陈旧）；multi-get 用统一 API 取全类型（同 AZ 1–3ms、近实时但平台成本高）。",
+    "why_en": "Pre-computation fits slow behavioral aggregates (<1ms lookup, hours-stale), TTL caching fits semi-static ad/advertiser data (<1ms hit, TTL-dependent staleness), and multi-get serves all types via one API (1–3ms same-AZ, near-real-time but high platform cost).",
+    "tags": [
+      "llm-sd",
+      "ctr",
+      "feature-serving"
+    ],
+    "table": {
+      "headers": [
+        "策略",
+        "最适合",
+        "延迟",
+        "陈旧度",
+        "运维"
+      ],
+      "rows": [
+        [
+          "预计算",
+          "行为聚合",
+          "<1ms 查",
+          "小时级",
+          "中（批管线）"
+        ],
+        [
+          "TTL 缓存",
+          "半静态广告/主",
+          "<1ms 命中",
+          "随 TTL",
+          "低"
+        ],
+        [
+          "multi-get",
+          "全类型统一取",
+          "1–3ms 同 AZ",
+          "近实时",
+          "高（平台+治理）"
+        ]
+      ]
+    },
+    "options": [
+      "三种策略在延迟和陈旧度上其实一样，区别只在实现语言，按团队熟悉度随便挑一个即可",
+      "预计算永远最新鲜、TTL 缓存做到零陈旧、multi-get 因为跨表所以延迟最高、最不该用",
+      "预计算配行为聚合（<1ms、小时级陈旧）；TTL 缓存配半静态广告/广告主（命中<1ms、随 TTL 陈旧）；multi-get 统一取全类型（同 AZ 1–3ms、近实时）",
+      "直接全用 multi-get 就够，预计算和 TTL 缓存都可淘汰，反正 multi-get 覆盖所有类型且更实时"
+    ],
+    "options_en": [
+      "The three are the same on latency and staleness, differing only in language, so pick by team familiarity.",
+      "Pre-computation is always freshest, TTL caching is zero-stale, and multi-get has the highest latency (cross-table) so avoid it.",
+      "Pre-computation fits aggregates (<1ms, hours-stale); TTL caching fits semi-static ad/advertiser (<1ms hit, TTL-stale); multi-get serves all types (1–3ms same-AZ, near-real-time).",
+      "Just use multi-get for everything and retire pre-computation and TTL caching, since multi-get covers all types and is more real-time."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "三者延迟/陈旧度差别正是选择依据，说「都一样」抹掉了整张决策地图。",
+      "说反了：预计算恰恰是小时级陈旧，TTL 缓存会随 TTL 陈旧，multi-get 同 AZ 才 1–3ms。",
+      "对；三者按新鲜度和延迟各占其位，是标准的分层特征服务地图。",
+      "全用 multi-get 会把慢变特征也走高成本平台路径，且丢掉预计算 <1ms 的极低延迟优势。"
+    ],
+    "optionExplanations_en": [
+      "Their latency/staleness differences are the basis for choosing, so 'all the same' erases the whole decision map.",
+      "Reversed: pre-computation is hours-stale, TTL caching is TTL-stale, and multi-get is 1–3ms only same-AZ.",
+      "Correct — each sits by freshness and latency, the standard layered feature-serving map.",
+      "Using multi-get for everything routes slow features through a costly platform and loses pre-computation's sub-1ms latency."
+    ],
+    "termDefinitions": [
+      {
+        "term": "AZ",
+        "fullName": "Availability Zone",
+        "meaning": "可用区：云上一个隔离的机房区域；跨 AZ 通信有额外网络延迟。",
+        "meaningEn": "An AZ (Availability Zone) is an isolated datacenter zone in the cloud; cross-AZ traffic adds network latency."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存存活时长，决定数据多久刷新一次。",
+        "meaningEn": "TTL (Time To Live) is a cache lifetime that sets how often data refreshes."
+      }
+    ]
+  }
+]
