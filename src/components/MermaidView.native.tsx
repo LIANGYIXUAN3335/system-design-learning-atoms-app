@@ -44,6 +44,19 @@ function unlockZoom(html: string): string {
   return html.replace('maximum-scale=1', () => 'maximum-scale=8, user-scalable=yes');
 }
 
+/** Reflow left-right flowcharts to top-down. A wide LR graph gets scaled down to
+ *  the phone's width until the node labels are unreadably small; stacking the
+ *  nodes vertically (client → gateway → app → service) keeps the text large.
+ *  Only the flowchart/graph direction is touched — sequence / ER / state / class
+ *  / gantt diagrams have no LR/TD axis and are left untouched. `$1`/`$2` here are
+ *  intended capture-group backreferences (unlike inlineMermaid, where `$` must be
+ *  literal). */
+function toVertical(spec: string): string {
+  return spec
+    .replace(/^(\s*(?:flowchart|graph)\s+)(?:LR|RL|BT)\b/im, '$1TD')
+    .replace(/(^|\n)(\s*direction\s+)(?:LR|RL|BT)\b/gim, '$1$2TB');
+}
+
 /** mermaid.min.js is ~3.4MB; anything below this is a truncated/corrupt copy */
 const MIN_LIB_CHARS = 1_000_000;
 
@@ -101,9 +114,10 @@ export function MermaidView({ spec }: { spec: string }) {
     };
   }, [spec, isDark]);
 
+  const verticalSpec = useMemo(() => toVertical(spec), [spec]);
   const injected = useMemo(
-    () => `window.__render(${JSON.stringify(spec)}, ${isDark ? 'true' : 'false'}); true;`,
-    [spec, isDark],
+    () => `window.__render(${JSON.stringify(verticalSpec)}, ${isDark ? 'true' : 'false'}); true;`,
+    [verticalSpec, isDark],
   );
   const renderWhenReady = useCallback(() => {
     webViewRef.current?.injectJavaScript(injected);
