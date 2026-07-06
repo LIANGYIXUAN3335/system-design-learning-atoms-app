@@ -137,6 +137,9 @@ console.log('terms');
   // visual routing follows first occurrence, not branch order
   const mixedCard = { ...termCard, q: 'TCP 和 UDP 的取舍，会影响 Cassandra 集群间通信吗？' };
   t('earliest term picks the visual (TCP before Cassandra)', chooseConceptVisual(detectTerms(mixedCard))?.id === 'tcp-udp');
+
+  const webhookCard = { ...termCard, q: 'Stripe webhook 为什么要做幂等处理？' };
+  t('detects webhook as an HTTP callback term', detectTerms(webhookCard).map((x) => x.label).includes('Webhook'));
 }
 
 // ---- automatic architecture visuals ----------------------------------
