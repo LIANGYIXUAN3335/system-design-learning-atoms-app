@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { localDateStr } from '../logic/dates';
-import { chainCorrect, choiceCorrect, toFeedbackGrade, toFsrsRating } from '../logic/grading';
+import { chainCorrect, choiceCorrect, minIntervalDays, toFeedbackGrade, toFsrsRating } from '../logic/grading';
 import { dueAdditions, type SrsEntry } from '../logic/queue';
 import { shuffleWithMap, type Shuffled } from '../logic/shuffle';
 import { applyReview, emptyCard } from '../logic/srs';
@@ -297,10 +297,13 @@ export function SessionScreen({
   const grade = (g: SelfGrade) => {
     const now = new Date();
     const rating = toFsrsRating(g, eph.wasCorrect, eph.usedIdk);
+    // M3 §3.2: correctness-gated floor — a correct-but-shaky card must not return
+    // tomorrow. (Phase 2 will pass a deadline-scaled floor derived from the plan.)
+    const floorDays = minIntervalDays(g, eph.wasCorrect, eph.usedIdk);
     const existing = store.srs.get(card.id);
     const prev = existing?.fsrs ?? emptyCard(now);
     const entry: SrsEntry = {
-      fsrs: applyReview(prev, now, rating),
+      fsrs: applyReview(prev, now, rating, floorDays),
       firstSeen: existing?.firstSeen ?? localDateStr(now),
     };
     store.srs.set(card.id, entry);

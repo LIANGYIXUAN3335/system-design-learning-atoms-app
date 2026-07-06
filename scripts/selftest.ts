@@ -9,7 +9,7 @@ import bundleJson from '../src/content/deck.bundle.json';
 import seedTracksJson from '../src/content/tracks.json';
 import type { Card, Track } from '../src/types';
 import { shuffleWithMap } from '../src/logic/shuffle';
-import { chainCorrect, choiceCorrect, toFeedbackGrade, toFsrsRating } from '../src/logic/grading';
+import { chainCorrect, choiceCorrect, minIntervalDays, toFeedbackGrade, toFsrsRating } from '../src/logic/grading';
 import { parseCloze } from '../src/logic/cloze';
 import {
   applyReview,
@@ -96,6 +96,14 @@ t('forgot → Again', toFsrsRating('forgot', true, false) === Rating.Again);
 t('fuzzy → Hard', toFsrsRating('fuzzy', true, false) === Rating.Hard);
 t('got + correct → Good', toFsrsRating('got', true, false) === Rating.Good);
 t('got + cloze(null) → Good', toFsrsRating('got', null, false) === Rating.Good);
+// M3 §3.2 correctness-gated floor (min days before a card may reappear)
+t('minInterval: wrong → 1 (may return tomorrow)', minIntervalDays('fuzzy', false, false) === 1);
+t('minInterval: idk → 1', minIntervalDays('got', true, true) === 1);
+t('minInterval: correct+fuzzy uses the floor', minIntervalDays('fuzzy', true, false, 4) === 4);
+t('minInterval: correct+fuzzy scales with deadline floor', minIntervalDays('fuzzy', true, false, 9) === 9);
+t('minInterval: correct+forgot (guessed) → 2', minIntervalDays('forgot', true, false) === 2);
+t('minInterval: cloze forgot → 1', minIntervalDays('forgot', null, false) === 1);
+t('minInterval: correct+got → 1 (FSRS decides)', minIntervalDays('got', true, false) === 1);
 t('got + wrong → capped Hard', toFsrsRating('got', false, false) === Rating.Hard);
 t('got + idk → capped Hard', toFsrsRating('got', null, true) === Rating.Hard);
 t('feedback grade: forgot exports as unknown', toFeedbackGrade('forgot') === 'unknown');
@@ -235,6 +243,11 @@ console.log('fsrs');
   let again = emptyCard(now);
   again = applyReview(again, now, Rating.Again);
   t('Again leaves today review debt', localDateStr(again.due) > localDateStr(now) && !isDueNow(again, now));
+  // M3 §3.2: a correct-but-fuzzy card is floored several days out, not tomorrow
+  let cf = emptyCard(now);
+  cf = applyReview(cf, now, toFsrsRating('fuzzy', true, false), minIntervalDays('fuzzy', true, false, 4));
+  const cfDays = Math.round((cf.due.getTime() - now.getTime()) / 86400000);
+  t('correct+fuzzy floored ≥4 days (not tomorrow)', cfDays >= 4);
   const revived = deserializeFsrs(serializeFsrs(c));
   t('roundtrip revives Date', revived.due instanceof Date && revived.due.getTime() === c.due.getTime());
   t('roundtrip keeps state/stability', revived.state === c.state && revived.stability === c.stability);
@@ -361,7 +374,11 @@ console.log('tracks');
   t('low-level track matches lld cards', cardMatchesTrack(d, lldTrack) && !cardMatchesTrack(a, lldTrack));
   t('ALL_TRACK matches everything', filterDeck([a, b, c, d], ALL_TRACK).length === 4);
   t('filterDeck unions correctly', filterDeck([a, b, c], llmTrack).map((x) => x.id).join(',') === 'c');
-  t('seed tracks: 4, ids stable', seedTracks.length === 4 && seedTracks.map((x) => x.id).join(',') === 'ai-coding,classic-sd,llm-sd,low-level-design');
+  t(
+    'seed tracks: 5, ids stable',
+    seedTracks.length === 5 &&
+      seedTracks.map((x) => x.id).join(',') === 'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill',
+  );
   t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
   t('bundle covers llm-sd seed track', filterDeck(bundle, seedTracks[2]).length >= 300);
