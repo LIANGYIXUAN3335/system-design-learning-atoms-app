@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -195,11 +195,22 @@ export function MermaidView({ spec }: { spec: string }) {
       <Modal
         visible={zoomOpen}
         animationType="fade"
-        onRequestClose={() => setZoomOpen(false)}
+        // Only the ✕ button closes the zoom viewer. A no-op onRequestClose stops the
+        // Android back gesture / edge-swipe from dismissing it mid-pan — users kept
+        // exiting by accident while dragging a zoomed diagram.
+        onRequestClose={() => {}}
         statusBarTranslucent
       >
         <View style={{ flex: 1, backgroundColor: isDark ? '#0b0b0d' : '#ffffff' }}>
-          <View style={[styles.zoomHeader, { borderBottomColor: colors.line }]}>
+          <View
+            style={[
+              styles.zoomHeader,
+              {
+                borderBottomColor: colors.line,
+                paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 10 : 44,
+              },
+            ]}
+          >
             <Pressable
               onPress={() => setZoomOpen(false)}
               hitSlop={12}
