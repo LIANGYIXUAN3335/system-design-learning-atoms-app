@@ -58,11 +58,12 @@ version: 2026-07-04.1
 
 ### 1.3 选项解析（`optionMeanings` / `optionDirectness` / `optionScenarioImpacts`）
 
+- **S0 覆盖门**：`mcq` / `multi` / `code` 卡必须有完整 option-level 解释：优先六个 rich 字段（中英三字段逐项对齐且非空），或至少 legacy `optionExplanations` + `optionExplanations_en` 完整存在 `[choice.missing_option_notes]`。唯一例外是 S4 的裸数字估算题。
 - **S1** 每字段每项 **1 句 ≤70 字** `[too_long.option_note]`；三段形状 = ①它是什么（含术语才写）②它在什么场景更合适 ③放到本场景意味着什么。`optionDirectness` 是历史字段名，新内容把它当作**适用边界/when this option fits**，不要写成"够不够直接"。
 - **S2** **一卡一讲**：一个概念在 A 解释过，B/C/D 引用而不重讲 `[redundant.cross_option_repeat]`。
 - **S3** 不复读 `why` `[redundant.why_repeated_in_options]`；不含模板腔 `[template_filler]`（"不符合最佳实践"类零信息句 = error）。
 - **S3a** 禁止机械套"最直接 / 直接命中题目的关键约束 / 不够直接"。`optionDirectness` 应写**这个方案在哪些约束下会赢**（如"读多写少且可容忍短暂旧数据时，读副本更合适"、"翻旧评论时，`before/cursor` 比 `since` 更合适"）。如果写不出可信适用场景，留空胜于硬凑。
-- **S4** **number 题不写选项解析**：数字就是数字，设计含义只写在 `why` `[number.over_explained]`。
+- **S4** **裸数字估算题不写选项解析**：当多数选项只是 `~10ms` / `~100k QPS` 这类裸量级时，数字就是数字，设计含义只写在 `why` `[number.over_explained]`。但如果 `number` 卡问的是数字的来源、取舍、适用场景或排除理由，仍按 S0 补 option-level 解释。
 - **S5 清单/分层卡（multi、安全分层、加固手段、优化手段）每项一句"它挡住什么风险 / 把压力从哪里减掉"**——不是名词翻译。范例（容器加固）："read-only filesystem：防止用户代码改依赖、留持久文件"；（写入优化）"batch processing：多条写合成一次事务，减少 commit/WAL flush 次数，但有缓冲丢失风险"。判据：删掉该句后学习者只剩一个名词 = failure。
 - **F1** 三段全填但读完无增量（宁可留空——空胜于废话）。
 
@@ -132,7 +133,7 @@ version: 2026-07-04.1
 | 选项无英文 | `[missing.options_en]` | 补 `options_en` |
 | 题干/场景无英文小字 | `[missing.q_en]` / `[missing.scenario_en]` | 补自然英文 `q_en` / `scenario_en` |
 | 术语不可朗读 | `[speech.jargon_untold]` | 补 `termDefinitions.meaningEn` |
-| number 题过度解释 | `[number.over_explained]` | 删选项解析，设计含义进 `why` |
+| 裸数字题过度解释 | `[number.over_explained]` | 删选项解析，设计含义进 `why` |
 | 机制链条断裂（只给结论词） | judge（1.4-S4） | 补全"正常→异常→恢复→代价"整链 + 链上术语进词表 |
 | 数字没有公式/单位/用途 | judge（1.4-S5） | 补估算三件套 |
 | 资源判断缺量级锚点 | judge（1.4-S5a） | 给假设/公式/粗量级/设计含义；不确定就标 rule of thumb |
@@ -173,10 +174,11 @@ npm run build:deck && npm run verify     # schema + 逻辑 + Mermaid
 | `missing.scenario_en` | warn | 有 `scenario` 但无英文场景小字 | 补自然英文 `scenario_en`，保留约束与系统背景 |
 | `speech.jargon_untold` | warn | 错误选项含术语但 termDefinitions 无带 meaningEn 的条目 | 补可朗读的术语定义 |
 | `terms.missing_full_name` | warn | 缩写术语（CRDT/OT/mTLS 形）无 `fullName` | 补全称展开（§1.5-S2b）。实现注记：`ABBREV_RE = /^[a-z]?[A-Z][A-Za-z]{0,4}[A-Z]s?$\|^[A-Z]{2,6}s?$/`；此规则曾两次被并发编辑覆盖，维护脚本者请确认在位（JARGON_RE 同时补 CRDT/OT/SDP/QUIC） |
-| `number.over_explained` | warn | number 卡写了选项解析 | 删解析，设计含义进 why（§1.3-S4） |
+| `number.over_explained` | warn | 裸数字估算卡写了选项解析 | 删解析，设计含义进 why（§1.3-S4） |
 | `missing_context` | warn | 题干用指代词（这一层/文章）且无 scenario | 把系统与约束写进 scenario |
 | `trivia_or_bad_number_question` | warn | 选项多为数字的裸数字题 / number 卡无场景 | 数字作前提考设计含义（Gate 0 G3） |
 | `bad_distractors` (`choice.generic_explanation`) | warn | 多个选项解释是"不符合要求"式套话 | 写出每个选项代表的误解 |
+| `choice.missing_option_notes` | warn | 非裸数字估算选择题没有完整 option-level 解释 | 补 rich 三字段中英版本；若已有高质量 legacy 解释，可先补 `optionExplanations_en` |
 | `choice.legacy_only` | warn | 只有 `optionExplanations` 无三字段 | 重要卡迁移到三字段形式 |
 | `jargon_not_explained` (`terms.undefined`) | warn | 题干/选项术语密集但无本地解释 | 补 termDefinitions 或场景内释义 |
 | `fit.missing_when_other_wins` | **error** | fit 选择卡缺 `whenOtherWins` | 写被拒方案何时反超 |
