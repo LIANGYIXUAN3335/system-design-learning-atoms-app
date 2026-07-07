@@ -38,7 +38,7 @@ const JARGON_RE =
 const NUMBER_RE =
   /(\d[\d,.]*\s*(万|亿|k|m|b|ms|s|秒|分钟|小时|天|年|DAU|QPS|RPS|TPS|req\/s|RCU|WCU|KB|MB|GB|TB|%|倍)|[一二三四五六七八九十百千万亿]+\s*(个|次|天|年|秒|分钟|小时))/i;
 const NUMERIC_CHOICE_RE =
-  /^(约\s*)?(\d[\d,.]*|[一二三四五六七八九十百千万亿]+)\s*(万|亿|k|m|b|ms|s|秒|分钟|小时|天|年|DAU|QPS|RPS|TPS|req\/s|RCU|WCU|KB|MB|GB|TB|%|个|次|条|行|用户|商品)?/i;
+  /^(?:约\s*)?(?:~|≈)?\s*(\d[\d,.]*|[一二三四五六七八九十百千万亿]+)\s*(万|亿|k|m|b|ms|s|秒|分钟|小时|天|年|DAU|QPS|RPS|TPS|req\/s|RCU|WCU|KB|MB|GB|TB|%|个|次|条|行|用户|商品)?/i;
 const CLOZE_RE = /\{\{([^}]+)\}\}/g;
 
 /**
@@ -96,6 +96,37 @@ function choiceCard(card) {
   return card.format === 'mcq' || card.format === 'multi' || card.format === 'code';
 }
 
+function isMostlyNumericChoiceCard(card) {
+  const options = card.options ?? [];
+  if (!options.length) return false;
+  const numericOptions = options.filter((option) => NUMERIC_CHOICE_RE.test(compact(option))).length;
+  return numericOptions >= Math.max(2, Math.ceil(options.length * 0.6));
+}
+
+function isBareNumberChoiceCard(card) {
+  return card.atomType === 'number' && isMostlyNumericChoiceCard(card);
+}
+
+function completeStringArray(card, key) {
+  const n = Array.isArray(card.options) ? card.options.length : 0;
+  return Array.isArray(card[key]) && card[key].length === n && card[key].every((value) => compact(value));
+}
+
+function hasCompleteRichOptionNotes(card) {
+  return (
+    completeStringArray(card, 'optionMeanings') &&
+    completeStringArray(card, 'optionDirectness') &&
+    completeStringArray(card, 'optionScenarioImpacts') &&
+    completeStringArray(card, 'optionMeanings_en') &&
+    completeStringArray(card, 'optionDirectness_en') &&
+    completeStringArray(card, 'optionScenarioImpacts_en')
+  );
+}
+
+function hasCompleteLegacyOptionNotes(card) {
+  return completeStringArray(card, 'optionExplanations') && completeStringArray(card, 'optionExplanations_en');
+}
+
 function add(issues, category, severity, reason) {
   issues.push({ category, severity, reason });
 }
@@ -118,10 +149,9 @@ function auditCard(card, rel) {
     add(issues, 'missing.scenario_en', 1, 'scenario has no English helper line (scenario_en); bilingual drill should show it under Chinese');
   }
 
-  const numericOptions = options.filter((option) => NUMERIC_CHOICE_RE.test(compact(option))).length;
   if (
     choiceCard(card) &&
-    numericOptions >= Math.max(2, Math.ceil(options.length * 0.6)) &&
+    isMostlyNumericChoiceCard(card) &&
     /多少|多久|量级|大约|约|每天|每秒|几跳|几层|几次|几秒|几毫秒|benchmark|基准/i.test(q)
   ) {
     add(issues, 'trivia_or_bad_number_question', 3, 'mostly numeric choices; likely tests recall instead of design implication');
@@ -145,16 +175,29 @@ function auditCard(card, rel) {
   }
 
   if (choiceCard(card)) {
+    const hasRichNotes = hasCompleteRichOptionNotes(card);
+    const hasLegacyNotes = hasCompleteLegacyOptionNotes(card);
+    if (!isBareNumberChoiceCard(card) && !hasRichNotes && !hasLegacyNotes) {
+      add(
+        issues,
+        'choice.missing_option_notes',
+        3,
+        'choice card has no complete per-option explanation set; add rich option notes or legacy optionExplanations in both languages unless it is a bare numeric estimate',
+      );
+    } else if (!isBareNumberChoiceCard(card) && !hasRichNotes && hasLegacyNotes) {
+      add(issues, 'choice.legacy_only', 1, 'choice card only has legacy optionExplanations; migrate important cards to rich option notes');
+    }
+
     const genericCount = optionExplanations.filter((exp) => GENERIC_EXPLANATION_RE.test(compact(exp))).length;
     if (genericCount >= 2) {
       add(issues, 'bad_distractors', 3, 'multiple option explanations are generic instead of explaining the misconception');
     }
 
-    const hasRichNotes =
+    const hasAnyRichField =
       Array.isArray(card.optionMeanings) ||
       Array.isArray(card.optionScenarioImpacts) ||
       Array.isArray(card.optionDirectness);
-    if (!hasRichNotes && options.some((option) => JARGON_RE.test(option))) {
+    if (!hasAnyRichField && options.some((option) => JARGON_RE.test(option))) {
       add(issues, 'jargon_not_explained', 2, 'technical choices include jargon but no rich per-option explanation fields');
     }
   }
@@ -240,7 +283,7 @@ function auditCard(card, rel) {
   }
 
   // ---- number cards: the number is the answer; don't over-explain options ---
-  if (choiceCard(card) && card.atomType === 'number') {
+  if (choiceCard(card) && isBareNumberChoiceCard(card)) {
     const noteCount = ['optionMeanings', 'optionScenarioImpacts'].reduce(
       (n, f) => n + (Array.isArray(card[f]) ? card[f].filter((s) => compact(s).length > 0).length : 0),
       0,
