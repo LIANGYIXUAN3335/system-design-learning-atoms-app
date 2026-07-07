@@ -115,6 +115,10 @@ function titleWord(word) {
   return ACRONYM_WORDS.get(lower) ?? `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
 }
 
+function stripOrderingPrefix(stem) {
+  return stem.replace(/^\d{2,4}[-_\s]+/, '');
+}
+
 function categoryFromFile(file) {
   let stem = file.replace(/\.json$/, '');
   for (const prefix of CATEGORY_PREFIXES) {
@@ -123,6 +127,7 @@ function categoryFromFile(file) {
       break;
     }
   }
+  stem = stripOrderingPrefix(stem);
   return stem
     .split(/[-_]+/)
     .filter(Boolean)
