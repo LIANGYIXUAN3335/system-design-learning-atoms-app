@@ -19,7 +19,7 @@ export function chainCorrect(
 
 /**
  * Combine the subjective 3-button grade with the objective outcome
- * (atoms-m1-review.md §3.2):
+ * (docs/history/m1-review.md §3.2):
  *   忘了 → Again · 模糊 → Hard · 记得 → Good,
  *   but 记得 is capped to Hard when the answer was objectively wrong or
  *   the card was revealed via 不确定. Cloze passes wasCorrect = null
