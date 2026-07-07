@@ -21,6 +21,11 @@ const limit = limitArg ? Number(limitArg.split('=')[1]) : 120;
 const explicitFiles = args.filter((arg) => !arg.startsWith('--'));
 
 const TRACKS = ['system-design', 'llm-sd', 'low-level-design', 'ai-coding'];
+const OPTION_NOTE_PAIRS = [
+  ['optionMeanings', 'optionMeanings_en'],
+  ['optionDirectness', 'optionDirectness_en'],
+  ['optionScenarioImpacts', 'optionScenarioImpacts_en'],
+];
 const GENERIC_EXPLANATION_RE =
   /(不符合题目需求|超出了初版范围|This does not meet the stated requirements|This doesn't fit the requirements|信息不足|not enough information)/i;
 const TRUNCATED_RE =
@@ -248,6 +253,13 @@ function auditCard(card, rel) {
   // ---- bilingual: options need English versions ----------------------------
   if (choiceCard(card) && !Array.isArray(card.options_en)) {
     add(issues, 'missing.options_en', 1, 'options have no English versions (options_en); bilingual drill + option TTS need them');
+  }
+  if (choiceCard(card)) {
+    for (const [zhKey, enKey] of OPTION_NOTE_PAIRS) {
+      if (Array.isArray(card[zhKey]) && !Array.isArray(card[enKey])) {
+        add(issues, `missing.${enKey}`, 1, `${zhKey} exists but ${enKey} is missing; option reveal notes should stay bilingual`);
+      }
+    }
   }
 
   // ---- speech coverage: jargon in wrong options should be speakable --------

@@ -116,7 +116,13 @@
           "流/削峰"
         ]
       ]
-    }
+    },
+    "optionDirectness_en": [
+      "Only fits when this statement is true.",
+      "Only fits when this statement is true.",
+      "Use when the hundred-person group cap lines up with DynamoDB's hundred-item transaction limit.",
+      "This matches the scenario constraint."
+    ]
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-003",
@@ -508,6 +514,12 @@
         "meaningEn": "Server-Sent Events let a server keep pushing updates to a client over a single one-way HTTP connection.",
         "fullName": "Server-Sent Events"
       }
+    ],
+    "optionMeanings_en": [
+      "HTTP/1.1 short polling.",
+      "A custom protocol running over a raw TLS-encrypted TCP connection.",
+      "UDP multicast.",
+      "One-way Server-Sent Events."
     ]
   },
   {
@@ -744,6 +756,12 @@
         "meaning": "嵌入式的单文件关系型数据库，通常跑在客户端本地而非服务端集群。",
         "meaningEn": "SQLite is an embedded single-file relational database that typically runs locally on a client rather than as a server cluster."
       }
+    ],
+    "optionMeanings_en": [
+      "DynamoDB, strong performance and scalable.",
+      "A single-host MySQL instance.",
+      "Elasticsearch.",
+      "An embedded SQLite file."
     ]
   },
   {
@@ -793,6 +811,12 @@
         "meaning": "记录某个会话里都有哪些成员的关联表。",
         "meaningEn": "ChatParticipant is the join table recording which members belong to which chat."
       }
+    ],
+    "optionMeanings_en": [
+      "Write only one chat record, leaving no record of who the participants are.",
+      "Write only ChatParticipant records, leaving the chat itself with no metadata.",
+      "Write a placeholder row in the Message table first and backfill members later.",
+      "One chat record plus one ChatParticipant record per member."
     ]
   },
   {
@@ -948,6 +972,12 @@
         "meaning": "同一分区键内用来排序和做范围查询的第二个键。",
         "meaningEn": "The sort key orders rows that share the same partition key and supports range queries within it."
       }
+    ],
+    "optionMeanings_en": [
+      "Build a separate reverse table maintained by application double-writes, which is prone to drift.",
+      "Full table scan over ChatParticipant.",
+      "Cache the entire chat list locally on the client, unrealistic at scale.",
+      "Add a GSI keyed by participantId with chatId as sort key, kept in sync automatically."
     ]
   },
   {
@@ -1154,6 +1184,12 @@
         "meaning": "把消息持久化到磁盘、按 topic 组织、并维护消费者位点的分布式消息队列。",
         "meaningEn": "Kafka is a distributed message queue that persists messages to disk, organizes them into topics, and tracks consumer offsets."
       }
+    ],
+    "optionMeanings_en": [
+      "Rely entirely on client-side local storage syncing with each other.",
+      "Each recipient gets an inbox: deliver immediately if online, or wait for reconnect if offline.",
+      "Just convert offline messages into push notifications.",
+      "Create one Kafka topic per user as their inbox."
     ]
   },
   {
@@ -1260,6 +1296,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "offline-sync",
+    "scenario": "WhatsApp 类聊天里，用户离线时服务器可能已经把消息写入数据库，但实时 WebSocket 投递没有成功。客户端重新连上后，系统要补发这位用户还没确认收到的消息。",
+    "scenario_en": "In a WhatsApp-like chat system, messages may already be persisted while realtime WebSocket delivery failed because the user was offline. When the client reconnects, the system needs to redeliver only the messages that this user has not acknowledged.",
     "q": "离线客户端重新连接后的补发流程是？",
     "q_en": "What is the redelivery flow when an offline client reconnects?",
     "options": [
@@ -1277,19 +1315,67 @@
     "answer": [
       2
     ],
-    "why": "重连同步 = Inbox 找 ID、Message 表取体、下发、ack 后删。同一套 ack 语义同时服务在线投递和离线补发。",
-    "why_en": "On reconnect the server reads the inbox for undelivered message ids, fetches each message, delivers them over the socket, and deletes entries once acknowledged.",
+    "why": "离线补发不是扫历史，而是补上未完成投递。Inbox 记每个接收者欠哪些 messageId，重连后取正文、下发、ack 后删。",
+    "why_en": "Offline redelivery is not a history scan. It is recovery of unfinished delivery obligations: read pending message ids from the recipient inbox, fetch bodies, deliver them, then delete after ack.",
+    "whenOtherWins": "低价值提醒或弹幕可以丢，重连拉最新状态即可，不必维护 Inbox。",
+    "tradeoff": "精确可靠补发 vs 多写一份 per-recipient Inbox",
     "tags": [
       "whatsapp",
       "offline-sync",
       "inbox"
     ],
-    "diagram": "graph LR\n    Client[Reconnect client] --> Server[Chat server]\n    Server --> Inbox[(Inbox rows)]\n    Inbox --> Missed[Undelivered messages]\n    Missed --> Client\n    Client --> Ack[Ack delivered]\n    Ack --> Inbox",
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant CS as Chat Server\n    participant I as Inbox\n    participant M as Message table\n    C->>CS: reconnect\n    CS->>I: query pending messageIds\n    I-->>CS: m123, m124\n    CS->>M: fetch message bodies\n    M-->>CS: message bodies\n    CS-->>C: deliver over WebSocket\n    C-->>CS: ack(messageId)\n    CS->>I: delete or mark delivered",
+    "optionMeanings": [
+      "时间窗口重放：按时间取最近消息，不看谁已收到。",
+      "客户端扫 Message：让手机直接从正文表找漏消息。",
+      "Inbox 补拉：Inbox 存待投递 messageId，Message 表存正文。",
+      "捎带同步：等下一条新消息触发补拉。"
+    ],
+    "optionDirectness": [
+      "低量小群、可重复时，时间窗口实现最快。",
+      "可信后端批处理能扫库，普通客户端不该扫。",
+      "需要离线必达和崩溃恢复时，用 per-recipient Inbox。",
+      "低价值角标或状态刷新，可用懒触发省请求。"
+    ],
+    "optionScenarioImpacts": [
+      "会重发已读内容，也可能漏掉窗口外未确认消息。",
+      "会暴露内部表，也缺少按接收者待投递查询的索引。",
+      "只补这位用户缺的消息；ack 后删，避免下次重复。",
+      "聊天安静时不会触发，用户会一直少消息。"
+    ],
+    "optionMeanings_en": [
+      "Time-window replay: the server fetches recent messages by time, not by per-user delivery state.",
+      "Client scans Message: the phone treats the message-body store as its query surface.",
+      "Inbox replay: the inbox stores pending message ids, while Message stores the body.",
+      "Piggyback sync: no proactive replay; a future new message triggers the check."
+    ],
+    "optionDirectness_en": [
+      "A time-window replay can be fastest for tiny chats where duplicates are acceptable.",
+      "A trusted backend job may scan storage; a normal mobile client should not.",
+      "A per-recipient inbox fits when offline delivery and crash recovery matter.",
+      "Lazy triggering can save a request for low-value state such as badges."
+    ],
+    "optionScenarioImpacts_en": [
+      "Here it resends messages already read and can miss unacked messages outside the window.",
+      "Here it exposes an internal table and lacks an index for recipient-pending delivery.",
+      "Here it replays only what this user is owed; ack cleanup prevents repeat delivery.",
+      "Here a quiet chat may never catch up, so the user can keep missing messages."
+    ],
     "termDefinitions": [
       {
+        "term": "离线补发",
+        "meaning": "用户重连后，服务器把这位用户尚未确认收到的消息重新投递一次。",
+        "meaningEn": "Offline redelivery means sending messages again after reconnect when this user has not acknowledged them yet."
+      },
+      {
         "term": "Inbox",
-        "meaning": "为每个接收者保存未投递消息的持久化队列。",
-        "meaningEn": "An inbox is a durable per-recipient queue of messages that have not yet been delivered."
+        "meaning": "为每个接收者保存未投递消息的持久化队列，通常只放接收者和 messageId。",
+        "meaningEn": "An inbox is a durable per-recipient queue of undelivered message ids, usually keyed by recipient."
+      },
+      {
+        "term": "Message 表",
+        "meaning": "保存消息正文和元数据的主表；Inbox 指向它，避免给每个接收者复制正文。",
+        "meaningEn": "The Message table stores message body and metadata; inbox rows point to it instead of copying the body per recipient."
       },
       {
         "term": "ack",
@@ -1358,6 +1444,12 @@
         "meaning": "为每个接收者保存未投递消息的持久化队列。",
         "meaningEn": "An inbox is a durable per-recipient queue of messages that have not yet been delivered."
       }
+    ],
+    "optionMeanings_en": [
+      "Run a full table scan every day and batch-delete.",
+      "Set a TTL on the entries and let them expire automatically.",
+      "Rely on the client to send a delete request.",
+      "Write a cron script that compares timestamps row by row."
     ]
   },
   {
@@ -1457,6 +1549,12 @@
         "meaning": "用户标识，作为分区键时会把不同用户的收件箱写入分散到不同分区。",
         "meaningEn": "A userId is the user identifier; as a partition key, it spreads inbox writes across users."
       }
+    ],
+    "optionDirectness_en": [
+      "Only fits when this statement is true: it spikes to about ten million writes per second.",
+      "Only fits when this statement is true.",
+      "This matches the scenario constraint.",
+      "Use when counting the message write plus inbox entries and group fan-out."
     ]
   },
   {
@@ -1513,6 +1611,12 @@
         "meaningEn": "Blob storage is an object store purpose-built for large binary files such as images, video, and attachments.",
         "fullName": "Binary Large Object storage"
       }
+    ],
+    "optionMeanings_en": [
+      "Not cost-effective because storage is too cheap, but cost is not the real bottleneck here.",
+      "Too many transaction conflicts, but this is not actually a concurrent-write problem.",
+      "Databases are not built for large binary blobs, and it drags down the Chat Server's bandwidth.",
+      "You cannot set a TTL on an attachment, but a TTL can always be set."
     ]
   },
   {
@@ -1933,6 +2037,12 @@
         "meaning": "AWS 提供的托管 NoSQL 键值/文档数据库，按分区键把数据水平分布到多个节点。",
         "meaningEn": "DynamoDB is a managed NoSQL key-value database that distributes data across nodes by partition key."
       }
+    ],
+    "optionMeanings_en": [
+      "The load balancer can't handle WebSocket handshakes.",
+      "The server has no guarantee of holding the recipients' connections, so it cannot deliver.",
+      "Too many servers make the cost spiral out of control.",
+      "DynamoDB does not support multiple writers."
     ]
   },
   {
@@ -1979,6 +2089,12 @@
         "meaning": "把消息持久化到磁盘、按 topic 组织、并维护消费者位点的分布式消息队列。",
         "meaningEn": "Kafka is a distributed message queue that persists messages to disk, organizes them into topics, and tracks consumer offsets."
       }
+    ],
+    "optionMeanings_en": [
+      "Kafka does not support multiple consumers on one topic.",
+      "Kafka cannot persist messages.",
+      "Topics cannot be created dynamically, but that is not the real bottleneck either.",
+      "Kafka is not built for billions of topics; the metadata overhead is too large."
     ]
   },
   {
@@ -2175,7 +2291,13 @@
           "流/削峰"
         ]
       ]
-    }
+    },
+    "optionMeanings_en": [
+      "RabbitMQ with a dead-letter queue.",
+      "One Kafka topic per user.",
+      "Redis Pub/Sub: build a channel per userId for inter-server forwarding.",
+      "A full mesh of gRPC calls between all Chat Servers."
+    ]
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-042",
@@ -2251,6 +2373,12 @@
         "meaningEn": "Pub/Sub is publish-subscribe messaging where a publisher sends to a channel and every current subscriber receives it; Redis does not persist these messages, so one with no subscriber is simply lost.",
         "fullName": "Publish/Subscribe"
       }
+    ],
+    "optionMeanings_en": [
+      "Both must write to disk for every channel, so persistence cost is the same.",
+      "Kafka topics are actually the lighter-weight option.",
+      "Redis Pub/Sub also has to track a consumer offset.",
+      "Kafka persists to disk and tracks offsets, carrying real overhead; Pub/Sub is just an in-memory pointer."
     ]
   },
   {
@@ -2518,7 +2646,13 @@
           "流/削峰"
         ]
       ]
-    }
+    },
+    "optionMeanings_en": [
+      "Switch back to Kafka.",
+      "Vertically scale by adding more memory.",
+      "Shard by userId across multiple Redis instances.",
+      "No scaling needed, one instance is always enough."
+    ]
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-048",
@@ -3061,6 +3195,12 @@
         "meaning": "同一账号下的一台登录设备或应用实例，例如手机、桌面端或网页端。",
         "meaningEn": "A client is one logged-in device or app instance for an account, such as a phone, desktop app, or web session."
       }
+    ],
+    "optionDirectness_en": [
+      "Only fits when this statement is true.",
+      "Use when capping accounts at about three clients keeps the per-device storage and delivery amplification from.",
+      "Only fits when this statement is true.",
+      "It does not fit this scenario constraint."
     ]
   },
   {
@@ -3186,6 +3326,12 @@
         "meaning": "连接双方按固定间隔互相发送的小探测包，用来确认对方仍然存活。",
         "meaningEn": "A heartbeat is a small probe message sent at a fixed interval to confirm the other side of a connection is still alive."
       }
+    ],
+    "optionMeanings_en": [
+      "TCP keepalive is minute-scale; a heartbeat is second-scale.",
+      "The two approaches detect failures at about the same speed.",
+      "TCP keepalive is millisecond-scale, so it is actually faster.",
+      "Application-level heartbeats are actually slower."
     ]
   },
   {
@@ -3246,6 +3392,12 @@
         "meaningEn": "TCP is a connection-oriented transport protocol that guarantees ordered delivery.",
         "fullName": "Transmission Control Protocol"
       }
+    ],
+    "optionMeanings_en": [
+      "Wait for TCP to time out and close on its own, which only detects failure on a minute scale.",
+      "Blindly send every message twice, masking loss with redundancy.",
+      "Wait for the client ACK after delivery.",
+      "Downgrade every user on a weak network to polling, sacrificing real-time delivery for everyone."
     ]
   },
   {
@@ -3909,6 +4061,12 @@
         "meaning": "连接双方按固定间隔互相发送的小探测包，用来确认对方仍然存活。",
         "meaningEn": "A heartbeat is a small probe message sent at a fixed interval to confirm the other side of a connection is still alive."
       }
+    ],
+    "optionMeanings_en": [
+      "Read latency becomes too high, but reading one record is actually fast.",
+      "Massive write amplification.",
+      "Timestamp precision is insufficient, but that is not the real problem here.",
+      "It leaks user IP addresses, but the field never stores an IP."
     ]
   },
   {
@@ -4004,6 +4162,12 @@
         "meaningEn": "A conditional write only commits when a stated condition holds, letting the store atomically compare and update in one step.",
         "fullName": "Conditional Write"
       }
+    ],
+    "optionMeanings_en": [
+      "Grab a global lock before writing.",
+      "Write after a random backoff delay.",
+      "Let only one fixed server be responsible for writing.",
+      "A DynamoDB conditional write that only updates when the new timestamp is greater."
     ]
   },
   {
