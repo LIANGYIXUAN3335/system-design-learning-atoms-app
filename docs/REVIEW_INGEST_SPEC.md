@@ -2,7 +2,7 @@
 
 > A fourth content path, alongside AUTHORING / REGEN / ENRICH. It turns each new
 > interview debrief into study cards. Detector: `scripts/review-ingest-cron.mjs`.
-> Authoring rules: `scripts/AUTHORING_SPEC.md` **Mode B**. Judged by the same
+> Authoring rules: `docs/AUTHORING_SPEC.md` **Mode B**. Judged by the same
 > `docs/card-quality-rubric.md`.
 
 ## The loop
@@ -21,7 +21,8 @@ scripts/review-ingest-cron.mjs            (detector — deterministic, no LLM)
 card-authoring agent  (AUTHORING_SPEC Mode B — classify each item)
    • knowledge gap  → knowledge deck in the matching <topic>
    • delivery/behavioral gap → interview-drill deck
-   • validate (validate-deck.mjs) — writes CANDIDATES, does not mark done
+   • pass the FULL acceptance gate (validate-deck + audit error=0 + judge sampling,
+     docs/AUTHORING_SPEC.md §验收门 — same bar as REGEN) — writes CANDIDATES, does not mark done
              ↓
 HUMAN ACCEPT gate  ← you review the candidate cards
              ↓
@@ -78,6 +79,6 @@ CronCreate is NOT durable — it dies with the session):
    (`claude -p` with the task files) writing candidates, then notifies you.
 2. **`/schedule` routine** — a scheduled cloud agent whose prompt is: "run
    review-ingest-cron.mjs; for each pending block author candidate cards per
-   AUTHORING_SPEC Mode B; validate; report for human accept; do NOT mark done."
+   docs/AUTHORING_SPEC.md Mode B; pass the full acceptance gate; report for human accept; do NOT mark done."
 
 Default posture: detect nightly, author to candidates, notify — accept by hand.

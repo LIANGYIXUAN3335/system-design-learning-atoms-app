@@ -1,5 +1,7 @@
 # Atoms — M2a Convergence Plan (make the 6000 cards usable, and not 干巴)
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Focused build increment · extends Fable's M1 in `atoms-app/` · full detail for motivation/planner/tracks/rhythm lives in `atoms-m2-spec.md` §2–5 — this plan is the **M2a slice + the deltas discovered after that spec was written** (wire the bundle, topic granularity, de-干巴 presentation, and what's now deferred). · date: 2026-07-01
 >
 > **给 Fable**：先读这份计划 + `atoms-m2-spec.md` §2–5 + 现有 `atoms-app/` 代码，**批判性审一遍再动手**；这是在 M1 上扩展，不是重写；只做 M2a，别碰后台/生成服务。

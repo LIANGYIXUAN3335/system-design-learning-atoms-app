@@ -82,7 +82,7 @@ verify: 全绿
 1. 先完整读这三个文件，它们是唯一标准，不要凭默认审美发挥：
    - docs/card-quality-rubric.md   （什么算好卡：Gate 0 存在性判据 + 逐字段 success/failure metrics + 讲解十二律）
    - docs/REGEN_FLOW.md            （怎么跑：五步循环、验证命令、回炉条件、汇报格式）
-   - scripts/AUTHORING_SPEC.md     （card JSON 的 schema 细节）
+   - docs/AUTHORING_SPEC.md        （card JSON 的 schema 细节）
 
 2. 本次处理 deck：src/content/system-design/core-concepts_caching.json（试点，只做这一个）。
 

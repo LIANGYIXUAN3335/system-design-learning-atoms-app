@@ -1,5 +1,7 @@
 # Atoms — M2a pre-build review (spec vs. code)
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Critical review of `atoms-m2-spec.md` **against the actual M1 codebase** (`atoms-app/`), done before implementing M2a · reviewer: Claude (Fable 5) · date: 2026-07-01
 >
 > **读法**：§1 是 spec 假设与代码现实的差距（M2a 必须先补的内容管线）；§2 是 spec 内部含糊处及我采用的解释（每条一行理由）；§3 是硬约束核查（无违反）；§4 是一行式异议；§5 是决策日志。

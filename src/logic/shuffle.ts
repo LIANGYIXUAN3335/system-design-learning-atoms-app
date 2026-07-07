@@ -3,7 +3,7 @@
  *
  * 26 of the 29 choice cards in the seed deck put the correct answer at
  * index 1 ("B") — without per-render shuffling, spaced repetition would
- * teach "pick B" instead of the content (atoms-m1-review.md §3.1).
+ * teach "pick B" instead of the content (docs/history/m1-review.md §3.1).
  * Grading always happens in ORIGINAL indexes; only display order varies.
  */
 export interface Shuffled<T> {

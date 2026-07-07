@@ -1,6 +1,6 @@
 # Feedback triage rubric（P1 feedback-driven content update cron 的路由标准）
 
-> 📍 **体系导航**：本文件只决定“用户 feedback 应该怎么处理、交给哪个 flow、用什么模型档位”。这是 P1 反馈驱动内容更新线；当前 P0 是 rubric-driven backfill cron。卡片质量本身仍以 `docs/card-quality-rubric.md` 为唯一裁判；执行流程仍走 `docs/REGEN_FLOW.md`、`scripts/ENRICH_SPEC.md`、`scripts/AUTHORING_SPEC.md`。
+> 📍 **体系导航**：本文件只决定“用户 feedback 应该怎么处理、交给哪个 flow、用什么模型档位”。这是 P1 反馈驱动内容更新线；当前 P0 是 rubric-driven backfill cron。卡片质量本身仍以 `docs/card-quality-rubric.md` 为唯一裁判；执行流程仍走 `docs/REGEN_FLOW.md`、`docs/AUTHORING_SPEC.md`（ENRICH 已退役 → `docs/history/ENRICH_SPEC.md`）。
 
 ## 0. Goal
 

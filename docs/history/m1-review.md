@@ -1,5 +1,7 @@
 # Atoms — M1 pre-build design review
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Critical review of `atoms-design-doc.md` + `atoms-technical-design.md` + `content/databases-drill.html`, done before scaffolding M1 · reviewer: Claude (Fable 5) · date: 2026-07-01
 >
 > **读法**：正文英文，每节开头 `> **速读**` 中文。§2–§3 是必读（发现的矛盾和缺口，以及 M1 里我怎么处理的）；§4 是要留意的风险；§6 是 M1 具体取值的决策记录。

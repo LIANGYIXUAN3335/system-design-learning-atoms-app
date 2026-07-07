@@ -358,7 +358,7 @@ For higher-risk batches, add sampled judge QA using `docs/judge-calibration.md`.
 
 ### 10.5 Status & next
 
-- **已建并验证**：命令 marker 化 + 路径修正；检测器（已测）；AUTHORING **Mode A/B**（`scripts/AUTHORING_SPEC.md` 加了 behavioral-card 段）；新 `interview-drill`（面试临场）track（`build-deck.mjs` + `tracks.json`，id abbr `idr`）；首批 66 张卡。
+- **已建并验证**：命令 marker 化 + 路径修正；检测器（已测）；AUTHORING **Mode A/B**（`docs/AUTHORING_SPEC.md` 加了 behavioral-card 段）；新 `interview-drill`（面试临场）track（`build-deck.mjs` + `tracks.json`，id abbr `idr`）；首批 66 张卡。
 - **未定**：durable 调度——in-session CronCreate 是 session-only，需 macOS `launchd` 或 `/schedule` routine 每晚跑 detect + 造 candidate + 通知；默认先 on-demand，跑通一场真实复盘后再提升。
 
 ---

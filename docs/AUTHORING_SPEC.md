@@ -1,6 +1,8 @@
 # Atoms card authoring spec (for card-generation agents)
 
-> 📍 **体系导航**：三条内容管线之一（从文章写全新 deck）。判据权威是 `docs/card-quality-rubric.md`——本文 Hard rules 是其浓缩转述，若两者冲突以 rubric 为准（改标准先改 rubric 再同步这里）。地图：`docs/INDEX.md`。
+> 📍 **体系导航**：内容管线之一（从文章写全新 deck）。判据权威是 `docs/card-quality-rubric.md`——本文 Hard rules 是其浓缩转述，若两者冲突以 rubric 为准（改标准先改 rubric 再同步这里）。地图：`docs/INDEX.md`。
+>
+> ⚖️ **验收与 REGEN 同门**：新卡的合格线 = 重写卡的合格线（同一 rubric、同一 `audit error=0` 机检、同一 judge 抽查），见文末「验收门」。
 
 You are authoring spaced-repetition drill cards ("atoms") for a personal **interview-study** app. The subject matter is whatever the user needs to drill for interviews — system design, low-level design, ML/LLM systems, coding, **and interview delivery itself**. Follow this spec exactly. Quality matters: bad distractors or vague explanations make the drill worthless.
 
@@ -144,11 +146,27 @@ This guarantees no collisions with other agents.
 - Cover EVERY section and concept in the article — don't skimp. Target **~50-80 cards** for a dense article (deep-dives, problem-breakdowns), **~30-50** for shorter overview pages. More is fine if the article is rich; never pad with near-duplicate cards.
 - Prefer depth: for a problem-breakdown, atomize the requirements, the core entities/API, the high-level design, each deep-dive, and the key numbers/trade-offs.
 
-## Validate before finishing (must pass)
+## 验收门（must pass — 与 REGEN 完全同一标准）
+
+> **写新卡和重写旧卡的验收标准是同一份，没有"先生成、以后重写再达标"这回事。**
+> 判据 = `docs/card-quality-rubric.md`（唯一裁判）；机检 = audit error 必须为 0；judge 抽查同 `docs/REGEN_FLOW.md` Step 4。
+> schema 通过（validate-deck）只是入场券，不是验收。历史教训：只跑 validate-deck 生成的 deck，
+> 曾留下上百条 rubric 违规（最长选项泄漏答案、fit 卡缺 tradeoff、术语无解释），全靠事后 REGEN 补课。
+
+每写完**一个** deck，按顺序全部通过才算完成（全绿再写下一个）：
 
 ```bash
 cd "/Users/yixuanliang/interview/Job_Search/system design learning/atoms-app"
+# 1. schema 门（入场券）
 node scripts/validate-deck.mjs src/content/<topic>/<your-file>.json
+# 2. rubric 机检门：error 必须为 0；warning 逐条处理或在报告里给一句不改的理由
+node scripts/audit-card-quality.mjs src/content/<topic>/<your-file>.json --limit=0
+# 3. bundle + 逻辑 + Mermaid 三道门
+npm run build:deck && npm run verify
 ```
 
-Fix every error it reports. When all your assigned files validate, report: which files you wrote, card counts per file, and the total.
+4. **Judge 抽查（同 REGEN Step 4）**：从本 deck 随机抽 10 张（或 ≤10% 取大者），按 REGEN_FLOW 的四项
+   （约束决定答案 / 答案泄漏 / 英文口语自然度 / Gate 0 复核）逐卡 pass/fail + 一句理由，输出成表。
+   ≥2 张 fail 同一项 → 该项全 deck 系统性返工后重跑机检。
+
+**汇报格式（同 REGEN Step 5）**：每 deck 一段 —— 文件名、卡数、audit `errors 0 / warnings N（残余分类）`、judge 抽查结果表、verify 全绿。

@@ -217,7 +217,7 @@ function repairPrompt(deck, cardIds, taskPath) {
    - docs/card-quality-rubric.md    （判据总库：Gate 0 + 逐字段 S/F + 讲解十二律 + 附录A机检规则）
    - docs/judge-calibration.md      （四个解析形状的 fail/pass 对照样本）
    - docs/REGEN_FLOW.md             （五步循环与硬性禁止）
-   - scripts/AUTHORING_SPEC.md      （card JSON schema 细节）
+   - docs/AUTHORING_SPEC.md         （card JSON schema 细节）
 
 2. 只修这个文件里的这些卡（其余卡一个字都不要动）：
    deck: ${deck}

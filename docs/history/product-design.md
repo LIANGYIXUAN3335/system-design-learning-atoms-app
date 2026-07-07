@@ -1,5 +1,7 @@
 # Atoms — a System Design micro-drill trainer
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Design doc · working title "Atoms" (placeholder) · status: DRAFT · author: Yixuan · date: 2026-07-01
 
 > **How to read this doc** — The body is written in English (that's the substance). Each section opens with a `> **速读**` blockquote in Chinese so you can skim the whole thing in ~2 minutes and only drop into English where you want detail.

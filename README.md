@@ -1,8 +1,8 @@
 # Atoms — study app (M1 core loop + M2a)
 
-> **速读** ｜ 「系统设计版百词斩」。M1：核心刷题循环（5 种题型 → 解释 + 🔊 → 忘了/模糊/记得 → `ts-fsrs` 排期）。M2a 新增：**学习路径**（track = tag 过滤器，626 张卡、可自建）、**规划器**（面试日期 → 每天新卡量）、**动机层**（每日目标环 + 🔥 连续天数 + 斩杀框架）、**节奏预设**（早晚/每天/隔天 → 提醒 + FSRS retention）、表格原子渲染。纯本地（expo-sqlite），无 AI、无 key、无网络依赖。设计决策见 `../atoms-m1-review.md` 与 `../atoms-m2a-review.md`。
+> **速读** ｜ 「系统设计版百词斩」。M1：核心刷题循环（5 种题型 → 解释 + 🔊 → 忘了/模糊/记得 → `ts-fsrs` 排期）。M2a 新增：**学习路径**（track = tag 过滤器、可自建）、**规划器**（面试日期 → 每天新卡量）、**动机层**（每日目标环 + 🔥 连续天数 + 斩杀框架）、**节奏预设**（早晚/每天/隔天 → 提醒 + FSRS retention）、表格原子渲染。纯本地（expo-sqlite），无 AI、无 key、无网络依赖。设计决策见 `docs/history/m1-review.md` 与 `docs/history/m2a-review.md`；全部文档地图：`docs/INDEX.md`。
 
-Local-first Expo (React Native + TypeScript) app: `expo-sqlite` + `ts-fsrs` (the **only** scheduler), 626 bundled cards across tracks, per-card feedback capture with JSON export. No API key anywhere in the app.
+Local-first Expo (React Native + TypeScript) app: `expo-sqlite` + `ts-fsrs` (the **only** scheduler), ~10k bundled cards across 5 tracks, per-card feedback capture with JSON export. No API key anywhere in the app.
 
 ## Run it（macOS + iPhone）
 
@@ -37,28 +37,29 @@ npx expo start
 | Path | What |
 |---|---|
 | `App.tsx` | screen state machine: Today → Session → Done → Settings; deck/track/planner wiring |
-| `src/content/deck.bundle.json` | **the runtime deck**（626 张，`build:deck` 生成，别手改） |
-| `src/content/cards.json` + `ai-coding/` + `system-design/` | per-source decks（port/生成产物；bundle 的输入） |
+| `src/content/deck.bundle.json` | **the runtime deck**（`build:deck` 生成，别手改） |
+| `src/content/<track>/*.json` + `cards.json` | per-source decks（bundle 的输入；五轨：system-design / llm-sd / low-level-design / ai-coding / interview-drill） |
 | `src/content/tracks.json` | 种子路径（首启动种一次，之后归 DB 管，删了不会复活） |
 | `src/config.ts` | tunables：`NEW_PER_DAY`、`RECOMMENDED_NEW_PER_DAY`、`MASTERED_STABILITY_DAYS`、learn-ahead、**RHYTHMS**（retention + 提醒模式） |
 | `src/logic/` | pure logic：srs (含 `setRequestRetention`)、queue、planner、streak、tracks、settings、shuffle、grading、cloze、feedback |
 | `src/db/database.ts` | SQLite v2：cards / srs / review_log / feedback / **settings / tracks** + 迁移 + 启动时内容↔状态调和 |
 | `src/notifications.ts` | 提醒：未来 7 天 DATE 触发器批量重排；web no-op |
 | `src/screens/`, `src/components/` | Today(路径选择器+目标环) / Session / Done(斩杀) / **Settings**；卡片渲染器 + Mermaid WebView + **TableView** |
-| `scripts/port-cards.mjs` | 3 个 HTML 原型 → 规范化 deck JSON（`npm run port:cards`） |
+| `docs/` | **全部文档**：INDEX（地图）、card-quality-rubric（质量唯一判据）、AUTHORING_SPEC / REGEN_FLOW / REVIEW_INGEST_SPEC（三条内容管线）、ROADMAP-m3；`docs/history/` = 归档 |
 | `scripts/build-deck.mjs` | 合并全部 deck + **按目录注入 `track:*` tag** → `deck.bundle.json`（`npm run build:deck`） |
 | `scripts/validate-deck.mjs` | 校验任意 deck JSON（生成新内容后跑） |
 | `scripts/selftest.ts` | 逻辑自检（bundle/tracks/planner/streak/rhythm 全覆盖）：`npm run selftest` |
 
 `npm run verify` = typecheck + selftest + visual:validate（三道门都要绿）.
 
-## Content workflow (M2a)
+## Content workflow
 
-1. 手写卡的真源在 `../content/*.html`（M0 原型）；生成卡直接放 `src/content/<dir>/*.json`。
-2. 改了 HTML 原型 → `npm run port:cards`（规范化 `en→why_en` 等 + 校验 + 打 tag）。
-3. 新增/改动任何 deck 后 → `npm run build:deck` 重建 bundle（**track tag 在这里按目录注入**：`system-design/`→classic-sd、`ai-coding/`→ai-coding、`llm-sd/`→llm-sd；放进映射目录=自动入轨，或卡片自带 `track:*` tag）。
-4. 重启 `npx expo start`。卡片内容**直接从 bundle 读取**（不再镜像进 SQLite——6k 张卡每次启动逐条写库是白付的数秒冷启动）；SQLite 只存可变状态（srs/review_log/feedback/settings/tracks），换 bundle 不影响学习进度。
-5. 刷题里「导出反馈」→ JSON 喂给 Claude 生成补漏新卡（M2c 把这条链自动化成后台服务）。
+1. 新内容一律以 JSON deck 形式进 `src/content/<track>/*.json`；怎么写、怎么重写、怎么从复盘造卡 → 看 `docs/INDEX.md`（三条管线：AUTHORING / REGEN / REVIEW-INGEST）。
+2. **验收门对所有管线一致**：`validate-deck`（schema）→ `audit-card-quality --limit=0`（rubric 机检，error=0）→ judge 抽查 → `npm run build:deck && npm run verify`。写新卡不豁免，见 `docs/AUTHORING_SPEC.md` §验收门。
+3. 新增/改动任何 deck 后 → `npm run build:deck` 重建 bundle（**track tag 按目录注入**：`system-design/`→classic-sd、`ai-coding/`→ai-coding、`llm-sd/`→llm-sd；放进映射目录=自动入轨，或卡片自带 `track:*` tag）。
+4. 重启 `npx expo start`。卡片内容**直接从 bundle 读取**；SQLite 只存可变状态（srs/review_log/feedback/settings/tracks），换 bundle 不影响学习进度。
+5. 刷题里「导出反馈」→ 走 `docs/feedback-triage-rubric.md` 路由成候选更新（P1 cron）。
+6. M0 的 HTML 原型与 porting 工具已归档（`archive/m0-prototypes/`，工具在 git 历史）；seed 34 卡固化在 `src/content/cards.json`。
 
 ## Key behaviors (决策日志：M1 review §6 · M2a review §5)
 

@@ -13,7 +13,7 @@
  *   2. read the ledger; a block is PENDING if its (file,id) is not ledgered
  *      done AND its marker status is "new"
  *   3. emit one task file per pending block (the block text + an authoring
- *      header pointing at AUTHORING_SPEC) into scripts/review-ingest-tasks/
+ *      header pointing at docs/AUTHORING_SPEC.md) into scripts/review-ingest-tasks/
  *   4. write a report + print a summary
  *   5. authoring is delegated + HUMAN-GATED: an agent turns task files into
  *      candidate decks under src/content/<topic>/ (see REVIEW_INGEST_SPEC.md);
@@ -146,11 +146,13 @@ if (!flag('--dry-run')) {
   for (const b of pending) {
     const safe = `${b.id}__${b.file.replace(/[^a-z0-9]+/gi, '-')}`.replace(/-+$/,'');
     const header = [
-      `<!-- AUTHORING TASK for atoms card cron. Follow scripts/AUTHORING_SPEC.md (Mode B).`,
+      `<!-- AUTHORING TASK for atoms card cron. Follow docs/AUTHORING_SPEC.md (Mode B).`,
       `   Source file: ${b.file}   |   review id: ${b.id}`,
       `   1. Classify each item: knowledge gap → knowledge deck in the matching <topic>;`,
       `      delivery/behavioral gap → interview-drill deck.`,
-      `   2. Author candidate cards into src/content/<topic>/ ; validate; do NOT mark done.`,
+      `   2. Author candidate cards into src/content/<topic>/ ; pass the FULL acceptance gate`,
+      `      (validate-deck + audit-card-quality --limit=0 error=0 + judge sampling,`,
+      `      see docs/AUTHORING_SPEC.md §验收门); do NOT mark done.`,
       `   3. After human accept: node scripts/review-ingest-cron.mjs --mark-done ${b.id}  -->`,
       '', b.text, '',
     ].join('\n');

@@ -1,5 +1,7 @@
 # Atoms — M2 Spec
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Spec for the second build increment · companion to `atoms-design-doc.md` / `atoms-technical-design.md` · builds on Fable's M1 in `atoms-app/` · date: 2026-07-01
 >
 > **读法**：正文英文（给实现者/Fable 读），每节 `> **速读**` 是中文摘要。给 Fable 用时说：「读 `atoms-m2-spec.md`，先批判审一遍，再按里程碑实现。」

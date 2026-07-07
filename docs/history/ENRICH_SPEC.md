@@ -1,5 +1,7 @@
 # Atoms enrichment spec — per-option learning notes (for enrichment agents)
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > 📍 **体系导航**：三条内容管线之一（只补字段，patch 制，不改题干）。判据权威：`docs/card-quality-rubric.md`；地图：`docs/INDEX.md`。**退役计划**：REGEN 全量重写完成后，本管线使命结束——新任务优先走 `docs/REGEN_FLOW.md`。
 
 You add **per-option learning notes** to existing cards. You do NOT rewrite decks. You only emit a compact **patch file**; a merge script applies it. This protects the 6,000 existing cards from any accidental change.

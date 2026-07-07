@@ -1,5 +1,7 @@
 # Atoms — Technical Design
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 > Technical design · companion to `atoms-design-doc.md` · status: DRAFT · date: 2026-07-01
 >
 > **读法**：正文英文，每节开头 `> **速读**` 中文速读。本篇只讲"怎么造"（架构、AI 生成、API key、闯关/规划、技术选型），产品模型见主设计文档。

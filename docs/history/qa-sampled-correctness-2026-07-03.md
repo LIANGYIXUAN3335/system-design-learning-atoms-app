@@ -1,5 +1,7 @@
 # Sampled Correctness QA - 2026-07-03
 
+> 🗄 **ARCHIVED 2026-07-07** — 历史文档，只作背景与决策依据；文中路径/状态以当时为准。现行结构与标准见 `docs/INDEX.md`。
+
 ## Scope
 
 This pass reviewed a stratified, high-risk-weighted sample of 400 cards out of 6093 total cards, using six parallel review workers.
