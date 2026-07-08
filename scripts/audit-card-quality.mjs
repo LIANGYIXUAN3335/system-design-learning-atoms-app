@@ -61,6 +61,21 @@ const TEMPLATE_FILLER_RE =
 /** explicit tradeoff signal: naming both sides of an axis */
 const TRADEOFF_RE =
   /(vs|对比|而不是|换来|代价是|牺牲|相比|取舍|权衡|trade-?off|更快但|更慢但|一致性.{0,6}(可用|延迟)|(读|写).{0,8}(读|写).{0,4}(路径|放大|优先))/i;
+const COMMAND_MECHANISM_RE =
+  /\b(INCR|EXPIRE|SETNX|EVAL|XREADGROUP|XACK|XCLAIM|XAUTOCLAIM|SSUBSCRIBE|SPUBLISH|BF\.(RESERVE|ADD|EXISTS)|JSON\.(SET|GET|NUMINCRBY)|TS\.(ADD|RANGE)|SET\s+.{0,40}\s+NX)\b/i;
+const SCALING_UNIT_RE =
+  /(按(节点|频道|连接|分片|槽|slot|shard|用户|设备)|不按(节点|频道|连接|分片|槽|slot|shard|用户|设备)|per\s+(node|channel|connection|shard|slot|user|device|subscriber|server)|连接数|频道数|topic\s*数|slot\s*数|shard\s*数|subscription state|百万.*频道|100\s*万.*频道)/i;
+const LIFECYCLE_OWNERSHIP_RE =
+  /(自制|homegrown|自己维护|应用维护|Redis\s*维护|ZooKeeper\s*维护|注册表|registry|谁维护|lifecycle|ownership)/i;
+const NATIVE_VS_SELF_BUILT_RE =
+  /((原生|native).{0,30}(自制|homegrown|相比|对比|vs|versus)|(自制|homegrown|相比|对比|vs|versus).{0,30}(原生|native))/i;
+const VERSION_BOUNDARY_RE =
+  /(Redis\s*(7|8)|Redis Stack|老版本|legacy|Stack\s*模块|Redis\s*模块|built-?in\s+Redis)/i;
+const STALE_LOCK_RE =
+  /(过期锁|expired lock|旧持有者|旧写|stale write|写坏|持续写|自损|pause|GC|醒来后.*写|过期后.*写)/i;
+const LOCK_RE = /(Redis\s*锁|分布式锁|\block\b|SETNX|SET\s+.{0,40}\s+NX|fencing token)/i;
+const LOCK_GUARD_RE =
+  /(fencing|token|CAS|compare-and-swap|conditional write|条件写|版本|version|状态条件|last_?token|WHERE|拒绝旧写|幂等)/i;
 
 /** longest common substring length ≥ n between two strings (cheap n-gram check) */
 function sharesLongRun(a, b, n = 14) {
@@ -73,6 +88,22 @@ function sharesLongRun(a, b, n = 14) {
 
 function compact(text) {
   return (text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function hasCodeSample(card) {
+  return compact(card.codeSample).length > 0;
+}
+
+function hasDiagram(card) {
+  return compact(card.diagram).length > 0 || Array.isArray(card.optionDiagrams);
+}
+
+function hasVisual(card) {
+  return Boolean(card.table) || hasDiagram(card);
+}
+
+function hasFormulaishText(card) {
+  return /(≈|=|公式|formula|roughly|约等于|->|×|\*)/.test(allText(card));
 }
 
 function allText(card) {
@@ -353,6 +384,52 @@ function auditCard(card, rel) {
     if (longCell || headers.some((h) => compact(h).length > 10)) {
       add(issues, 'table.cell_over_budget', 1, 'table cells should be short phrases (cell ≤20, header ≤8 chars target) — move sentences into option notes or why');
     }
+  }
+
+  // ---- live-drill confusion triggers from the quality rubric --------------
+  if (COMMAND_MECHANISM_RE.test(text) && !hasCodeSample(card) && !hasDiagram(card)) {
+    add(
+      issues,
+      'missing.command_example',
+      1,
+      'card names concrete commands/mechanisms but has no codeSample or sequence diagram; add a runnable command snippet or state timeline',
+    );
+  }
+
+  if (SCALING_UNIT_RE.test(text) && !hasVisual(card) && !hasFormulaishText(card)) {
+    add(
+      issues,
+      'missing.scaling_unit_model',
+      1,
+      'card discusses scaling by node/channel/user/device/slot/shard but lacks a unit model; explain what is counted and what remains a secondary cost',
+    );
+  }
+
+  if ((LIFECYCLE_OWNERSHIP_RE.test(text) || NATIVE_VS_SELF_BUILT_RE.test(text)) && !hasVisual(card)) {
+    add(
+      issues,
+      'missing.lifecycle_visual',
+      1,
+      'card contrasts native/homegrown or state ownership but has no table/diagram showing who owns, cleans up, and recovers the state',
+    );
+  }
+
+  if (VERSION_BOUNDARY_RE.test(text) && !card.table && !compact(card.whenOtherWins)) {
+    add(
+      issues,
+      'missing.version_boundary',
+      1,
+      'version-sensitive claim lacks a current-vs-legacy/product boundary; add a table or whenOtherWins note',
+    );
+  }
+
+  if (LOCK_RE.test(text) && STALE_LOCK_RE.test(text) && !LOCK_GUARD_RE.test(text)) {
+    add(
+      issues,
+      'missing.lock_correctness_guard',
+      1,
+      'expired-lock/stale-holder card does not name the downstream guard (fencing token, CAS, conditional write, version/state check)',
+    );
   }
 
   // ---- tradeoff must be explicit on decision cards -------------------------

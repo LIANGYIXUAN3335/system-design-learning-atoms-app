@@ -1,5 +1,5 @@
 ---
-version: 2026-07-04.1
+version: 2026-07-08.1
 ---
 
 # Card quality rubric（逐字段质量标准 · 重写/生成的唯一裁判）
@@ -117,6 +117,18 @@ version: 2026-07-04.1
 - **F1** 伪代码化的空架子（`doAuth(); // 认证`）——不如不写。
 - **F2** 超过 10 行的完整教程式代码——这是卡片不是文档。
 
+### 1.9 Live-drill confusion triggers（实刷暴露出的强制补强项）
+
+这些不是新字段，而是从用户实刷反馈里抽出来的"容易卡住"触发器。命中任一触发器时，生成/重写 agent 必须用现有字段补强：`scenario`、`why`、`termDefinitions`、`table`、`diagram`、`codeSample`、option rich fields。原则：**不能只告诉学习者选什么，要让学习者能在脑子里跑一遍系统。**
+
+- **C1 命令/多步序列触发器**：题目出现 Redis 命令、HTTP 报文、SQL、CQL、Kafka CLI、DynamoDB API，尤其是两条命令之间可能崩溃（如 `INCR` + `EXPIRE`、`SET NX PX` + 业务写、`SSUBSCRIBE`/`SPUBLISH`），必须有 `codeSample` 或时序图。解释要写清："命令什么时候执行"、"状态立刻变成什么"、"崩在两步中间会留下什么"。只说"原子/非原子"= failure。
+- **C2 规模单位触发器**：出现"按节点不按频道"、"按 user/chat/device 分区"、"连接数/QPS/TPS/slot/shard/topic 数"时，必须定义计量单位、非计量单位和一行粗公式。范例："连接数 ≈ 触达的 Redis 节点数，不是频道数；但订阅元数据和消息 fanout 仍按频道/订阅者增长。"
+- **C3 原生 vs 自制 / 生命周期触发器**：题目比较 native Pub/Sub、homegrown registry、ZooKeeper/Redis 记录路由、cache 策略等"谁维护状态"的问题时，必须有 table 或 diagram 说明：状态放哪里、谁创建、谁清理、谁发现故障、丢失/重复的代价是什么。只说"原生更方便/自制更灵活"= failure。
+- **C4 版本/产品边界触发器**：题目涉及 Redis 7/8、Redis Stack vs Redis Open Source、AWS managed service、旧版本模块、新版本内置等，会随时间或发行版变化的事实时，必须写当前说法与旧说法的边界，并用 table 或 `whenOtherWins` 标出"在哪个版本/产品里这句话不成立"。只写"现在是这样"= failure。
+- **C5 锁/租约/跨系统正确性触发器**：题目出现 Redis lock、lease、过期锁、fencing token、CAS、条件写、幂等时，必须画出"拿锁 -> TTL 过期/进程暂停 -> 另一个持有者写 -> 旧持有者醒来"的状态链，并点名真正拒绝旧写的是下游 DB/存储的 token/version/state 条件，不是 Redis 锁本身。
+- **C6 抽象数据库术语触发器**：题目出现 optimizer、query planner、columnar OLAP、MPP、WAL、KMS、TLS、at-rest encryption、CRDT/OT 这类抽象词时，必须回答三件事：它在哪一层、输入/输出长什么样、为什么本题需要它。`termDefinitions` 只给一句词典式解释不够；`why` 或 option notes 要给一个具名例子。
+- **C7 "正确但没解释为什么不用另一把刀"触发器**：当用户的直觉是"杀鸡焉用牛刀"或"这个方案也能做啊"时，卡片必须有 `whenOtherWins` 或表格行说明 rejected option 何时反超。范例：Time Series DB 适合按时间窗口的 metric；ClickHouse/BigQuery 适合复杂多维报表和大范围列扫描。
+
 ## 2. 失败模式速查（F → 检测 → 修）
 
 | 失败 | 检测 | 修法 |
@@ -140,6 +152,11 @@ version: 2026-07-04.1
 | 形容词悬空（"更简单"没落点） | judge（1.4-S6） | 指到具体接口参数/操作/资源数字 |
 | 不像面试口语 | `[template_filler]` + judge（1.4-S7） | 拆短句；改成"我会先…因为…但代价是…" |
 | 清单题名词罗列 | judge（1.3-S5） | 每项一句"挡什么风险/减哪里压力" |
+| 命令/多步序列没真实例子 | `[missing.command_example]` + judge（1.9-C1） | 补 `codeSample` 或时序图：命令、状态变化、崩溃点、残留状态 |
+| 扩展成本没说明按谁算 | `[missing.scaling_unit_model]` + judge（1.9-C2） | 补单位模型：按 node/channel/user/device/slot/shard 哪个算，哪个只是二级成本 |
+| 原生 vs 自制只给形容词 | `[missing.lifecycle_visual]` + judge（1.9-C3） | 补 table/diagram：谁维护状态、谁清理、谁发现故障、代价 |
+| 版本事实没边界 | `[missing.version_boundary]` + judge（1.9-C4） | 补 current vs legacy / product boundary；必要时查官方文档 |
+| 锁题没讲下游防旧写 | `[missing.lock_correctness_guard]` + judge（1.9-C5） | 补 fencing token / CAS / conditional write / version check 的状态链 |
 
 ## 3. 讲解十二律（写 scenario/why/解析时的风格约束，源自 Hello Interview 逆向）
 
@@ -181,6 +198,11 @@ npm run build:deck && npm run verify     # schema + 逻辑 + Mermaid
 | `choice.missing_option_notes` | warn | 非裸数字估算选择题没有完整 option-level 解释 | 补 rich 三字段中英版本；若已有高质量 legacy 解释，可先补 `optionExplanations_en` |
 | `choice.legacy_only` | warn | 只有 `optionExplanations` 无三字段 | 重要卡迁移到三字段形式 |
 | `jargon_not_explained` (`terms.undefined`) | warn | 题干/选项术语密集但无本地解释 | 补 termDefinitions 或场景内释义 |
+| `missing.command_example` | warn | 题干/解释出现具体命令或 API 机制，但没有 `codeSample` 或时序图 | 补真实命令/请求/SQL，或画出多步状态变化 |
+| `missing.scaling_unit_model` | warn | 文本出现"按节点/按频道/per node/per channel/连接数/slot/shard"等扩展单位，但没有表格/图或公式化说明 | 补单位模型：主计量单位、非主计量单位、二级成本 |
+| `missing.lifecycle_visual` | warn | 文本比较原生/自制、registry、谁维护状态，但没有 table/diagram | 补生命周期表或数据流图 |
+| `missing.version_boundary` | warn | 文本涉及 Redis 7/8、Redis Stack、老版本/新版本、模块/内置等版本边界，但没有对比表或 `whenOtherWins` | 补 current vs legacy / product boundary |
+| `missing.lock_correctness_guard` | warn | 文本涉及过期锁/旧持有者继续写，但没有 fencing/CAS/条件写/版本检查等下游 guard | 补跨系统状态链，点名谁拒绝旧写 |
 | `fit.missing_when_other_wins` | **error** | fit 选择卡缺 `whenOtherWins` | 写被拒方案何时反超 |
 | `explanation.truncated_or_cross_topic` | **error** | 文本疑似截断或跨题串稿 | 从本卡场景整体重写解释 |
 
