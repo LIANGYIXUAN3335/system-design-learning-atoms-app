@@ -695,48 +695,101 @@
     "answer": [
       0
     ],
-    "why": "并发读到同一个旧值会丢更新，结果是系统低估真实请求数。",
-    "why_en": "Concurrent reads of the same old value can lose an increment and undercount real traffic.",
+    "why": "两个节点都读到旧值 4，都判断 4 < 5 所以放行；然后各自计算 4+1=5 并写回 5。真实发生了 2 个请求，但 counter 最后还是 5，只增加了 1 次，系统低估流量，下一次可能继续误放行。",
+    "why_en": "Both nodes read the old value 4, both see 4 < 5 and allow, then both compute 4+1=5 and write 5 back. Two requests happened, but the counter only increased once, so the limiter undercounts and may allow too much traffic.",
+    "codeSample": "// Unsafe read-modify-write\nconst n = await redis.get('rl:user:42'); // both nodes read 4\nif (Number(n) < 5) {\n  await redis.set('rl:user:42', Number(n) + 1); // both write 5\n  allow(); // two requests allowed, one count recorded\n}\n\n// Safer atomic counter\nconst newCount = await redis.incr('rl:user:42');\nif (newCount <= 5) allow();\nelse reject429();",
+    "lang": "javascript",
     "tags": [
       "educative",
       "rate-limiter",
       "concurrency"
     ],
+    "table": {
+      "headers": [
+        "Step",
+        "Node A",
+        "Node B",
+        "Counter"
+      ],
+      "rows": [
+        [
+          "1",
+          "read 4",
+          "read 4",
+          "4"
+        ],
+        [
+          "2",
+          "allow",
+          "allow",
+          "4"
+        ],
+        [
+          "3",
+          "write 5",
+          "write 5",
+          "5"
+        ],
+        [
+          "Result",
+          "1 request",
+          "1 request",
+          "only +1"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "read-modify-write",
+        "meaning": "先读旧值，在应用里计算新值，再写回；如果读和写不是一个原子动作，并发时可能互相覆盖。",
+        "meaningEn": "Read-modify-write reads an old value, computes a new value in the app, then writes it back; if the cycle is not atomic, concurrent writers can overwrite each other."
+      },
+      {
+        "term": "lost update",
+        "meaning": "两次并发更新都发生了，但其中一次更新效果被另一次写回覆盖，最终状态只反映一次。",
+        "meaningEn": "A lost update happens when two concurrent updates both occur, but one effect is overwritten so the final state reflects only one update."
+      },
+      {
+        "term": "INCR",
+        "meaning": "Redis 原子自增命令，把读、加一、写回合成服务端一个不可被插队的操作。",
+        "meaningEn": "INCR is Redis's atomic increment command, combining read, add-one, and write-back into one server-side operation."
+      }
+    ],
     "optionMeanings": [
-      "选项主张：并发允许却丢一次计数。",
-      "选项主张：请求会被永久拒绝。",
-      "选项主张：规则缓存自动修复。",
-      "选项主张：LB 自动串行请求。"
+      "两个请求都被允许，但最后 counter 只从 4 变成 5。",
+      "这是另一个问题；本题不是永久拒绝，而是少记了请求。",
+      "规则缓存只存配置，不会修复计数器竞态。",
+      "普通负载均衡不会自动把同一用户请求串行化。"
     ],
     "optionDirectness": [
-      "这是本题要识别的核心原因。",
-      "只有题设改成这个方向时才适合。",
-      "适合临时加速或可容忍短暂旧值。",
-      "只有题设改成这个方向时才适合。"
+      "适合：这正是 lost update。",
+      "不符合：系统反而可能多放行，不是永久拒绝。",
+      "不符合：缓存配置和原子计数是两回事。",
+      "不符合：除非显式做 sticky routing 或单线程队列。"
     ],
     "optionScenarioImpacts": [
-      "会让方案围绕「并发允许却丢一次计数」展开。",
-      "会让系统依赖「请求会被永久拒绝」这个前提。",
-      "会让系统依赖「规则缓存自动修复」这个前提。",
-      "会让系统依赖「LB 自动串行请求」这个前提。"
+      "会推动你用 Redis INCR、Lua 或事务把检查和自增放进原子边界。",
+      "会误判故障方向，错过超发风险。",
+      "会把静态规则缓存和动态计数状态混在一起。",
+      "会错误依赖基础设施提供它并不保证的串行语义。"
     ],
     "optionMeanings_en": [
-      "Both allow but one increment is lost.",
-      "Requests are rejected forever.",
-      "The rule cache fixes it automatically.",
-      "The load balancer serializes requests."
+      "Both requests are allowed, but the counter only moves from 4 to 5.",
+      "That is a different failure; here the request is undercounted, not rejected forever.",
+      "A rule cache stores config and does not fix counter races.",
+      "A normal load balancer does not serialize requests for the same user."
     ],
     "optionDirectness_en": [
-      "This is the core issue in this scenario.",
-      "Only fits when this statement is true: requests are rejected forever.",
-      "Only fits when this statement is true: the rule cache fixes it automatically.",
-      "Only fits when this statement is true: the load balancer serializes requests."
+      "Fits: this is the lost update.",
+      "Does not fit: the system may allow too much, not reject forever.",
+      "Does not fit: cached rules are separate from atomic counter updates.",
+      "Does not fit unless you explicitly add sticky routing or a single-threaded queue."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this path: Both allow but one increment is lost.",
-      "It commits the design to this assumption: Requests are rejected forever.",
-      "It commits the design to this assumption: The rule cache fixes it automatically.",
-      "It commits the design to this assumption: The load balancer serializes requests."
+      "It pushes the design toward Redis INCR, Lua, or a transaction so check and increment share an atomic boundary.",
+      "It diagnoses the wrong direction and misses the over-admission risk.",
+      "It confuses static rule caching with dynamic counter state.",
+      "It relies on serialization that load balancing does not guarantee."
     ]
   },
   {

@@ -1152,8 +1152,10 @@
       2
     ],
     "tradeoff": "写延迟 vs 数据持久性",
-    "why": "Write-Through 同步落库→写慢但一写就持久；Write-Behind 异步落库→写快但崩溃可能丢。这是一条典型的「延迟 vs 持久性」权衡。",
-    "why_en": "Write-through trades slower writes for durability, while write-behind trades possible data loss for much faster writes.",
+    "why": "严格说，写 DB 后删除 cache 是 cache-aside invalidation，不是 write-through。Write-through 是同步写 DB 和 cache，确认持久化后才返回，所以更慢但更安全；write-behind 是先写 cache/队列就返回，后台异步刷 DB，所以更快，但后台写库失败或队列不可靠时可能丢更新。",
+    "why_en": "Strictly, writing the database and deleting the cache is cache-aside invalidation, not write-through. Write-through synchronously writes the database and cache before acknowledging, so it is slower but safer; write-behind acknowledges after a cache or queue write and flushes to the database later, so it is faster but can lose updates if the flush fails or the queue is not durable.",
+    "codeSample": "// Cache-aside invalidation: DB is source of truth\nasync function updateCacheAside(id, review) {\n  await db.tx(async () => {\n    await db.insertReview(id, review);\n    await db.updateRatingAggregate(id);\n  });\n  await cache.del(`business:${id}:rating`); // next read rebuilds cache\n}\n\n// Write-through: ack only after DB and cache are updated\nasync function updateWriteThrough(id, review) {\n  const avg = await db.tx(async () => {\n    await db.insertReview(id, review);\n    return db.updateRatingAggregate(id);\n  });\n  await cache.set(`business:${id}:rating`, avg);\n  return avg; // durable before returning\n}\n\n// Write-behind: ack before DB commit; worker flushes later\nasync function updateWriteBehind(id, review) {\n  await cache.applyReview(id, review);\n  await queue.enqueue({ id, review }); // must be durable\n  return 'accepted';\n}\n\nasync function flushWorker(event) {\n  try {\n    await db.applyReview(event.id, event.review);\n    await queue.ack(event);\n  } catch (err) {\n    await queue.retry(event); // without retry/WAL, data can be lost\n  }\n}",
+    "lang": "javascript",
     "tags": [
       "yelp",
       "write-through",
@@ -1162,70 +1164,84 @@
     ],
     "table": {
       "headers": [
-        "Mode",
-        "Latency",
-        "Durable"
+        "Pattern",
+        "Write path",
+        "Ack time",
+        "Risk"
       ],
       "rows": [
         [
           "Write-Through",
-          "higher",
-          "immediate"
+          "DB + cache sync",
+          "after DB",
+          "slower"
         ],
         [
           "Write-Behind",
-          "lower",
-          "risk of loss"
+          "cache/queue first",
+          "before DB",
+          "flush can fail"
+        ],
+        [
+          "Cache-Aside",
+          "DB then delete cache",
+          "after DB",
+          "stale until miss"
         ]
       ]
     },
     "termDefinitions": [
       {
         "term": "Write-Through",
-        "meaning": "写入时同步更新缓存和数据库，两者都成功才算完成。",
-        "meaningEn": "Write-through synchronously updates both the cache and the database before acknowledging a write."
+        "meaning": "写入时同步更新数据库和缓存，通常等数据库持久化、缓存也更新后才返回；不是简单删除缓存。",
+        "meaningEn": "Write-through synchronously updates the database and cache and usually acknowledges only after the database is durable and the cache is updated; it is not simply deleting the cache."
       },
       {
         "term": "Write-Behind",
-        "meaning": "写入先落到缓存，再由后台异步批量写入数据库。",
-        "meaningEn": "Write-behind writes to the cache first and flushes to the database asynchronously in the background."
+        "meaning": "写入先落到缓存或持久队列并快速返回，再由后台异步写数据库；如果后台写库失败且没有可靠队列、重试或 WAL，可能丢更新。",
+        "meaningEn": "Write-behind writes to the cache or durable queue first, acknowledges quickly, then flushes to the database asynchronously; if the flush fails without a reliable queue, retry, or WAL, updates can be lost."
+      },
+      {
+        "term": "cache-aside invalidation",
+        "meaning": "应用先写数据库，再删除或失效缓存；下一次读 miss 后从数据库回填缓存。",
+        "meaningEn": "Cache-aside invalidation writes the database first, then deletes or invalidates the cache so the next cache miss reloads from the database."
       }
     ],
     "optionMeanings": [
-      "选项主张：写穿透写更快但可能丢数据。",
-      "选项主张：两者写延迟和持久性完全一样。",
-      "选项主张：同步落库写更慢但更持久，写回更快但可能丢。",
-      "选项主张：写回更慢也更持久，写穿透更快。"
+      "把 write-through 和 write-behind 的延迟/风险说反了。",
+      "忽略了同步写库和异步刷库的根本差异。",
+      "正确：write-through 等 DB 持久化，write-behind 先返回再异步刷库。",
+      "把 write-behind 说成更慢更持久，方向相反。"
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有这个绝对假设成立时才适合。",
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。"
+      "不符合：write-through 的优势是持久性，不是低延迟。",
+      "不符合：两者正是在延迟和持久性上做取舍。",
+      "适合：这正是本题要区分的 tradeoff。",
+      "不符合：write-behind 快在先返回，风险在异步刷库。"
     ],
     "optionScenarioImpacts": [
-      "会让系统依赖「写穿透写更快但可能丢数据」这个前提。",
-      "会让系统依赖「两者写延迟和持久性完全一样」这个前提。",
-      "会让方案围绕「同步落库写更慢但更持久，写回更快但可能丢」展开。",
-      "会让系统依赖「写回更慢也更持久，写穿透更快」这个前提。"
+      "会误把安全写路径当成低延迟路径，选型会倒过来。",
+      "会让你看不出异步刷库失败这一类数据丢失风险。",
+      "会把 Yelp 平均分这种可派生数据放进正确的延迟/持久性框架里比较。",
+      "会低估 write-through 的同步成本，也高估 write-behind 的持久性。"
     ],
     "optionMeanings_en": [
-      "Write-through is faster but may lose data.",
-      "Both have identical write latency and durability.",
-      "Write-through is slower but more durable; write-behind is faster but may lose data.",
-      "Write-behind is slower and more durable."
+      "Reverses the latency and risk profile of write-through and write-behind.",
+      "Misses the core difference between synchronous database writes and asynchronous flushes.",
+      "Correct: write-through waits for durability; write-behind returns first and flushes later.",
+      "Says write-behind is slower and more durable, which is the opposite direction."
     ],
     "optionDirectness_en": [
-      "Only fits when the goal is to write -through is faster but may lose data.",
-      "Only fits when this statement is true: both have identical write latency and durability.",
-      "Use when write-through trades slower writes for durability, while write-behind trades possible data loss for much faster writes.",
-      "Only fits when the goal is to write -behind is slower and more durable."
+      "Does not fit: write-through's advantage is durability, not lower latency.",
+      "Does not fit: these patterns differ exactly on latency versus durability.",
+      "Fits: this is the tradeoff the question asks you to identify.",
+      "Does not fit: write-behind is faster because it returns before the database commit."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: Write-through is faster but may lose data.",
-      "It commits the design to this assumption: Both have identical write latency and durability.",
-      "It commits the design to this path: Write-through is slower but more durable; write-behind is faster but may lose data.",
-      "It commits the design to this assumption: Write-behind is slower and more durable."
+      "It would make you treat the safer write path as the low-latency path.",
+      "It hides the async database-flush failure mode.",
+      "It frames Yelp rating updates with the right latency-versus-durability tradeoff.",
+      "It underestimates write-through's synchronous cost and overestimates write-behind's durability."
     ]
   },
   {
