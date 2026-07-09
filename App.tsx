@@ -113,9 +113,13 @@ export default function App() {
 
     let mastered = 0;
     let trackMastered = 0;
+    let trackSeen = 0;
     for (const [id, e] of store.srs.entries()) {
       const isMastered = e.fsrs.state === State.Review && e.fsrs.stability >= MASTERED_STABILITY_DAYS;
-      if (trackDeckIds.has(id) && isMastered) trackMastered++;
+      if (trackDeckIds.has(id)) {
+        trackSeen++;
+        if (isMastered) trackMastered++;
+      }
       if (deckIds.has(id) && isMastered) mastered++;
     }
 
@@ -181,6 +185,7 @@ export default function App() {
           name: '全部',
           total: trackDeck.length,
           mastered: trackMastered,
+          seen: trackSeen,
         },
         ...categoryStats,
       ],

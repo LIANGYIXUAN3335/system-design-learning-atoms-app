@@ -4,6 +4,7 @@ import { useTheme } from '../theme';
 import { ActButton, GhostButton, ProgressBar } from '../components/ui';
 import { RECOMMENDED_NEW_PER_DAY } from '../config';
 import type { Track } from '../types';
+import { categoryStatus } from '../logic/categories';
 
 export interface TodayStats {
   /** cards in the active track */
@@ -39,6 +40,7 @@ export interface CategoryPill {
   name: string;
   total: number;
   mastered: number;
+  seen: number;
 }
 
 export interface TodayScreenProps {
@@ -158,6 +160,9 @@ export function TodayScreen({
               const on = category.id === activeCategory;
               const mastery =
                 category.total > 0 ? Math.round((category.mastered / category.total) * 100) : 0;
+              const status = categoryStatus(category);
+              const dotColor =
+                status === 'covered' ? '#3fb883' : status === 'in-progress' ? '#e2a33b' : colors.muted;
               return (
                 <Pressable
                   key={category.id}
@@ -170,11 +175,17 @@ export function TodayScreen({
                     },
                   ]}
                 >
-                  <Text style={{ color: on ? colors.accent : colors.ink, fontSize: 13.5, fontWeight: '700' }}>
-                    {category.name}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                    <View
+                      accessibilityLabel={status === 'covered' ? '已刷完' : status === 'in-progress' ? '进行中' : '未开始'}
+                      style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: dotColor }}
+                    />
+                    <Text style={{ color: on ? colors.accent : colors.ink, fontSize: 13.5, fontWeight: '700' }}>
+                      {category.name}
+                    </Text>
+                  </View>
                   <Text style={{ color: colors.muted, fontSize: 11.5, marginTop: 3 }}>
-                    {category.total} 张 · 掌握 {mastery}%
+                    已刷 {category.seen}/{category.total} · 掌握 {mastery}%
                   </Text>
                 </Pressable>
               );
