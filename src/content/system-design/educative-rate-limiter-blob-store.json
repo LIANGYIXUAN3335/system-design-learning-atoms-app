@@ -319,7 +319,8 @@
       "Distributed counters trade precision for lower latency, so claiming they are always more accurate has it backwards.",
       "A shared counter still needs an atomic op like INCR or a transaction, or concurrent writers overwrite each other — it is not lock-free by nature.",
       "Distributed counters can still key by user, they just admit a bit more slack, so per-user limiting is not impossible."
-    ]
+    ],
+    "diagram": "flowchart LR\n  subgraph Centralized\n    A1[Node A] -->|INCR key| S[(Shared counter)]\n    A2[Node B] -->|INCR key| S\n  end\n  subgraph Distributed\n    B1[Node A] --> L1[(Local counter)]\n    B2[Node B] --> L2[(Local counter)]\n    L1 -.periodic sync.-> L2\n  end"
   },
   {
     "id": "sd-educative-rate-blob-007",
@@ -332,16 +333,16 @@
     "q": "计数 key 应如何建模？",
     "q_en": "How should the counter keys be modeled?",
     "options": [
-      "只有全局 counter",
-      "只按机器名计数",
+      "只统计一个全局 counter",
+      "只按机器名字分别计数",
       "全局 + per-user counters",
-      "每请求随机 counter"
+      "每次请求都用随机 counter"
     ],
     "options_en": [
-      "Only a global counter",
-      "Count only by server name",
+      "Count with only one global counter",
+      "Count only by server machine name",
       "Global plus per-user counters",
-      "A random counter per request"
+      "Every request gets its own random counter"
     ],
     "answer": [
       2
@@ -358,15 +359,34 @@
     "optionExplanations": [
       "只留全局 counter 能护住整体容量，但分不清哪个客户超了自己的套餐额度。",
       "按机器名计数会随请求落到哪台机器而变化，同一个客户可能被算成好几份配额。",
-      "全局 counter 挡雪崩，per-user counter 保公平，两条 key 分别守住不同的不变量。",
+      "全局那层挡的是站点级雪崩，按用户单独开一份计数才管得住每个客户自己的套餐上限，两者各守一条不变量。",
       "每请求随机生成 counter 等于每次都当成新客户，配额和历史请求完全对不上。"
     ],
     "optionExplanations_en": [
       "A global-only counter protects overall capacity but cannot tell which customer went over their own plan.",
       "Counting by server name shifts with whichever machine handled the request, so one customer's traffic gets split into several counts.",
-      "A global counter guards total capacity while a per-user counter enforces fairness — each key protects a different invariant.",
+      "The global layer blocks a site-wide avalanche, while a separate per-user count is what actually caps each customer's own plan limit — two counters, two different invariants.",
       "A random counter per request treats every call as a brand-new customer, so quotas never line up with real request history."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "范围",
+        "计数对象",
+        "次要成本"
+      ],
+      "rows": [
+        [
+          "全局 counter",
+          "全站请求总量",
+          "分不清租户"
+        ],
+        [
+          "Per-user counter",
+          "单客户请求量",
+          "多一份状态要维护"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-educative-rate-blob-008",
@@ -491,7 +511,7 @@
     ],
     "optionExplanations": [
       "继续转发只写日志等于放行了超限请求，后端照样要花资源处理它，限流形同虚设。",
-      "429 明确告诉客户端这是限流拒绝，既不占用后端资源，也不会伪装成请求成功。",
+      "拒绝时用标准的 429 状态码，客户端立刻能分辨这不是业务成功，后端也不再浪费资源处理这条请求。",
       "返回 200 但丢响应体会让客户端误以为请求成功，实际却拿不到任何数据。",
       "改走数据库读副本解决的是读扩展问题，跟拒绝超限请求完全是两件事。"
     ],
@@ -711,7 +731,7 @@
       "redis"
     ],
     "optionExplanations": [
-      "Lua 脚本让检查、递增和设置过期在 Redis 内部一次跑完，别的请求插不进两条命令之间。",
+      "Lua 脚本把检查、递增和设置过期打包成 Redis 端一次原子执行，别的请求没办法插进两条命令中间。",
       "Lua 只保证单个 Redis 节点内脚本原子执行，不会让跨地域复制自动变成强一致。",
       "限流的目的就是要拒绝超额请求，Lua 只是让判定更准，并不会让请求永远通过。",
       "Lua 只是把多条命令捆成一次执行的手段，具体用哪种限流算法仍要另外选。"
@@ -980,7 +1000,7 @@
       "leaking-bucket"
     ],
     "optionExplanations": [
-      "下游只能稳定处理 100/s 且怕突发尖峰，leaking bucket 用 FIFO 队列按固定速率漏出请求，天然就是平滑出流。",
+      "下游只能稳定处理 100/s 且怕突发尖峰，leaking bucket 靠 FIFO 队列把请求按固定速率一条条放出去，天然就是平滑出流。",
       "Token bucket 允许攒下的 token 一次性花掉，出流会有尖峰，跟不希望看到任何突发正好相反。",
       "Fixed window counter 按窗口重置计数，窗口边界仍可能出现两侧叠加的短时尖峰，不算平滑。",
       "随机丢弃一半请求既不保证下游速率稳定在 100/s，也会误伤正常请求，不是有意义的整形方式。"
@@ -1072,7 +1092,7 @@
       "sliding-window"
     ],
     "optionExplanations": [
-      "登录防爆破要求任意滚动 60 秒内都精确，sliding window log 存每次请求时间戳、先删过期记录再按 log 大小判定，精度最高。",
+      "登录防爆破要求任意滚动 60 秒内都精确，这里就该选会给每一次请求记时间戳、且能按当前留存数量做判断的那个算法，精度最高。",
       "Fixed window counter 在整分钟边界重置，攻击者能把尝试堆在边界两侧凑出接近双倍的滚动窗口流量。",
       "Token bucket 关注的是长期速率和突发容量，不会精确消除某个具体窗口边界的突发问题。",
       "只按每小时总量计数根本看不到 60 秒级别的滚动窗口，防不住短时间内的密集爆破尝试。"
@@ -1177,7 +1197,7 @@
       "algorithms"
     ],
     "optionExplanations": [
-      "Sliding window log 要给窗口内每一次请求都存一个时间戳，请求越多存的记录越多，内存随请求量线性增长。",
+      "该算法给窗口内每一次到达的请求都单独记一个时间戳，请求越多占用越大，内存随请求量线性往上涨。",
       "Token bucket 只存容量和 refill rate 这几个小参数，允许突发但状态本身很轻。",
       "Leaking bucket 只需要维护一个 FIFO 队列和固定出流速率，状态小但突发会被排队而不是立刻放行。",
       "Fixed window counter 每个窗口只存一个数字，状态最小，代价是边界处会出现突发。"
@@ -1271,16 +1291,16 @@
       "quiz"
     ],
     "optionExplanations": [
-      "Token bucket 平滑的是长期速率，并不专门针对窗口边界两侧叠加出的尖峰。",
-      "Sliding window log 按真实滚动窗口逐个检查时间戳，正好补上 fixed window 边界突发这个漏洞。",
-      "Fixed window counter 恰恰是产生边界尖峰的那个算法，选它等于选中了问题本身。",
-      "选项里已经有能解决边界尖峰的 sliding window log，不需要退到以上都不是。"
+      "Token bucket 平滑的是长期平均速率，不是针对某个窗口边界两端拼起来才出现的短时高峰专门设计的。",
+      "这道题要挑能修 fixed window 边界高峰的算法：靠保留每次请求时间戳做真实滚动判断的那个就是它。",
+      "Fixed window counter 正是题目描述里制造出那种边界高峰的算法，选它等于把问题本身选成了答案。",
+      "能对付边界高峰的算法已经在候选里出现了，不必退回到都不对这个选项。"
     ],
     "optionExplanations_en": [
-      "Token bucket smooths the long-run rate, but it isn't specifically aimed at the spike created by two windows meeting at a boundary.",
-      "Sliding window log checks timestamps against a true rolling window, exactly patching the edge-spike hole that fixed windows have.",
-      "Fixed window counter is the very algorithm that produces the edge spike, so picking it means picking the problem itself.",
-      "Sliding window log is already sitting in the choices as the fix for the edge spike, so there is no need to fall back to none of the above."
+      "Token bucket smooths the long-run average; it isn't specifically built to counter the short spike created where two windows meet.",
+      "The pick here is whichever algorithm fixes the fixed-window edge spike: the one that keeps a real timestamp per request and checks the true rolling window is it.",
+      "Fixed window counter is precisely the algorithm that produces the edge-spike behavior described, so choosing it just restates the problem.",
+      "An algorithm that already handles the edge spike is sitting among the choices, so there's no need to fall back to none of the above."
     ]
   },
   {
@@ -1502,7 +1522,7 @@
       "客户状态绑在固定节点上，那个节点故障或要扩容时，状态迁移和重新均衡都变得更麻烦。",
       "Sticky sessions 只是把同一客户固定路由到同一节点，不会自动触发跨区域数据复制。",
       "本地计数确实更快，但延迟只是变低不是完全消失，把它说成消失所有延迟过头了。",
-      "Sticky sessions 只决定请求路由到哪个节点，节点内仍然可以按 per-user 维度限流。"
+      "同一节点内部依然可以按 per-user 维度继续做限流判断，粘性路由只是决定了请求送到哪个节点。"
     ],
     "optionExplanations_en": [
       "Because customer state is pinned to one node, failing that node over or rebalancing traffic gets harder since the state has to move too.",
@@ -1554,7 +1574,26 @@
       "Between sync intervals every node only sees its own local value, so claiming all nodes see the exact same instant count ignores that lag.",
       "The whole point of local counting is to avoid a serial lock, so requests don't all have to queue through one shared lock.",
       "The limiter key is scoped to the user, not their city, so there's no rule limiting access to a single city."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "视角",
+        "看到的值",
+        "滞后"
+      ],
+      "rows": [
+        [
+          "本地节点",
+          "自己节点的本地计数",
+          "无，判定即时"
+        ],
+        [
+          "全局同步后",
+          "多节点合并后的真实值",
+          "有同步周期，短暂滞后"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-educative-rate-blob-033",
@@ -1638,16 +1677,16 @@
     "q": "规则更新路径应怎么设计？",
     "q_en": "How should rule updates flow?",
     "options": [
-      "规则库 + retriever 刷缓存",
-      "客户端代码写死规则",
-      "每次请求同步查规则库",
-      "人工逐机改配置文件"
+      "规则库 + retriever 刷新",
+      "客户端代码写死限流规则",
+      "每次请求同步查询规则库",
+      "人工逐台机器改配置文件"
     ],
     "options_en": [
-      "Rule database plus retriever cache refresh",
-      "Hard-code rules in client code",
-      "Read the rule database on every request",
-      "Manually edit config on each machine"
+      "Rule database plus retriever refresh",
+      "Hard-code rate limits in client code",
+      "Synchronously query the rule database each request",
+      "Manually edit config on every machine"
     ],
     "answer": [
       0
@@ -1731,16 +1770,16 @@
     "q": "这种 WORM/immutable 假设带来什么设计简化？",
     "q_en": "What design simplification comes from a WORM or immutable assumption?",
     "options": [
-      "写入后主要追加新版本，减少原地覆盖和并发修改冲突",
-      "每次读都必须改写原 blob",
-      "所有对象都必须放进关系表",
-      "删除可以立刻同步擦掉所有副本"
+      "写入后追加新版本，避免原地覆盖冲突",
+      "每次读都必须改写原始 blob",
+      "所有对象都必须放进关系型数据表",
+      "删除操作可以立刻同步擦掉所有副本"
     ],
     "options_en": [
-      "Updates mostly append new versions, reducing in-place overwrite conflicts",
+      "Updates append new versions, avoiding in-place overwrite conflicts",
       "Every read must rewrite the original blob",
-      "All objects must live in relational tables",
-      "Deletes can synchronously erase every replica immediately"
+      "All objects must go into a relational table",
+      "A delete can instantly erase every replica"
     ],
     "answer": [
       0
@@ -1829,16 +1868,16 @@
     "q": "生命周期管理最应该做什么？",
     "q_en": "What should lifecycle management do?",
     "options": [
-      "按访问频率把对象移动到合适 tier，并按年龄过期",
-      "把所有对象永久放在最高性能层",
-      "每天随机删除冷对象",
-      "禁止对象带任何 metadata"
+      "按访问频率分层，并按年龄过期清理",
+      "把所有对象永久放在最高性能层里",
+      "每天随机删除一批冷对象",
+      "禁止对象携带任何自定义 metadata"
     ],
     "options_en": [
-      "Move objects to suitable tiers by access frequency and expire by age",
-      "Keep every object forever in the highest-performance tier",
-      "Randomly delete cold objects every day",
-      "Forbid objects from carrying metadata"
+      "Tier objects by access frequency and expire by age",
+      "Keep every object in the top-performance tier forever",
+      "Randomly delete a batch of cold objects each day",
+      "Forbid objects from carrying any custom metadata"
     ],
     "answer": [
       0
@@ -1863,7 +1902,35 @@
       "Keeping everything in the top-performance tier satisfies the image latency need, but cold backups pay the same high cost for no benefit.",
       "Randomly deleting cold objects each day can't guarantee the one-year retention and risks erasing data still inside its retention window.",
       "Forbidding metadata removes the very signals — access frequency, creation time — that tiering decisions depend on, breaking lifecycle management."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "层级",
+        "访问频率",
+        "延迟",
+        "典型对象"
+      ],
+      "rows": [
+        [
+          "热层",
+          "高频",
+          "低延迟",
+          "近期图片"
+        ],
+        [
+          "温层",
+          "偶尔",
+          "中等延迟",
+          "次新对象"
+        ],
+        [
+          "冷层/归档",
+          "几乎不访问",
+          "可接受高延迟",
+          "一年内旧备份"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-educative-rate-blob-041",
@@ -1908,7 +1975,31 @@
       "Reading a blob through its generated path lets a read only care about one stable identifier, not where the data physically lives.",
       "Deleting blobs or containers under a retention rule ties cleanup to the object lifecycle instead of ad hoc manual purges.",
       "Running cross-table SQL joins per blob needs a relational model and query optimizer, which isn't what an object-storage API is for."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "阶段",
+        "触发操作",
+        "状态"
+      ],
+      "rows": [
+        [
+          "创建",
+          "createContainer/uploadBlob",
+          "可读可写"
+        ],
+        [
+          "读取",
+          "downloadBlob(path)",
+          "只读"
+        ],
+        [
+          "删除",
+          "deleteBlob/deleteContainer",
+          "标记删除，等 GC"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-educative-rate-blob-042",
@@ -2305,16 +2396,16 @@
     "q": "为什么要分离 metadata path 和 blob data path？",
     "q_en": "Why separate the metadata path from the blob data path?",
     "options": [
-      "metadata 查位置，data nodes 传字节",
-      "所有视频字节都经过 manager",
-      "metadata 可以直接丢弃",
-      "data nodes 只存账号列表"
+      "metadata 管位置，data node 传字节",
+      "所有视频字节都要经过 manager 转发",
+      "metadata 可以在读路径里直接丢弃",
+      "data nodes 只用来存账号名单"
     ],
     "options_en": [
-      "Use metadata for location and data nodes for bytes",
-      "Send all video bytes through the manager",
-      "Discard metadata directly",
-      "Data nodes store only account lists"
+      "metadata handles location, data nodes carry the bytes",
+      "All video bytes must be relayed through the manager",
+      "metadata can be discarded directly on the read path",
+      "Data nodes only store the list of accounts"
     ],
     "answer": [
       0
@@ -2352,16 +2443,16 @@
     "q": "如何降低 manager 单点故障风险？",
     "q_en": "How can you reduce the manager single-point-of-failure risk?",
     "options": [
-      "snapshot + standby 接管",
-      "metadata 只放内存",
-      "删除权限检查",
-      "客户端随机猜 chunk"
+      "定期 snapshot，standby 随时接管",
+      "metadata 只放在内存里不落盘",
+      "把权限检查这一步整个删掉",
+      "让客户端随机去猜 chunk 位置"
     ],
     "options_en": [
-      "Snapshot plus standby takeover",
-      "Keep metadata only in memory",
-      "Remove authorization checks",
-      "Clients randomly guess chunks"
+      "Snapshot regularly so standby can take over anytime",
+      "Keep metadata only in memory, never persisted",
+      "Remove the authorization check step entirely",
+      "Let the client randomly guess the chunk location"
     ],
     "answer": [
       0
@@ -2610,7 +2701,7 @@
     "optionExplanations": [
       "按 upload date、media type、container name 搜索并排序分页，靠给 metadata 打 tag 加一个索引引擎在这一层就能查完，不用碰对象字节。",
       "扫描所有 data node 上的字节意味着每次搜索都要读遍存储的大文件，代价高到不现实。",
-      "禁止用户 metadata 恰恰把 upload date、media type 这些可搜索字段都去掉了，搜索反而没法做。",
+      "禁止用户 metadata 恰恰抹掉了这些字段可搜索的能力，比如上传时间、媒体类型这些查询条件根本没地方存。",
       "把视频内容转成 SQL 行既做不到，也偏离了问题——要索引的是元数据字段，不是视频本身。"
     ],
     "optionExplanations_en": [
@@ -2765,16 +2856,16 @@
     "q": "heartbeat 和 re-replication 的闭环是什么？",
     "q_en": "What is the heartbeat and re-replication loop?",
     "options": [
-      "heartbeat 发现坏节点，复制缺失副本",
-      "客户端随机读坏盘",
-      "只告警不更新 mapping",
-      "删除 metadata 避免读"
+      "heartbeat 查坏节点，补齐缺失副本",
+      "客户端随机去读那块坏盘",
+      "只发告警，不更新路由 mapping",
+      "直接删掉 metadata 避免被读到"
     ],
     "options_en": [
-      "Heartbeat detects bad nodes and missing replicas are copied",
-      "Clients randomly read bad disks",
-      "Only alert without updating mappings",
-      "Delete metadata to avoid reads"
+      "Heartbeat finds the bad node, missing replicas get copied back",
+      "The client randomly reads from that bad disk",
+      "Only alert, without updating the routing mapping",
+      "Delete the metadata outright to avoid it being read"
     ],
     "answer": [
       0
@@ -2954,16 +3045,16 @@
     "q": "一致性设计应优先保证哪条路径？",
     "q_en": "Which path should the consistency design prioritize?",
     "options": [
-      "写入在本集群同步复制并提交 metadata 后再返回",
-      "先返回成功，再慢慢决定 blob ID",
-      "只复制远端区域，不复制本地",
-      "读请求永远绕过 metadata"
+      "本集群同步复制并提交 metadata 才返回",
+      "先返回成功，再慢慢决定 blob ID 是谁",
+      "只复制远端区域，本地反而不复制",
+      "读请求可以永远绕开 metadata 查"
     ],
     "options_en": [
-      "Synchronously replicate in the local cluster and commit metadata before returning",
+      "The local cluster replicates synchronously and commits metadata before returning",
       "Return success first, then decide the blob ID later",
-      "Replicate only to remote regions, not locally",
-      "Reads always bypass metadata"
+      "Only replicate to remote regions, not locally",
+      "Reads can always bypass metadata entirely"
     ],
     "answer": [
       0
