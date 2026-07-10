@@ -571,8 +571,8 @@
     "q": "补全 WhatsApp 设计的四个核心实体：",
     "q_en": "Fill in the four core entities of the WhatsApp design:",
     "text": "核心实体：{{User}}（用户）、{{Chat}}（2-100 人的会话）、{{Message}}（消息）、{{Client}}（同一用户可能有多台设备）。",
-    "why": "实体是推理问题的语言基础；这里的 Client 不是泛泛的“前端代码”，而是同一账号下的一台已登录设备或 App 实例。把 Client 与 User 分开，正是后面多设备、per-device ack、per-client Inbox 和重连 sync 的伏笔。",
-    "why_en": "The entity list is the language of the design. Here, Client does not mean frontend code in general; it means one logged-in device or app instance under a user account. Separating Client from User sets up multi-device delivery, per-device ACKs, per-client Inbox rows, and reconnect sync.",
+    "why": "Client 是同一账号下的一台已登录设备，不是泛泛前端代码。把 Client 和 User 分开，后面才能做多设备投递、per-client Inbox、ack 和重连 sync。",
+    "why_en": "A Client is one logged-in device under a user, so separating it from User makes per-device delivery, ACKs, Inbox rows, and reconnect sync possible.",
     "tags": [
       "whatsapp",
       "entities",
@@ -638,8 +638,8 @@
     "answer": [
       3
     ],
-    "why": "用户 ≠ 设备：User 是账号身份，Client 是这个账号登录的一台设备/App 实例。一个 User 可能同时有手机、电脑、网页版三个 Client；每个 Client 的 WebSocket 连接、是否在线、最后收到的序号、ack 和 Inbox 待投递状态都可能不同。这个区分让后面「Inbox 按 client 而非 user」的改造顺理成章。",
-    "why_en": "User is the account identity, while Client is one logged-in device or app instance under that account. One user may have a phone, desktop app, and web client at the same time; each client can have a different WebSocket connection, online state, last seen sequence number, ACK state, and pending Inbox rows. This is why delivery and sync are tracked per client rather than only per user.",
+    "why": "User 是账号身份，Client 是这个账号下的一台已登录设备。多设备时每台设备的连接、lastSeq、ack 和 Inbox 都可能不同，所以投递与 sync 要按 client 跟踪。",
+    "why_en": "User is the account, while Client is one logged-in device, so delivery, ACKs, last sequence, and Inbox state must be tracked per client in a multi-device design.",
     "tags": [
       "whatsapp",
       "entities",
@@ -1280,8 +1280,8 @@
     "answer": [
       3
     ],
-    "why": "createChat 指用户点“新建私聊/群聊”时，服务端创建一个新的会话容器并返回 chatId。只“记下有哪些人在里面”其实就是 ChatParticipant，但还不够：Chat 记录保存会话本身的元数据，例如 chatId、type、name、createdBy、createdAt、status；ChatParticipant 每人一行，保存 chatId + userId 这条成员关系，以及 role、joinedAt、lastReadSeq、mute 等成员级状态。小群可以把 1 条 Chat + N 条 ChatParticipant 放进一个事务，保证要么全成功、要么全失败；接近 100 人上限时，DynamoDB 单事务 100 items 放不下 Chat + 100 participants，通常要分批写，并用 CREATING/ACTIVE 状态或幂等重试处理半完成状态。",
-    "why_en": "createChat means the user is creating a new one-on-one or group conversation, and the server returns a chatId. 'Remembering who is inside' is exactly the ChatParticipant part, but it is not enough by itself. The Chat record stores conversation-level metadata such as chatId, type, name, createdBy, createdAt, and status. Each ChatParticipant row stores one membership edge, chatId plus userId, along with member-level state such as role, joinedAt, lastReadSeq, or mute. Small chats can write one Chat row plus N ChatParticipant rows in one transaction so the create either fully succeeds or fully fails. Near the one-hundred-person group cap, DynamoDB's one-hundred-item transaction limit cannot fit Chat plus one hundred participants, so the system batches writes and uses a CREATING/ACTIVE state or idempotent retries to handle partially completed creation.",
+    "why": "createChat 要同时写会话元数据和成员边：1 条 Chat 保存 type/name/status，N 条 ChatParticipant 保存 chatId+userId 与成员状态。小群可事务写；100 人边界可能超过 DynamoDB 单事务 item 数，要分批并用 CREATING/ACTIVE 或幂等重试兜住半完成。",
+    "why_en": "createChat writes one Chat row for conversation metadata and one ChatParticipant row per member; small groups fit in one transaction, while 100-person groups may need batched idempotent creation.",
     "diagram": "flowchart TD\n    A[Client calls createChat<br/>participants = u1,u2,u3] --> B[Create Chat row<br/>chatId, type, name, createdAt, status]\n    B --> C[Create ChatParticipant rows]\n    C --> C1[chatId#u1]\n    C --> C2[chatId#u2]\n    C --> C3[chatId#u3]\n    C --> D[Return chatId]\n    D --> E[Later sendMessage queries<br/>ChatParticipant by chatId]",
     "codeSample": "createChat(creatorId, participantIds, name=None):\n  chatId = newULID()\n  members = unique(participantIds + [creatorId])\n\n  chat = {\n    \"PK\": chatId,\n    \"type\": \"GROUP\" if len(members) > 2 else \"DM\",\n    \"name\": name,\n    \"createdBy\": creatorId,\n    \"createdAt\": now(),\n    \"status\": \"ACTIVE\"\n  }\n\n  participantRows = [\n    {\n      \"PK\": chatId,\n      \"SK\": userId,\n      \"role\": \"ADMIN\" if userId == creatorId else \"MEMBER\",\n      \"joinedAt\": now(),\n      \"lastReadSeq\": 0,\n      \"mute\": False\n    }\n    for userId in members\n  ]\n\n  if 1 + len(participantRows) <= 100:\n    transactWrite([chat] + participantRows)  # all-or-nothing\n  else:\n    put(chat with status=\"CREATING\")\n    batchWrite(participantRows)              # chunked/idempotent\n    update(chatId, status=\"ACTIVE\")\n\n  return chatId",
     "lang": "python",
@@ -1734,8 +1734,8 @@
     "answer": [
       2
     ],
-    "why": "单机里要保存的是「真正的连接对象」：WebSocket/TCP socket 句柄只存在于接住连接的那个进程内，不能序列化放进 Redis。Redis 可以存 userId→serverId、在线状态或做 Pub/Sub 路由，但最终下发仍要由持有 socket 的 Chat Server 查本机内存表并写 socket。",
-    "why_en": "On one host, the server must keep the actual connection object. A WebSocket/TCP socket handle lives inside the process that accepted it and cannot be serialized into Redis. Redis can store userId-to-serverId, presence, or Pub/Sub routing metadata, but the Chat Server that owns the socket still needs an in-memory map to write to it.",
+    "why": "单机要保存真正的 WebSocket/TCP 连接对象，它只存在于接住连接的进程内，不能序列化进 Redis。Redis 可存 userId→serverId 或 presence，但最终下发仍靠持有 socket 的本机内存表。",
+    "why_en": "On one host, the actual WebSocket lives inside the process that accepted it, so Redis can store routing metadata but the owning Chat Server still needs an in-memory map.",
     "codeSample": "const connections = new Map(); // userId -> WebSocket object\n\nfunction onConnect(userId, ws) {\n  connections.set(userId, ws); // actual socket handle stays in this process\n}\n\nfunction sendToLocalUser(userId, msg) {\n  const ws = connections.get(userId);\n  if (ws) ws.send(JSON.stringify(msg));\n}\n\n// Redis can help other servers find or notify this server:\n// presence.set(userId, serverId) or publish(`user:${userId}`, msg)\n// but Redis cannot store the ws object itself.",
     "lang": "javascript",
     "tags": [
@@ -1844,8 +1844,8 @@
     "answer": [
       0
     ],
-    "why": "022 讲的是单机初始方案，所以没有 Pub/Sub：sendMessage 进来后，Chat Server 查 ChatParticipant 找接收者，再查本机内存连接表，逐个 WebSocket 下发。Pub/Sub 是后面打破「所有用户都连在同一台服务器」这个假设时才引入的跨服务器路由层；多机时，对本机连接仍然直发，对别的服务器持有的用户才 publish 到对应 user channel。",
-    "why_en": "Card 022 is the single-host starting point, so it does not need Pub/Sub. The Chat Server looks up ChatParticipant, finds each recipient's local WebSocket in its in-memory connection map, and sends one by one. Pub/Sub appears later when the design breaks the assumption that every user is connected to the same server: local recipients are still sent directly, while recipients owned by another server are routed by publishing to that user's channel.",
+    "why": "单机初始方案没有 Pub/Sub：sendMessage 先查 ChatParticipant 得到接收者，再查本机连接表并逐个 WebSocket 下发。Pub/Sub 只在多机路由远端用户时引入，本机连接仍然直发。",
+    "why_en": "In the single-host design, sendMessage looks up ChatParticipant, finds local connections, and writes to each WebSocket; Pub/Sub is only needed for remote servers.",
     "tags": [
       "whatsapp",
       "send-flow",
@@ -2225,8 +2225,8 @@
     "answer": [
       2
     ],
-    "why": "离线补发不是扫历史，而是补上未完成投递。客户端重连成功后主动发 sync/replay 请求，服务端按 userId 或多设备场景下的 clientId 查 Inbox 里仍是 PENDING 的 messageId，再批量取 Message 正文下发；每条 Inbox row 仍会带 chatId，或者通过 messageId 到 Message 表拿到 chatId，所以客户端知道这条消息属于哪个会话。客户端本地幂等保存后 ack，服务端才删除或标记 delivered。",
-    "why_en": "Offline redelivery is not a history scan. After reconnect, the client sends a sync/replay request. The server queries the Inbox by userId, or by clientId in a multi-device design, for PENDING message ids, batch-fetches Message bodies, and sends them down. Each inbox row can still carry chatId, or the server can fetch chatId from the Message table by messageId, so the client knows which conversation the message belongs to. The client idempotently stores messages locally and ACKs, after which the server deletes or marks the inbox rows delivered.",
+    "why": "离线补发查的是未完成投递，不是全量历史。客户端重连后 sync，服务端按 userId/clientId 查 PENDING Inbox，取 Message 正文下发；客户端幂等保存并 ack 后才清理。",
+    "why_en": "Reconnect sync queries pending Inbox rows by userId or clientId, fetches Message bodies, sends them down, and clears them only after the client stores and ACKs them.",
     "whenOtherWins": "低价值提醒或弹幕可以丢，重连拉最新状态即可，不必维护 Inbox。",
     "tradeoff": "精确可靠补发 vs 多写一份 per-recipient Inbox",
     "tags": [
@@ -2457,8 +2457,8 @@
     "answer": [
       1
     ],
-    "why": "这里的 4 万 messages/s 是“用户发出的原始消息速率”，还不是数据库写入次数。计算是：2 亿活跃用户 × 每人每天 20 条 = 40 亿 messages/day；一天有 24 × 60 × 60 = 86,400 秒；40 亿 ÷ 86,400 ≈ 46,000 messages/s，面试里按数量级说成约 4 万/秒或 5 万/秒都可以。这个平均速率已经排除了单机数据库，但还没到必须自研存储的地步；真正的存储写入量会在下一题再乘以 Message + Inbox + 群聊 fan-out。",
-    "why_en": "The forty-thousand messages per second number is the raw user-send rate, not the database write count yet. The calculation is two hundred million active users times twenty messages per user per day, which is four billion messages per day. A day has 24 times 60 times 60, or 86,400 seconds. Four billion divided by 86,400 is about 46,000 messages per second, which is rounded to roughly forty or fifty thousand per second in interview sizing. This average rate rules out a single database host, but does not require a custom storage engine. The actual storage write rate is handled in the next card by multiplying by Message plus Inbox plus group fan-out.",
+    "why": "messages/s = 2 亿活跃 × 20 条/天 ÷ 86,400 ≈ 46k，面试可按 4-5 万/秒说。它是原始发送速率，只说明单机数据库不够；存储写入还要再乘 Message、Inbox 和群聊 fan-out。",
+    "why_en": "The raw send rate is 200M users times 20 messages per day divided by 86,400, about 46k messages/s, which rules out one database host but still needs later write amplification.",
     "diagram": "flowchart LR\n    A[200M active users] --> C[4B messages/day]\n    B[20 messages/user/day] --> C\n    C --> D[Divide by 86,400 sec/day]\n    D --> E[~46k messages/s<br/>round to ~40k-50k]",
     "codeSample": "active_users = 200_000_000\nmessages_per_user_per_day = 20\nseconds_per_day = 24 * 60 * 60  # 86,400\n\nmessages_per_day = active_users * messages_per_user_per_day\n# 200M * 20 = 4B messages/day\n\nmessages_per_sec = messages_per_day / seconds_per_day\n# 4B / 86,400 ~= 46k messages/s\n# interview answer: about 40k-50k messages/s",
     "lang": "python",
@@ -2581,8 +2581,8 @@
     "answer": [
       3
     ],
-    "why": "上一题先估出原始发送速率约 4 万 messages/s。存储写入不是 4 万，因为一条消息至少写两类记录：Message 正文 1 行 + 接收者 Inbox 1 行；所以纯 1:1 就约 4 万 × 2 = 8 万 writes/s。再考虑少量群聊，一条群消息仍只写 1 行 Message，但要给多个接收者各写一行 Inbox。面试估算通常用平均放大系数，而不是拿 100 人上限硬乘所有消息；如果平均每条消息约 1.5 个接收者，则每条写入约 1 + 1.5 = 2.5 行，4 万 × 2.5 ≈ 10 万 writes/s。关键结论不是“整个 WhatsApp 只用一个 DynamoDB 就完事”，而是“这个平均写入量级还没有逼到必须自研存储”。DynamoDB 在这里代表托管、水平分区的 KV/NoSQL 存储；生产设计仍要拆 Message/Inbox/ChatParticipant 等表，选好 chatId/userId/clientId 分区键，考虑峰值系数、多区域、热分区、备份和成本。",
-    "why_en": "The previous card estimated the raw send rate at about forty thousand messages per second. Storage writes are higher because every message writes at least two records: one Message body row and one recipient Inbox row. Pure one-on-one traffic is therefore about forty thousand times two, or eighty thousand writes per second. Group chats add fan-out: one group message still writes one Message row, but writes one Inbox row per recipient. In interview sizing, use an average fan-out factor rather than multiplying every message by the one-hundred-person maximum. If the average message has about 1.5 recipients, each message writes about 1 plus 1.5 equals 2.5 rows, so forty thousand times 2.5 is roughly one hundred thousand writes per second. The conclusion is not that all of WhatsApp runs on one DynamoDB table. It is that this average write order of magnitude does not by itself force a custom storage engine. DynamoDB here represents a managed, horizontally partitioned KV/NoSQL store; a production design still needs separate Message, Inbox, ChatParticipant-style tables, good chatId/userId/clientId partition keys, peak-factor planning, multi-region strategy, hot-partition handling, backups, and cost control.",
+    "why": "写入量 ≈ 原始发送速率 × 每条写入行数：1:1 是 Message+Inbox≈2 行，群聊按平均接收者放大，约 4 万×2.5≈10 万 writes/s。结论是可选水平分区 KV/NoSQL，不是单表单区无峰值地扛完整产品。",
+    "why_en": "Storage writes are raw sends times rows per message: Message plus Inbox is about two writes for 1:1, and average group fan-out brings the estimate near 100k writes/s.",
     "diagram": "flowchart LR\n    A[Raw sends<br/>~40k messages/s] --> B[1 Message row<br/>per message]\n    A --> C[Inbox row<br/>per recipient]\n    B --> D[Writes/message<br/>= 1 + avgRecipients]\n    C --> D\n    D --> E[Example avgRecipients ~1.5<br/>40k * 2.5 ~= 100k writes/s]\n    E --> F[Conclusion<br/>horizontally partitioned store is plausible]\n    F --> G[Still need<br/>peak factor + regions + hot-key handling]",
     "codeSample": "raw_messages_per_sec = 40_000\n\n# 1:1 only:\nwrites_per_1to1_message = 1_message_row + 1_inbox_row  # 2\none_to_one_writes = raw_messages_per_sec * 2            # 80k writes/s\n\n# Add group-chat fan-out using an average, not the 100-person worst case:\navg_recipients_per_message = 1.5\nwrites_per_message = 1 + avg_recipients_per_message     # Message row + Inbox rows\nestimated_writes = raw_messages_per_sec * writes_per_message\n# 40k * 2.5 ~= 100k writes/s",
     "lang": "python",
@@ -3409,8 +3409,8 @@
     "answer": [
       3
     ],
-    "why": "Inbox 是一个抽象：保存某个 user/client 还没 ack 的待投递消息；它不一定必须是数据库表，但在 WhatsApp 这种场景里用 DynamoDB/Cassandra 这类表更自然。所谓「Kafka topic 当 Inbox」是指给每个用户建一个 topic，消息 append 进去，用户上线后由消费者从 offset 读取。把 Kafka 改成按 chatId 组织只能解决「同一个会话内消息有序」或做 chat log，不能直接解决「每台 client 是否收到」；用户重连时仍然要知道这个 client 在所有 chats 里缺哪些 message。若每个 chat 一个 topic，topic 数仍可能爆炸；若少量 shared topics 按 chatId 分区，它适合后台事件流，但还需要单独的 per-client Inbox/offset 表来做补发。它不是因为 Kafka 不能持久化，也不主要是因为延迟；Kafka 可以低延迟，但 topic/partition、文件、controller 元数据、consumer offset 都是较重资源。更麻烦的是 ack/删除也不自然：Kafka 擅长按 offset 顺序消费和按 retention 过期，不擅长像 Inbox 表那样按 clientId+messageId 精确查询、标记、删除 pending row。",
-    "why_en": "Inbox is an abstraction: it stores the messages a user or client has not acknowledged yet. It does not have to be a database table, but a DynamoDB/Cassandra-style table fits this WhatsApp use case better. Using a Kafka topic as an inbox means creating one topic per user, appending messages to it, and having a consumer read from an offset when the user comes online. Keying Kafka by chatId only solves ordering within one conversation or implements a chat log; it does not directly solve whether each client has received the message. On reconnect, the system still needs to know which messages this client is missing across all chats. One topic per chat can still create too many topics, while a small number of shared topics partitioned by chatId works as a backend event stream but still needs a separate per-client Inbox or offset table for redelivery. The problem is not that Kafka cannot persist data, and latency is not the main issue; Kafka can be low-latency. The real issue is that topics/partitions, files, controller metadata, and consumer offsets are heavyweight resources. ACK and deletion are also awkward: Kafka is good at ordered offset consumption and retention, not precise per-clientId plus messageId pending-row lookup, marking, and deletion.",
+    "why": "每用户一个 Kafka topic 太重：topic/partition、文件、controller 元数据和 offset 都按 topic 增长。Kafka 能持久化、也能低延迟，但它不擅长按 clientId+messageId 精确查 pending、ack 后删除；WhatsApp 更适合 Message+Inbox 表兜底。",
+    "why_en": "A Kafka topic per user is too heavy and awkward for per-client ACK and delete, while a Message plus Inbox table can query and clear pending rows by clientId and messageId.",
     "whenOtherWins": "Kafka 仍然适合做少量 shared topics 的后台事件流，例如消息审计、异步通知任务、反垃圾处理或分析流水线；它不适合把 topic 粒度做到每个终端用户。",
     "tradeoff": "Kafka 顺序日志的高吞吐 vs Inbox 表按 client/message 精确查询和清理",
     "tags": [
@@ -3546,8 +3546,8 @@
     "answer": [
       0
     ],
-    "why": "一致性哈希直连方案需要一个“控制面事实源”：当前有哪些 Chat Server、每台负责哪些 hash range、ring 的版本号是多少、节点下线后谁接管。这类元数据更新不频繁，但必须强一致、可 watch、能用 lease/ephemeral node 发现节点死亡，所以更像 ZooKeeper/etcd 的工作。Redis 当然也能存 userId->serverId 或 hashRange->serverId，甚至可以当缓存；但 Redis 更偏高速数据面/缓存/PubSub，不擅长当集群成员与路由配置的强一致协调源。用 Redis 当事实源时，你还要自己补 leader 选举、租约过期、版本 CAS、watch 通知、脑裂保护等机制。连接请求按 ZooKeeper/etcd 发布的 hash ring 定位归属服务器，事件也直接发往“拥有”该 userId 的那台。",
-    "why_en": "Consistent-hashing direct delivery needs a control-plane source of truth: which Chat Servers exist, which hash ranges each server owns, the ring version, and who takes over after a node dies. This metadata changes infrequently, but it needs strong consistency, watches, leases or ephemeral nodes, and failure detection, which is exactly the kind of work ZooKeeper or etcd is built for. Redis can certainly store userId-to-serverId or hashRange-to-serverId and can act as a cache, but it is more of a fast data-plane/cache/PubSub component than a strongly consistent cluster-coordination source. If Redis becomes the source of truth, you must rebuild leader election, leases, version CAS, watch notifications, and split-brain protection yourself. Connection requests use the ring published through ZooKeeper/etcd to find the owning server, and events are sent directly to the server that owns the userId.",
+    "why": "一致性哈希直连需要强一致控制面：server 列表、hash range owner、ring version、租约和故障接管。ZooKeeper/etcd 适合这类 watch/lease；Redis 可做缓存或 Pub/Sub，但当事实源就要自补选主、CAS 和脑裂保护。",
+    "why_en": "Consistent-hash direct routing needs a strongly consistent control plane for membership, range ownership, ring versions, leases, and failover, which fits ZooKeeper or etcd better than Redis.",
     "whenOtherWins": "不想自己管理伸缩编排、能接受多一跳毫秒级延迟时，Redis Pub/Sub 更省心，也是文中评级更高的选择。",
     "tradeoff": "服务器直连低时延 vs 自管路由编排（注册表、扩容迁移）的运维复杂度",
     "tags": [
@@ -3687,8 +3687,8 @@
       1,
       2
     ],
-    "why": "一致性哈希直连的好处是低延迟、确定路由，但代价是你自己接管了 Redis Pub/Sub 原本替你做的路由编排。第一，全网状直连会让连接数近似 N² 增长，1000 台服务器彼此直连会非常重，所以会倾向于少量大服务器。第二，扩缩容会改变一部分 userId 的 owner；如果立刻让这些用户全部断线重连，会形成惊群，所以要 drain、分批迁移、带 backoff。第三，迁移窗口里 old owner 和 new owner 对同一个 user 的归属可能短暂不一致，事件要双发或做转发桥接，避免消息打到旧服务器后新连接已经去了新服务器而丢失。",
-    "why_en": "Consistent-hashing direct connect gives low-latency deterministic routing, but it makes you own the routing orchestration that Redis Pub/Sub would otherwise absorb. First, full-mesh direct connections grow roughly as N squared, so thousands of servers become expensive and the design tends to prefer fewer larger servers. Second, scaling changes the owner for some userIds; disconnecting all affected users at once creates a thundering herd, so you need draining, batches, and reconnect backoff. Third, during migration, the old owner and new owner can briefly disagree about who owns a user, so events must be dual-sent or bridged to avoid sending to the old server after the client has moved to the new one.",
+    "why": "直连低延迟，但你要自管路由编排。代价是全网状连接近似 N²、扩缩容会让一批 user 换 owner 形成重连惊群，迁移窗口还要双发或桥接，避免事件打到旧 owner。",
+    "why_en": "Direct routing saves a hop, but it creates near-N-squared server links, migration herds during scaling, and old/new owner races that need draining, backoff, and bridging.",
     "tradeoff": "直连低延迟、少一跳 vs 自己维护全网连接、哈希环迁移和过渡期双发",
     "codeSample": "# Before scaling:\nowner(user123) = Server A\n\n# Add Server B; hash ring changes:\noldOwner = Server A\nnewOwner = Server B\n\n# Transition window:\nroute(user123) -> [oldOwner, newOwner]  # dual-send or bridge\noldOwner.drainConnections(batch_size=small)\nclient reconnects with jitter/backoff\n\n# After client is stable on B:\nroute(user123) -> Server B only",
     "lang": "python",
@@ -3949,8 +3949,8 @@
     "answer": [
       3
     ],
-    "why": "对，Redis Pub/Sub 的 channel 元数据比 Kafka topic 少得多。Kafka topic 是持久化日志资源：要管理 partition、segment 文件、复制、controller 元数据和 consumer offset。Redis channel 更像一个临时频道名：通常不用预创建，没有日志、没有 retention、没有 consumer offset；Redis 主要维护 channel -> 订阅连接的内存映射。所以它能承受很多 user channels。代价是这不是 durable inbox：无人订阅或故障时消息就丢，真正防丢仍靠 Message + Inbox 表。也别理解成完全零成本，活跃订阅数、连接数和输出缓冲区仍要按容量规划。",
-    "why_en": "Yes: Redis Pub/Sub channels carry much less metadata than Kafka topics. A Kafka topic is a durable log resource with partitions, segment files, replication, controller metadata, and consumer offsets. A Redis channel is more like an ephemeral channel name: it usually does not need pre-creation, has no log, no retention, and no consumer offset; Redis mainly keeps an in-memory channel-to-subscriber mapping. That is why it can support many user channels. The trade-off is that it is not a durable inbox: if nobody is subscribed or a failure happens, the message is lost, so permanent delivery still relies on the Message and Inbox tables. It is not zero cost either: active subscriptions, connections, and output buffers still need capacity planning.",
+    "why": "Kafka topic 是持久化日志资源，要 partition、segment、复制、controller 元数据和 offset；Redis channel 更像临时频道名，只维护活跃订阅映射。代价是 Redis Pub/Sub 不持久，防永久丢失仍靠 Message+Inbox。",
+    "why_en": "Kafka topics are durable log resources with partitions, files, replication, and offsets, while Redis channels are lightweight subscriber maps that trade durability for low routing overhead.",
     "tradeoff": "Pub/Sub 轻量不持久化 vs Kafka 持久化带来的强投递保证",
     "tags": [
       "whatsapp",
@@ -4057,8 +4057,8 @@
     "answer": [
       0
     ],
-    "why": "Redis Pub/Sub 是 at-most-once：消息只会尝试发一次，无人订阅、连接瞬断或 Redis 故障时不会持久化、不会重试。所以用户确实可能短暂看不到消息；WhatsApp 方案能接受它，是因为 Pub/Sub 只负责实时提醒，真正防永久丢失靠先写 Message + Inbox，客户端 ack 后才清理 Inbox，之后由 sync/重连补出来。",
-    "why_en": "Redis Pub/Sub is at-most-once: it attempts delivery once and does not persist or retry if there is no subscriber, a disconnect, or a Redis hiccup. The user may indeed not see the message immediately. A WhatsApp-style design accepts this because Pub/Sub is only the realtime notification path; preventing permanent loss comes from writing Message and Inbox first, then clearing the inbox row only after client ACK, with sync or reconnect filling the gap later.",
+    "why": "Redis Pub/Sub 是 at-most-once：无人订阅、断连或故障时不持久化也不重试。它只做实时提醒；永久不丢靠先写 Message+Inbox，客户端 ack 后才清理，再由 sync/重连补漏。",
+    "why_en": "Redis Pub/Sub is at-most-once, so permanent delivery must come from writing Message and Inbox first and clearing the Inbox row only after a client ACK.",
     "tags": [
       "whatsapp",
       "redis-pubsub",
@@ -4567,8 +4567,8 @@
     "answer": [
       3
     ],
-    "why": "没有免费的跨服务器路由：Redis Pub/Sub 的代价是消息多走一跳，通常增加个位数毫秒，并且 Chat Server 要维护到 Redis 集群的连接。内存/容量当然要规划，但 Pub/Sub 不持久化聊天消息，不会因为消息历史堆在 Redis 里而“内存暴涨”；它主要占用的是订阅关系、连接状态和客户端输出缓冲区。注意这不是说“没有 Redis 就更快”：没有 Redis 时，只有收件人刚好在本机才能直发；如果人在别的 Chat Server，你仍然需要某种 userId->server 路由、服务间 RPC、全连接广播或负载均衡黏性。Redis Pub/Sub 不是不找服务器，而是把“找 user 所在 server”变成订阅关系：持有 user 连接的 Chat Server 先订阅 user channel，发送方只 publish 到 user channel，Redis 根据订阅表把消息推给正确服务器。",
-    "why_en": "Cross-server routing is not free. Redis Pub/Sub adds one extra hop, usually single-digit milliseconds, and Chat Servers must keep connections to the Redis cluster. Capacity and memory still need planning, but Pub/Sub does not persist chat history in Redis, so its main cost is not messages piling up in memory; it mainly holds subscription metadata, connections, and client output buffers. This does not mean the design would be faster without Redis: direct sending only works when the recipient is on the same Chat Server. If the recipient is on another server, you still need some userId-to-server routing, service-to-service RPC, full-mesh broadcast, or sticky load balancing. Redis Pub/Sub does not eliminate server discovery so much as invert it into subscriptions: the Chat Server that owns the user's connection subscribes to that user's channel, the sender publishes to the channel, and Redis uses its subscription table to deliver to the right server.",
+    "why": "Redis Pub/Sub 的代价是多一跳和维护 Redis 连接/订阅状态，容量主要看订阅、连接和输出缓冲区，不是聊天历史堆内存。没有 Redis 也要自建 userId→server 路由或 RPC；Pub/Sub 只是用订阅表替发送方找 server。",
+    "why_en": "Redis Pub/Sub adds a hop and subscription capacity, but without it you still need your own user-to-server routing or RPC layer for recipients on other Chat Servers.",
     "whenOtherWins": "如果所有用户都固定连在同一台 Chat Server，或单机教学模型里，本机连接表直发最快；但一到多机和数亿连接，就需要跨服务器路由层。",
     "tradeoff": "Redis 多一跳、可控路由 vs 自己维护复杂的跨服务器连接/路由网格",
     "tags": [
@@ -4853,8 +4853,8 @@
     "answer": [
       0
     ],
-    "why": "按 chat 分区的意思是 Pub/Sub channel 用 chatId 命名，例如 chat:abc，而不是用 userId 命名。用户上线后，所在 Chat Server 查这个用户属于哪些 chats，并订阅这些 chat channels；或者在用户打开某个 chat 时订阅，离开/下线时退订。群里发一条消息时，发送方只 publish 到 chat:abc 一次，所有订阅了这个 chat channel 的 Chat Server 都收到。你说得对：每台收到消息的 Chat Server 最后仍然要知道“本机有哪些 user/client 属于这个 chat”，然后本地 ws.send；区别是这一步发生在本机内存索引里，比如 chatId -> local connections，而不是再对 Redis publish 99 次。这题比较的是 Redis Pub/Sub 层的 publish 次数，不是最终 WebSocket send 次数。",
-    "why_en": "Partitioning by chat means the Pub/Sub channel is named by chatId, such as chat:abc, rather than by userId. When a user comes online, their Chat Server looks up the chats the user belongs to and subscribes to those chat channels; alternatively it subscribes when the user opens a chat and unsubscribes when they leave or disconnect. When a group message is sent, the sender publishes once to chat:abc and every Chat Server subscribed to that chat channel receives it. You are right that each receiving Chat Server still needs to know which local users or clients belong to that chat and then call ws.send locally. The difference is that this happens through an in-memory local index such as chatId to local connections, not by publishing 99 more times to Redis. This card compares Redis Pub/Sub publish count, not final WebSocket send count.",
+    "why": "按 chat 分区时，群消息只 publish 到 chat channel 一次，订阅该 chat 的服务器再查本机 chatId→connections 做 ws.send。比较的是 Redis publish 次数；最终 WebSocket 发送仍会按在线成员 fan-out。",
+    "why_en": "With chat channels, the sender publishes once to the chat channel and each subscribed server fans out locally, so Redis publish count drops even though WebSocket sends still fan out.",
     "tradeoff": "按 chat 分区精简发布次数 vs 按 user 分区精简订阅数",
     "tags": [
       "whatsapp",
@@ -5172,8 +5172,8 @@
       2,
       3
     ],
-    "why": "多设备 = Clients 表 + 按 client 的 Inbox + 投递展开到每台设备。clientId 通常在设备首次登录/绑定时由服务端生成（UUID/ULID 一类），Clients 表保存 userId -> clientIds；发消息时先按群成员拿 userIds，再查每个 user 的 clientIds，为每个 client 写 Inbox 并投递。唯独 Pub/Sub 不用改成 clientId 频道，服务器仍可订 userId 频道后在本机展开到各 client。",
-    "why_en": "Multi-device support adds a Clients table, a per-client Inbox, and fan-out of every message to each device. A clientId is usually generated by the server when a device first logs in or links to the account, and the Clients table maps userId to clientIds. When sending, the server looks up chat participants as userIds, expands each user into clientIds, writes one Inbox row per client, and delivers. Pub/Sub does not need to switch to clientId channels; servers can still subscribe by userId and fan out locally.",
+    "why": "多设备要加 Clients 表、per-client Inbox，并在发送时把 user 展开成 client。clientId 通常首次登录生成；Pub/Sub 仍可按 user channel 找到服务器，再在本机展开到各 client。",
+    "why_en": "Multi-device support adds a Clients table and per-client Inbox rows; sending expands each user into clients, while Pub/Sub can still route by user and fan out locally.",
     "tags": [
       "whatsapp",
       "multi-device",
@@ -5465,8 +5465,8 @@
     "answer": [
       2
     ],
-    "why": "按 user 的 Inbox 只有一份送达状态：任一设备 ack 就删，其他设备从此漏消息。所以多设备 Inbox 的主访问路径应该是「这台设备重连时查自己还缺什么」，常见 key 是 clientId/deviceId（或 userId#deviceId 组合）+ messageId/seq；userId 主要用来查 Clients 表，展开这个账号有哪些设备。`userId + chatId` 很适合表示“这个用户在这个会话里的状态”，比如会话列表、已读水位、未读数，但它不能表达“这台设备还缺哪几条具体消息”。注意：按 clientId 做主键不代表 Inbox 不知道 chat；chatId 可以作为 row 属性保存，或从 Message 表按 messageId 读出来。",
-    "why_en": "With a per-user inbox, one device's acknowledgment deletes the entry, so a laptop that was off never receives those messages. In a multi-device design, the primary access pattern is 'this device reconnects and asks what it still needs,' so the Inbox is typically keyed by clientId/deviceId (or a userId#deviceId composite) plus messageId/sequence. userId is mainly used to query the Clients table and fan out to all devices for the account. userId plus chatId is useful for per-user per-chat state such as the chat list, read watermark, or unread count, but it does not answer which exact messages this specific device is still missing. Keying by clientId does not mean the Inbox loses chat information; chatId can be stored as a row attribute, or fetched from the Message table by messageId.",
+    "why": "按 user 的 Inbox 只有一份送达状态，手机 ack 后电脑会漏收。多设备的主查询是“这台设备还缺什么”，所以 key 应按 clientId/deviceId + messageId/seq；userId 只用来展开账号设备。",
+    "why_en": "A per-user Inbox has one delivery state, so one device's ACK can hide a message from another; multi-device redelivery needs keys at clientId or deviceId granularity.",
     "codeSample": "Clients table:\n  PK = userId\n  SK = clientId\n\nInbox table:\n  PK = clientId          # or userId#deviceId\n  SK = messageId         # or createdAt#messageId\n  chatId = chat123       # attribute, not necessarily part of the key\n  status = PENDING\n\nMessage table:\n  PK = chatId\n  SK = messageSeq\n  messageId = msg789\n  body = \"hello\"\n\nUserChats / read state:\n  PK = userId\n  SK = chatId            # good for chat list / unread / read watermark\n\nsendMessage(toUserId, chatId, msgId):\n  clientIds = Clients.query(toUserId)\n  for clientId in clientIds:\n    Inbox.put(clientId, msgId, chatId, PENDING)\n\nack(clientId, msgId):\n  Inbox.delete(clientId, msgId)  # only clears this device's copy",
     "lang": "python",
     "tags": [
@@ -5609,8 +5609,8 @@
     "answer": [
       0
     ],
-    "why": "死连接指的是：客户端已经断网、App 被系统挂起、NAT 映射失效或中间链路断了，但服务器进程里的 socket 还没有收到 close/error，看起来仍然“连着”。TCP keepalive 是操作系统 TCP 层的低频探活，默认/常见配置往往要分钟级才判死；应用层机制是聊天服务自己发 ping/pong 或等待消息 ack，可以把检测压到秒级，并在失败后主动关闭连接，让客户端重连并从 Inbox sync。",
-    "why_en": "A dead connection means the client is offline, suspended, behind an expired NAT mapping, or separated by a broken path, while the server-side socket has not received close/error and still appears open. TCP keepalive is a low-frequency probe in the operating system's TCP layer, often minute-scale under default or common settings. An application-level mechanism is owned by the chat service itself, such as ping/pong or message ACK timeouts, so it can detect failure in seconds, close the stale connection, and let the client reconnect and sync from the Inbox.",
+    "why": "死连接是服务端 socket 还活着、客户端或链路已不可用。TCP keepalive 常是分钟级兜底；应用层 ping/pong 或 ACK 超时可把发现压到秒级，并主动关 socket 触发重连与 Inbox sync。",
+    "why_en": "TCP keepalive is a slow OS-level backstop, while app-level ping/pong or ACK timeouts can detect a dead chat socket in seconds and trigger reconnect plus Inbox sync.",
     "tradeoff": "检测速度（心跳秒级）vs 额外的探测开销",
     "tags": [
       "whatsapp",
@@ -5748,8 +5748,8 @@
     "answer": [
       2
     ],
-    "why": "客户端 ACK 本来就要发（用于清 Inbox），服务器只需加一个投递超时判定：发出消息后等 ACK，短时间没等到就重试，连续失败就关闭这条 WebSocket。这里“逼客户端重连”不是让用户手动操作，而是让 App/Client 代码看到 socket close/error 后自动重连、重新认证，再从 Inbox sync 漏掉的消息。",
-    "why_en": "The client ACK already exists to clear the Inbox, so the server can add a delivery timeout: after sending a message, wait for the ACK, retry after a short timeout, and close the WebSocket after repeated failures. 'Force the client to reconnect' does not mean the human user manually reconnects; the app/client code observes socket close/error, automatically reconnects, re-authenticates, and syncs missed messages from the Inbox.",
+    "why": "复用 ACK 的做法是：发消息后等客户端 ACK，超时重试，多次失败就关闭 WebSocket。App 看到 close/error 后自动重连、重新认证，再从 Inbox sync 漏掉的消息。",
+    "why_en": "Reuse ACKs by timing out delivery, retrying briefly, then closing the WebSocket so the app reconnects and syncs pending Inbox rows.",
     "whenOtherWins": "要在「安静期」也能发现死连接，必须再加周期性心跳——仅靠投递 ACK 只有在有消息可发时才起作用。",
     "tradeoff": "复用现有 ACK 机制、实现成本低 vs 只有发消息时才能探测的安静期盲区",
     "tags": [
@@ -5953,8 +5953,8 @@
     "answer": [
       0
     ],
-    "why": "主动心跳把检测从「等消息」变成「定时探测」：死连接在秒级被发现并关闭，重连 + Inbox 同步兜住不漏消息。它可以理解成一个很小的 request/response，但通常不是 REST API；聊天已经有 WebSocket 长连接，所以心跳会作为 WebSocket ping/pong 控制帧，或应用层小消息如 {type: \"ping\"}/{type: \"pong\"} 发在同一条连接上。",
-    "why_en": "Active heartbeats turn detection from waiting for a message into periodic probing: dead sockets are found and closed within seconds, while reconnect plus Inbox sync prevents message loss. You can think of a heartbeat as a tiny request/response, but it is usually not a REST API call; chat already has a WebSocket connection, so the heartbeat is sent on that same connection as a WebSocket ping/pong control frame or an application-level message such as {type: \"ping\"}/{type: \"pong\"}.",
+    "why": "主动心跳把“等消息时才发现”改成定时探测，死连接可在秒级被关闭。它通常走同一条 WebSocket 的 ping/pong 控制帧或小型应用消息，不是额外 REST 调用；重连后仍靠 Inbox sync 兜底。",
+    "why_en": "Active heartbeats probe on a timer over the existing WebSocket, so quiet dead sockets are closed within seconds and reconnect plus Inbox sync handles missed messages.",
     "whenOtherWins": "如果能接受「只在发消息时才发现死连接」的弱实时场景，仅用投递 ACK 超时可以省掉这份心跳流量。",
     "tradeoff": "有保证的检测时间上界 vs 心跳带来的额外探测流量",
     "tags": [
@@ -6180,8 +6180,8 @@
     "answer": [
       2
     ],
-    "why": "Pub/Sub 丢的是一次实时提醒，不是消息本体：用户会短暂看不到，直到下一次 sync、重连、序号缺口检测或心跳兜底把它补出来。发送路径先写 Message + Inbox，再尝试 Pub/Sub/WebSocket 快速推送；只要客户端没有回 ack，Inbox 里的待投递记录就不能清理。",
-    "why_en": "Pub/Sub may drop a realtime notification, not the durable message itself. The user may temporarily not see the message until the next sync, reconnect, sequence-gap check, or heartbeat backstop recovers it. The send path writes Message and Inbox first, then attempts Pub/Sub/WebSocket delivery; until the client ACKs, the inbox row remains pending.",
+    "why": "Pub/Sub 丢的是实时提醒，不是消息本体。发送路径先写 Message+Inbox 再推送；没 ack 的 Inbox row 留着，之后由 sync、重连、序号缺口或心跳补回来。",
+    "why_en": "Pub/Sub can lose a realtime notification, but Message and Inbox remain durable until ACK, so sync, reconnect, sequence gaps, or heartbeats can recover it.",
     "codeSample": "sendMessage(msg):\n  db.put(Message[msg.id] = msg)\n  db.put(Inbox[receiverId, msg.id] = PENDING)\n  pubsub.publish(userChannel(receiverId), msg.id)  # best effort\n\nsync(receiverId):\n  pending = db.query(Inbox where receiverId and status = PENDING)\n  sendOverWebSocket(pending)\n\nack(receiverId, msgId):\n  db.delete(Inbox[receiverId, msgId])  # or mark DELIVERED",
     "lang": "python",
     "whenOtherWins": "想要秒级发现丢失得靠序号 + 心跳组合；轮询间隔越短负载越高，它更适合当最后一道防线。",
@@ -6461,8 +6461,8 @@
     "answer": [
       2
     ],
-    "why": "缺口检测是被动的：客户端只有看到一个更大的新序号，才能反推中间有漏。比如本地最后收到 3，如果 4 丢了但之后没有新消息，客户端看不到任何异常；只有后来收到 5，才知道 4 缺了并触发 sync。这就是为什么还要把最新序号捎带进心跳，或做周期 sync 兜底。",
-    "why_en": "Gap detection is passive: the client needs to see a later, larger sequence number before it can infer that something in the middle was missed. If the client last saw 3 and message 4 is dropped, silence looks normal. Only when 5 arrives can the client infer that 4 is missing and trigger sync. That is why production designs piggyback the latest sequence on heartbeats or use periodic sync as a backstop.",
+    "why": "缺口检测是被动的：客户端要先看到更大的新序号，才知道中间漏了。若 lastSeq=3、seq=4 丢后一直安静，客户端不会发现；所以要用心跳带 latestSeq 或周期 sync 兜底。",
+    "why_en": "Gap detection is passive because the client needs a later sequence to see the hole, so quiet periods require latestSeq in heartbeats or periodic sync.",
     "tags": [
       "whatsapp",
       "sequence-numbers",
@@ -6582,8 +6582,8 @@
     "answer": [
       1
     ],
-    "why": "这题是在补上“缺口检测只能等下一条消息”的盲区。每次有消息发给某个 user，就先给这个 user 的全局序号 +1，并把 seq 写进 Message/Inbox/实时推送。客户端本地保存 lastSeq；如果实时推送丢了、后面又没有新消息，客户端本来看不出异常。现在心跳本来就要每 10 秒发一次，于是在 ping 里顺手带 latestSeq。客户端看到 latestSeq > lastSeq，就知道自己落后了，立刻 sync Inbox。额外负载主要只是心跳 payload 多一个数字，真正的 sync 只在发现落后时触发；代价是要维护 per-user 原子计数器，并谨慎处理 latestSeq 的读取/缓存。",
-    "why_en": "This closes the blind spot of pure gap detection, which only notices a missing message after a later message arrives. Every message sent to a user increments that user's global sequence, and the sequence is stored with the Message/Inbox row and realtime push. The client persists lastSeq. If a realtime push is missed and no later message arrives, the client would otherwise see nothing wrong. Since heartbeat pings already happen, the server piggybacks latestSeq on the ping. If the client sees latestSeq greater than lastSeq, it knows it is behind and immediately syncs the Inbox. The extra load is mostly one small number in an existing heartbeat payload; actual sync only happens when lag is detected. The cost is maintaining a per-user atomic counter and carefully sourcing or caching latestSeq.",
+    "why": "组合方案是给每个 user 维护全局 seq，并把 latestSeq 放进已有心跳。客户端发现 latestSeq > lastSeq 就 sync Inbox；额外负载只是心跳多一个数字，代价是维护 per-user 原子计数器和 latestSeq 缓存/读取。",
+    "why_en": "Piggyback latestSeq on existing heartbeats; if it is greater than the client's lastSeq, the client syncs the Inbox, paying only one small payload field plus a per-user counter.",
     "whenOtherWins": "没有心跳基础设施、或不想为原子计数器加依赖时，单纯拉长间隔的轮询更简单，只是发现丢失更慢。",
     "tradeoff": "心跳捎带序号，近零额外成本 vs 引入原子计数器这个新依赖",
     "tags": [
@@ -6712,8 +6712,8 @@
     "answer": [
       1
     ],
-    "why": "GET 再 SET 是两步读改写，会在并发下产生相同序号；INCR 在单个 Redis key 上一步完成自增并返回新值，所以两个并发请求不会拿到同一个序号。注意：这里的原子性指单条命令/单个 key，不等于多 key 事务，也不等于主从故障切换时绝对不回退。",
-    "why_en": "A separate GET and SET is a two-step read-modify-write and can race under concurrency. INCR atomically increments and returns the new value for one Redis key, so two concurrent requests do not receive the same sequence number. This atomicity is for one command on one key; it is not a multi-key transaction and does not by itself guarantee no rollback during failover.",
+    "why": "GET+SET 是两步读改写，并发下可能撞号；INCR 对单个 Redis key 原子自增并返回新值。它只保证单命令单 key，不等于多 key 事务，也不保证故障切换绝不回退。",
+    "why_en": "GET plus SET can race, while INCR atomically increments one Redis key and returns a unique value; it is not a multi-key transaction or failover guarantee.",
     "whenOtherWins": "如果只需要会话内定序，可按 chat 计数（INCR seq:chat:456）；全局用户序号的优势是一个数字覆盖该用户所有会话的丢失检测。",
     "tradeoff": "INCR 单 key 原子自增 vs GET+SET 两步读改写的竞态风险",
     "tags": [
@@ -7166,8 +7166,8 @@
     "answer": [
       0
     ],
-    "why": "把「在线」交给实时询问、把「离线时间」交给断连时的一次写入：存储最小（每人一条）、写入最少（仅断连时）。查询 last seen 时，服务端一边读 LastSeen 表拿历史断连时间，一边通过 Pub/Sub 问目标用户当前连接所在的 Chat Server：“你现在在线吗？”如果在线，UI 显示 online；如果没收到在线响应，就显示表里的 lastDisconnect。注意这类题选的是“满足题目目标的设计”，不是“哪句话本身为真”。负载均衡器日志只能更适合历史/分析，这个判断本身是真的，但它描述的是被排除的方案：即使日志接到 Kafka/Elasticsearch/ClickHouse 做近实时分析，也通常有秒级到分钟级延迟、采样/聚合/乱序问题，而且它记录的是连接/请求事件，不是产品层的权威 presence 状态；它适合审计、排障、报表，不适合每次用户打开聊天窗口时回答“对方此刻在线吗”。",
-    "why_en": "The design gives online state to a live query and offline time to one durable write on disconnect: minimal storage and minimal writes. When a client asks for last seen, the server reads the LastSeen table for the historical disconnect time and, in parallel, asks the target user's current Chat Server over Pub/Sub, 'are you online right now?' If a live response arrives, the UI shows online; otherwise it falls back to the lastDisconnect row. Be careful: this question asks for the design that satisfies the goal, not for any statement that is true in isolation. It is true that load-balancer logs are better for history and analytics, but that describes a rejected approach. Even if those logs are shipped to Kafka, Elasticsearch, or ClickHouse for near-real-time analytics, they usually have seconds-to-minutes of lag, sampling, aggregation, and ordering issues, and they record connection/request events rather than authoritative product-level presence. They are good for audit, debugging, and reporting, not for answering 'is this person online right now?' every time a chat window opens.",
+    "why": "最小写入方案是断连时写 LastSeen，查询时并行读 LastSeen 并通过 Pub/Sub 探活目标 Chat Server。在线就显示 online；没有实时响应才回退 lastDisconnect，LB 日志只适合历史分析，不能当 presence 读路径。",
+    "why_en": "Write LastSeen only on disconnect, then answer reads by combining that durable row with a live Pub/Sub presence probe; load-balancer logs are analytics, not the presence source of truth.",
     "whenOtherWins": "用户量小或需要完整在线历史审计时，按活动直接写库更简单、信息也更全。",
     "tradeoff": "存储与写入最小化 vs 在线状态的实时精确性",
     "tags": [

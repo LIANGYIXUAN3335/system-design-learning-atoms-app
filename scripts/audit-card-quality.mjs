@@ -20,6 +20,27 @@ const limitArg = args.find((arg) => arg.startsWith('--limit='));
 const limit = limitArg ? Number(limitArg.split('=')[1]) : 120;
 const explicitFiles = args.filter((arg) => !arg.startsWith('--'));
 
+const thresholdArg = args.find((arg) => arg.startsWith('--threshold='));
+const PASS_THRESHOLD = thresholdArg ? Number(thresholdArg.split('=')[1]) : 90;
+// Scoring model (rubric §0.1): errors (severity >= 4) are HARD GATES — any error fails the
+// card regardless of score. Warnings (severity <= 3) are DEDUCTIONS from 100; a card passes
+// iff it has no error AND score >= PASS_THRESHOLD. Minor/style nits (length budgets, table
+// cell width, missing fullName) cost 2; other warnings cost by severity.
+const MINOR_DEDUCTIONS = new Set([
+  'too_long.why', 'too_long.when_other_wins', 'too_long.option_note', 'too_long.reveal_total',
+  'table.cell_over_budget', 'terms.missing_full_name',
+]);
+function deductionFor(issue) {
+  if (issue.severity >= 4) return 0; // errors are gated separately, not scored
+  if (MINOR_DEDUCTIONS.has(issue.category)) return 2;
+  return issue.severity >= 3 ? 8 : issue.severity === 2 ? 5 : 3;
+}
+function scoreCard(issues) {
+  const hasError = issues.some((i) => i.severity >= 4);
+  const score = Math.max(0, 100 - issues.reduce((s, i) => s + deductionFor(i), 0));
+  return { score, hasError, pass: !hasError && score >= PASS_THRESHOLD };
+}
+
 const TRACKS = ['system-design', 'llm-sd', 'low-level-design', 'ai-coding'];
 const OPTION_NOTE_PAIRS = [
   ['optionMeanings', 'optionMeanings_en'],
@@ -76,6 +97,10 @@ const STALE_LOCK_RE =
 const LOCK_RE = /(Redis\s*锁|分布式锁|\block\b|SETNX|SET\s+.{0,40}\s+NX|fencing token)/i;
 const LOCK_GUARD_RE =
   /(fencing|token|CAS|compare-and-swap|conditional write|条件写|版本|version|状态条件|last_?token|WHERE|拒绝旧写|幂等)/i;
+const CACHE_ASIDE_CODE_RE =
+  /(cache[- ]?aside|cache\.get|cache\.set|cache\.delete|database\.read\(key\)|db\.read\(key\))/i;
+const CACHE_PATTERN_CONTEXT_RE =
+  /(cache[- ]?aside|read[- ]?through|write[- ]?through|write[- ]?behind|cache miss|cache hit|缓存命中|缓存未命中|回源|缓存失效|invalidation|热点读|read-heavy|in front of .*db|in front of .*postgres|挡在.*(DB|数据库)|TTL|过期)/i;
 
 /** longest common substring length ≥ n between two strings (cheap n-gram check) */
 function sharesLongRun(a, b, n = 14) {
@@ -118,6 +143,26 @@ function allText(card) {
     ...(card.options ?? []),
     ...(card.optionExplanations ?? []),
     ...(card.optionExplanations_en ?? []),
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function promptText(card) {
+  return [
+    card.q,
+    card.q_en,
+    card.scenario,
+    card.scenario_en,
+    card.why,
+    card.why_en,
+    card.whenOtherWins,
+    ...(card.options ?? []),
+    ...(card.optionExplanations ?? []),
+    ...(card.optionExplanations_en ?? []),
+    ...(card.optionMeanings ?? []),
+    ...(card.optionDirectness ?? []),
+    ...(card.optionScenarioImpacts ?? []),
   ]
     .filter(Boolean)
     .join(' ');
@@ -215,9 +260,9 @@ function auditCard(card, rel) {
         3,
         'choice card has no complete per-option explanation set; add rich option notes or legacy optionExplanations in both languages unless it is a bare numeric estimate',
       );
-    } else if (!isBareNumberChoiceCard(card) && !hasRichNotes && hasLegacyNotes) {
-      add(issues, 'choice.legacy_only', 1, 'choice card only has legacy optionExplanations; migrate important cards to rich option notes');
     }
+    // One coherent `optionExplanations` note per option is now the PREFERRED form
+    // (see rubric §1.3-S0/S1: no labeled 是什么/适用/本题 three-part split), so legacy-only is no longer flagged.
 
     const genericCount = optionExplanations.filter((exp) => GENERIC_EXPLANATION_RE.test(compact(exp))).length;
     if (genericCount >= 2) {
@@ -286,13 +331,22 @@ function auditCard(card, rel) {
     }
   }
 
-  // ---- NBME: the longest option should not give the answer away -----------
+  // ---- NBME: the correct option should not be the giveaway-longest --------
   if (choiceCard(card) && Array.isArray(card.answer) && card.answer.length === 1 && options.length >= 3) {
-    const correct = compact(options[card.answer[0]] ?? '');
-    const distractors = options.filter((_, i) => i !== card.answer[0]).map((o) => compact(o));
+    const ci = card.answer[0];
+    const correct = compact(options[ci] ?? '');
+    const distractors = options.filter((_, i) => i !== ci).map((o) => compact(o));
     const avg = distractors.reduce((s, o) => s + o.length, 0) / Math.max(1, distractors.length);
-    if (correct.length > avg * 1.9 && correct.length > avg + 14) {
-      add(issues, 'answer_cue.longest_option', 2, `correct option is ${correct.length} chars vs distractor avg ${Math.round(avg)}; length telegraphs the answer — balance option lengths`);
+    const secondLongest = Math.max(0, ...distractors.map((o) => o.length));
+    const isStrictLongest = correct.length > secondLongest; // strictly longer than every distractor
+    // Flag an egregious magnitude tell OR a clear rank-1 tell (longest by a visible margin).
+    // The rank check catches "longest by only a little but always first" — the deck-wide ~85%
+    // bias the pure 1.9x threshold missed; near-ties (correct longest by <6 chars) stay allowed.
+    if (
+      (correct.length > avg * 1.9 && correct.length > avg + 14) ||
+      (isStrictLongest && correct.length > secondLongest + 6 && correct.length > avg + 8)
+    ) {
+      add(issues, 'answer_cue.longest_option', 2, `correct option is ${correct.length} chars (distractor avg ${Math.round(avg)}, 2nd-longest ${secondLongest}); length telegraphs the answer — balance lengths and don't let the correct option be the longest`);
     }
   }
 
@@ -432,6 +486,15 @@ function auditCard(card, rel) {
     );
   }
 
+  if (CACHE_ASIDE_CODE_RE.test(compact(card.codeSample)) && !CACHE_PATTERN_CONTEXT_RE.test(promptText(card))) {
+    add(
+      issues,
+      'code_sample.cross_topic',
+      4,
+      'codeSample looks like cache-aside, but the card prompt is not about cache hit/miss, TTL, invalidation, or a cache read/write pattern',
+    );
+  }
+
   // ---- tradeoff must be explicit on decision cards -------------------------
   if (
     choiceCard(card) &&
@@ -461,18 +524,30 @@ async function defaultFiles() {
 
 const files = explicitFiles.length ? explicitFiles : await defaultFiles();
 const findings = [];
+const cardScores = [];
 for (const rel of files) {
   const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
   const cards = JSON.parse(fs.readFileSync(abs, 'utf8'));
   if (!Array.isArray(cards)) continue;
-  for (const card of cards) findings.push(...auditCard(card, path.relative(root, abs)));
+  const relPath = path.relative(root, abs);
+  for (const card of cards) {
+    const issues = auditCard(card, relPath);
+    findings.push(...issues);
+    cardScores.push({ file: relPath, id: card.id, ...scoreCard(issues) });
+  }
 }
+const passCount = cardScores.filter((c) => c.pass).length;
+const failByError = cardScores.filter((c) => c.hasError).length;
+const failByScore = cardScores.filter((c) => !c.hasError && !c.pass).length;
+const avgScore = cardScores.length ? Math.round((cardScores.reduce((s, c) => s + c.score, 0) / cardScores.length) * 10) / 10 : 100;
+const lowestCards = cardScores.filter((c) => !c.pass).sort((a, b) => a.score - b.score).slice(0, 12);
+const scoreSummary = { threshold: PASS_THRESHOLD, cards: cardScores.length, pass: passCount, failByError, failByScore, avgScore };
 
 findings.sort((a, b) => b.severity - a.severity || a.file.localeCompare(b.file) || a.id.localeCompare(b.id));
 const selected = Number.isFinite(limit) && limit > 0 ? findings.slice(0, limit) : findings;
 
 if (asJson) {
-  console.log(JSON.stringify({ files: files.length, findings: findings.length, shown: selected.length, selected }, null, 2));
+  console.log(JSON.stringify({ files: files.length, findings: findings.length, shown: selected.length, scoreSummary, selected, cardScores }, null, 2));
 } else {
   console.log(`files: ${files.length}  findings: ${findings.length}  shown: ${selected.length}\n`);
   const byCategory = findings.reduce((acc, f) => {
@@ -480,6 +555,13 @@ if (asJson) {
     return acc;
   }, {});
   console.log('by category:', JSON.stringify(byCategory));
+  console.log('');
+  const pct = cardScores.length ? Math.round((100 * passCount) / cardScores.length) : 100;
+  console.log(`score (pass = no error & >= ${PASS_THRESHOLD}): ${passCount}/${cardScores.length} pass (${pct}%) · fail ${failByError} by error + ${failByScore} by low score · avg ${avgScore}`);
+  if (lowestCards.length) {
+    console.log('lowest (need attention):');
+    for (const c of lowestCards) console.log(`  ✗ ${String(c.score).padStart(3)}  ${c.id}${c.hasError ? '  [has error]' : ''}`);
+  }
   console.log('');
   for (const f of selected) {
     console.log(`[S${f.severity}] ${f.category}  ${f.file}  ${f.id}`);

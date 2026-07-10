@@ -104,6 +104,22 @@ This deliberately trades depth for breadth, which is the right call for intervie
   - Phase 3 (`6030d64`) — `FINAL_STRETCH_DAYS = 3`; `isFinalStretch(daysLeft)`; in the final stretch the "全部" view sets newPerDay = 0, floor = 1, and builds `buildWeakSweepQueue` (seen-but-not-mastered, weakest first). Today shows "冲刺收尾：暂停新卡，集中刷未掌握的弱卡".
   - Weak set = not-mastered proxy (Review + stability ≥ 7d = mastered). Flag-based weak signals deferred.
 
+### 3.3 Layered reveal — progressive disclosure（added 2026-07-09 · **promoted P1 → P0 2026-07-09**, data below）
+
+> **提级依据（缓存试点实测）**：平均 reveal 阅读量 **268 字/卡**，其中**选项解析占 60%**，而 `why`（真正的答案）只占 **26%**——卡片揭示已经偏重、核心被埋。内容侧收紧（§1.3 一句连贯 + 按题型匹配深度）能减字，但"一次全糊出来"是呈现结构问题，需要分层渐显来治本。所以从 P1 提到 P0。
+
+> **速读** ｜ 现在点开答案是"一屏全糊"（答案 + why + 四选项解析 + 表 + 代码，最多 420 字），既跟"最小信息检索"记忆原则打架，也跟"卡越来越厚"的趋势矛盾。改成**分层渐显**：第一层只露 `正确答案 + 一句 why`（≤~120 字）必现；表 / 深解 / 选项解析 / 代码 / 术语藏在"看详解"里按需展开。让卡片可以很丰富、但揭示时不觉得沉。**纯前端渲染改动，不改 schema、不改内容。**
+
+Today the reveal panel shows everything at once — answer, `why`, all four option decompositions, `table`, `codeSample`, `termDefinitions` — up to the ≤420-char budget. That fights two things: the **minimum-information retrieval principle** spaced repetition relies on (a wall of text right after answering dilutes the "did I get it + the one key reason" signal), and the **trajectory of richer cards** (full bilingual + tables + diagrams + code make the reveal balloon).
+
+- **Layer 1 (auto, on reveal):** the retrieval-critical minimum — correct answer + a one-line `why` (≤~120 chars). Stays crisp so each retrieval is a clean signal.
+- **Layer 2 (behind a "看详解 / more" tap):** everything richer — per-option decomposition, `table`, `diagram`, `codeSample`, `termDefinitions`, `whenOtherWins`. Available on demand, never forced.
+- **Resolves a rubric tension:** the §1.6 reveal budget then applies to **Layer 1** (keep it tight), while Layer 2 can be as rich as the card needs — so "rich content" and "light retrieval" stop competing. (Origin: 2026-07-09 内容质量 review 讨论。)
+- **No schema/content change:** pure render. All fields already exist; this only changes what shows immediately vs behind a tap. Reuses the existing reveal components + `MermaidView`.
+- **Analogy:** 百词斩-style — quick answer + one line first, "详细释义" behind a tap.
+- **Why P0 now (2026-07-09):** the caching pilot showed reveals are already too heavy — 268 chars/card, 60% of it option notes, `why` only 26%. Content trimming (§1.3) helps, but showing everything at once is a presentation problem that only layered reveal fixes. Promoted from P1.
+- **Done when:** revealing a card shows only answer + one-line `why` by default, with a visible "看详解" affordance that expands the rest; selftest / UI check covers the collapsed→expanded state.
+
 ---
 
 ## 4. F2 (P0) — Rubric-driven content quality backfill cron
@@ -122,6 +138,7 @@ This is the **P0 content cron**. It is **rubric-driven**, not feedback-driven: t
 - **Priority order (impact × severity):** cards the user actually drilled (`review_log`) → cards due within 7 days → audit errors → audit warnings → never-seen inventory. The first ~500 repaired cards should cover ~90% of the daily experience.
 - **Inputs:** current source decks, latest `docs/card-quality-rubric.md` (+version), `docs/judge-calibration.md`, existing audit output, the run ledger, and small same-deck context.
 - **Outputs:** backfill report (cards fixed, audit before/after, Level-2 quarantine list), per-deck repair batches, validation result, and the updated run ledger. Accepted content still passes validation before entering the bundle.
+- **Efficacy signal (added 2026-07-09):** the cron's repair queue should also be fed by **real drill performance**, not just static audit gaps — cards with an abnormally high FSRS lapse rate (总答错 → suspected wrong/too-hard card) or an always-correct rate (too-easy / answer telegraphed) surface for re-review. Quality ≠ efficacy: an audit-clean card that everyone gets wrong is still broken. Derive from `review_log`; this complements the correctness gate (rubric §1.2-S6).
 - **Non-goal for P0:** ingesting in-app feedback/API events, accept/reject UI, or a full candidate-review product surface.
 
 ### 4.0.1 Daily delivery: OTA, not APK reinstall（决定于 2026-07-03）
@@ -395,12 +412,12 @@ For higher-risk batches, add sampled judge QA using `docs/judge-calibration.md`.
 
 > **速读** ｜ M3a = P0（上线 + rubric-driven content quality backfill cron）；M3a.5 = 更新安全 + 弱卡 recap（Standalone/手机更新前必须定）；M3b = P1（feedback-driven content update cron + 掌握度 + 浏览）；M3c = TTS/跟读。
 
-- **M3a (P0)** — F1 ship the corpus + **F2 rubric-driven content quality backfill cron**:
+- **M3a (P0)** — F1 ship the corpus + **F2 rubric-driven content quality backfill cron** + **§3.3 layered reveal (promoted P1→P0 2026-07-09)**:
   - scan existing 6k-card corpus against the latest quality rubric;
   - produce backfill reports and repair batches for standalone context, bilingual `q_en` / `scenario_en`, rich option decomposition, short speakable explanations, architecture diagrams;
   - rerun whenever the rubric changes, because the user's quality bar will keep evolving.
 - **M3a.5 (P0)** — F6 update-safe progress + weak-card recap. Must land before treating standalone mobile updates as safe. App/schema/version updates remain a manual engineering flow.
-- **M3b (P1)** — F7 feedback-driven content update cron + F4 mastery analytics + F5 browse/search. Feedback cron waits until API/feedback plumbing is worth connecting; it is important, but not the current blocker.
+- **M3b (P1)** — F7 feedback-driven content update cron + F4 mastery analytics + F5 browse/search. Feedback cron waits until API/feedback plumbing is worth connecting; it is important, but not the current blocker. (§3.3 layered reveal was promoted to P0 — now in M3a.)
 - **M3c** — F3: improve TTS naturalness (listen-and-imitate). Full spoken-grading/ASR deferred.
 - **F8 (BUILT 2026-07-06, out of milestone order)** — review-ingest: 面试复盘 → cards (marker + detector + AUTHORING Mode B + `interview-drill` track). Sibling of F7; landed early because interview debriefs were already producing the source content. Durable scheduling (launchd / `/schedule`) still to set up.
 

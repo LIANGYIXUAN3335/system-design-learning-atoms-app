@@ -52,6 +52,24 @@ function optionEn(card, index, max = 104) {
   return trimWords(card.options_en?.[index] ?? card.options?.[index] ?? 'This option', max).replace(/[.!?]$/, '');
 }
 
+function cachePatternText(text) {
+  return /(cache-aside|read[- ]?through|write[- ]?through|write[- ]?behind|缓存|cache|memcached|ttl|过期|miss|hit|热点读|回源|失效|invalidation)/i.test(
+    compact(text),
+  );
+}
+
+function redisOptionKind(text) {
+  const option = compact(text);
+  if (/pub.?sub|subscribe|publish|ssubscribe|spublish/i.test(option)) return 'pubsub';
+  if (/stream|xreadgroup|xack|xclaim|xautoclaim/i.test(option)) return 'streams';
+  if (/lock|锁|setnx|set\s+.+nx|fencing/i.test(option)) return 'lock';
+  if (/cluster|slot|hash.?slot|moved|分片|槽/i.test(option)) return 'cluster';
+  if (/bloom|json|time\s*series|ts\./i.test(option)) return 'datatype';
+  if (/redis/i.test(option) && cachePatternText(option)) return 'cache';
+  if (/redis/i.test(option)) return 'redis-generic';
+  return '';
+}
+
 function conditionFromWhyEn(whyEn) {
   const why = compact(whyEn).replace(/[.!?]$/, '');
   const directPatterns = [/^Once ([^,;]+),/i, /^When ([^,;]+),/i, /^If ([^,;]+),/i];
@@ -132,7 +150,14 @@ function zhDirectness(card, index) {
   if (/只|必须|一定|永远|完全|所有|全部|唯一|无需|不需要|不能/.test(option)) {
     return '只有这个绝对假设成立时才适合。';
   }
-  if (/Redis|缓存|cache/i.test(option)) return '适合临时加速或可容忍短暂旧值。';
+  const redisKind = redisOptionKind(option);
+  if (redisKind === 'pubsub') return '适合在线低延迟转发，不负责持久重放。';
+  if (redisKind === 'streams') return '适合持久流和消费组，不是普通缓存。';
+  if (redisKind === 'lock') return '适合短租约互斥，还要下游防旧写。';
+  if (redisKind === 'cluster') return '适合按 key 分片扩展，受 slot 规则限制。';
+  if (redisKind === 'datatype') return '适合专门数据结构，不是 cache-aside。';
+  if (redisKind === 'cache' || /缓存|cache|Memcached/i.test(option)) return '适合临时加速或可容忍短暂旧值。';
+  if (redisKind === 'redis-generic') return '先看本题用的是 Redis 哪个机制。';
   if (/Kafka|queue|队列|pub.?sub|stream/i.test(option)) return '适合异步解耦或事件流场景。';
   if (/PostgreSQL|MySQL|SQL|关系|事务/i.test(option)) return '适合强事务或关系查询更重要时。';
   if (/DynamoDB|Cassandra|NoSQL|KV|key/i.test(option)) return '适合按 key 高吞吐访问。';

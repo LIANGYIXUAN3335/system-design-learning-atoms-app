@@ -1452,8 +1452,28 @@
     "answer": [
       1
     ],
-    "why": "幂等性定义在服务器状态上：重复 DELETE 后资源仍是「已删除」，状态没有变化，所以幂等——即使响应码从 204 变成 404。",
-    "why_en": "DELETE is idempotent because repeated calls leave the server in the same deleted state, even if the response codes differ.",
+    "why": "204 = 删除成功但不返回响应体；404 = 资源已不存在。幂等看服务器最终状态：第一次删掉，第二次仍是已删除，所以算幂等。",
+    "why_en": "204 means the delete succeeded with no response body, while 404 means the resource no longer exists. Idempotency is about final server state, and repeated deletes leave the resource deleted.",
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant API as API\n    C->>API: DELETE /bookings/123\n    API-->>C: 204 No Content\n    C->>API: DELETE /bookings/123 again\n    API-->>C: 404 Not Found\n    Note over API: final state is still deleted",
+    "table": {
+      "headers": [
+        "调用",
+        "状态",
+        "响应"
+      ],
+      "rows": [
+        [
+          "第1次",
+          "删掉资源",
+          "204"
+        ],
+        [
+          "第2次",
+          "仍不存在",
+          "404"
+        ]
+      ]
+    },
     "tags": [
       "api-design",
       "http-methods",
@@ -1461,28 +1481,28 @@
       "idempotency"
     ],
     "optionMeanings": [
-      "把幂等性的判断标准错放在响应码上",
+      "把 204→404 的信号变化误当成状态变化",
       "把幂等性的判断标准正确放在服务器状态上",
       "要求响应码也必须每次一致才算幂等",
-      "断言 DELETE 这个方法类别整体不幂等"
+      "直接否定 DELETE 作为幂等方法的语义"
     ],
     "optionScenarioImpacts": [
-      "混淆了「状态」和「信号」两个不同层面，会误判可安全重试的操作",
+      "会把一次安全重试误判为重复副作用",
       "准确抓住幂等的本质：状态不变即幂等，与响应码无关",
       "这是不必要的额外约束，规范并未如此要求",
-      "与 HTTP 规范和本题给出的例子直接矛盾"
+      "会导致所有 DELETE 都不敢重试，违背 HTTP 方法设计"
     ],
     "optionMeanings_en": [
-      "Wrongly places the idempotency criterion on the response code",
+      "Mistakes the 204-to-404 signal change for a state change",
       "Correctly places the idempotency criterion on server state",
       "Requires response codes to also be identical every time to count as idempotent",
-      "Asserts that DELETE as a method class is never idempotent"
+      "Directly denies DELETE's method-level idempotent semantics"
     ],
     "optionScenarioImpacts_en": [
-      "Confuses state with signal, leading to misjudging what is safe to retry",
+      "Misreads a safe retry as if it created a repeated side effect",
       "Accurately captures the essence of idempotency: unchanged state, regardless of response code",
       "An unnecessary extra constraint not required by the HTTP spec",
-      "Directly contradicts both the HTTP spec and the example given in the question"
+      "Would make every DELETE seem unsafe to retry, contrary to HTTP method design"
     ],
     "termDefinitions": [
       {
@@ -1491,22 +1511,32 @@
         "meaningEn": "DELETE is the HTTP method that removes the target resource."
       },
       {
+        "term": "204 No Content",
+        "meaning": "请求成功，服务器没有响应体要返回；DELETE 成功时常见。",
+        "meaningEn": "204 No Content means the request succeeded and the server has no response body to return; it is common for successful DELETE."
+      },
+      {
+        "term": "404 Not Found",
+        "meaning": "目标资源不存在；重复 DELETE 时可能表示已经删过了。",
+        "meaningEn": "404 Not Found means the target resource does not exist; on a repeated DELETE it may simply mean it was already deleted."
+      },
+      {
         "term": "幂等",
         "meaning": "重复执行同一操作，服务器最终状态和只执行一次相同。",
         "meaningEn": "Idempotent means repeating the same operation leaves the server in the same final state as doing it once."
       }
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
+      "只在题目问响应码稳定性时才相关。",
       "适合本题给出的约束。",
-      "只有这个绝对假设成立时才适合。",
-      "只有题设改成这个方向时才适合。"
+      "把幂等误解成响应完全相同。",
+      "把 DELETE 的方法语义记反了。"
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: no, since the response code changed it is not idempotent.",
+      "Only relevant if the question is about response-code stability.",
       "Use when repeated calls leave the server in the same deleted state, even if the response codes differ.",
-      "Only fits when this statement is true: only counts as idempotent if the response codes are identical every time.",
-      "Only fits when the goal is to delete is never an idempotent method."
+      "Misunderstands idempotency as identical responses.",
+      "Reverses DELETE's method semantics."
     ]
   },
   {
@@ -1709,8 +1739,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "passing-data",
-    "scenario": "订票时要提交：几张 VIP 票、几张普通票、座位偏好、支付方式——结构复杂且含敏感信息。",
-    "scenario_en": "A booking request includes VIP and general ticket counts, seating preferences, and a payment method, so the data is structured and sensitive.",
+    "scenario": "订票时要提交：几张 VIP 票、几张普通票、座位偏好、支付方式引用（如 payment_method_id）——结构复杂。",
+    "scenario_en": "A booking request includes VIP and general ticket counts, seating preferences, and a payment method reference such as payment_method_id, so the data is structured.",
     "q": "这些数据应该放在哪？",
     "q_en": "Where should this data go?",
     "options": [
@@ -1728,37 +1758,55 @@
     "answer": [
       0
     ],
-    "why": "复杂数据结构、大体量或敏感内容（支付方式）都属于请求体——URL 既放不下也不该暴露这些。",
-    "why_en": "Complex structures and sensitive data like payment details belong in the request body, not the URL.",
-    "whenOtherWins": "简单、可选、无敏感性的标量过滤条件才适合查询参数；资源标识才放路径。",
-    "tradeoff": "请求体承载复杂敏感载荷 vs URL 参数暴露在日志和浏览器历史中",
+    "why": "复杂载荷放请求体；支付字段应是 token/payment_method_id，不是完整卡号或 CVV。",
+    "why_en": "Complex business payloads belong in the request body, but the payment field should be a token or payment_method_id, not a raw card number or CVC.",
+    "whenOtherWins": "过滤条件用查询参数；认证/幂等键用 header；原始卡号最好直接给支付服务商。",
+    "tradeoff": "请求体承载复杂载荷 vs URL 参数暴露在日志和浏览器历史中",
     "tags": [
       "api-design",
       "request-body"
     ],
     "optionMeanings": [
       "请求体是复杂结构和敏感数据的标准容器",
-      "把复杂结构和敏感字段硬塞进查询字符串",
-      "试图把嵌套的票务结构编码进路径段",
+      "把嵌套字段硬塞进 URL 查询串",
+      "把票务层级伪装成路径层级",
       "借用浏览器 Cookie 机制承载一次性提交的业务数据"
     ],
     "optionScenarioImpacts": [
-      "结构清晰、不受 URL 长度限制，也不会把支付方式暴露在服务器日志里",
-      "URL 会变得很长且容易在日志、浏览器历史里泄漏支付方式等敏感信息",
-      "路径段无法表达嵌套的票务列表这种结构化数据，技术上不可行",
+      "结构清晰、不受 URL 长度限制；支付字段应传 token/id，不传完整卡号",
+      "URL 变长，payment token/id 可能进入日志和浏览器历史",
+      "路径适合资源身份，不适合表达票务数组和座位偏好",
       "Cookie 是为会话状态设计的，不是为承载一次性提交的业务数据设计的"
     ],
     "optionMeanings_en": [
       "Request body is the standard container for complex and sensitive data",
-      "Squeeze nested structure and sensitive fields entirely into the URL query string",
-      "Squeeze nested structure and sensitive fields entirely into the URL path",
+      "Squeezes nested fields into the URL query string",
+      "Treats ticket structure as if it were URL path hierarchy",
       "Borrow the browser cookie mechanism to carry one-time submission data"
     ],
     "optionScenarioImpacts_en": [
-      "Clear structure, no URL length limit, and payment method never lands in server logs",
-      "URLs become long and payment details risk leaking into logs and browser history",
-      "Path segments cannot express nested structures like a ticket list, technically infeasible",
+      "Clear structure, no URL length limit; the payment field should be a token or id, not raw card data",
+      "The URL becomes long, and payment tokens or ids can leak into logs and browser history",
+      "Paths identify resources; they do not fit ticket arrays and seating preferences",
       "Cookies are designed for session state, not for carrying one-time submission data"
+    ],
+    "termDefinitions": [
+      {
+        "term": "payment_method_id",
+        "meaning": "支付服务商返回的支付方式引用，例如 Stripe 的 pm_...；业务 API 用它扣款，不接触完整卡号。",
+        "meaningEn": "A payment_method_id is a payment provider reference, such as Stripe's pm_..., that lets your business API charge without handling full card numbers."
+      },
+      {
+        "term": "tokenization",
+        "meaning": "把原始卡号换成可引用的 token/id；商户系统保存 token/id、last4、brand，而不是 PAN/CVV。",
+        "meaningEn": "Tokenization replaces raw card data with a reference token or id; merchant systems store the token/id, last4, and brand rather than PAN/CVC."
+      },
+      {
+        "term": "PAN",
+        "fullName": "Primary Account Number",
+        "meaning": "银行卡主账号，也就是完整卡号；不应随意进入业务日志或普通数据库。",
+        "meaningEn": "PAN is the full card number and should not casually enter application logs or ordinary databases."
+      }
     ],
     "optionDirectness": [
       "适合本题给出的约束。",
@@ -1846,71 +1894,94 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "passing-data",
-    "scenario": "用户要给活动 123 订 2 张 VIP 票 + 1 张普通票，用信用卡支付，并希望（可选地）收到确认通知。",
-    "scenario_en": "The user books two VIP tickets and one general ticket for event 123, pays by credit card, and optionally wants a confirmation notification.",
+    "scenario": "用户要给活动 123 订 2 张 VIP 票 + 1 张普通票，用已 token 化的信用卡支付，并希望（可选地）收到确认通知。",
+    "scenario_en": "The user books two VIP tickets and one general ticket for event 123, pays with a tokenized credit card, and optionally wants a confirmation notification.",
     "q": "哪种请求结构最合理？",
     "q_en": "Which request structure is most reasonable?",
     "options": [
       "POST /bookings?event=123&vip=2&general=1&pay=credit_card&notify=true",
       "PUT /events/123/bookings/new-vip-2",
       "GET /events/123/book?notify=true",
-      "POST /events/123/bookings?notify=true，票数与支付方式放 JSON 请求体"
+      "POST /events/123/bookings?notify=true，票数与 payment_method_id 放 JSON 请求体"
     ],
     "options_en": [
       "POST /bookings?event=123&vip=2&general=1&pay=credit_card&notify=true",
       "PUT /events/123/bookings/new-vip-2",
       "GET /events/123/book?notify=true",
-      "POST /events/123/bookings?notify=true, with ticket counts and payment method in a JSON request body"
+      "POST /events/123/bookings?notify=true, with ticket counts and payment_method_id in a JSON request body"
     ],
     "answer": [
       3
     ],
-    "why": "必需的活动 ID 在路径、可选的通知开关在查询参数、核心复杂数据（票、支付方式）在请求体——三种传参各司其职。",
-    "why_en": "The required event id goes in the path, the optional notify flag in a query parameter, and the complex booking details in the request body.",
+    "why": "活动 ID 放路径，notify 放查询参数，票务列表和 payment_method_id 放请求体；完整卡号/CVV 不进 booking API。",
+    "why_en": "The required event id goes in the path, the optional notify flag goes in a query parameter, and the complex booking payload goes in the body. The payment field should be a payment_method_id/token, not raw card data.",
     "whenOtherWins": "若请求没有复杂载荷（比如简单查询），就不需要请求体，GET + 查询参数即可。",
     "tradeoff": "三层分工的清晰度 vs 全塞查询参数的实现简便",
-    "codeSample": "POST /events/123/bookings?notify=true\n{\n  \"tickets\": [\n    {\"section\": \"VIP\", \"quantity\": 2},\n    {\"section\": \"General\", \"quantity\": 1}\n  ],\n  \"payment_method\": \"credit_card\"\n}",
+    "codeSample": "// hosted iframe / payment SDK 收卡号 -> PSP 返回 payment_method_id = \"pm_abc123\"\n\nPOST /events/123/bookings?notify=true\n{\n  \"tickets\": [\n    {\"section\": \"VIP\", \"quantity\": 2},\n    {\"section\": \"General\", \"quantity\": 1}\n  ],\n  \"payment_method_id\": \"pm_abc123\"\n}\n\n// 不要这样传：{\"card_number\":\"4242...\", \"cvc\":\"123\"}",
     "lang": "http",
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant UI as Hosted payment iframe/SDK\n    participant PSP as Payment Provider\n    participant API as Booking API\n    C->>UI: type card details\n    UI->>PSP: card details over HTTPS\n    PSP-->>C: payment_method_id\n    C->>API: POST booking with tickets + payment_method_id\n    API->>PSP: charge payment_method_id\n    PSP-->>API: payment result",
     "tags": [
       "api-design",
       "passing-data",
       "rest"
     ],
     "optionMeanings": [
-      "把票务清单这种嵌套结构和支付方式全拼进查询参数",
+      "把票务清单和支付方式引用全拼进查询参数",
       "用 PUT 承载创建动作，且把票数编码进不规范的路径段",
       "用 GET 触发有副作用的订票动作",
-      "嵌套路径放必需的活动 ID，查询参数放可选的通知开关，请求体放复杂的订票数据"
+      "按身份、开关、载荷三类分开放置"
     ],
     "optionScenarioImpacts": [
-      "URL 过长，且支付方式这类敏感字段会暴露在日志里",
+      "URL 过长，payment token/id 可能进入日志和历史记录",
       "PUT 语义要求已知目标资源整体替换，这里既没有已知资源也不是替换",
       "GET 应该是安全无副作用的，这里却创建了订单",
-      "三层清晰分工，精确覆盖本场景的必需、可选、核心三类数据"
+      "语义清楚，也只让 booking 服务接触支付引用"
     ],
     "optionMeanings_en": [
-      "Squeezes the nested ticket list and payment method entirely into query parameters",
+      "Squeezes the nested ticket list and payment method reference into query parameters",
       "Uses PUT to carry a create action, and encodes ticket counts into a non-standard path segment",
       "Uses GET to trigger a side-effecting booking action",
-      "Nested path for the required event id, query parameter for the optional notify toggle, request body for complex booking data"
+      "Separates identity, optional toggle, and payload into the right places"
     ],
     "optionScenarioImpacts_en": [
-      "URL becomes long, and a sensitive field like payment method risks leaking into logs",
+      "The URL becomes long, and payment tokens or ids can leak into logs and history",
       "PUT semantics require a known target resource to replace wholesale, neither condition holds here",
       "GET is supposed to be safe with no side effects, yet this creates an order",
-      "Three-level clean separation precisely covering the required, optional, and core data in this scenario"
+      "Clear semantics, and the booking service only sees a payment reference"
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
+      "只适合极小、无敏感性的简单查询。",
+      "只适合已知资源的整体替换。",
+      "只适合读取，不适合创建订单。",
       "适合本题给出的约束。"
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: pOST /bookings?event=123&vip=2&general=1&pay=credit_card&notify=true.",
-      "Only fits when this statement is true: pUT /events/123/bookings/new-vip-2.",
-      "Only fits when this statement is true: gET /events/123/book?notify=true.",
+      "Only fits tiny, non-sensitive simple queries.",
+      "Only fits whole replacement of a known resource.",
+      "Only fits reads, not order creation.",
       "Use when the required event id goes in the path, the optional notify flag in a query parameter, and the complex booking details in the request body."
+    ],
+    "termDefinitions": [
+      {
+        "term": "payment_method_id",
+        "meaning": "支付服务商返回的支付方式引用；业务 API 用它发起扣款，而不是接收完整卡号。",
+        "meaningEn": "A payment_method_id is a payment provider reference used by your business API to charge without receiving the full card number."
+      },
+      {
+        "term": "hosted payment iframe/SDK",
+        "meaning": "由支付服务商提供的收卡号组件；用户输入卡号，但商户业务服务器只拿到 token/id。",
+        "meaningEn": "A provider-hosted card collection component where the user enters card data, while the merchant server receives only a token or id."
+      },
+      {
+        "term": "request body",
+        "meaning": "POST/PUT/PATCH 请求里的结构化载荷，适合放创建订单所需的票务列表和支付方式引用。",
+        "meaningEn": "The request body is the structured payload of a POST, PUT, or PATCH request, suitable for ticket lists and payment method references."
+      },
+      {
+        "term": "header",
+        "meaning": "请求头适合放认证、幂等键、内容类型等协议元数据，不适合放票务清单或卡号。",
+        "meaningEn": "Headers are for protocol metadata such as authentication, idempotency keys, and content type, not ticket lists or card numbers."
+      }
     ]
   },
   {
@@ -1921,9 +1992,9 @@
     "sub": "status-codes",
     "q": "补全常用状态码：",
     "q_en": "Fill in the common HTTP status codes:",
-    "text": "成功返回 200；创建成功返回 {{201}}；请求格式错误返回 {{400}}；需要认证返回 {{401}}；资源不存在返回 {{404}}；服务器内部错误返回 {{500}}。",
-    "why": "面试记住这几个常用码就够：200/201 成功侧，400/401/404 客户端错误，500 服务器错误。",
-    "why_en": "Stick to the common codes: 200 for success, 201 for created, 400 for bad request, 401 for unauthenticated, 404 for not found, and 500 for server error.",
+    "text": "成功返回 200；创建成功返回 {{201}}；成功但无响应体返回 {{204}}；资源不存在返回 {{404}}；服务器内部错误返回 {{500}}。",
+    "why": "面试记住这几个常用码就够：200/201/204 成功侧，400/401/404 客户端错误，500 服务器错误。DELETE 成功常用 204。",
+    "why_en": "Stick to the common codes: 200/201/204 for success, 400/401/404 for client errors, and 500 for server errors. Successful DELETE often returns 204.",
     "tags": [
       "api-design",
       "status-codes"
@@ -1938,7 +2009,7 @@
         [
           "2xx",
           "成功",
-          "200 / 201"
+          "200 / 201 / 204"
         ],
         [
           "3xx",
@@ -2265,11 +2336,40 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "graphql",
+    "scenario": "同一个 user profile 资源被多个客户端使用：列表页只要 name/avatar，详情页还要 bio/friends。",
+    "scenario_en": "The same user profile resource is used by multiple clients: a list page only needs name/avatar, while a detail page also needs bio/friends.",
     "q": "补全两个取数问题的名字：",
     "q_en": "Fill in the names of the two data-fetching problems:",
     "text": "REST 固定返回结构会导致 {{over-fetching}}（下载了大量用不到的数据）或 {{under-fetching}}（一次拿不够、还要再发请求）。",
-    "why": "这两个词是 GraphQL 的触发信号：面试官一提「多取/少取」，就该想到单端点按需查询。",
-    "why_en": "Over-fetching means downloading unused data and under-fetching means needing extra requests, the two problems GraphQL solves.",
+    "why": "对，这正是 GraphQL 的经典动机之一。REST endpoint 通常由服务端定义固定响应形状；客户端需求一变，就会多拿字段、少拿关联数据，或为每个页面新建端点。GraphQL 让客户端声明字段，服务端按这个形状返回。",
+    "why_en": "Yes, this is one of GraphQL's classic motivations. REST endpoints usually have server-defined response shapes; when client needs vary, clients either get too much data, not enough related data, or require new page-specific endpoints.",
+    "whenOtherWins": "需求固定、端点少、缓存简单、团队不想引入 query 复杂度时，REST 更直接。",
+    "table": {
+      "headers": [
+        "方式",
+        "问题",
+        "例子"
+      ],
+      "rows": [
+        [
+          "REST",
+          "过取",
+          "/users/1 返回 bio/friends"
+        ],
+        [
+          "REST",
+          "欠取",
+          "还要 /users/1/friends"
+        ],
+        [
+          "GraphQL",
+          "按需",
+          "只查 name/avatar"
+        ]
+      ]
+    },
+    "codeSample": "GET /users/1\n# REST 固定返回：id, name, avatar, bio, friends...\n# 列表页只用 name/avatar => over-fetching\n\nquery {\n  user(id: \"1\") {\n    name\n    avatar\n  }\n}\n# GraphQL 响应只含 name/avatar",
+    "lang": "graphql",
     "tags": [
       "api-design",
       "graphql",
@@ -2285,6 +2385,16 @@
         "term": "under-fetching",
         "meaning": "一次请求拿不到足够数据，客户端要再发额外请求补齐。",
         "meaningEn": "Under-fetching means one request does not return enough data, forcing the client to make extra requests."
+      },
+      {
+        "term": "GraphQL",
+        "meaning": "单端点 + 查询语言，客户端声明想要哪些字段。",
+        "meaningEn": "GraphQL is a single-endpoint query language where clients declare which fields they want."
+      },
+      {
+        "term": "固定返回结构",
+        "meaning": "REST 端点常由服务端决定响应字段，客户端不能随每个页面自由裁剪。",
+        "meaningEn": "A fixed response shape means the server endpoint decides the returned fields, so clients cannot freely trim them per screen."
       }
     ]
   },
@@ -2849,6 +2959,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "rpc",
+    "scenario": "booking 服务要让 payment 服务扣款；调用方希望像调函数一样写代码，但实际服务在另一台机器上。",
+    "scenario_en": "The booking service needs the payment service to charge a card; the caller wants function-call-like code, while the callee actually runs on another machine.",
     "q": "RPC 范式与 REST 最根本的思维差异是？",
     "q_en": "What is the most fundamental mindset difference between RPC and REST?",
     "options": [
@@ -2866,35 +2978,38 @@
     "answer": [
       1
     ],
-    "why": "RPC 让你以「调函数」的方式思考：getEvent(eventId)、createBooking(...)，客户端无需关心底层网络细节；REST 则把一切建模成资源。",
-    "why_en": "REST models everything as resources while RPC is action-oriented, letting you call remote procedures as if they were local functions.",
+    "why": "RPC 让你以「调函数」方式调用远端动作：一个 service 是接口集合，可包含多个 method；每个 method 有自己的 request/response。生成的 stub 负责网络细节。",
+    "why_en": "RPC calls remote actions in a function-call style: a service is a collection of methods, each with its own request/response type, and the generated stub hides network details.",
+    "codeSample": "// 1. 接口合同：payment.proto\nservice PaymentService {\n  rpc Charge(ChargeRequest) returns (ChargeResponse);\n  rpc Refund(RefundRequest) returns (RefundResponse);\n  rpc GetPayment(GetPaymentRequest) returns (Payment);\n}\nmessage ChargeRequest { string user_id = 1; int64 amount_cents = 2; }\nmessage RefundRequest { string payment_id = 1; int64 amount_cents = 2; }\nmessage GetPaymentRequest { string payment_id = 1; }\n\n// 2. 调用方拿到生成的 client stub：像调多个本地函数\npaymentClient.Charge({ user_id: \"u1\", amount_cents: 5000 })\npaymentClient.Refund({ payment_id: \"p1\", amount_cents: 5000 })\npaymentClient.GetPayment({ payment_id: \"p1\" })\n\n// 3. 服务端分别实现这些远端 handler\nfunction Charge(req) { return chargeCard(req.user_id, req.amount_cents) }\nfunction Refund(req) { return refundPayment(req.payment_id, req.amount_cents) }\nfunction GetPayment(req) { return loadPayment(req.payment_id) }",
+    "lang": "protobuf",
+    "diagram": "flowchart LR\n    B[\"Booking service\"] --> Stub[\"generated client stub\"]\n    Stub --> Wire[\"serialize + HTTP/2\"]\n    Wire --> P[\"Payment service Charge handler\"]",
     "tags": [
       "api-design",
       "rpc",
       "paradigm"
     ],
     "optionMeanings": [
-      "误以为 RPC 被限制在单机进程间通信",
+      "把 RPC 和本机 IPC 混为一谈",
       "准确描述资源导向和动作导向这两种不同的建模思维",
-      "误以为 RPC 不经过网络",
+      "把网络细节被 stub 封装误会成没有网络",
       "误以为协议类型本身就决定了速度快慢"
     ],
     "optionScenarioImpacts": [
-      "gRPC 等主流 RPC 框架的核心场景恰恰是跨机器的服务间通信",
+      "会错过 RPC 最常见的跨服务、跨机器调用场景",
       "这正是理解 checkPermission(userId, resource) 这类调用为何在 RPC 里比在 REST 里更自然的关键",
-      "RPC 调用同样要走网络栈，只是把网络细节封装在生成的客户端代码里",
+      "会忽略超时、重试、网络分区这些真实远程调用问题",
       "真正的速度差异来自序列化格式和传输协议（如二进制 + HTTP/2），不是「RPC」这个名字本身"
     ],
     "optionMeanings_en": [
-      "Wrongly assumes RPC is limited to same-machine, inter-process communication",
+      "Confuses RPC with local inter-process communication on one machine",
       "Accurately describes resource-oriented versus action-oriented modeling",
-      "Wrongly assumes RPC bypasses the network",
+      "Mistakes network details being hidden by the stub for no network at all",
       "Wrongly assumes the protocol name itself decides speed"
     ],
     "optionScenarioImpacts_en": [
-      "The core use case for mainstream RPC frameworks like gRPC is exactly cross-machine service calls",
+      "Misses RPC's common cross-service, cross-machine use case",
       "This is the key to why a call like checkPermission(userId, resource) feels more natural in RPC than REST",
-      "RPC calls still go through the network stack, the details are just hidden inside generated client code",
+      "Ignores real remote-call issues such as timeout, retry, and network partition",
       "The real speed difference comes from serialization format and transport, like binary plus HTTP/2, not the label RPC itself"
     ],
     "termDefinitions": [
@@ -2909,6 +3024,26 @@
         "fullName": "Representational State Transfer",
         "meaning": "用标准 HTTP 方法操作资源的 API 风格。",
         "meaningEn": "REST is an API style that uses standard HTTP methods to operate on resources."
+      },
+      {
+        "term": "client stub",
+        "meaning": "由 RPC 框架生成的本地代理对象；业务代码调用它，它负责把调用变成网络请求。",
+        "meaningEn": "A client stub is generated proxy code; application code calls it locally, while it turns the call into a network request."
+      },
+      {
+        "term": "RPC service",
+        "meaning": "一组相关远程方法的接口边界，例如 PaymentService 管 Charge/Refund/GetPayment；它不是数据库表。",
+        "meaningEn": "An RPC service is an interface boundary grouping related remote methods, such as Charge, Refund, and GetPayment; it is not a database table."
+      },
+      {
+        "term": "RPC method",
+        "meaning": "service 里的一个远程函数，例如 Charge 或 Refund；每个 method 定义自己的请求和响应类型。",
+        "meaningEn": "An RPC method is one remote function inside a service, such as Charge or Refund, with its own request and response types."
+      },
+      {
+        "term": ".proto",
+        "meaning": "gRPC/protobuf 的接口合同文件，定义服务方法和请求/响应结构。",
+        "meaningEn": "A .proto file is the gRPC/protobuf contract defining service methods and request/response messages."
       }
     ],
     "optionDirectness": [
@@ -4007,21 +4142,23 @@
     "answer": [
       0
     ],
-    "why": "URL 版本化被更广泛理解、几秒钟就能解释清楚，是面试的安全默认；实际上很多题解里甚至不写版本号——多数面试官不看重它。",
-    "why_en": "URL versioning is the safer interview default because it is widely understood and quick to explain.",
-    "whenOtherWins": "若面试官明确追问更符合 HTTP 规范、URL 更干净的方案，再谈 header 版本化。",
+    "why": "选 URL 版本化不是为了给最终用户看，而是让客户端、SDK、网关和后端路由都一眼知道契约版本。/v1 给老客户端继续用，/v2 给新字段/新语义，面试里最直观。",
+    "why_en": "URL versioning is not for end users; it makes the contract version obvious to clients, SDKs, gateways, and backend routing. /v1 can keep serving old clients while /v2 introduces new fields or semantics.",
+    "whenOtherWins": "若面试官追问「URL 必须干净、版本属于内容协商」或内部平台可统一工具链，再谈 header 版本化。",
     "tradeoff": "URL 版本化的普适易懂 vs header 版本化的规范简洁",
+    "codeSample": "# 老客户端仍然调用旧契约\nGET /v1/events/123\n# -> { \"name\": \"Concert\", \"date\": \"2026-08-01\" }\n\n# 新客户端显式选择新契约\nGET /v2/events/123\n# -> { \"title\": \"Concert\", \"starts_at\": \"2026-08-01T20:00:00Z\", \"venue\": {...} }\n\n# Header 版本化也可以，但地址栏/日志/文档里不如 /v2 直观\nGET /events/123\nAPI-Version: 2",
+    "lang": "http",
     "table": {
       "headers": [
         "方式",
         "可见性",
-        "浏览器可测"
+        "代价"
       ],
       "rows": [
         [
           "URL 版本化",
           "高",
-          "可以"
+          "URL 变长"
         ],
         [
           "Header 版本化",
@@ -4042,8 +4179,8 @@
       "把兼容性判断的责任丢给客户端自己处理"
     ],
     "optionScenarioImpacts": [
-      "面试官几秒钟就能理解这个方案，几乎不需要额外解释",
-      "更优雅但需要额外几句话解释请求头机制，稍微拖慢节奏",
+      "老客户端固定走 /v1，新客户端显式走 /v2，网关和日志也容易看懂",
+      "URL 更干净，但开发者要看 header 才知道版本，curl/Postman/网关配置也多一步",
       "老客户端会在毫无预警的情况下读到语义已经变化的字段，直接破坏兼容性",
       "客户端根本没有能力判断服务端字段语义是否变了，这不是可行方案"
     ],
@@ -4054,8 +4191,8 @@
       "Pushes compatibility judgment onto each client to figure out"
     ],
     "optionScenarioImpacts_en": [
-      "The interviewer understands this in seconds with almost no extra explanation needed",
-      "More elegant but needs a few extra sentences to explain the header mechanism, slightly slower",
+      "Old clients keep using /v1, new clients explicitly use /v2, and gateways and logs are easy to read",
+      "Cleaner URLs, but developers must inspect headers and tools like curl, Postman, or gateways need an extra step",
       "Old clients read a field whose meaning has silently changed with zero warning, directly breaking compatibility",
       "Clients have no way to detect that server-side field semantics changed, not a workable plan"
     ],
@@ -4389,6 +4526,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "jwt",
+    "scenario": "用户登录后，前端拿到一个 access token，之后每次请求都把它放进 Authorization header。",
+    "scenario_en": "After login, the frontend receives an access token and sends it in the Authorization header on later requests.",
     "q": "JWT（JSON Web Token）的核心机制是？",
     "q_en": "What is the core mechanism of a JWT?",
     "options": [
@@ -4406,14 +4545,40 @@
     "answer": [
       2
     ],
-    "why": "登录成功后服务器签发含 user_id、角色、过期时间的签名令牌；之后验签就能确认真实性并直接读出用户信息——无状态、免数据库查询。",
-    "why_en": "A JWT encodes the user's id, role, and expiry into a signed token that any service can verify without a database lookup.",
+    "why": "JWT 通常不是加密，而是 base64url 编码 + 签名。payload 可读，只放 user_id、role、exp 等非秘密信息；服务端验签防篡改，过了才信。",
+    "why_en": "A JWT is usually base64url encoding plus a signature, not encryption. Its payload is readable, so it carries non-secret claims such as user_id, role, and exp; the server trusts it only after verifying the signature.",
+    "whenOtherWins": "要隐藏 payload 用 JWE/服务端 session；要立即踢下线，用数据库 session 或 blacklist。",
+    "table": {
+      "headers": [
+        "部分",
+        "内容",
+        "谁能读"
+      ],
+      "rows": [
+        [
+          "header",
+          "算法",
+          "任何人"
+        ],
+        [
+          "payload",
+          "用户声明",
+          "任何人"
+        ],
+        [
+          "signature",
+          "防篡改",
+          "服务端验"
+        ]
+      ]
+    },
+    "diagram": "sequenceDiagram\n    participant U as User\n    participant C as Client\n    participant A as Auth Server\n    participant API as API Service\n    U->>C: 输入账号密码\n    C->>A: POST /login over HTTPS\n    A->>A: 校验密码并签发 JWT\n    A-->>C: 返回 signed JWT\n    C->>API: Authorization: Bearer JWT\n    API->>API: 验签 + 检查 exp\n    API-->>C: 返回受保护数据",
     "tags": [
       "api-design",
       "jwt",
       "auth"
     ],
-    "codeSample": "// JWT 是三段用 . 连接的 base64 编码字符串\nheader.payload.signature\n// 例如\neyJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjoiMTIzIn0.abc123signature",
+    "codeSample": "// JWT = base64url(header) + \".\" + base64url(payload) + \".\" + signature\npayload = { \"user_id\": \"123\", \"role\": \"admin\", \"exp\": 1710000000 }\n\n// 签名由服务端生成，前端没有 secret/private key\nsignature = HMAC_SHA256(base64url(header) + \".\" + base64url(payload), SERVER_SECRET)\n\n// 请求时前端只携带 token\nAuthorization: Bearer <jwt>\n\n// 服务端收到后重新算签名；payload 被改过就对不上\nif verifySignature(jwt, SERVER_SECRET) && now < payload.exp:\n  trust(payload.user_id)",
     "lang": "text",
     "optionMeanings": [
       "把会话状态存在服务器一侧，靠服务器内存维护",
@@ -4445,13 +4610,29 @@
         "fullName": "JSON Web Token",
         "meaning": "把用户信息签名编码进令牌本身、无需服务端存储会话的身份凭证格式。",
         "meaningEn": "A JWT, or JSON Web Token, is a signed identity credential format that encodes user info into the token itself, with no server-side session storage needed."
+      },
+      {
+        "term": "base64url",
+        "meaning": "一种可逆编码，不是加密；任何拿到 token 的人都能解码 header/payload。",
+        "meaningEn": "base64url is reversible encoding, not encryption; anyone holding the token can decode the header and payload."
+      },
+      {
+        "term": "signature",
+        "meaning": "服务端用 secret/private key 对 header.payload 计算出的防篡改校验值。",
+        "meaningEn": "A signature is a tamper check computed by the server over header.payload using a secret or private key."
+      },
+      {
+        "term": "JWE",
+        "fullName": "JSON Web Encryption",
+        "meaning": "会加密内容的 JWT 变体；普通 JWT/JWS 主要是签名，不隐藏 payload。",
+        "meaningEn": "JWE is the encrypted JWT variant; a normal signed JWT/JWS mainly signs data and does not hide the payload."
       }
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
+      "只有你选择服务器内存会话时才适合。",
+      "只有你愿意每次请求查库时才适合。",
       "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。"
+      "只有需要传密码本身时才适合。"
     ],
     "optionDirectness_en": [
       "Only fits when the goal is to store session data in server memory and look it up in memory to identify the user.",
@@ -4564,6 +4745,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "jwt",
+    "scenario": "客户端带 access token 请求 API，但 token 的 exp 已经过期。",
+    "scenario_en": "The client calls an API with an access token whose exp has already passed.",
     "q": "JWT payload 里，哪个字段让令牌自动失效、避免永久有效？",
     "q_en": "Which JWT payload field makes the token expire automatically instead of staying valid forever?",
     "options": [
@@ -4581,10 +4764,12 @@
     "answer": [
       3
     ],
-    "why": "exp 是过期时间戳：验签时同时检查是否过期，令牌到点自动失效——这是 JWT 相对 API key 的重要优势之一。",
-    "why_en": "The exp claim is the expiration timestamp that makes the token invalid after that time.",
-    "codeSample": "// JWT payload\n{\n  \"user_id\": \"123\",\n  \"email\": \"john@example.com\",\n  \"role\": \"customer\",\n  \"exp\": 1640995200   // 过期时间（Unix 时间戳）\n}",
-    "lang": "json",
+    "why": "exp 是过期时间戳。access token 过期后 API 拒绝它；客户端通常用 refresh token 找 Auth Server 换一个新的 access token，而不是修改旧 token。",
+    "why_en": "The exp claim is the expiration timestamp. Once an access token expires, the API rejects it; the client usually uses a refresh token to ask the auth server for a new access token.",
+    "whenOtherWins": "refresh token 也过期、被撤销或设备登出时，必须重新登录。",
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant API as API Service\n    participant A as Auth Server\n    C->>API: Request with expired access token\n    API-->>C: 401 token expired\n    C->>A: POST /refresh with refresh token\n    A->>A: 校验 refresh token\n    A-->>C: new access token\n    C->>API: Retry with new access token\n    API-->>C: 200 OK",
+    "codeSample": "// access token payload\n{ \"user_id\": \"123\", \"role\": \"customer\", \"exp\": 1640995200 }\n\nif now > payload.exp:\n  return 401  // access token expired\n\n// client then calls Auth Server\nPOST /refresh  // with refresh token\n=> new signed access token",
+    "lang": "text",
     "tags": [
       "api-design",
       "jwt"
@@ -4625,18 +4810,28 @@
         "fullName": "Expiration Time",
         "meaning": "JWT payload 里表示令牌失效时刻的 Unix 时间戳字段。",
         "meaningEn": "exp is the JWT payload field holding the Unix timestamp at which the token expires."
+      },
+      {
+        "term": "access token",
+        "meaning": "短期令牌，请求 API 时携带；过期后 API 应拒绝。",
+        "meaningEn": "An access token is a short-lived token sent to APIs; the API should reject it after expiry."
+      },
+      {
+        "term": "refresh token",
+        "meaning": "较长期令牌，只交给认证服务换新 access token；可被服务端撤销。",
+        "meaningEn": "A refresh token is a longer-lived token used only with the auth server to obtain a new access token, and it can be revoked server-side."
       }
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
+      "适合问「这个 token 属于谁」的问题。",
+      "适合需要展示邮箱或联系用户的场景。",
+      "适合做权限判断，不负责自动过期。",
       "适合本题给出的约束。"
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: user_id.",
-      "Only fits when this statement is true: email.",
-      "Only fits when this statement is true: role.",
+      "Fits questions about which user this token belongs to.",
+      "Fits screens or flows that need the user's email address.",
+      "Fits authorization decisions, not automatic expiry.",
       "Use when the exp claim is the expiration timestamp that makes the token invalid after that time."
     ]
   },
@@ -4663,8 +4858,33 @@
     "answer": [
       0
     ],
-    "why": "多数面试不把认证当重点：标注需要登录的端点、说一句「用 JWT 或把会话存库」就够了，把时间留给核心架构。",
-    "why_en": "Just call out which endpoints require authentication and say you would rely on a JWT or a database-backed session, then move on.",
+    "why": "JWT 是 token 格式/凭证，常用于自己系统登录后签发 access token；OAuth2 是授权协议，常用于第三方 App 代表用户访问资源。面试里点到即可。",
+    "why_en": "JWT is a token format or credential often issued after first-party login, while OAuth2 is an authorization protocol commonly used when a third-party app accesses resources on a user's behalf.",
+    "table": {
+      "headers": [
+        "概念",
+        "是什么",
+        "何时用"
+      ],
+      "rows": [
+        [
+          "JWT",
+          "token 格式",
+          "自家登录/服务验签"
+        ],
+        [
+          "OAuth2",
+          "授权流程",
+          "第三方代表用户访问"
+        ],
+        [
+          "Session",
+          "服务端状态",
+          "要即时吊销"
+        ]
+      ]
+    },
+    "diagram": "flowchart LR\n    Login[\"User logs into your app\"] --> JWT[\"Auth server issues JWT\"]\n    Third[\"Third-party app asks permission\"] --> OAuth[\"OAuth2 consent/code flow\"]\n    OAuth --> Token[\"access token, often JWT or opaque\"]",
     "tags": [
       "api-design",
       "auth",
@@ -4706,6 +4926,16 @@
         "fullName": "OAuth 2.0",
         "meaning": "让第三方应用在用户授权下代表用户访问资源的标准授权协议。",
         "meaningEn": "OAuth 2.0 is a standard authorization protocol letting a third-party app access resources on a user's behalf after the user grants consent."
+      },
+      {
+        "term": "access token",
+        "meaning": "客户端请求 API 时携带的访问凭证；它可以是 JWT，也可以是不透明随机字符串。",
+        "meaningEn": "An access token is the credential sent to APIs; it can be a JWT or an opaque random string."
+      },
+      {
+        "term": "opaque token",
+        "meaning": "客户端无法自行解读的随机 token；服务端需要查库或 introspection 才知道它代表谁。",
+        "meaningEn": "An opaque token is a random token clients cannot decode; the server must look it up or introspect it to know what it represents."
       }
     ],
     "optionDirectness": [
@@ -4757,13 +4987,13 @@
     "options": [
       "customer：可订票、查看自己的 booking",
       "venue_manager：可创建活动、查看自己场馆的销售报表",
-      "admin：可访问一切",
+      "admin：可管理全局活动/订单/用户，但敏感字段仍按最小权限脱敏和审计",
       "customer：可查看所有用户的 booking"
     ],
     "options_en": [
       "customer: can book tickets and view their own bookings",
       "venue_manager: can create events and view sales reports for their own venues",
-      "admin: can access everything",
+      "admin: can manage global events, bookings, and users, while sensitive fields remain masked and audited under least privilege",
       "customer: can view every user's bookings"
     ],
     "answer": [
@@ -4771,37 +5001,37 @@
       1,
       2
     ],
-    "why": "customer 只能操作自己的数据，venue_manager 管自己场馆，admin 全权——「customer 看所有人订单」违反最小权限，正是授权检查要拦的。",
-    "why_en": "Customers manage only their own bookings, venue managers handle their venues, and admins access everything, while letting customers see all bookings breaks least privilege.",
+    "why": "customer 只能操作自己的数据，venue_manager 管自己场馆；admin 有全局管理能力，但不等于可看原始卡号、私钥或所有敏感字段。「customer 看所有人订单」违反最小权限。",
+    "why_en": "Customers manage only their own bookings and venue managers handle their own venues. Admins have global management capabilities, but not unrestricted access to raw card data, secrets, or every sensitive field.",
     "tags": [
       "api-design",
       "rbac",
       "authorization"
     ],
-    "codeSample": "Roles:\n  customer:      book tickets, view own bookings\n  venue_manager: create events, view own venue sales\n  admin:         access everything\n\njohn@example.com    -> customer\nmanager@venue.com   -> venue_manager",
+    "codeSample": "Roles:\n  customer:      book tickets, view own bookings\n  venue_manager: create events, view own venue sales\n  admin:         manage events/users/bookings; masked PII/payment data; audited break-glass\n\nNever:\n  customer -> view all bookings\n  admin    -> raw card/CVV, private keys, password hashes",
     "lang": "text",
     "optionMeanings": [
       "customer 角色的权限范围限定在自己的订票行为",
       "该角色的权限被限定在自己名下的场馆范围内",
-      "admin 角色拥有系统内最高权限",
+      "admin 管全局业务资源，但敏感字段仍受额外控制",
       "customer 角色被赋予了查看所有人订单的权限"
     ],
     "optionScenarioImpacts": [
       "符合最小权限原则，customer 无法碰到别人的数据",
       "符合职责边界，别的场馆的数据它碰不到",
-      "admin 承担全局管理职责，需要全权访问",
+      "既能处理全局运营，又不会把 PII/支付/密钥暴露给普通后台权限",
       "让普通用户能看到陌生人的订票记录，隐私和权限双重失控"
     ],
     "optionMeanings_en": [
       "The customer role's permission scope is limited to its own booking actions",
       "The venue_manager role's permission scope is limited to its own venues",
-      "The admin role holds the system's highest permission level",
+      "The admin role manages global business resources, but sensitive fields still have extra controls",
       "The customer role is granted permission to view everyone's bookings"
     ],
     "optionScenarioImpacts_en": [
       "Follows least privilege, a customer cannot touch anyone else's data",
       "Matches scope of responsibility, a venue manager cannot reach other venues",
-      "Admin carries global management duty and needs full access",
+      "Supports global operations without exposing PII, payment data, or secrets to ordinary admin access",
       "Lets a regular user see strangers' booking records, a double failure of privacy and permission control"
     ],
     "termDefinitions": [
@@ -4815,6 +5045,17 @@
         "term": "最小权限",
         "meaning": "每个角色只拥有完成其职责所必需的最小权限集合。",
         "meaningEn": "Least privilege means each role holds only the minimum set of permissions needed to do its job."
+      },
+      {
+        "term": "PII",
+        "fullName": "Personally Identifiable Information",
+        "meaning": "能识别个人身份的信息，如姓名、邮箱、电话、地址；后台也应按需展示或脱敏。",
+        "meaningEn": "PII is information that can identify a person, such as name, email, phone, or address, and should be shown only as needed or masked."
+      },
+      {
+        "term": "break-glass",
+        "meaning": "紧急情况下临时提升权限的机制，通常要求审批、限时、强审计。",
+        "meaningEn": "Break-glass access is temporary emergency privilege elevation, typically requiring approval, time limits, and strong auditing."
       }
     ],
     "optionDirectness": [
@@ -4824,9 +5065,9 @@
       "只有这个绝对假设成立时才适合。"
     ],
     "optionDirectness_en": [
-      "Use when customers manage only their own bookings, venue managers handle their venues, and admins access everything, while letting customers see all bookings breaks least privilege.",
-      "Use when customers manage only their own bookings, venue managers handle their venues, and admins access everything, while letting customers see all bookings breaks least privilege.",
-      "Use when customers manage only their own bookings, venue managers handle their venues, and admins access everything, while letting customers see all bookings breaks least privilege.",
+      "Use when customers manage only their own bookings.",
+      "Use when venue managers are scoped to their own venues.",
+      "Use when admins manage global resources without bypassing sensitive-data controls.",
       "Only fits when this statement is true: customer: can view every user's bookings."
     ]
   },
