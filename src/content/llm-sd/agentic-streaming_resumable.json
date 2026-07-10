@@ -19,9 +19,9 @@
     "diagram": "flowchart TB\n  A[\"(a) 解耦 job 与连接<br/>durable job + job_id\"] --> B[\"(b) 生成即持久化<br/>(job_id, seq, token)\"]\n  B --> C[\"(c) 重连续传<br/>from_seq 重放 + 续播\"]",
     "options": [
       "(a)前端定时轮询任务进度 (b)已生成 token 只缓存在浏览器内存 (c)断线后靠前端内存补齐缺口",
-      "(a)保持一个超长 HTTP 请求不关闭 (b)token 只在连接内下推不落库 (c)断线就整段从头重发",
-      "(a)解耦 job 与连接(job_id) (b)生成即持久化 token 带单调 seq (c)重连按 from_seq 重放再续播",
-      "(a)每次断线在后端重起新任务 (b)不存 token 历史靠模型重新生成 (c)用更快模型赌在断线前跑完"
+      "(a)保持一个超长 HTTP 请求不关闭 (b)token 只在这条连接内下推、不做持久化落库 (c)一断线就把整段内容从头重新发送",
+      "(a)解耦 job 与连接(job_id) (b)持久化 token 带单调 seq (c)按 from_seq 重放再续播",
+      "(a)每次断线都在后端重新发起一个新任务 (b)不保存 token 历史、靠模型重新生成一遍 (c)指望用更快的模型抢在断线前跑完"
     ],
     "options_en": [
       "(a) Frontend polls the job for progress, (b) generated tokens are cached only in browser memory, (c) after a drop the frontend fills the gap from its own memory.",
@@ -81,11 +81,39 @@
       "decouple"
     ],
     "tradeoff": "durable job + job_id(可续传但多一层队列/存储) vs 直连 HTTP(简单但连接一断任务就死)",
+    "table": {
+      "headers": [
+        "方案",
+        "状态放哪",
+        "断线/关页后",
+        "谁能恢复"
+      ],
+      "rows": [
+        [
+          "durable job",
+          "服务端持久队列",
+          "任务照常继续跑",
+          "服务端本身"
+        ],
+        [
+          "Worker+LS",
+          "客户端本地",
+          "Worker 销毁、进度丢",
+          "仅原设备原浏览器"
+        ],
+        [
+          "断线重起(幂等key)",
+          "服务端但归零",
+          "从头重新计算",
+          "服务端但要重算"
+        ]
+      ]
+    },
     "options": [
-      "提交时建 durable job 拿稳定 job_id，HTTP 立即返回 job_id，前端连 job_id 端点，浏览器关了后端照跑",
-      "用一个超长 HTTP 请求从提交一直撑到生成结束，任务状态全放在这条连接里，靠连接保活避免被中断",
-      "把整个任务塞进前端 Web Worker 后台线程跑，页面关闭前用 localStorage 存进度下次接着算",
-      "每次断线就在后端重起一个新任务从头生成，用幂等 key 尽量减少重复副作用"
+      "提交时建 durable job 拿稳定 job_id，前端连 job_id 端点，浏览器关了后端照跑",
+      "用一个超长 HTTP 请求从提交开始一直撑到生成结束，把任务状态全部放在这一条连接里，靠连接保活来避免被中断",
+      "把整个任务塞进前端 Web Worker 后台线程里持续运行，页面关闭前用 localStorage 保存进度，下次回来接着计算",
+      "每次遇到断线都在后端重新发起一个新任务从头开始生成，虽然用了幂等 key 但仍难完全避免重复副作用"
     ],
     "options_en": [
       "Enqueue a durable job with a stable job_id, return it immediately, stream from the job_id endpoint, and let the backend keep running when the browser closes.",
@@ -171,10 +199,10 @@
     ],
     "diagram": "sequenceDiagram\n  participant C as Client\n  participant S as Server\n  participant St as Token Store\n  Note over C,S: 断线于 seq=42, 后端已到 seq=60\n  C->>S: GET /stream/{job_id}?from_seq=42\n  S->>St: 取 seq > 42\n  St-->>S: 43..60\n  S-->>C: 重放 43..60\n  S-->>C: 续播 61,62,... (实时)",
     "options": [
-      "从 seq=1 把所有 token 从头重放一遍，让客户端自己对比去掉已看过的 1..42",
+      "从 seq=1 开始把所有已发送过的 token 全部重放一遍，让客户端自己去对比、去重已经看过的 1..42",
       "放弃已生成的 43..60，让后端从头重起任务重新生成，保证客户端拿到完整一份",
       "只推断线后新生成的 token，中间已算好的 43..60 直接跳过不补",
-      "客户端带 from_seq=42 重连 → 服务端重放 seq>42 的 token → 再无缝接上实时新 token"
+      "客户端带 from_seq=42 重连 → 服务端重放 seq>42 的 token → 再接上实时新 token"
     ],
     "options_en": [
       "Replay all tokens from seq=1 and let the client itself diff out the 1..42 it already saw.",
@@ -251,43 +279,31 @@
       ]
     },
     "options": [
-      "改用 WebSocket 建全双工长连接，自己写心跳和断线重连逻辑来恢复中断的 token 流",
-      "用 SSE 走单向 server→client、基于普通 HTTP，浏览器 EventSource 靠 Last-Event-ID 自动重连续传",
-      "改用 HTTP 长轮询，客户端每隔几秒发一次请求拉取新 token，直到 job 标记完成",
-      "用一个一直不关闭的 chunked HTTP 响应持续下推 token，断线就整段从头重来"
+      "改用 WebSocket 建立全双工长连接，还要自己写心跳保活和断线重连逻辑，才能恢复中断的 token 流",
+      "用 SSE 做单向 server→client 推送，EventSource 靠 Last-Event-ID 自动重连续传",
+      "改用 HTTP 长轮询，客户端每隔几秒就发一次请求去拉取新 token，一直轮询到 job 标记为完成为止",
+      "用一个一直不关闭的 chunked HTTP 响应持续把 token 往下推，一旦断线就得把整段内容从头重新来过"
     ],
     "options_en": [
       "Switch to WebSocket for a full-duplex connection and hand-roll heartbeat and reconnect logic to recover the interrupted token stream.",
-      "Use SSE for one-way server-to-client over plain HTTP, where the browser EventSource auto-reconnects and resumes via Last-Event-ID.",
+      "Use SSE for one-way server-to-client push; EventSource auto-reconnects and resumes via Last-Event-ID.",
       "Switch to HTTP long-polling, sending a request every few seconds to pull new tokens until the job is marked complete.",
       "Use one never-closing chunked HTTP response to keep pushing tokens, restarting the whole stream on a drop."
     ],
     "answer": [
       1
     ],
-    "optionMeanings": [
-      "WebSocket：全双工长连接，客户端和服务端都能随时互发消息。",
-      "SSE：基于 HTTP 的单向推送协议，浏览器原生自动重连。",
-      "长轮询：客户端反复发普通 HTTP 请求，轮询有没有新数据。",
-      "chunked HTTP：一条不关闭的响应用分块编码持续往下写。"
+    "optionExplanations": [
+      "全双工连接更适合客户端也要随时主动发消息的场景；这里只需要单向往下推 token，选它得自己搭一整套心跳和重连逻辑，纯属多余的活。",
+      "SSE 就是为这种单向下推设计的：走普通 HTTP，浏览器原生帮你处理重连，断线后自动带 Last-Event-ID 找回断点，不用自己写这套逻辑。",
+      "长轮询靠客户端反复发请求硬凑出「像流」的效果，延迟高、空轮询浪费资源，还得自己维护偏移量才能不丢不重，属于旧时代的将就方案。",
+      "裸 chunked 响应确实能持续下推，但它没有像 SSE 那样的事件 id，断线就只能整段重来，没法精确从断点续传。"
     ],
-    "optionMeanings_en": [
-      "WebSocket is a full-duplex persistent connection where both sides can send anytime.",
-      "SSE is an HTTP-based one-way push protocol with native browser auto-reconnect.",
-      "Long-polling repeatedly sends plain HTTP requests to poll for new data.",
-      "Chunked HTTP keeps one response open and streams data via chunked encoding."
-    ],
-    "optionScenarioImpacts": [
-      "这里只往下推 token、不需要上行，选它就得白写心跳和断线重放，杀鸡用牛刀。",
-      "单向续传正合适，浏览器重连时自动带回最后 id，省掉自建重连逻辑。",
-      "轮询延迟高、空轮询浪费请求，且仍要自己记 offset 才能不丢不重。",
-      "没有逐事件 id，断线只能整段重来，无法从断点精确续传。"
-    ],
-    "optionScenarioImpacts_en": [
-      "Here we only push tokens downstream with no upstream need, so choosing it means hand-rolling heartbeat and replay — overkill.",
-      "It fits one-way resume: the browser auto-returns the last id on reconnect, avoiding hand-rolled reconnect logic.",
-      "Polling adds latency and wastes empty requests, and you still track an offset yourself to avoid loss or duplication.",
-      "Without per-event ids, a drop forces a full restart and cannot resume precisely from the break."
+    "optionExplanations_en": [
+      "Full-duplex fits when the client also needs to push upstream at will; here you only push tokens down, so WebSocket just means hand-rolling heartbeat and reconnect for no real gain.",
+      "SSE is built for exactly this one-way push: plain HTTP, and the browser natively reconnects and resumes via Last-Event-ID, so you don't have to hand-roll any of that.",
+      "Long-polling fakes a stream by hammering the server with repeated requests — higher latency, wasted empty polls, and you'd still track an offset yourself to avoid gaps or dupes.",
+      "A bare chunked response keeps pushing, but without per-event ids like SSE has, a drop forces a full restart instead of resuming from the exact break."
     ],
     "termDefinitions": [
       {
@@ -306,18 +322,6 @@
         "meaning": "SSE 断线重连时浏览器自动带上的请求头，值为最后收到的事件 id。",
         "meaningEn": "Last-Event-ID is the header the browser auto-sends on SSE reconnect, carrying the last received event id."
       }
-    ],
-    "optionDirectness": [
-      "适合通信约束正好匹配时。",
-      "这是本题要识别的核心原因。",
-      "适合通信约束正好匹配时。",
-      "适合通信约束正好匹配时。"
-    ],
-    "optionDirectness_en": [
-      "Only fits when this statement is true: switch to WebSocket for a full-duplex connection and hand-roll heartbeat and reconnect logic to recover….",
-      "This is the core issue in this scenario.",
-      "Only fits when this statement is true: switch to HTTP long-polling.",
-      "Only fits when the goal is to use one never-closing chunked HTTP response to keep pushing tokens."
     ]
   },
   {
@@ -338,10 +342,10 @@
       "sse"
     ],
     "options": [
-      "每条只发 data: <token> 不带 id 字段，靠客户端自己数收了多少条来记录进度",
-      "在同一个流里混用 WebSocket 的 send() 双向发消息来同步进度",
-      "每条事件带 id: <seq> 和 data: <token>，浏览器断线自动用 Last-Event-ID 头带回最后 id",
-      "把所有 token 攒完拼成一条超大 data 事件一次性发完，前端拿到再整体渲染"
+      "每条只发 data: <token> 不带 id 字段，靠客户端自己数收了多少条来记录进度，容易在断线后数错",
+      "在同一个流里混用 WebSocket 的 send() 双向发消息来同步进度，试图借它来同步续传状态",
+      "每条事件带 id: <seq> 和 data: <token>，断线时浏览器自动带 Last-Event-ID 头回来",
+      "把所有 token 攒完拼成一条超大 data 事件一次性发完，前端拿到之后再整体渲染出来"
     ],
     "options_en": [
       "Send only data: <token> with no id field and let the client itself count how many it received to track progress.",
@@ -392,10 +396,10 @@
       "failure"
     ],
     "options": [
-      "在 job 上存 status(running/completed/failed)；失败时重连返回已存部分 token + 错误，前端据 status 显示「部分+失败」",
-      "重连时直接把连接挂起、什么都不返回，让前端界面一直转圈，直到用户自己失去耐心关掉页面为止",
-      "把上游失败也当成任务正常完成，返回一个空结果并把 status 标成 completed，让前端直接收尾展示",
-      "后端根本不记 status，让前端对已经失败的 job 无限重连重试，寄希望于某一次碰巧能拿到结果"
+      "在 job 上存 running/completed/failed 三态；失败就返回部分 token+错误，据此显示部分失败",
+      "重连时后端直接把连接挂起、什么响应都不返回，让前端界面一直转圈，直到用户自己失去耐心、动手关掉页面为止",
+      "把上游失败也当成任务正常完成处理，返回一个空空如也的结果，并把 status 标成 completed，让前端直接收尾展示",
+      "后端干脆不记录任何 status，让前端对着已经失败的 job 无限重连重试，寄希望于某一次运气好碰巧能拿到结果"
     ],
     "options_en": [
       "Keep a status field (running/completed/failed); on failure, reconnect returns partial tokens plus an error and the UI shows partial-plus-failed.",
@@ -458,6 +462,18 @@
     "answer": [
       3
     ],
+    "optionExplanations": [
+      "TTL 从来不是靠平均量和写入速率精确反推出的公式解——它是产品先拍板的保留目标，工程照着实现即可。",
+      "保留时间不是越长越好：无限存下去会让 token 历史无限膨胀，存储成本和合规风险都跟着涨。",
+      "不设 TTL 不是免费的，历史数据会无限堆积占用存储，正是 TTL 存在的理由。",
+      "对，这是产品先定的保留窗口，续传能力和存储预算都得按它来算。"
+    ],
+    "optionExplanations_en": [
+      "The TTL isn't a formula precisely back-solved from average token volume and write throughput — the product picked the window first and engineering just implements it.",
+      "Retention isn't simply better the longer it runs: keeping everything forever lets token history balloon, driving up storage cost and compliance risk.",
+      "Skipping TTL isn't free — history piles up and eats storage, which is exactly the problem TTL exists to solve.",
+      "Correct — it's a product-set retention window that both bounds resumability and sizes storage capacity."
+    ],
     "termDefinitions": [
       {
         "term": "TTL",
@@ -471,42 +487,6 @@
         "meaning": "服务给定的目标(如保留 24h)，是产品约束而非计算结果。",
         "meaningEn": "An SLO (Service Level Objective) is a product-set target, not a computed result."
       }
-    ],
-    "optionMeanings": [
-      "选项主张：是根据平均 token 数量和写入速率，精确反推出来的最优过期阈值。",
-      "选项主张：TTL 当然越长越好，干脆设成无限、永久保留全部 token 历史不删。",
-      "选项主张：token 历史只是临时数据，根本不需要设 TTL，用完即弃、随手清掉就行。",
-      "选项主张：这是产品给定的保留窗口(SLO 类)，决定「重连能续传多久」，也是存储容量的估算基数。"
-    ],
-    "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有这个绝对假设成立时才适合。",
-      "只有这个绝对假设成立时才适合。",
-      "适合本题给出的约束。"
-    ],
-    "optionScenarioImpacts": [
-      "会让系统依赖「是根据平均 token 数量和写入速率，精确反推出来的最优过期阈值」这个前提。",
-      "会让系统依赖「TTL 当然越长越好，干脆设成无限、永久保留全部 token 历史不删」这个前提。",
-      "会让系统依赖「token 历史只是临时数据，根本不需要设 TTL，用完即弃、随手清掉就行」这个前提。",
-      "会让方案围绕「这是产品给定的保留窗口(SLO 类)，决定「重连能续传多久」，也是存储容量的估算基数」展开。"
-    ],
-    "optionMeanings_en": [
-      "It is the optimal expiry threshold reverse-computed precisely from average token count and write rate.",
-      "Longer is always better, so just set it to infinite and keep all token history forever.",
-      "Token history is only temporary data and needs no TTL at all — discard it whenever you like.",
-      "It is a product-given retention window (SLO-like) that sets how long resume works and sizes storage cap…."
-    ],
-    "optionDirectness_en": [
-      "Only fits when this statement is true: it is the optimal expiry threshold reverse-computed precisely from average token count and write rate.",
-      "Only fits when this statement is true: longer is always better, so just set it to infinite and keep all token history forever.",
-      "Only fits when this statement is true: token history is only temporary data and needs no TTL at all — discard it whenever you like.",
-      "Use when the 24-hour TTL is a product-given retention target, not a computed value, and it sets how long a job can be resumed while also sizing token storage."
-    ],
-    "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: It is the optimal expiry threshold reverse-computed precisely from average token count and write rate.",
-      "It commits the design to this assumption: Longer is always better, so just set it to infinite and keep all token history forever.",
-      "It commits the design to this assumption: Token history is only temporary data and needs no TTL at all — discard it whenever you like.",
-      "It commits the design to this path: It is a product-given retention window (SLO-like) that sets how long resume works and sizes storage cap…."
     ]
   },
   {
@@ -528,10 +508,10 @@
     ],
     "tradeoff": "seq/version 守卫(拦住乱序覆盖) vs 只加 loading(遮住却没解决竞态)",
     "options": [
-      "加一个 loading 遮罩盖住整个页面，等最后一个响应回来之后再一起揭开显示结果",
+      "加一个 loading 遮罩盖住整个页面，什么都先不显示，一直耐心等到最后一个响应都回来之后，才统一揭开呈现最终结果",
       "每个请求带单调递增 seq/version，响应只接受最新 seq、旧的丢弃，用 AbortController 取消在途请求",
-      "把所有推荐请求改成同步串行，严格等上一个完全做完再发下一个，这样天然不会乱序",
-      "给每个在途请求都加一段随机延迟来错开返回时间，尽量让较新的请求晚一点才返回"
+      "把所有推荐请求都改成同步串行，严格等上一个完全处理完毕之后才发下一个，这样天然就不会出现乱序",
+      "给每一个在途请求都额外加一段随机延迟来错开返回时间，尽量让较新发出的请求晚一点才返回"
     ],
     "options_en": [
       "Cover the whole page with a loading overlay and reveal everything together only after the last response returns.",
@@ -614,7 +594,7 @@
       ]
     },
     "options": [
-      "纯客户端 localStorage 存已收到的 token，刷新后仍在、读取最快，不必每次都走服务端网络往返",
+      "纯客户端 localStorage 存下已收到的 token，刷新页面后仍然还在、读取速度也最快，不必每次都走一趟服务端网络往返",
       "纯客户端内存里存 UI 状态，完全不落后端，够单次会话用就行、实现也最省事",
       "服务端持久化的 (job_id, seq, token)+status 为权威源，前端乐观展示但以服务端为准，刷新/换设备/崩溃都可恢复",
       "谁先把状态写进存储就以谁为准，先到先得，压根不用去比较 seq 或版本号谁更新"

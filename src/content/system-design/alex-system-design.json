@@ -6277,8 +6277,8 @@
     "answer": [
       0
     ],
-    "why": "缓存层的价值是挡住重复读。大面积 miss 等于把原本被挡住的读洪峰推回数据库。",
-    "why_en": "A cache protects storage from repeated reads; broad misses send that hidden traffic back to the database.",
+    "why": "大面积 miss 会把缓存平时吸收的重复读同时推回数据库。数据库只按少量 miss 设计时，就会被突发读压垮。",
+    "why_en": "Broad cache misses send absorbed reads back to a database sized for only a small miss rate.",
     "tradeoff": "路由稳定性 vs 后端保护",
     "whenOtherWins": "如果缓存只是可选优化、数据库能承受全量读，重映射风险会小一些。",
     "tags": [
@@ -6286,17 +6286,29 @@
       "consistent-hashing",
       "cache-miss"
     ],
+    "termDefinitions": [
+      {
+        "term": "cache miss",
+        "meaning": "缓存未命中，应用需要去后端数据源读取。",
+        "meaningEn": "A cache miss means the cache has no usable value, so the app reads from the backend store."
+      },
+      {
+        "term": "hash ring",
+        "meaning": "一致性哈希里把 key 和节点映射到同一圆环上的路由结构。",
+        "meaningEn": "A hash ring maps keys and nodes onto the same consistent-hashing circle for routing."
+      }
+    ],
     "optionExplanations": [
-      "缓存本来挡住的是重复读，一旦大量 key 因为错误路由集体 miss，这些原本被挡住的读请求会同时涌向数据库，把它平时没见过的压力一次性放大。",
-      "错误路由带来的是大量 miss，命中率只会下降，不会自动升高。",
-      "数据库不具备感知或修复哈希环配置的能力，环本身出问题需要靠应用或缓存层的机制解决。",
-      "缓存 miss 触发的回源读通常是同步等待结果的，不会因为路由出错就自动变成异步任务。"
+      "大量 key 错路由时会同时 miss，缓存平时吸收的重复读会集中回源，数据库很容易被打满。",
+      "错误路由让命中率下降；只有 key 重新打到正确节点或回填后，命中率才可能恢复。",
+      "哈希环是应用或缓存客户端的路由配置，数据库不会知道更不会主动修复它。",
+      "miss 后通常要同步回源拿结果；异步化需要额外队列设计，不会自动发生。"
     ],
     "optionExplanations_en": [
-      "A cache's whole job is blocking repeat reads, so when a wave of keys gets misrouted and all miss at once, the reads it used to absorb all surge onto the database simultaneously, amplifying pressure it never normally sees.",
-      "Misrouting causes a wave of misses — the hit rate can only drop, not rise on its own.",
-      "A database has no ability to sense or repair a hashing ring's configuration — a broken ring has to be fixed at the application or caching layer.",
-      "A cache-miss fallback read is normally a synchronous wait for the result — a routing error doesn't magically turn it into an async task."
+      "When many keys miss at once, reads the cache normally absorbs fall back together and can saturate the database.",
+      "Misrouting lowers the hit rate; it recovers only after keys hit the right nodes or get refilled.",
+      "The hash ring is routing config in the app or cache client; the database does not repair it.",
+      "A miss usually waits on a backend read; async fallback requires an explicit queue design."
     ]
   },
   {
@@ -17020,26 +17032,36 @@
     "answer": [
       0
     ],
-    "why": "入口越早拒绝无效请求，后面队列和 worker 越干净。provider 故障和用户行为则要在后续观测。",
-    "why_en": "Reject invalid requests early so queues and workers only handle sendable events.",
+    "why": "入口要挡掉请求本身就不可能发送的脏数据。provider 抖动和点击率是发送后问题，不能靠入队前校验解决。",
+    "why_en": "Validate before enqueueing so workers handle only sendable notifications.",
     "termDefinitions": [
       {
         "term": "payload",
         "meaning": "通知发送给平台或用户设备的内容体。",
         "meaningEn": "A payload is the content body sent to a platform or user device."
+      },
+      {
+        "term": "provider",
+        "meaning": "实际代发短信、邮件或 push 的外部服务商。",
+        "meaningEn": "A provider is the external service that actually sends SMS, email, or push messages."
+      },
+      {
+        "term": "worker",
+        "meaning": "从队列取任务并执行发送逻辑的后台进程。",
+        "meaningEn": "A worker is a background process that pulls jobs from a queue and performs the send."
       }
     ],
     "optionExplanations": [
-      "格式不对、字段缺失、内容超限或者调用方越权，这些在入口就能判断出来的问题越早挡住，后面的队列和 worker 才不会被脏数据污染。",
-      "把所有合法请求也当成要挡的对象，会连正常业务都一起拦下来，跟入口校验该做的事正好相反。",
-      "供应商内部网络抖动是发送之后才会暴露的问题，入口校验这一步根本还没走到那里，管不到它。",
-      "用户是否点击是发送完成之后很久才能知道的互动结果，跟入口这一步要做的格式和权限校验完全不在一个阶段。"
+      "格式、必填字段、大小上限和授权在入口就能判断，挡住它们能避免脏任务占用队列和 worker。",
+      "合法请求应该进入队列；把它们挡掉就是制造误拒。",
+      "provider 网络抖动发生在实际发送阶段，入口校验还没调用它，挡不住。",
+      "点击是发送后的用户行为，入口只能校验请求能不能被发送。"
     ],
     "optionExplanations_en": [
-      "Malformed data, missing fields, oversized content, or an unauthorized caller are all things the entry point can catch immediately, and blocking them as early as possible keeps the queue and workers from getting polluted with garbage.",
-      "Treating every legitimate request as something to block would reject normal business traffic too — the opposite of what entry-point validation should do.",
-      "Provider-side network jitter only surfaces after the send actually happens — entry-point validation hasn't even reached that stage and has no control over it.",
-      "Whether the user clicked is an engagement outcome known long after the send completes, an entirely different stage from the format and authorization checks the entry point handles."
+      "Format, required fields, size limits, and authorization can be checked at entry, before dirty jobs occupy workers.",
+      "Valid requests should enter the queue; blocking them is a false rejection.",
+      "Provider jitter happens during the actual send, before entry validation has even called it.",
+      "Clicks are user behavior after delivery; entry validation only checks whether a request is sendable."
     ]
   },
   {
@@ -17750,8 +17772,8 @@
     "answer": [
       0
     ],
-    "why": "me/feed 表示读当前登录用户的首页，auth token 决定是谁。不要让客户端随便传 user_id 读别人 feed。",
-    "why_en": "A me/feed endpoint uses the authenticated identity to fetch the current user's feed, avoiding arbitrary user_id reads.",
+    "why": "GET /v1/me/feed 把身份绑定到登录态，而不是让客户端传任意 user_id。这样读路径默认只返回当前用户自己的 feed。",
+    "why_en": "Use /me/feed with the authenticated identity so clients cannot choose arbitrary user IDs.",
     "tags": [
       "ch11",
       "read-api",
@@ -17763,19 +17785,32 @@
         "meaning": "HTTP 里用于读取资源的请求方法。",
         "meaningEn": "HTTP GET is the request method used to read a resource.",
         "fullName": "Hypertext Transfer Protocol GET"
+      },
+      {
+        "term": "API",
+        "meaning": "服务暴露给客户端或其他服务调用的接口契约。",
+        "meaningEn": "An API is the interface contract a service exposes to clients or other services.",
+        "fullName": "Application Programming Interface"
+      },
+      {
+        "term": "auth token",
+        "meaning": "客户端随请求携带的登录凭证，服务端用它识别当前用户。",
+        "meaningEn": "An auth token is a login credential sent with a request so the server can identify the current user."
       }
     ],
+    "codeSample": "GET /v1/me/feed?limit=20 HTTP/1.1\nAuthorization: Bearer <user-token>",
+    "lang": "http",
     "optionExplanations": [
-      "对，me/feed 表示读取的是当前登录用户自己的首页，服务端靠 auth token 判断这个身份，不该让客户端随便传一个 user_id 就能读到别人的 feed。",
-      "这是一个会删除全体用户的高危写操作，跟“打开首页取自己的 feed”这个简单读取需求完全不是一回事。",
-      "robots.txt 是网站给爬虫看的抓取规则文件，跟一个社交产品用户读取自己首页的接口毫无关系。",
-      "这是修改短信供应商配置的接口，跟客户端打开首页要拉取 feed 完全不搭边。"
+      "这是面向当前登录用户的读接口；服务端从 auth token 取身份，不接受客户端随便传 user_id。",
+      "这是删除用户的写接口，权限和副作用都与读取自己的首页相反。",
+      "robots.txt 给爬虫看抓取规则，不返回用户 feed。",
+      "修改短信 provider 配置和首页读取不在同一业务路径。"
     ],
     "optionExplanations_en": [
-      "Right — me/feed means reading the currently logged-in user's own homepage, with the server deciding identity from the auth token, and clients shouldn't be able to just pass any user_id and read someone else's feed.",
-      "This is a high-risk write operation that deletes every user — nowhere near the simple read requirement of opening a homepage to fetch one's own feed.",
-      "robots.txt is the crawl-rules file a site shows to crawlers, unrelated to a social product's endpoint for a user reading their own homepage.",
-      "This is an endpoint for modifying SMS provider configuration, completely unrelated to a client opening its homepage and fetching a feed."
+      "This reads the current user's feed; the server gets identity from the auth token, not a client-supplied user_id.",
+      "This is a destructive user-delete write path, the opposite of reading your own homepage.",
+      "robots.txt is for crawler rules; it does not return a user's feed.",
+      "Changing SMS provider config is a different business path from reading the home feed."
     ]
   },
   {
@@ -19403,8 +19438,8 @@
     "answer": [
       0
     ],
-    "why": "设备进度不同，所以同步游标也要按设备保存。拉取 message_id 更大的记录，就能补齐离线期间的新消息。",
-    "why_en": "Each device needs its own cursor, then it can fetch messages with IDs greater than its last seen ID.",
+    "why": "每台设备都有自己的已读进度，所以游标要按设备保存。设备重连时只拉 message_id 大于本地游标的消息。",
+    "why_en": "Store a cursor per device, then fetch only messages newer than that device's last synced ID.",
     "tags": [
       "ch12",
       "multi-device-sync",
@@ -19415,50 +19450,57 @@
       {
         "term": "cur_max_message_id",
         "meaning": "某设备已经同步到的最大消息 ID，用作增量拉取游标。",
-        "meaningEn": "cur_max_message_id is the largest message ID a device has synced, used as an incremental cursor."
+        "meaningEn": "cur_max_message_id is the largest message ID a device has synced, used as an incremental cursor.",
+        "fullName": "current maximum message identifier"
       },
       {
         "term": "cursor",
         "meaning": "分页或同步时记录当前位置的标记。",
         "meaningEn": "A cursor marks the current position for pagination or synchronization."
+      },
+      {
+        "term": "message_id",
+        "meaning": "消息的唯一编号，可用来排序和做增量同步边界。",
+        "meaningEn": "A message_id is a unique message identifier used for ordering and incremental sync.",
+        "fullName": "message identifier"
       }
     ],
     "tradeoff": "设备独立进度 vs 同步状态存储成本",
     "table": {
       "headers": [
-        "状态",
-        "计量",
-        "用途"
+        "字段",
+        "归属",
+        "作用"
       ],
       "rows": [
         [
-          "cursor",
+          "cur_max",
           "设备",
-          "离线补拉"
+          "补离线消息"
         ],
         [
           "message_id",
           "消息",
-          "增量查询"
+          "排序/增量"
         ],
         [
-          "会话",
           "chat_id",
-          "保局部性"
+          "会话",
+          "限定范围"
         ]
       ]
     },
     "optionExplanations": [
-      "每台设备的读取进度不同，给每台设备各自保存一个 cur_max_message_id，拉取比这个值更大的记录，就能精确补齐这台设备离线期间错过的新消息。",
-      "让所有设备共享一个本地内存指针，既没法反映每台设备真实各自的进度，指针本身也不该是本地内存这种易失状态。",
-      "只给最新登录设备发消息，会让之前登录的其他设备完全收不到新消息，跟“多设备同步”这个目标正相反。",
-      "按设备屏幕大小排序完全不涉及消息读取进度，跟多设备之间该怎么同步没有任何关系。"
+      "每台设备保存自己的 cur_max_message_id，重连时只补拉更大的 message_id，既不漏也少重复。",
+      "共享内存指针会互相覆盖进度，服务重启还会丢状态。",
+      "只给最新设备发消息会让手机或电脑其中一端漏消息。",
+      "屏幕大小不是同步游标，不能表示设备读到了哪条消息。"
     ],
     "optionExplanations_en": [
-      "Each device's read progress differs, so saving a cur_max_message_id per device and pulling anything with a larger ID precisely fills in whatever that specific device missed while offline.",
-      "Sharing one in-memory pointer across all devices neither reflects each device's true individual progress, nor should it be volatile local-memory state to begin with.",
-      "Sending only to the most recently logged-in device leaves every other logged-in device unable to receive new messages at all — the opposite of the multi-device sync goal.",
-      "Sorting by device screen size has nothing to do with message-read progress and no bearing on how devices should stay in sync."
+      "Each device keeps its own cur_max_message_id, so reconnect only pulls larger message IDs.",
+      "One shared memory pointer overwrites device progress and disappears on restart.",
+      "Sending only to the latest device makes the phone or laptop miss messages.",
+      "Screen size is not a sync cursor and says nothing about the last read message."
     ]
   },
   {
@@ -19849,8 +19891,8 @@
     "answer": [
       0
     ],
-    "why": "普通 CRUD 请求不需要长连接语义，HTTP 更容易负载均衡和无状态扩展。WebSocket 留给实时消息和 presence。",
-    "why_en": "Use HTTP for ordinary request-response features and reserve WebSocket for real-time messaging and presence.",
+    "why": "登录、注册、资料更新是一次请求一次响应，不需要为每个用户占长连接。HTTP 更容易做无状态负载均衡；WebSocket 留给实时消息和 presence。",
+    "why_en": "Use HTTP for one-shot CRUD requests and keep WebSocket for real-time messaging and presence.",
     "tags": [
       "ch12",
       "http-for-stateless",
@@ -19870,19 +19912,64 @@
         "meaning": "Hypertext Transfer Protocol，Web 常用请求/响应协议。",
         "meaningEn": "HTTP is the common request-response protocol of the web.",
         "fullName": "Hypertext Transfer Protocol"
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "浏览器或 App 与服务端保持的一条双向长连接。",
+        "meaningEn": "A WebSocket is a long-lived bidirectional connection between a client and a server."
+      },
+      {
+        "term": "presence",
+        "meaning": "用户是否在线、正在输入或可接收实时消息的状态。",
+        "meaningEn": "Presence is state such as whether a user is online, typing, or reachable in real time."
+      },
+      {
+        "term": "SMS",
+        "meaning": "手机运营商短信通道，常用于离线通知或验证码。",
+        "meaningEn": "SMS is the carrier text-message channel often used for offline alerts or verification codes.",
+        "fullName": "Short Message Service"
       }
     ],
+    "table": {
+      "headers": [
+        "协议",
+        "连接形态",
+        "适合用途"
+      ],
+      "rows": [
+        [
+          "HTTP",
+          "短请求",
+          "登录/设置"
+        ],
+        [
+          "WebSocket",
+          "长连接",
+          "实时消息"
+        ],
+        [
+          "SMS",
+          "运营商通道",
+          "离线通知"
+        ],
+        [
+          "数据库复制",
+          "库间协议",
+          "客户端不用"
+        ]
+      ]
+    },
     "optionExplanations": [
-      "登录、注册、改资料这些普通请求不需要长连接语义，用标准 HTTP 请求响应模式更容易做无状态负载均衡和水平扩展，把 WebSocket 留给真正需要实时的场景。",
-      "把登录、注册这类简单一次性请求也强行塞进 WebSocket，等于给不需要长连接的场景背上长连接的状态管理成本，纯属浪费。",
-      "短信协议是通知系统的传输通道，跟聊天 App 内部的登录、注册这类普通业务请求完全不是一回事。",
-      "数据库复制协议是数据库节点之间同步数据用的内部协议，客户端的普通业务请求根本不会走这条路径。"
+      "登录、注册、改资料是一次性请求，HTTP 方便无状态负载均衡，把长连接留给实时消息。",
+      "强行走 WebSocket 会让简单请求背上连接保持、断线重连和路由状态成本。",
+      "SMS 是外部通知通道，适合提醒或验证码，不适合承载 App 内部 API。",
+      "数据库复制协议只在数据库节点之间同步数据，客户端业务请求不会走它。"
     ],
     "optionExplanations_en": [
-      "Ordinary requests like login, sign-up, and profile edits need no long-connection semantics — standard HTTP request/response makes stateless load balancing and horizontal scaling far easier, leaving WebSocket for what actually needs real-time.",
-      "Forcing simple one-off requests like login and sign-up through WebSocket saddles a scenario that never needed a long connection with all its state-management overhead — pure waste.",
-      "An SMS protocol is a notification system's transport channel, entirely unrelated to a chat app's ordinary business requests like login and sign-up.",
-      "A database replication protocol is an internal protocol for syncing data between database nodes — a client's ordinary business request never goes anywhere near it."
+      "Login, signup, and profile edits are one-shot requests, so HTTP keeps load balancing stateless.",
+      "Forcing WebSocket adds connection, reconnect, and routing-state cost to simple requests.",
+      "SMS is an external notification channel, useful for alerts or codes, not internal app APIs.",
+      "Database replication syncs database nodes; client business requests do not use it."
     ]
   },
   {
@@ -23917,8 +24004,8 @@
     "answer": [
       0
     ],
-    "why": "上传关注可靠接收、转码和状态推进；播放关注离用户近、快速起播和持续供流。把两条路径分开，才能分别扩容和优化。",
-    "why_en": "Uploads optimize durable ingestion and processing, while playback optimizes nearby reads and startup latency.",
+    "why": "上传是写路径：可靠接收源文件、排队转码、推进状态。播放是读路径：从边缘快速起播并持续供流，所以两条路径要分开扩容。",
+    "why_en": "Upload is a durable write-and-process path; playback is a low-latency edge-read path.",
     "tradeoff": "写入处理吞吐 vs 播放低延迟",
     "table": {
       "headers": [
@@ -23930,7 +24017,7 @@
       "rows": [
         [
           "上传",
-          "写入处理",
+          "写入+转码",
           "分钟级",
           "worker"
         ],
@@ -23947,17 +24034,35 @@
       "youtube",
       "paths"
     ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "meaning": "内容分发网络，把视频片段缓存到离用户更近的边缘节点。",
+        "meaningEn": "A CDN caches media segments at edge locations closer to viewers.",
+        "fullName": "Content Delivery Network"
+      },
+      {
+        "term": "worker",
+        "meaning": "后台消费任务并执行转码、封装或状态推进的进程。",
+        "meaningEn": "A worker is a background process that consumes jobs and performs transcoding or state updates."
+      },
+      {
+        "term": "transcoding",
+        "meaning": "把源视频转换成不同编码、分辨率或码率版本的处理过程。",
+        "meaningEn": "Transcoding converts a source video into different codec, resolution, or bitrate versions."
+      }
+    ],
     "optionExplanations": [
-      "上传要重点保证可靠接收、异步转码和状态推进；播放要重点保证离用户近、启动快、能持续供流，两条路径关心的东西完全不同，分开才能各自扩容和优化。",
-      "上传本身就是要先把源文件写进存储、再触发转码，不是必须走 CDN 的场景；播放才是真正依赖 CDN 就近分发的路径，这个说法把两者搞反了。",
-      "上传恰恰需要授权（比如 pre-signed URL）来限制写权限；播放同样需要真实的网络带宽来传输视频字节，说两者都不需要这些不成立。",
-      "上传是可以异步慢慢处理的写入路径，播放要求低启动延迟的实时供流，把两条特性完全不同的路径塞进同一组同步 worker 会两头都做不好。"
+      "上传是耐心写入和异步处理；播放是低延迟读和连续供流，拆开后才能分别扩容。",
+      "CDN 主要服务播放就近读取；上传通常先写对象存储，再触发转码。",
+      "上传要限制写权限，播放也要实际带宽传视频字节。",
+      "同步 worker 会把慢转码和低延迟播放绑在一起，任一边抖动都会拖累另一边。"
     ],
     "optionExplanations_en": [
-      "Upload has to prioritize reliable receipt, asynchronous transcoding, and status progression; playback has to prioritize being close to the user, fast startup, and sustained streaming — the two paths care about completely different things, and separating them lets each scale and optimize on its own.",
-      "Upload is about writing the source file to storage first and then triggering transcoding — it isn't a scenario that must go through a CDN; playback is the one that genuinely relies on CDN proximity — this claim has the two reversed.",
-      "Upload specifically needs authorization (like a pre-signed URL) to restrict write access, and playback likewise needs real network bandwidth to transfer video bytes — claiming neither needs these doesn't hold.",
-      "Upload is a write path that can be processed asynchronously and slowly, while playback demands real-time streaming with low startup latency — forcing two paths with such different characteristics through the same synchronous worker pool serves neither well."
+      "Upload is patient write-and-process work; playback is low-latency reading and sustained streaming.",
+      "CDN mainly helps playback read nearby; upload usually writes to object storage before transcoding.",
+      "Upload still needs write authorization, and playback still needs bandwidth for video bytes.",
+      "Synchronous workers would tie slow transcoding to low-latency playback and make both paths suffer."
     ]
   },
   {
