@@ -11,6 +11,18 @@ version: 2026-07-08.2
 >
 > 依据：SuperMemo 最小信息原则、NBME 命题指南、MCQ 生成研究（LLM 典型失败：幻觉、肤浅干扰项、答案泄漏）、对 Hello Interview 讲解方式的逆向分析（§8 十二律）。
 
+## §0 验收评分模型（硬门 + 加权扣分 · 唯一通过标准）
+
+一张卡通过 = **① 硬门全过 且 ② 分数 ≥ 90**（阈值可调）。**不再要求"每条 warning 清零"**——避免为"why 差 2 个字"这种小事反复回炉。
+
+- **硬门（error = severity 4，一票否决）**：schema 非法、正确性错 / 答案泄漏、`template_filler`、fit 缺 `whenOtherWins`、`code_sample.cross_topic`、解释截断。任一 error → 直接 fail，与分数无关。
+- **加权扣分（warning = severity ≤3，从 100 扣）**：
+  - **小 / 风格类扣 2**：长度超预算（why / 解析 / reveal）、表头或单元格超长、缺 `fullName`。
+  - **一般类按严重度扣 3–8**：冗余复读、长度泄题、缺双语、缺场景、清单 / 机制补强、bad distractors 等。
+  - `score = 100 − Σ扣分`；**无 error 且 score ≥ 90 → pass**。
+- **命令**：`node scripts/audit-card-quality.mjs <file> --limit=0` 末尾输出 `score (pass = no error & >= 90): P/N pass · avg …` + 最低分卡清单；`--threshold=NN` 调阈值；`--json` 输出每卡 `{score, pass, hasError}`。
+- **验收门（REGEN / AUTHORING / BACKFILL 共用）**：从"audit error=0"升级为"**全部卡 pass（无 error 且 ≥90）**"；judge 抽查照旧。
+
 ## Gate 0 — 这张卡该不该存在（先判生死，再谈质量）
 
 **全部满足才保留；任一不满足 → 删除或重写，不进入字段打分：**
@@ -178,7 +190,7 @@ npm run quality:audit -- --limit=120     # 全部 [机检] 项
 npm run build:deck && npm run verify     # schema + 逻辑 + Mermaid
 ```
 
-机检 error=0 才可入库；warn 进 review 队列。机器查不了的（1.2-F2 答案泄漏、1.1-S1 约束决定答案、1.5-S1 口语自然度、Gate 0 G1/G2）由 judge 按本文件逐项 pass/fail（校准样本：`docs/judge-calibration.md`；流程：`docs/REGEN_FLOW.md`）。
+机检验收 = **无 error 且 score ≥ 90（§0）**；低于 90 的卡进 review 队列。机器查不了的（1.2-F2 答案泄漏、1.1-S1 约束决定答案、1.5-S1 口语自然度、Gate 0 G1/G2）由 judge 按本文件逐项 pass/fail（校准样本：`docs/judge-calibration.md`；流程：`docs/REGEN_FLOW.md`）。
 
 ## 附录 A · 机检规则参考（audit-card-quality.mjs 的全部规则）
 
