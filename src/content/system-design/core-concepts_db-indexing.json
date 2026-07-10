@@ -1,5 +1,55 @@
 [
   {
+    "id": "sd-core-concepts-db-indexing-storage-map",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "storage-engine-map",
+    "q": "选存储引擎 / 索引结构时，最该先问自己的一组问题是？",
+    "options": [
+      "内存/磁盘 · 读/写 · 等值/范围 · 超不超 RAM · 要不要持久化",
+      "用什么编程语言 · 团队多大 · 预算多少",
+      "先决定 NoSQL 还是 SQL，再把它的特性全背下来",
+      "无脑默认 Postgres，不用分析"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "选存储结构不用背——先问五个问题就定：①内存还是磁盘 ②读多还是写多 ③只等值还是要范围 ④会不会超过 RAM ⑤要不要持久化。三大核心结构：哈希表（O(1) 只等值，内存）、B 树（读优化+范围，磁盘）、LSM 树（写优化，日志结构 memtable→SSTable→compaction）。这是所有索引/引擎选型卡的总纲。",
+    "why_en": "You don't memorize storage choices — you ask five questions: (1) memory or disk, (2) read- or write-heavy, (3) exact-match only or need range/sort, (4) will data exceed RAM, (5) need durability. Three core structures: hash table (O(1) exact-match, in-memory), B-tree (read-optimized + range, on disk), and LSM tree (write-optimized, log-structured). This is the master map behind every index/engine card.",
+    "diagram": "flowchart TD\n  A{\"内存 or 磁盘?\"}\n  A -->|内存| B{\"只等值 or 范围?\"}\n  B -->|等值| H[\"哈希表 O(1)\"]\n  B -->|范围| S[\"有序结构\"]\n  A -->|磁盘| C{\"读多 or 写多?\"}\n  C -->|读| BT[\"B 树\"]\n  C -->|写| L[\"LSM 树\"]",
+    "table": {
+      "headers": [
+        "结构",
+        "优化 / 特点",
+        "代表"
+      ],
+      "rows": [
+        [
+          "哈希表",
+          "O(1) 只等值·无范围（内存）",
+          "Redis、MySQL MEMORY"
+        ],
+        [
+          "B 树",
+          "读优化·原地更新·范围+排序（磁盘）",
+          "Postgres、InnoDB"
+        ],
+        [
+          "LSM 树",
+          "写优化·日志结构 memtable→SSTable→compaction",
+          "Cassandra、RocksDB、DynamoDB"
+        ]
+      ]
+    },
+    "tags": [
+      "storage-engine",
+      "index",
+      "capstone",
+      "prerequisite"
+    ]
+  },
+  {
     "id": "sd-core-concepts-db-indexing-001",
     "format": "mcq",
     "atomType": "fact",
@@ -96,8 +146,9 @@
     "answer": [
       0
     ],
-    "why": "主表数据通常存成堆文件——行按写入先后堆放、没有特定顺序，就像来一条记一条的笔记本。这正是需要索引提供有序访问路径的原因。",
-    "why_en": "Table data is typically stored as a heap file, an unordered collection of rows written as they come, which is why indexes are needed for fast lookups.",
+    "why": "选堆文件。这里问主表数据，不是主键索引：行通常堆在数据页里；主键 B-tree 另存并指向这些行。",
+    "why_en": "Choose heap file. This asks about table data, not the primary-key index: rows usually live in heap pages, while a separate primary-key B-tree points to them.",
+    "whenOtherWins": "例外：InnoDB 用 clustered index；Postgres 常见是 heap table + separate index。",
     "tags": [
       "indexing",
       "heap-file",
@@ -109,6 +160,31 @@
       "An array of hash buckets, scattering rows by hash value.",
       "Column-compressed blocks, storing data by column rather than by row."
     ],
+    "diagram": "flowchart LR\n    T[\"table heap pages\\nrows in write order\"]\n    I[\"primary-key B-tree\\nsorted keys\"] --> T\n    Q[\"WHERE id = 42\"] --> I\n    T --> R[\"row data\"]",
+    "table": {
+      "headers": [
+        "对象",
+        "磁盘形态",
+        "作用"
+      ],
+      "rows": [
+        [
+          "主表",
+          "heap pages",
+          "存行"
+        ],
+        [
+          "主键索引",
+          "B-tree",
+          "找行"
+        ],
+        [
+          "InnoDB",
+          "clustered",
+          "例外"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "堆文件 / heap file",
@@ -119,6 +195,11 @@
         "term": "主键 / primary key",
         "meaning": "唯一标识一行数据的列或列组合。",
         "meaningEn": "A primary key is the column or columns that uniquely identify each row."
+      },
+      {
+        "term": "聚簇索引 / clustered index",
+        "meaning": "索引顺序就是主表数据顺序的存储方式，MySQL InnoDB 的主键就是典型例子。",
+        "meaningEn": "A clustered index stores table rows in the same order as the index; MySQL InnoDB primary keys are the classic example."
       }
     ],
     "q_en": "How is the main table data usually stored on disk?",
@@ -129,16 +210,16 @@
       "选项主张：列式压缩块，按列而非按行存储。"
     ],
     "optionDirectness": [
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。"
+      "正确：主表 heap，索引另存。",
+      "不对：这是 clustered index 特例。",
+      "不对：这是哈希索引/分布。",
+      "不对：这是列式 OLAP。"
     ],
     "optionScenarioImpacts": [
-      "会让方案围绕「堆文件（heap file）：行按写入顺序堆放，没有特定排序」展开。",
-      "会让系统依赖「始终按主键排序的有序文件，写入需保持位置」这个前提。",
-      "会让系统依赖「哈希桶数组，按哈希值分散存放」这个前提。",
-      "会让系统依赖「列式压缩块，按列而非按行存储」这个前提。"
+      "解释了为什么还需要索引。",
+      "会把 InnoDB 当通用规则。",
+      "会误解主表天然可等值查。",
+      "会混淆 OLTP 和 OLAP。"
     ],
     "optionMeanings_en": [
       "A heap file: rows stored in the order they were written, with no particular sort order.",
@@ -147,16 +228,16 @@
       "Column-compressed blocks, storing data by column rather than by row."
     ],
     "optionDirectness_en": [
-      "Use when table data is typically stored as a heap file, an unordered collection of rows written as they come, which is why indexes are needed for fast lookups.",
-      "Only fits when this statement is true: a file always kept sorted by primary key, so writes must preserve row position.",
-      "Only fits when this statement is true: an array of hash buckets, scattering rows by hash value.",
-      "Only fits when this statement is true: column-compressed blocks, storing data by column rather than by row."
+      "Correct: main table heap, index separate.",
+      "Incorrect: this is a clustered-index exception.",
+      "Incorrect: this is hash indexing or distribution.",
+      "Incorrect: this is columnar OLAP."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this path: A heap file: rows stored in the order they were written, with no particular sort order.",
-      "It commits the design to this assumption: A file always kept sorted by primary key, so writes must preserve row position.",
-      "It commits the design to this assumption: An array of hash buckets, scattering rows by hash value.",
-      "It commits the design to this assumption: Column-compressed blocks, storing data by column rather than by row."
+      "Explains why an index is still needed.",
+      "Mistakes InnoDB for the universal rule.",
+      "Assumes the table itself is an equality index.",
+      "Confuses OLTP rows with OLAP columns."
     ]
   },
   {
@@ -673,8 +754,8 @@
     "answer": [
       3
     ],
-    "why": "索引对内存的冲击常被高估——现代缓冲池管理已大幅缓解。但好习惯不变：监控索引使用率，删掉没有明显收益的索引。",
-    "why_en": "The memory impact of indexes is often overblown thanks to smart buffer pool management, but you should still monitor usage and drop unnecessary indexes.",
+    "why": "这题只在说「内存」这一种代价，别和另两种混了。加索引其实有三种代价：①写变慢——每次增删改都要顺带维护这个索引（写放大），这才是主要代价；②占磁盘——索引是一份独立的 B 树结构；③占内存——就是本题，常被高估：缓冲池(buffer pool)是 LRU 缓存，只把「热」页留在内存，冷索引躺在盘上几乎不占 RAM，不会「翻一倍」。所以要防的不是内存，而是「加了一堆没人查、却拖慢每次写」的索引 → 监控使用率、删掉无用索引。",
+    "why_en": "This card is only about the MEMORY cost — don't conflate it with the other two. An index has three costs: (1) slower writes — every insert/update/delete must maintain it (write amplification), the main cost; (2) extra disk — a separate B-tree structure; (3) memory — the topic here, and the overhyped one: the buffer pool is an LRU cache that keeps only hot pages, so cold indexes barely occupy RAM (no doubling). The real danger is unused indexes that slow every write for zero read benefit — monitor and drop them.",
     "tags": [
       "indexing",
       "buffer-pool",
@@ -729,6 +810,81 @@
       "It commits the design to this assumption: Indexes take up no memory at all.",
       "It commits the design to this assumption: Memory impact is the single most fatal cost of indexes.",
       "It commits the design to this path: The impact is often overblown thanks to smart buffer pool management."
+    ],
+    "table": {
+      "headers": [
+        "代价",
+        "加一个索引会怎样",
+        "严重吗"
+      ],
+      "rows": [
+        [
+          "磁盘 storage",
+          "多一份 B 树结构占盘",
+          "一般不贵"
+        ],
+        [
+          "写 write",
+          "每次增删改都要多维护它 → 写变慢",
+          "★ 真·主要代价"
+        ],
+        [
+          "内存 memory",
+          "只有被频繁读的热页才进缓冲池",
+          "常被夸大"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-core-concepts-db-indexing-cost-map",
+    "format": "multi",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "index-cost",
+    "q": "给一张表新增一个索引，真实代价有哪些？（多选）",
+    "options": [
+      "写变慢：每次 INSERT / UPDATE / DELETE 都要顺带更新这个索引（写放大）",
+      "占磁盘：索引是表旁边一份独立的 B 树结构，需要额外存储",
+      "占内存翻倍：多一个索引，RAM 占用就翻一倍",
+      "没人用的索引纯亏：白维护 + 白占盘却零读收益，应监控并删除"
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "加索引有两类真实代价——①写变慢（每次增删改都要维护索引 = 写放大，主要代价）②占磁盘（一份独立 B 树）。内存则常被高估：缓冲池是 LRU 缓存，只缓存热页，冷索引几乎不占 RAM，不会「翻一倍」。真正要防的是「加了一堆没人查、却拖慢每次写」的索引 → 监控使用率、删无用索引。",
+    "why_en": "Adding an index has two real costs: slower writes (every insert/update/delete must maintain it — write amplification, the main one) and extra disk (a separate B-tree). Memory is overhyped: the buffer pool is an LRU cache that keeps only hot pages, so cold indexes barely touch RAM (no doubling). The real danger is unused indexes that slow every write for zero read benefit — monitor and drop them.",
+    "table": {
+      "headers": [
+        "代价",
+        "加一个索引会怎样",
+        "严重吗"
+      ],
+      "rows": [
+        [
+          "磁盘 storage",
+          "多一份 B 树结构占盘",
+          "一般不贵"
+        ],
+        [
+          "写 write",
+          "每次增删改都要多维护它 → 写变慢",
+          "★ 真·主要代价"
+        ],
+        [
+          "内存 memory",
+          "只有被频繁读的热页才进缓冲池",
+          "常被夸大"
+        ]
+      ]
+    },
+    "tags": [
+      "index-cost",
+      "write-amplification",
+      "consequence",
+      "prerequisite"
     ]
   },
   {
@@ -738,7 +894,7 @@
     "topic": "system-design",
     "sub": "index-types",
     "q": "补全面试常考的索引家族：",
-    "text": "通用默认用 {{B 树}}；极端写入负载用 {{LSM 树}} 存储引擎；纯精确匹配可用 {{哈希}} 索引；经纬度邻近搜索用 {{地理空间}} 索引；全文搜索用 {{倒排}} 索引。",
+    "text": "通用默认用 {{B-tree}}；极端写入负载用 {{LSM tree}} 存储引擎；纯精确匹配用 {{hash}} 索引；经纬度邻近搜索用 {{geospatial}} 索引（如 GeoHash / R-tree）；全文搜索用 {{inverted}} 索引（倒排）。",
     "why": "五类索引各解一类问题：B 树是万金油，LSM 吃写入，哈希只做等值，地理空间管 2D 邻近，倒排管文本。面试先想清楚查询形态再选。",
     "why_en": "B-trees are the default, LSM trees serve write-heavy workloads, hash indexes do exact matches, geospatial indexes handle proximity, and inverted indexes power text search.",
     "tags": [
@@ -774,7 +930,8 @@
         "meaningEn": "An inverted index stores a mapping from each word to the list of documents containing it, powering full-text search."
       }
     ],
-    "q_en": "Fill in the common index families interviewers expect you to know:"
+    "q_en": "Fill in the common index families interviewers expect you to know:",
+    "text_en": "General-purpose default: {{B-tree}}; write-heavy: {{LSM tree}} storage engine; exact-match only: {{hash}} index; lat/lng proximity: {{geospatial}} index (e.g. GeoHash, R-tree); full-text search: {{inverted}} index."
   },
   {
     "id": "sd-core-concepts-db-indexing-011",
@@ -869,8 +1026,8 @@
     "q": "B 树的结构性规则包括哪些？（多选）",
     "options": [
       "所有叶子节点必须在同一深度",
-      "每个节点可含 m/2 到 m 个键（m 为树的阶）",
-      "有 k 个键的节点恰好有 k+1 个子节点",
+      "非根节点通常保持半满到满（约 m/2 到 m 个键）",
+      "有 k 个键的内部节点恰好有 k+1 个子节点",
       "节点内的键无需保持有序"
     ],
     "answer": [
@@ -878,66 +1035,97 @@
       1,
       2
     ],
-    "why": "B 树靠这些不变式保持平衡：叶子同深、节点键数在 m/2 到 m 之间、k 键对应 k+1 子。节点内的键必须有序——这正是范围查询高效的基础。",
-    "why_en": "In a B-tree all leaves sit at the same depth, nodes hold between half-m and m keys, a node with k keys has exactly k plus one children, and keys stay sorted within each node.",
+    "why": "选 A/B/C。B 树靠叶子同深保持平衡；节点通常至少半满，避免树变瘦变高；内部节点的 k 个 key 把范围切成 k+1 段。D 错，因为节点内 key 必须有序。",
+    "why_en": "Choose A/B/C. A B-tree stays balanced by keeping all leaves at the same depth, keeping nodes roughly half-full or fuller, and using k keys in an internal node to split the key space into k+1 child ranges. D is wrong because keys inside a node must stay sorted.",
     "tags": [
       "btree",
       "invariants"
     ],
     "options_en": [
       "All leaf nodes must sit at the same depth.",
-      "Each node can hold between m/2 and m keys, where m is the tree's order.",
-      "A node with k keys has exactly k+1 children.",
+      "Non-root nodes usually stay between roughly half-full and full, about m/2 to m keys.",
+      "An internal node with k keys has exactly k+1 children.",
       "Keys inside a node do not need to stay sorted."
     ],
+    "diagram": "flowchart TD\n  R[\"internal node: keys 10 | 20\"]\n  R --> C0[\"child 0: < 10\"]\n  R --> C1[\"child 1: 10..20\"]\n  R --> C2[\"child 2: > 20\"]\n  C0 --> L0[\"leaf depth 2\"]\n  C1 --> L1[\"leaf depth 2\"]\n  C2 --> L2[\"leaf depth 2\"]",
+    "codeSample": "# Internal node with k keys creates k+1 ranges\nkeys = [10, 20]             # k = 2, sorted inside the node\nchildren = [c0, c1, c2]     # k + 1 = 3\n\n# Routing example\nif x < 10:      go_to(c0)\nelif x < 20:    go_to(c1)\nelse:           go_to(c2)\n\n# B-tree invariant: all leaves end at the same depth",
+    "table": {
+      "headers": [
+        "规则",
+        "意思"
+      ],
+      "rows": [
+        [
+          "叶同深",
+          "平衡"
+        ],
+        [
+          "半满",
+          "不变瘦"
+        ],
+        [
+          "k+1 子",
+          "切范围"
+        ],
+        [
+          "key 有序",
+          "能路由"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "阶 / order",
-        "meaning": "B 树的阶 m 决定了每个节点最多能有多少个键和子节点。",
-        "meaningEn": "A B-tree's order, m, determines the maximum number of keys and children each node can have."
+        "meaning": "B 树的阶 m 决定节点容量；不同教材有 max keys 或 max children 两种口径，所以面试里记“至少半满、最多装满”更稳。",
+        "meaningEn": "A B-tree's order m determines node capacity; textbooks vary between max-keys and max-children conventions, so in interviews remember the practical idea: roughly half-full to full."
       },
       {
         "term": "B 树 / B-tree",
         "meaning": "一种自平衡的多路搜索树，节点可以有多个子节点，保持数据有序。",
         "meaningEn": "A B-tree is a self-balancing multi-way search tree that keeps data sorted with many children per node."
+      },
+      {
+        "term": "内部节点 / internal node",
+        "meaning": "非叶子节点，负责用有序 key 把搜索范围分给多个子节点。",
+        "meaningEn": "An internal node is a non-leaf node that uses sorted keys to route searches to child ranges."
       }
     ],
     "q_en": "Which structural rules does a B-tree maintain? (Select all that apply.)",
     "optionMeanings": [
       "选项主张：所有叶子节点必须在同一深度。",
-      "选项主张：每个节点可含 m/2 到 m 个键（m 为树的阶）。",
-      "选项主张：有 k 个键的节点恰好有 k+1 个子节点。",
+      "选项主张：非根节点通常保持半满到满（约 m/2 到 m 个键）。",
+      "选项主张：有 k 个键的内部节点恰好有 k+1 个子节点。",
       "选项主张：节点内的键无需保持有序。"
     ],
     "optionDirectness": [
-      "适合本题给出的约束。",
-      "适合本题给出的约束。",
-      "适合本题给出的约束。",
-      "只有这个绝对假设成立时才适合。"
+      "正确：这是 B 树平衡的核心。",
+      "正确：半满约束避免节点太空、树太高。",
+      "正确：k 个分隔 key 会切出 k+1 个范围。",
+      "错误：节点内 key 必须有序，才能决定走哪个 child。"
     ],
     "optionScenarioImpacts": [
-      "会让方案围绕「所有叶子节点必须在同一深度」展开。",
-      "会让方案围绕「每个节点可含 m/2 到 m 个键（m 为树的阶）」展开。",
-      "会让方案围绕「有 k 个键的节点恰好有 k+1 个子节点」展开。",
-      "会让系统依赖「节点内的键无需保持有序」这个前提。"
+      "保证从根到任何数据页的路径长度差不多。",
+      "保证每个磁盘页装得比较满，减少树高和磁盘页读取。",
+      "例如 key [10,20] 对应 <10、10..20、>20 三个 child 范围。",
+      "如果无序，就无法二分查找节点内 key，也无法正确路由。"
     ],
     "optionMeanings_en": [
       "All leaf nodes must sit at the same depth.",
-      "Each node can hold between m/2 and m keys, where m is the tree's order.",
-      "A node with k keys has exactly k+1 children.",
+      "Non-root nodes usually stay between roughly half-full and full, about m/2 to m keys.",
+      "An internal node with k keys has exactly k+1 children.",
       "Keys inside a node do not need to stay sorted."
     ],
     "optionDirectness_en": [
-      "Use when in a B-tree all leaves sit at the same depth, nodes hold between half-m and m keys, a node with k keys has exactly k plus one children, and keys stay sorted within each node.",
-      "Use when in a B-tree all leaves sit at the same depth, nodes hold between half-m and m keys, a node with k keys has exactly k plus one children, and keys stay sorted within each node.",
-      "Use when in a B-tree all leaves sit at the same depth, nodes hold between half-m and m keys, a node with k keys has exactly k plus one children, and keys stay sorted within each node.",
-      "Only fits when this statement is true: keys inside a node do not need to stay sorted."
+      "Correct: this is the core balancing invariant.",
+      "Correct: the half-full rule prevents sparse nodes and tall trees.",
+      "Correct: k separator keys split the range into k+1 child ranges.",
+      "Incorrect: keys inside a node must be sorted to route lookups."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this path: All leaf nodes must sit at the same depth.",
-      "It commits the design to this path: Each node can hold between m/2 and m keys, where m is the tree's order.",
-      "It commits the design to this path: A node with k keys has exactly k+1 children.",
-      "It commits the design to this assumption: Keys inside a node do not need to stay sorted."
+      "This keeps root-to-leaf paths similar in length.",
+      "This keeps pages reasonably full, reducing tree height and page reads.",
+      "For example, keys [10,20] map to three ranges: <10, 10..20, and >20.",
+      "If keys were unordered, the database could not binary-search the node or route correctly."
     ]
   },
   {
@@ -1260,8 +1448,8 @@
       1,
       2
     ],
-    "why": "B 树是全能选手：有序（范围+排序）、自平衡（无性能悬崖）、贴合磁盘 I/O，且等值和范围（age > 25）都同样擅长——最后一项恰恰说反了。",
-    "why_en": "B-trees are the default because they keep data sorted for ranges, stay self-balanced for predictable performance, match disk storage for minimal I/O, and handle both equality and range searches well.",
+    "why": "B 树节点通常按磁盘页打包：一次 I/O 读进几百个有序 key 和子指针，树就很矮，点查只需少数几页。它还保持有序、自平衡，所以等值、范围和排序都稳。",
+    "why_en": "A B-tree node is usually packed to fit a disk page: one I/O brings in hundreds of sorted keys and child pointers, keeping the tree shallow. It is also sorted and self-balancing, so equality, range, and ordering queries stay predictable.",
     "tags": [
       "btree",
       "default-choice"
@@ -1282,44 +1470,57 @@
         "term": "自平衡 / self-balancing",
         "meaning": "结构在插入删除后能自动调整、保持性能稳定的特性。",
         "meaningEn": "Self-balancing means a structure automatically adjusts after inserts and deletes to keep performance stable."
+      },
+      {
+        "term": "磁盘页 / disk page",
+        "meaning": "数据库一次从磁盘读写的固定大小数据块，常见 4KB、8KB 或 16KB；B 树节点会尽量设计成一页大小。",
+        "meaningEn": "A disk page is the fixed-size block a database reads or writes at once, often 4KB, 8KB, or 16KB; B-tree nodes are designed around this unit."
+      },
+      {
+        "term": "扇出 / fan-out",
+        "meaning": "一个节点能指向多少个子节点；扇出越大，树越矮，需要读的页越少。",
+        "meaningEn": "Fan-out is how many children one node can point to; higher fan-out makes the tree shorter and reduces page reads."
       }
     ],
+    "codeSample": "page = read(root_page)          # one disk page I/O\nwhile not page.is_leaf:\n  child = choose_child(page.keys, target_key)\n  page = read(child)             # another page I/O\nreturn search_leaf(page, target_key)\n\n# B-tree nodes hold many keys per page, so this loop is usually only 2-4 page reads.",
+    "lang": "pseudocode",
+    "diagram": "flowchart TD\n    R[\"root page: many separator keys\"] --> I[\"internal page\"]\n    I --> L[\"leaf page with rows/pointers\"]\n    Note[\"one node ~= one disk page\"] --> R",
     "q_en": "Why did B-trees become the default database index? (Select all that apply.)",
     "optionMeanings": [
-      "选项主张：维持有序，范围查询和 ORDER BY 都高效。",
-      "选项主张：自平衡，数据增长、随机增删下性能依然可预期。",
-      "选项主张：结构贴合磁盘页存储方式，最小化磁盘 I/O。",
-      "选项主张：只支持等值查询，不支持范围查询。"
+      "有序结构支持范围扫描和排序。",
+      "自平衡避免树退化成很长链。",
+      "节点按磁盘页打包，一次 I/O 拿到很多路由 key。",
+      "把 B 树说成只能等值查。"
     ],
     "optionDirectness": [
-      "这是本题要识别的核心原因。",
-      "这是本题要识别的核心原因。",
-      "这是本题要识别的核心原因。",
-      "只有这个绝对假设成立时才适合。"
+      "正确：有序是范围查询基础。",
+      "正确：平衡让性能可预期。",
+      "正确：页读次数少是数据库索引核心。",
+      "不对：B 树正擅长范围查询。"
     ],
     "optionScenarioImpacts": [
-      "会让方案围绕「维持有序，范围查询和 ORDER BY 都高效」展开。",
-      "会让方案围绕「自平衡，数据增长、随机增删下性能依然可预期」展开。",
-      "会让方案围绕「结构贴合磁盘页存储方式，最小化磁盘 I/O」展开。",
-      "会让系统依赖「只支持等值查询，不支持范围查询」这个前提。"
+      "数据库能从某个 key 开始顺序扫叶页。",
+      "随机插入删除后仍是矮树。",
+      "一次点查通常读根页、内部页、叶页，而不是扫全表。",
+      "会误把 B 树当成哈希索引。"
     ],
     "optionMeanings_en": [
-      "It keeps data sorted, so range queries and ORDER BY are efficient.",
-      "It is self-balancing.",
-      "Its structure matches how databases store disk pages, minimizing disk I/O.",
-      "It only supports equality queries, not range queries."
+      "Sorted structure supports range scans and ordering.",
+      "Self-balancing prevents the tree from degenerating into a long chain.",
+      "Nodes are packed into disk pages, so one I/O gets many routing keys.",
+      "Misstates B-trees as equality-only."
     ],
     "optionDirectness_en": [
-      "This is the core issue in this scenario.",
-      "This is the core issue in this scenario.",
-      "This is the core issue in this scenario.",
-      "Only fits when this statement is true: it only supports equality queries, not range queries."
+      "Correct: sorted order enables range queries.",
+      "Correct: balance keeps performance predictable.",
+      "Correct: few page reads are the core database-index win.",
+      "Wrong: B-trees are good at range queries."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this path: It keeps data sorted, so range queries and ORDER BY are efficient.",
-      "It commits the design to this path: It is self-balancing.",
-      "It commits the design to this path: Its structure matches how databases store disk pages, minimizing disk I/O.",
-      "It commits the design to this assumption: It only supports equality queries, not range queries."
+      "The database can start at one key and scan leaf pages in order.",
+      "Random inserts and deletes still leave a shallow tree.",
+      "A lookup usually reads root, internal, and leaf pages instead of scanning the table.",
+      "It mistakes B-trees for hash indexes."
     ]
   },
   {
@@ -1408,7 +1609,41 @@
       "It commits the design to this assumption: Hash indexes, because O(1) exact-match lookups are fastest.",
       "It commits the design to this assumption: Inverted indexes, because they cover the most functionality.",
       "It commits the design to this assumption: No index yet — wait and see."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "能力",
+        "Hash 索引",
+        "B 树索引"
+      ],
+      "rows": [
+        [
+          "等值 =",
+          "✅ O(1) 略快",
+          "✅ O(log n) 够快"
+        ],
+        [
+          "范围 > < BETWEEN",
+          "❌ 完全不行",
+          "✅"
+        ],
+        [
+          "排序 ORDER BY",
+          "❌",
+          "✅"
+        ],
+        [
+          "前缀 LIKE 'ab%'",
+          "❌",
+          "✅"
+        ],
+        [
+          "MIN/MAX、复合最左前缀",
+          "❌",
+          "✅"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-core-concepts-db-indexing-019",
@@ -1427,8 +1662,8 @@
     "answer": [
       3
     ],
-    "why": "写远多于读的摄入型负载是 LSM 的主场：追加写内存+日志，顺序批量落盘，写吞吐远超 B 树的随机原地更新。时序、日志、分析平台都是典型场景。",
-    "why_en": "A metrics-ingestion workload writing far more than it reads is exactly where LSM trees win, since they batch writes in memory and flush sequentially.",
+    "why": "选 D。题眼是「几十万写入/s、每条立即落存储、读少且能慢一点」：LSM 先顺序写 WAL + memtable，再批量 flush 成 SSTable，把海量随机小写变成顺序大写。",
+    "why_en": "Choose D. The key clues are hundreds of thousands of writes per second, durable ingestion, and fewer reads that can tolerate higher latency. An LSM first writes sequentially to the WAL and memtable, then flushes batches into SSTables, turning many random small writes into large sequential writes.",
     "whenOtherWins": "用户侧应用每次页面加载都触发多个读查询时，B 树的 2-3 页点查通常表现更好。",
     "tags": [
       "lsm",
@@ -1442,6 +1677,28 @@
       "An LSM tree storage engine, the log-structured merge tree."
     ],
     "tradeoff": "极高写吞吐 vs 点查读性能",
+    "diagram": "flowchart LR\n  M[\"metrics writes<br/>hundreds of thousands/s\"] --> W[\"WAL append\"]\n  W --> T[\"memtable\"]\n  T --> S[\"batch flush<br/>SSTable\"]\n  S --> C[\"background<br/>compaction\"]\n  R[\"rare reads\"] --> Q[\"can pay read amplification\"]",
+    "codeSample": "# Decision trigger for this workload\nif writes_per_second_is_huge and reads_are_rarer:\n  choose(\"LSM storage engine\")\n\n# Write path intuition\nfor metric in incoming_metrics:\n  wal.append(metric)          # durable, sequential\n  memtable.put(metric.key, metric.value)\n\nif memtable.too_large():\n  flush_sorted_sstable(memtable)  # batch sequential write",
+    "table": {
+      "headers": [
+        "信号",
+        "指向"
+      ],
+      "rows": [
+        [
+          "写爆炸",
+          "LSM"
+        ],
+        [
+          "读少",
+          "可读放大"
+        ],
+        [
+          "点查多",
+          "B-tree"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "LSM 树 / LSM tree",
@@ -1473,10 +1730,10 @@
       "追加写把海量小写变成顺序大块写，撑住十万级写入。"
     ],
     "optionDirectness": [
-      "写入模式是随机原地更新，扛不住十万级写。",
-      "回答的是查找方式，不是存储引擎选型。",
-      "覆盖索引优化读路径，这里瓶颈在写。",
-      "顺序批量落盘正好匹配写远多于读的指标场景。"
+      "不优：B 树更适合读多/点查/范围查，这里会被随机页更新拖慢。",
+      "不优：哈希只解决等值查找，不解决高吞吐持久写入。",
+      "不优：覆盖索引省回表，是读优化；题目瓶颈是写入摄入。",
+      "正确：LSM 为写入摄入设计，用顺序写和批量 flush 换高写吞吐。"
     ],
     "q_en": "Which storage-engine index structure fits this workload best?",
     "scenario_en": "You are building a DataDog-style monitoring system: thousands of servers write hundreds of thousands of CPU, memory, and error-count metrics per second; every point must be stored immediately, while reads are rarer and can tolerate slightly higher latency.",
@@ -1487,10 +1744,10 @@
       "An LSM tree storage engine, the log-structured merge tree."
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: a regular B-tree index that updates data in place.",
-      "It does not fit this scenario constraint.",
-      "Only fits when this statement is true: a covering index that skips table lookups.",
-      "This matches the scenario constraint."
+      "Not best: B-trees fit read-heavy point/range lookups, but this workload is dominated by random page updates.",
+      "Not best: hash indexes help exact lookup; they do not solve durable high-throughput ingestion.",
+      "Not best: covering indexes optimize reads by avoiding table lookups; the bottleneck here is writes.",
+      "Correct: LSMs are designed for ingestion, trading read amplification for high sequential write throughput."
     ],
     "optionScenarioImpacts_en": [
       "It commits the design to this assumption: A regular B-tree index that updates data in place.",
@@ -1515,8 +1772,8 @@
     "answer": [
       1
     ],
-    "why": "B 树是原地更新：找到叶页、读入、改、写回。几千 TPS 没问题，但十万级写入时随机寻道压垮吞吐——像在文件柜里逐个找散落的文件夹改。",
-    "why_en": "Each B-tree write must find, read, modify, and write back a leaf page, so at a hundred thousand writes per second the random disk seeks become the bottleneck.",
+    "why": "O(log n) 只说明很快找到“哪一页要改”。真正贵的是后半段：把散落在磁盘/SSD 各处的小页读进缓存、改成脏页、之后再刷回去；页满了还可能 split。十万级写入会把这些小而分散的页操作放大成随机 I/O 瓶颈。",
+    "why_en": "O(log n) only means the database quickly finds which page to change. The expensive part comes after that: load scattered small pages, dirty them in cache, flush them back later, and sometimes split full pages. At very high write rates, those scattered page operations become the random I/O bottleneck.",
     "tags": [
       "btree",
       "lsm",
@@ -1528,16 +1785,67 @@
       "The tree loses balance under heavy concurrent writes.",
       "Keys overflow a single node's capacity."
     ],
+    "diagram": "flowchart LR\n    subgraph BT[\"B-tree: many tiny jumps\"]\n      W1[\"write key=18\"] --> P7[\"leaf page P7\"]\n      W2[\"write key=853\"] --> P31[\"leaf page P31\"]\n      W3[\"write key=4400\"] --> P4[\"leaf page P4\"]\n      P7 --> D[\"dirty pages in cache\"]\n      P31 --> D\n      P4 --> D\n      D --> F[\"flush P7, P31, P4 later\"]\n      P31 --> S[\"maybe split if full\"]\n    end\n    subgraph LSM[\"LSM: one conveyor belt\"]\n      A1[\"write key=18\"] --> WAL[\"append WAL\"]\n      A2[\"write key=853\"] --> WAL\n      A3[\"write key=4400\"] --> WAL\n      WAL --> MEM[\"memtable\"]\n      MEM --> SST[\"batch flush sorted file\"]\n    end",
+    "codeSample": "# B-tree: 找路很快，但每个 key 可能改不同旧页\nfor key, value in incoming_writes:\n  page_id = btree_find_leaf(key)       # O(log n): fast route lookup\n  page = page_cache.load(page_id)      # may touch scattered pages\n  page.put(key, value)                 # modify old page in place\n  page_cache.mark_dirty(page)\n  if page.is_full():\n    split_page(page)                   # extra page writes + parent update\n\npage_cache.flush_dirty_pages()         # later writes P7, P31, P4...\n\n# LSM: 先把小写入排成连续流水账\nfor key, value in incoming_writes:\n  wal.append(key, value)               # sequential append\n  memtable.put(key, value)             # memory update\n\nif memtable.too_large():\n  flush_as_sorted_sstable(memtable)    # batch write",
+    "table": {
+      "headers": [
+        "维度",
+        "B-tree",
+        "LSM"
+      ],
+      "rows": [
+        [
+          "查找",
+          "O(log n)",
+          "内存写"
+        ],
+        [
+          "写法",
+          "改旧页",
+          "追加写"
+        ],
+        [
+          "脑内画面",
+          "去很多抽屉改纸条",
+          "先写到同一本流水账"
+        ],
+        [
+          "瓶颈",
+          "脏页 flush / page split",
+          "后台 compaction"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "随机寻道 / random seek",
-        "meaning": "磁盘磁头移动到不连续位置读写，耗时远高于顺序读写。",
-        "meaningEn": "A random seek is the disk head moving to a non-contiguous location, far slower than sequential access."
+        "meaning": "不是只指 HDD 磁头；面试里更泛指读写很多不连续的小页。HDD 会物理跳位置，SSD 没磁头但仍要处理大量分散页请求。",
+        "meaningEn": "In interview language, random seek often broadly means many non-contiguous small page reads or writes. HDDs physically seek; SSDs do not have heads but still process scattered page requests."
       },
       {
         "term": "叶页 / leaf page",
         "meaning": "B 树最底层、直接存储数据指针的节点所在的磁盘页。",
         "meaningEn": "A leaf page is the disk page holding a B-tree's bottom-level nodes, which point directly to data."
+      },
+      {
+        "term": "脏页 / dirty page",
+        "meaning": "缓存里已经被改过、但还没写回磁盘的页；积累太多就要 flush。",
+        "meaningEn": "A dirty page is a cached page that has been modified but not written back to disk yet; too many dirty pages must be flushed."
+      },
+      {
+        "term": "flush",
+        "meaning": "把内存里的脏页真正写回磁盘或 SSD。它可以异步发生，但总要付出 I/O 成本。",
+        "meaningEn": "Flush means writing dirty pages from memory back to disk or SSD. It may happen asynchronously, but the I/O cost still exists."
+      },
+      {
+        "term": "页分裂 / page split",
+        "meaning": "叶页写满时，数据库要把它拆成两个页，并更新父节点；这会让一次写入牵连更多页。",
+        "meaningEn": "A page split happens when a leaf page is full; the database creates another page and updates the parent, making one write touch more pages."
+      },
+      {
+        "term": "O(log n)",
+        "meaning": "算法层面的树高复杂度，表示访问层数随数据量增长很慢；它不等于物理 I/O 免费。",
+        "meaningEn": "O(log n) is the logical tree-height complexity; it does not mean the physical I/O is free."
       }
     ],
     "q_en": "Where does a B-tree bottleneck show up at around one hundred thousand writes per second?",
@@ -1548,16 +1856,16 @@
       "选项主张：键的数量会溢出单个节点容量。"
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。"
+      "不对：根节点和上层页通常很容易缓存。",
+      "正确：log n 找得快，但原地改页是随机 I/O。",
+      "不对：B 树靠分裂/合并维持平衡。",
+      "不对：节点满了会 split，不是整体溢出。"
     ],
     "optionScenarioImpacts": [
-      "会让系统依赖「内存不够存放树的根节点数据」这个前提。",
-      "会让方案围绕「每次写要定位叶页、读入、改、写回——随机寻道成瓶颈」展开。",
-      "会让系统依赖「树在高并发写入下会失去平衡」这个前提。",
-      "会让系统依赖「键的数量会溢出单个节点容量」这个前提。"
+      "会把瓶颈误判成缓存容量，而不是写路径 I/O。",
+      "会把优化方向转向 LSM、批量写、顺序追加或减少二级索引写放大。",
+      "会误以为 B 树会被并发写坏结构。",
+      "会误解 B 树的节点分裂机制。"
     ],
     "optionMeanings_en": [
       "There is not enough memory to hold the tree's root node.",
@@ -1566,16 +1874,16 @@
       "Keys overflow a single node's capacity."
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: there is not enough memory to hold the tree's root node.",
-      "Use when each B-tree write must find, read, modify, and write back a leaf page, so at a hundred thousand writes per second the random disk seeks become the bottleneck.",
-      "Only fits when this statement is true: the tree loses balance under heavy concurrent writes.",
-      "Only fits when this statement is true: keys overflow a single node's capacity."
+      "Incorrect: root and upper-level pages are usually easy to cache.",
+      "Correct: log n finds the page quickly, but in-place page updates still create random I/O.",
+      "Incorrect: B-trees maintain balance through splits and merges.",
+      "Incorrect: full nodes split; the whole tree does not overflow."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: There is not enough memory to hold the tree's root node.",
-      "It commits the design to this path: Each write must locate the leaf page.",
-      "It commits the design to this assumption: The tree loses balance under heavy concurrent writes.",
-      "It commits the design to this assumption: Keys overflow a single node's capacity."
+      "This mistakes the bottleneck for cache capacity instead of write-path I/O.",
+      "It points the optimization toward LSMs, batching, append-only writes, or fewer secondary indexes.",
+      "This wrongly suggests concurrent writes corrupt the tree structure.",
+      "This misunderstands B-tree node splitting."
     ]
   },
   {
@@ -1832,6 +2140,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "lsm",
+    "scenario": "LSM 写入先进 memtable；等 memtable 够大后，系统要把它按 key 顺序刷成 SSTable。",
+    "scenario_en": "In an LSM tree, writes first enter the memtable; when it is large enough, the system flushes it into an SSTable sorted by key.",
     "q": "memtable 通常用什么数据结构实现？",
     "options": [
       "无序数组，按插入顺序追加",
@@ -1842,8 +2152,8 @@
     "answer": [
       2
     ],
-    "why": "memtable 要在内存里维持键有序（方便之后整体刷成有序的 SSTable），所以典型实现是红黑树或跳表；全内存操作，写入极快。",
-    "why_en": "The memtable is a sorted in-memory structure, typically a red-black tree or skip list, so it can flush directly into a sorted SSTable.",
+    "why": "选 C。写入先追加 WAL 保命，再写内存 sorted map：memtable。memtable 因为按 key 有序，写满后 flush 成 SSTable；WAL 只是临时恢复日志。",
+    "why_en": "Choose C. A write first appends to the WAL for crash recovery, then updates the in-memory sorted map, the memtable. Because the memtable is sorted by key, it can flush into an SSTable; the WAL is only a temporary recovery log.",
     "tags": [
       "lsm",
       "memtable",
@@ -1855,7 +2165,38 @@
       "A sorted structure such as a red-black tree or skip list.",
       "A heap file, with rows in no particular order."
     ],
+    "diagram": "flowchart LR\n    W[\"writes\"] --> M[\"Memtable<br/>sorted in memory\"]\n    M --> G[\"get(key)\"]\n    M --> R[\"range scan\"]\n    M --> F[\"flush in key order\"]\n    F --> S[\"SSTable<br/>sorted file\"]",
+    "codeSample": "memtable = SortedMap()  # in RAM; sorted by key\nwal = AppendOnlyLog()  # on disk; temporary crash-recovery log\n\nwrite(key, value):\n  # 1. WAL first: if the process crashes, replay this log.\n  wal.append(\"PUT\", key, value)\n\n  # 2. Memtable second: latest state, already sorted by key.\n  memtable.put(key, value)\n\nflush_memtable():\n  frozen = memtable\n  memtable = SortedMap()              # new writes use a fresh memtable\n  new_sstable = SSTableFile()\n\n  # Memtable becomes the SSTable because it is already sorted.\n  for key, value in frozen.items_in_key_order():\n    new_sstable.write(key, value)\n\n  new_sstable.fsync()\n\n  # WAL is not converted into an SSTable; it is retired after the SSTable is safe.\n  wal.truncate_records_covered_by(new_sstable)",
+    "table": {
+      "headers": [
+        "候选",
+        "能否",
+        "原因"
+      ],
+      "rows": [
+        [
+          "树/跳表",
+          "是",
+          "有序"
+        ],
+        [
+          "Bloom",
+          "否",
+          "不存值"
+        ],
+        [
+          "Heap/数组",
+          "否",
+          "无序"
+        ]
+      ]
+    },
     "termDefinitions": [
+      {
+        "term": "memtable",
+        "meaning": "LSM 里接收新写入的内存表，本质是按 key 有序的内存 map。",
+        "meaningEn": "A memtable is the in-memory table that receives new writes in an LSM tree; conceptually it is a sorted in-memory map."
+      },
       {
         "term": "红黑树 / red-black tree",
         "meaning": "一种自平衡二叉搜索树，插入删除后仍保持对数级高度。",
@@ -1885,16 +2226,16 @@
       "选项主张：堆文件，行没有特定顺序。"
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "只有题设改成这个方向时才适合。",
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。"
+      "不对：append 很快，但无法天然有序 flush。",
+      "不对：Bloom filter 只能辅助排除，不存真实值。",
+      "正确：memtable 通常就是内存 sorted map。",
+      "不对：heap file 是磁盘表/数据文件语境，不是 memtable。"
     ],
     "optionScenarioImpacts": [
-      "会让系统依赖「无序数组，按插入顺序追加」这个前提。",
-      "会让系统依赖「布隆过滤器，用于快速排除」这个前提。",
-      "会让方案围绕「有序结构，如红黑树或跳表」展开。",
-      "会让系统依赖「堆文件，行没有特定顺序」这个前提。"
+      "flush 成 SSTable 前还要额外排序，违背 memtable 的设计目的。",
+      "只能告诉你某个 key 可能在不在，不能回答 get(key) 的 value。",
+      "写入、点查、范围扫描和有序刷盘都能被同一个结构支持。",
+      "会把内存写缓冲误解成无序磁盘存储。"
     ],
     "optionMeanings_en": [
       "An unordered array, appended in insertion order.",
@@ -1903,16 +2244,16 @@
       "A heap file, with rows in no particular order."
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: an unordered array, appended in insertion order.",
-      "Only fits when this statement is true: a bloom filter, used to quickly rule things out.",
-      "Use when the memtable is a sorted in-memory structure, typically a red-black tree or skip list, so it can flush directly into a sorted SSTable.",
-      "Only fits when this statement is true: a heap file, with rows in no particular order."
+      "Incorrect: append is fast, but it does not naturally flush in sorted order.",
+      "Incorrect: a Bloom filter is an auxiliary absence check; it does not store the actual values.",
+      "Correct: a memtable is usually an in-memory sorted map.",
+      "Incorrect: a heap file is on-disk table/file terminology, not the memtable structure."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: An unordered array, appended in insertion order.",
-      "It commits the design to this assumption: A bloom filter, used to quickly rule things out.",
-      "It commits the design to this path: A sorted structure such as a red-black tree or skip list.",
-      "It commits the design to this assumption: A heap file, with rows in no particular order."
+      "The system would need an extra sort before flushing to an SSTable.",
+      "It could only say whether a key may be absent; it could not answer get(key) with a value.",
+      "The same structure supports writes, point reads, range scans, and sorted flushes.",
+      "This mistakes the in-memory write buffer for unordered on-disk storage."
     ]
   },
   {
@@ -2487,8 +2828,8 @@
     "answer": [
       1
     ],
-    "why": "size-tiered 少重写（写放大小）但文件堆得多、读时要多查；leveled 维持更少文件（读友好）但要更频繁地重写数据。按读写比例选。",
-    "why_en": "Size-tiered compaction minimizes write amplification but leaves more files to check, while leveled compaction keeps fewer files at the cost of more frequent rewrites.",
+    "why": "选 B。size-tiered 像“攒够同尺寸文件再合并”：少搬数据、写放大小，但同一 key 范围可能散在更多文件里。leveled 像“持续整理货架”：读时文件少，但数据会被反复重写到下一层。",
+    "why_en": "Choose B. Size-tiered compaction waits until similarly sized files accumulate, so it rewrites less data but leaves more files to check. Leveled compaction keeps data organized into levels with fewer files per key range, but it rewrites data more often.",
     "tags": [
       "lsm",
       "compaction",
@@ -2501,22 +2842,24 @@
       "Size-tiered only works for in-memory tables."
     ],
     "tradeoff": "写放大 vs 读时要查的文件数",
+    "diagram": "flowchart TD\n  subgraph ST[\"Size-tiered: write friendly\"]\n    S1[\"many similar SSTables\"] --> S2[\"merge when enough accumulate\"]\n    S2 --> S3[\"fewer rewrites<br/>more overlap\"]\n  end\n  subgraph LV[\"Leveled: read friendly\"]\n    L0[\"L0 new files\"] --> L1[\"L1 organized ranges\"]\n    L1 --> L2[\"L2 larger ranges\"]\n    L2 --> L3[\"more rewrites<br/>fewer files per read\"]\n  end",
+    "codeSample": "# Mental model, not implementation\nif workload.is_write_heavy():\n  choose(\"size-tiered\")   # fewer rewrites, more SSTables to check\n\nif workload.is_read_heavy():\n  choose(\"leveled\")       # more rewrites, fewer SSTables per lookup",
     "table": {
       "headers": [
-        "Strategy",
-        "Rewrites",
-        "Files"
+        "策略",
+        "写",
+        "读"
       ],
       "rows": [
         [
           "Size-tiered",
-          "fewer",
-          "more"
+          "少重写",
+          "多文件"
         ],
         [
           "Leveled",
-          "more",
-          "fewer"
+          "多重写",
+          "少文件"
         ]
       ]
     },
@@ -2530,44 +2873,54 @@
         "term": "写放大 / write amplification",
         "meaning": "一次逻辑写入实际引发的额外物理写入量。",
         "meaningEn": "Write amplification is the extra physical writes triggered by one logical write."
+      },
+      {
+        "term": "读放大 / read amplification",
+        "meaning": "一次逻辑读取为了确认结果，需要检查多个内存结构或磁盘文件。",
+        "meaningEn": "Read amplification means one logical read has to check multiple memory structures or disk files before it can answer."
+      },
+      {
+        "term": "overlap",
+        "meaning": "多个 SSTable 覆盖同一段 key 范围；读某个 key 时可能要检查多个文件。",
+        "meaningEn": "Overlap means multiple SSTables cover the same key range, so a lookup may need to check several files."
       }
     ],
     "q_en": "What is the tradeoff between size-tiered and leveled compaction?",
     "optionMeanings": [
-      "选项主张：两者在写放大和文件数上完全等价。",
-      "选项主张：size-tiered 写放大小、文件多；leveled 相反。",
-      "选项主张：leveled 写放大最小、文件也最少。",
-      "选项主张：size-tiered 只能用于纯内存表。"
+      "把两种策略误认为没有差异。",
+      "指出正确取舍：偏写 vs 偏读。",
+      "把 leveled 误认为读写都免费更优。",
+      "把磁盘 SSTable 策略误认为内存-only。"
     ],
     "optionDirectness": [
-      "只有这个绝对假设成立时才适合。",
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。",
-      "只有这个绝对假设成立时才适合。"
+      "错误：两者正是在写放大和读放大之间取舍。",
+      "正确：size-tiered 偏写，leveled 偏读。",
+      "错误：leveled 文件少但写放大更高。",
+      "错误：两者都是磁盘 SSTable 的 compaction 策略。"
     ],
     "optionScenarioImpacts": [
-      "会让系统依赖「两者在写放大和文件数上完全等价」这个前提。",
-      "会让方案围绕「size-tiered 写放大小、文件多；leveled 相反」展开。",
-      "会让系统依赖「leveled 写放大最小、文件也最少」这个前提。",
-      "会让系统依赖「size-tiered 只能用于纯内存表」这个前提。"
+      "会漏掉 compaction 策略存在的核心价值。",
+      "写入摄入系统偏 size-tiered，读延迟敏感系统偏 leveled。",
+      "会误以为 leveled 同时免费优化读写。",
+      "会把 LSM 的磁盘文件整理误解成内存结构。"
     ],
     "optionMeanings_en": [
-      "The two are exactly equivalent in write amplification and file count.",
-      "Size-tiered has less write amplification but more files; leveled is the reverse.",
-      "Leveled has both the least write amplification and the fewest files.",
-      "Size-tiered only works for in-memory tables."
+      "Mistakenly treats the two strategies as equivalent.",
+      "States the correct tradeoff: write-friendly versus read-friendly.",
+      "Mistakenly treats leveled as a free win for both reads and writes.",
+      "Mistakenly treats an on-disk SSTable strategy as memory-only."
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: the two are exactly equivalent in write amplification and file count.",
-      "Use when size-tiered compaction minimizes write amplification but leaves more files to check, while leveled compaction keeps fewer files at the cost of more frequent rewrites.",
-      "Only fits when this statement is true: leveled has both the least write amplification and the fewest files.",
-      "Only fits when this statement is true: size-tiered only works for in-memory tables."
+      "Incorrect: the strategies trade write amplification against read amplification.",
+      "Correct: size-tiered is more write-friendly, while leveled is more read-friendly.",
+      "Incorrect: leveled has fewer files but higher write amplification.",
+      "Incorrect: both are compaction strategies for on-disk SSTables."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: The two are exactly equivalent in write amplification and file count.",
-      "It commits the design to this path: Size-tiered has less write amplification but more files; leveled is the reverse.",
-      "It commits the design to this assumption: Leveled has both the least write amplification and the fewest files.",
-      "It commits the design to this assumption: Size-tiered only works for in-memory tables."
+      "This misses the core reason compaction strategies exist.",
+      "Write-heavy ingestion tends toward size-tiered; read-latency-sensitive workloads tend toward leveled.",
+      "This wrongly treats leveled as a free win for both reads and writes.",
+      "This confuses disk SSTable organization with an in-memory data structure."
     ]
   },
   {
@@ -2674,8 +3027,8 @@
       1,
       2
     ],
-    "why": "Cassandra、RocksDB、DynamoDB 是 LSM 阵营的代表（DynamoDB 内部未公开但被广泛认为是 LSM 风格）；Postgres 的默认索引和存储走的是 B 树路线。",
-    "why_en": "Cassandra, RocksDB, and DynamoDB are the classic LSM-based systems, while PostgreSQL defaults to B-trees.",
+    "why": "LSM 写优化的原理：写只进内存 memtable（有序）+ 顺序追加 WAL → 极快、无随机写；memtable 满了整批刷成不可变 SSTable（已排序）；后台 compaction 把多个 SSTable 归并、清掉被覆盖/删除的条目。代表：Cassandra、RocksDB、DynamoDB；Postgres 默认走 B 树。",
+    "why_en": "How LSM writes work: a write goes into an in-memory sorted memtable plus a sequential WAL append (fast, no random writes); when the memtable fills it is flushed as one immutable, sorted SSTable; a background compaction merges SSTables and drops overwritten/deleted entries. Classic LSM systems: Cassandra, RocksDB, DynamoDB; Postgres defaults to B-trees.",
     "tags": [
       "lsm",
       "cassandra",
@@ -2777,7 +3130,8 @@
       "It commits the design to this path.",
       "It commits the design to this path.",
       "It commits the design to this assumption: PostgreSQL's default storage engine."
-    ]
+    ],
+    "diagram": "flowchart TD\n  W[\"写入\"] --> M[\"memtable（内存·有序）\"]\n  W --> L[\"WAL 日志（盘·防丢）\"]\n  M -->|满了整批刷盘| S1[\"SSTable 1（不可变·有序）\"]\n  M -->|再满再刷| S2[\"SSTable 2\"]\n  S1 --> C[\"后台 compaction：归并 + 清墓碑\"]\n  S2 --> C"
   },
   {
     "id": "sd-core-concepts-db-indexing-035",
@@ -3106,8 +3460,8 @@
     "answer": [
       3
     ],
-    "why": "Postgres 文档原话大意：B 树做等值几乎和哈希一样快，还白送范围查询和排序。既然如此，哈希索引「解决的是我们很少遇到的问题」。",
-    "why_en": "PostgreSQL notes that B-trees handle equality comparisons almost as efficiently as hash indexes while also supporting ranges and sorting.",
+    "why": "关键：B 树的 O(log n) 是个极小的数——每个节点是一页、装几百个 key，所以几十亿行也就 3–4 层（见表）。加上真正的成本是磁盘 I/O 不是比较次数、顶层又几乎都在缓存，所以等值查找 B 树只比 hash 慢一丝丝，却白送范围和排序。因此 Postgres 说哈希「解决的是我们很少遇到的问题」。",
+    "why_en": "A B-tree's O(log n) is tiny: each node is a page holding hundreds of keys, so even billions of rows are only 3–4 levels deep. Since the real cost is disk I/O (not comparisons) and the top levels stay cached, equality lookups are only marginally slower than a hash — but you also get range and sort for free. Hence Postgres calls hash indexes a solution to a problem we rarely have.",
     "tags": [
       "hash-index",
       "postgres",
@@ -3167,7 +3521,31 @@
       "It commits the design to this assumption: Hash indexes use too much memory.",
       "It commits the design to this assumption: Hash indexes cannot be implemented on disk.",
       "It commits the design to this path: \"B-trees handle equality comparisons almost as efficiently as hash indexes\"."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "B 树层数（扇出 ~500）",
+        "能装多少行"
+      ],
+      "rows": [
+        [
+          "1 层",
+          "500"
+        ],
+        [
+          "2 层",
+          "25 万"
+        ],
+        [
+          "3 层",
+          "1.25 亿"
+        ],
+        [
+          "4 层",
+          "625 亿"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-core-concepts-db-indexing-040",
@@ -3186,8 +3564,8 @@
     "answer": [
       1
     ],
-    "why": "哈希索引的甜蜜点是内存数据库：Redis 主结构就是哈希表，MySQL MEMORY 引擎默认哈希索引。一旦涉及磁盘，B 树对 I/O 更友好，通常更优。",
-    "why_en": "Hash structures shine for in-memory stores like Redis and MySQL's MEMORY engine where exact-match lookups dominate and there is no disk I/O pattern to optimize for.",
+    "why": "为什么赢家反转：磁盘上主导成本是 I/O，把哈希 O(1) 的优势淹没了 → B 树几乎不输还更全能；纯内存里没有 I/O 可躲，O(1) 的优势才「兑现」，加上这类场景只需等值 → 哈希才对。Redis 主结构、MySQL MEMORY 引擎默认都用哈希。",
+    "why_en": "Why the winner flips: on disk, I/O dominates and hides hash's O(1) edge, so a B-tree is nearly as fast and more versatile; in pure memory there's no I/O to hide behind, so the O(1) edge finally shows — and this workload is exact-match only, so hash is right. Redis and the MySQL MEMORY engine both default to hash.",
     "whenOtherWins": "数据落磁盘时选 B 树——它对磁盘 I/O 模式的处理效率更高，等值也几乎不慢。",
     "tags": [
       "hash-index",
@@ -3256,7 +3634,29 @@
       "It commits the design to this path: With no disk I/O pattern to optimize for, hashing's O(1) advantage pays off.",
       "It commits the design to this assumption: Because a hash table uses less memory than a B-tree.",
       "It commits the design to this assumption: Because this scenario needs to support range queries."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "场景",
+        "主导成本",
+        "要范围?",
+        "谁赢"
+      ],
+      "rows": [
+        [
+          "磁盘 KV",
+          "磁盘 I/O（淹没 O(1)）",
+          "常要",
+          "B 树"
+        ],
+        [
+          "纯内存 KV",
+          "内存访问 / 操作次数（O(1) 显形）",
+          "不要",
+          "哈希"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-core-concepts-db-indexing-041",
@@ -4119,8 +4519,8 @@
     "answer": [
       1
     ],
-    "why": "像整理桌上的照片：四叉树不管照片在哪都对桌子四等分再细切；R 树按照片的自然聚集画可重叠的圈。R 树因此常用更少步数到达目标。",
-    "why_en": "A quadtree rigidly splits every region into four equal quadrants regardless of data, while an R-tree adapts flexible overlapping rectangles to the actual data clusters.",
+    "why": "选 B。四叉树先切空间：每个区域都按中线切成 4 块；R 树先看数据：把一批点/线/多边形装进最小外接矩形，父节点再包住这些矩形。这里的“矩形分组”就是 bounding box 分组，不是固定网格。",
+    "why_en": "Choose B. A quadtree splits space first, cutting each region into four quadrants; an R-tree looks at the data first and groups nearby points or shapes inside bounding rectangles.",
     "tags": [
       "rtree",
       "quadtree",
@@ -4133,6 +4533,8 @@
       "Neither allows regions to overlap."
     ],
     "tradeoff": "刚性等分的简单实现 vs 贴合数据的灵活分组",
+    "diagram": "flowchart LR\n    subgraph QT[\"Quadtree: split space\"]\n      Q0[\"world\"] --> Q1[\"NW\"]\n      Q0 --> Q2[\"NE\"]\n      Q0 --> Q3[\"SW\"]\n      Q0 --> Q4[\"SE\"]\n    end\n    subgraph RT[\"R-tree: group data\"]\n      R0[\"root rectangle\"] --> R1[\"MBR A: nearby points\"]\n      R0 --> R2[\"MBR B: nearby shapes\"]\n      R1 --> P1[\"p1,p2,p3\"]\n      R2 --> P2[\"polygon,line,p4\"]\n    end",
+    "codeSample": "# Quadtree: 切空间，不先管点怎么聚\nfunction insert_quadtree(node, point):\n  if node.too_many_points:\n    node.children = split_into_4_equal_quadrants(node.bounds)\n  insert(child_that_contains(point), point)\n\n# R-tree: 先按数据分组，再给每组画最小外接矩形 MBR\nfunction build_rtree(objects):\n  groups = cluster_nearby_objects(objects)\n  leaves = []\n  for group in groups:\n    rect = bounding_rectangle(group)  # minX,minY,maxX,maxY\n    leaves.append(Node(bounds=rect, children=group))\n  return Node(bounds=bounding_rectangle(leaves), children=leaves)",
     "table": {
       "headers": [
         "Index",
@@ -4162,6 +4564,11 @@
         "term": "R 树 / R-tree",
         "meaning": "用可重叠的矩形层层包裹数据的空间索引，矩形形状随数据分布自适应。",
         "meaningEn": "An R-tree indexes spatial data with flexible, overlapping bounding rectangles that adapt to how the data actually clusters."
+      },
+      {
+        "term": "最小外接矩形 / MBR",
+        "meaning": "能刚好包住一批点或形状的最小矩形，常用 minX、minY、maxX、maxY 表示。",
+        "meaningEn": "A minimum bounding rectangle, or MBR, is the smallest rectangle that contains a group of points or shapes, usually represented by minX, minY, maxX, and maxY."
       }
     ],
     "q_en": "What is the core difference between quadtrees and R-trees in how they divide space?",
@@ -4172,16 +4579,16 @@
       "选项主张：两者都完全不允许区域重叠。"
     ],
     "optionDirectness": [
-      "只有题设改成这个方向时才适合。",
-      "适合本题给出的约束。",
-      "只有题设改成这个方向时才适合。",
-      "只有这个绝对假设成立时才适合。"
+      "不对：四叉树会四等分，但 R 树不是固定网格。",
+      "正确：四叉树切空间，R 树包数据。",
+      "说反了：R 树不做固定四等分。",
+      "不对：R 树矩形可以重叠。"
     ],
     "optionScenarioImpacts": [
-      "会让系统依赖「两者都使用固定大小的网格」这个前提。",
-      "会让方案围绕「四叉树刚性四等分；R 树用贴合数据的矩形分组」展开。",
-      "会让系统依赖「说反了：R 树四等分、四叉树用矩形」这个前提。",
-      "会让系统依赖「两者都完全不允许区域重叠」这个前提。"
+      "会把 R 树误解成 geohash/网格类方案。",
+      "能解释为什么 R 树更适合真实形状和聚集数据。",
+      "会把两类空间索引的方向完全倒置。",
+      "会漏掉 R 树查询可能要查多个重叠矩形的代价。"
     ],
     "optionMeanings_en": [
       "Both use a fixed-size grid.",
@@ -4190,16 +4597,16 @@
       "Neither allows regions to overlap."
     ],
     "optionDirectness_en": [
-      "Only fits when this statement is true: both use a fixed-size grid.",
-      "Use when a quadtree rigidly splits every region into four equal quadrants regardless of data, while an R-tree adapts flexible overlapping rectangles to the actual data clusters.",
-      "Only fits when this statement is true: that's reversed: R-trees quarter space and quadtrees use rectangles.",
-      "Only fits when this statement is true: neither allows regions to overlap."
+      "Incorrect: quadtrees quarter space, but R-trees are not fixed grids.",
+      "Correct: quadtrees split space; R-trees bound data.",
+      "Reversed: R-trees do not fixedly quarter space.",
+      "Incorrect: R-tree rectangles may overlap."
     ],
     "optionScenarioImpacts_en": [
-      "It commits the design to this assumption: Both use a fixed-size grid.",
-      "It commits the design to this path: Quadtrees rigidly quarter space; R-trees group data with data-fitting rectangles.",
-      "It commits the design to this assumption: That's reversed: R-trees quarter space and quadtrees use rectangles.",
-      "It commits the design to this assumption: Neither allows regions to overlap."
+      "This mistakes R-trees for grid or geohash-like schemes.",
+      "This explains why R-trees fit real shapes and clustered data.",
+      "This reverses the two spatial-index ideas.",
+      "This misses the query cost of checking overlapping rectangles."
     ]
   },
   {
@@ -4357,6 +4764,125 @@
       "It commits the design to this assumption: R-trees cannot handle single-point data.",
       "It commits the design to this assumption: Every insert runs in O(n) time.",
       "It commits the design to this path: Overlapping rectangles force multi-branch search; implementations tune overlap vs. depth."
+    ],
+    "diagram": "flowchart TD\n  Q[\"查询点 Q：落在 R1 ∩ R2 重叠区\"]\n  Q -->|多分支| R1[\"矩形 R1\"]\n  Q -->|多分支| R2[\"矩形 R2（与 R1 重叠）\"]\n  R1 --> a[\"对象 a\"]\n  R1 --> b[\"对象 b\"]\n  R2 --> e[\"对象 c\"]\n  R2 --> f[\"对象 d\"]"
+  },
+  {
+    "id": "sd-core-concepts-db-indexing-053a",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "spatial-index",
+    "scenario": "你要为位置/空间数据选索引：可能是数据库里的配送区多边形，也可能是每秒更新的司机位置，或者游戏里的内存碰撞检测。",
+    "scenario_en": "You need to choose a spatial index for location data: database polygons, drivers updating every second, or in-memory collision checks in a game.",
+    "q": "今天应该怎么判断 quadtree、R-tree 还用不用？",
+    "q_en": "How should you decide whether quadtrees or R-trees still apply today?",
+    "options": [
+      "按场景选：DB 几何用 R-tree/GiST；内存分区用 quadtree；移动点/搜索用编码格或 BKD。",
+      "按年代选：quadtree/R-tree 都过时；现代位置题统一改用普通 B-tree。",
+      "按点数据选：只要是经纬度点就用 R-tree；geohash/S2/H3 都不用。",
+      "按地图题选：地图、游戏、配送一律手写 quadtree；不用数据库索引。"
+    ],
+    "options_en": [
+      "Choose by scenario: DB geometry uses R-tree/GiST; in-memory partitioning uses quadtrees; moving points/search use grid encodings or BKD.",
+      "Choose by age: quadtrees and R-trees are obsolete; modern location problems all use ordinary B-trees.",
+      "Choose by point data: any latitude/longitude point should use R-tree; never use geohash/S2/H3.",
+      "Choose by map problem: maps, games, and delivery always require a hand-rolled quadtree, not database indexes."
+    ],
+    "optionMeanings": [
+      "按场景选：数据库几何、内存划分、移动点各有不同默认。",
+      "把空间索引误判成已经被 B-tree 取代。",
+      "把 R-tree 误当成所有点查询的最低成本答案。",
+      "把 quadtree 当成所有空间题的默认实现。"
+    ],
+    "optionMeanings_en": [
+      "Chooses by context: database geometry, in-memory partitioning, and moving points have different defaults.",
+      "Incorrectly assumes spatial indexes have been replaced by B-trees.",
+      "Incorrectly treats R-trees as the cheapest answer for every point query.",
+      "Incorrectly treats quadtrees as the default implementation for every spatial problem."
+    ],
+    "optionDirectness": [
+      "正确：它们还在用，但不在同一个生态位。",
+      "不对：B-tree 不理解二维包含/相交。",
+      "不对：高频更新点通常怕 R-tree 重平衡。",
+      "不对：生产数据库通常直接用现成空间索引。"
+    ],
+    "optionDirectness_en": [
+      "Correct: both still exist, but in different niches.",
+      "Incorrect: B-trees do not understand 2D containment or intersection.",
+      "Incorrect: high-churn points often avoid R-tree rebalancing.",
+      "Incorrect: production databases usually use built-in spatial indexes."
+    ],
+    "optionScenarioImpacts": [
+      "能把面试回答落到真实系统：PostGIS/MySQL、Redis/编码格、Elastic/BKD、游戏内存结构。",
+      "会让系统无法处理多边形包含、相交、附近查询。",
+      "会让司机位置这类高写入数据付出过重维护成本。",
+      "会低估数据库空间索引和地理编码方案的工程成熟度。"
+    ],
+    "optionScenarioImpacts_en": [
+      "Grounds the interview answer in real systems: PostGIS/MySQL, Redis or grid encodings, Elastic/BKD, and game-memory structures.",
+      "Leaves the system unable to handle polygon containment, intersection, or nearby search well.",
+      "Makes high-write driver-location data pay too much maintenance cost.",
+      "Underestimates the maturity of database spatial indexes and geo-encoding approaches."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "还用，但位置不同：R-tree/GiST 是数据库几何索引主力；quadtree 更常见于内存空间划分；移动点和搜索系统常走 geohash/S2/H3/BKD。",
+    "why_en": "They are still used, but in different niches: R-tree/GiST for database geometry, quadtrees for in-memory spatial partitioning, and geohash/S2/H3/BKD for moving points or search systems.",
+    "tradeoff": "数据库原生几何索引 vs 内存空间划分 vs 高频移动点廉价更新",
+    "table": {
+      "headers": [
+        "场景",
+        "默认",
+        "原因"
+      ],
+      "rows": [
+        [
+          "GIS/多边形",
+          "R-tree/GiST",
+          "几何谓词"
+        ],
+        [
+          "移动点",
+          "geohash/S2/H3",
+          "更新便宜"
+        ],
+        [
+          "游戏/仿真",
+          "quadtree",
+          "内存简单"
+        ],
+        [
+          "Elastic geo",
+          "BKD",
+          "搜索引擎"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "R-tree/GiST",
+        "meaning": "数据库空间索引常见路线：用外接矩形先粗筛，再做精确几何判断。",
+        "meaningEn": "R-tree/GiST is a common database spatial-index path: use bounding boxes as a fast filter, then run exact geometry checks."
+      },
+      {
+        "term": "quadtree",
+        "meaning": "把二维空间递归四等分的树结构，常用于内存中的空间分区。",
+        "meaningEn": "A quadtree recursively quarters 2D space and is often used for in-memory spatial partitioning."
+      },
+      {
+        "term": "BKD tree",
+        "meaning": "Lucene/Elasticsearch 用于多维范围搜索的磁盘友好索引结构。",
+        "meaningEn": "A BKD tree is a disk-friendly multidimensional range index used by Lucene and Elasticsearch."
+      }
+    ],
+    "tags": [
+      "spatial-index",
+      "rtree",
+      "quadtree",
+      "geohash",
+      "bkd"
     ]
   },
   {
@@ -4444,7 +4970,41 @@
       "It commits the design to this path: Explain the problem first, then contrast the geohash and R-tree routes.",
       "It commits the design to this assumption: Just say \"use PostGIS\" and stop there.",
       "It commits the design to this assumption: Say it's a database internal detail not worth discussing."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "维度",
+        "Geohash",
+        "R 树"
+      ],
+      "rows": [
+        [
+          "本质",
+          "把 2D 坐标编码成有序的 1D（技巧）",
+          "2D 重叠矩形层层嵌套的树（结构）"
+        ],
+        [
+          "靠什么存",
+          "普通有序/字符串索引、KV、按前缀分片",
+          "DB 引擎原生空间索引（GiST 等）"
+        ],
+        [
+          "典型系统",
+          "Redis GEO、Elasticsearch、DynamoDB(geo库)、MongoDB 2d",
+          "PostGIS、MySQL/MariaDB、SQLite、Oracle"
+        ],
+        [
+          "偏向",
+          "简单 · 易横扩（NoSQL / 缓存侧）",
+          "精确 · 任意形状（SQL / 关系库侧）"
+        ],
+        [
+          "什么时候选它",
+          "要简单+好分片、Redis 就近/半径、海量横扩",
+          "要精确 k-NN / 任意多边形、已在关系库里"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-core-concepts-db-indexing-055",

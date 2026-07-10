@@ -95,6 +95,20 @@ for (const rel of files) {
         }
       }
     }
+    if (c.numberAnchors !== undefined) {
+      if (!Array.isArray(c.numberAnchors)) err(base, id, 'numberAnchors must be an array');
+      else {
+        for (const [i, anchor] of c.numberAnchors.entries()) {
+          if (!anchor || typeof anchor !== 'object') err(base, id, `numberAnchors[${i}] must be an object`);
+          else {
+            for (const key of ['system', 'unit', 'estimate', 'risk']) {
+              if (typeof anchor[key] !== 'string' || !anchor[key].trim())
+                err(base, id, `numberAnchors[${i}].${key} must be a non-empty string`);
+            }
+          }
+        }
+      }
+    }
 
     if (c.format === 'mcq' || c.format === 'code') {
       const n = c.options?.length ?? 0;

@@ -33,10 +33,13 @@ const ENGINE = [
 'function esc(s){return String(s==null?"":s).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}',
 'function speak(t){ if(!("speechSynthesis" in window)){alert("用 Chrome/Safari 打开可朗读");return;} try{speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(t);u.lang="en-US";u.rate=.95;speechSynthesis.speak(u);}catch(e){} }',
 'function optsHtml(c){ if(!c.options||!c.answer) return ""; var mono=c.format==="code"; var h="<div class=opts>"; for(var k=0;k<c.options.length;k++){ var ok=c.answer.indexOf(k)>=0; var label=ok?"<b>\\u2713</b> ":("<span class=k>"+"ABCD"[k]+"</span> "); var txt=mono?("<code>"+esc(c.options[k])+"</code>"):esc(c.options[k]); h+="<div class=\\"opt"+(ok?" ok":"")+"\\">"+label+txt+"</div>"; } return h+"</div>"; }',
-'function clozeHtml(c){ if(!c.text) return ""; return "<div class=cloze>"+esc(c.text).replace(/\\{\\{(.+?)\\}\\}/g,function(_,a){return "<b class=blank>"+esc(a)+"</b>";})+"</div>"; }',
+'function clozeHtml(c){ var f=function(t){return "<div class=cloze>"+esc(t).replace(/\\{\\{(.+?)\\}\\}/g,function(_,a){return "<b class=blank>"+esc(a)+"</b>";})+"</div>";}; return (c.text?f(c.text):"")+(c.text_en?f(c.text_en):""); }',
 'function chainHtml(c){ if(!c.steps||!c.answerOrder) return ""; var h="<ol class=chain>"; for(var i=0;i<c.answerOrder.length;i++){h+="<li>"+esc(c.steps[c.answerOrder[i]])+"</li>";} return h+"</ol>"; }',
 'function tableHtml(c){ if(!c.table) return ""; if(typeof c.table==="object"&&c.table.headers){ var t=c.table,h="<table class=cmp><thead><tr>"; t.headers.forEach(function(x){h+="<th>"+esc(x)+"</th>";}); h+="</tr></thead><tbody>"; (t.rows||[]).forEach(function(r){h+="<tr>";r.forEach(function(cell){h+="<td>"+esc(cell)+"</td>";});h+="</tr>";}); return h+"</tbody></table>"; } return "<pre class=mdtable>"+esc(c.table)+"</pre>"; }',
 'function diagramHtml(c){ return c.diagram?("<div class=diawrap><div class=dialabel>\\u56fe\\u793a diagram</div><pre class=mermaid>"+c.diagram+"</pre></div>"):""; }',
+'function tradeoffHtml(c){ return c.tradeoff?("<div class=tradeoff><b>取舍 tradeoff</b> "+esc(c.tradeoff)+"</div>"):""; }',
+'function optionNotesHtml(c){ if(!c.options) return ""; var M=c.optionMeanings,D=c.optionDirectness,S=c.optionScenarioImpacts,Me=c.optionMeanings_en,De=c.optionDirectness_en,Se=c.optionScenarioImpacts_en,L=c.optionExplanations,Le=c.optionExplanations_en; var rich=(M&&M.length)||(D&&D.length)||(S&&S.length); if(!rich&&!(L&&L.length)) return ""; var join=function(a,b,d){return [a,b,d].filter(Boolean).join(" ");}; var h="<div class=onotes><div class=dialabel>选项解析 option notes</div>"; for(var k=0;k<c.options.length;k++){ var ok=c.answer&&c.answer.indexOf(k)>=0; var cn=rich?join(M&&M[k],D&&D[k],S&&S[k]):((L&&L[k])||""); var en=rich?join(Me&&Me[k],De&&De[k],Se&&Se[k]):((Le&&Le[k])||""); h+="<div class=\\"onote"+(ok?" ok":"")+"\\"><div class=oh>"+(ok?"<b>\\u2713</b> ":("<span class=k>"+"ABCD"[k]+"</span> "))+esc(c.options[k])+"</div>"; if(cn)h+="<div class=ol>"+esc(cn)+(en?" <span class=oen>"+esc(en)+"</span>":"")+"</div>"; h+="</div>"; } return h+"</div>"; }',
+'function termsHtml(c){ if(!c.termDefinitions||!c.termDefinitions.length) return ""; var h="<div class=terms><div class=dialabel>术语 terms</div>"; c.termDefinitions.forEach(function(t){ var fn=t.fullName?(" ("+esc(t.fullName)+")"):""; h+="<div class=term><b>"+esc(t.term)+"</b>"+fn+" — "+esc(t.meaning||"")+(t.meaningEn?" <span class=oen>"+esc(t.meaningEn)+"</span>":"")+"</div>"; }); return h+"</div>"; }',
 'function render(){ var c=list[idx]; document.getElementById("pos").textContent=(idx+1)+" / "+list.length; if(!c){document.getElementById("card").innerHTML="";return;}',
 '  var tags="<div class=tags><span class=\\"tag t\\">"+esc(c.atomType||"")+"</span><span class=tag>"+esc(c.topic||"")+"</span><span class=tag>"+esc(c.sub||"")+"</span><span class=tag>"+esc(c.format)+"</span><span class=tag>"+esc(c.id)+"</span></div>";',
 '  var scen=c.scenario?("<div class=scenario><b>Scenario \\u573a\\u666f</b>"+esc(c.scenario)+"</div>"):"";',
@@ -45,7 +48,7 @@ const ENGINE = [
 '  var en=c.why_en?("<div class=en><button class=spk onclick=\\"speak("+JSON.stringify(c.why_en).replace(/"/g,"&quot;")+")\\">\\ud83d\\udd0a</button><div>"+esc(c.why_en)+"</div></div>"):"";',
 '  var other=c.whenOtherWins?("<div class=other><b>\\u4ec0\\u4e48\\u65f6\\u5019\\u9009\\u522b\\u7684\\uff1a</b> "+esc(c.whenOtherWins)+"</div>"):"";',
 '  var code=c.codeSample?("<div class=code><div class=dialabel>\\u5b9e\\u73b0\\u53c2\\u8003"+(c.lang?(" \\u00b7 "+esc(c.lang)):"")+"</div><pre>"+esc(c.codeSample)+"</pre></div>"):"";',
-'  var reveal="<div class=reveal><p class=why>"+esc(c.why||"")+"</p>"+tableHtml(c)+diagramHtml(c)+code+en+other+"</div>";',
+'  var reveal="<div class=reveal><p class=why>"+esc(c.why||"")+"</p>"+tradeoffHtml(c)+optionNotesHtml(c)+tableHtml(c)+diagramHtml(c)+code+termsHtml(c)+en+other+"</div>";',
 '  document.getElementById("card").innerHTML="<div class=inner>"+tags+scen+q+body+reveal+"</div>";',
 '  var pre=document.querySelector("#card .mermaid"); if(pre&&window.mermaid){try{mermaid.run({nodes:[pre]});}catch(e){}}',
 '  document.getElementById("card").scrollIntoView({block:"start"}); }',
@@ -81,6 +84,11 @@ const HTML = `<!DOCTYPE html>
  .en{background:var(--tealbg);color:var(--tealink);border-radius:10px;padding:11px 13px;font-size:14px;display:flex;gap:10px;align-items:flex-start;} .spk{flex:none;background:var(--tealink);color:var(--tealbg);border:none;border-radius:8px;padding:6px 11px;cursor:pointer;}
  .other{margin-top:11px;background:var(--amberbg);color:var(--amberink);border-radius:10px;padding:11px 13px;font-size:14px;}
  .code pre,.mdtable{background:#0e1116;color:#d7e0ee;border-radius:10px;padding:11px 13px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap;} .code{margin-top:12px;}
+ .tradeoff{background:var(--amberbg);color:var(--amberink);border-radius:10px;padding:9px 13px;font-size:13.5px;margin:0 0 12px;}
+ .onotes{margin:0 0 12px;} .onote{border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:7px;} .onote.ok{border-color:var(--ok);background:var(--okbg);}
+ .oh{font-weight:600;font-size:14px;margin-bottom:4px;} .oh .k{color:var(--muted);font-weight:700;}
+ .ol{font-size:13px;margin:2px 0;} .ol b{color:var(--muted);font-weight:600;font-size:11px;margin-right:5px;} .oen{color:var(--muted);font-style:italic;}
+ .terms{margin:0 0 12px;} .term{font-size:13px;margin:3px 0;padding:7px 10px;background:var(--chip);border-radius:8px;} .term b{color:var(--accent);}
  footer{text-align:center;color:var(--muted);font-size:12px;margin-top:20px;}
 </style></head>
 <body>

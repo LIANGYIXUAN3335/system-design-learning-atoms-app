@@ -22,13 +22,37 @@
     "answer": [
       1
     ],
-    "why": "Sharding 是跨多台机器的水平分片，每个 shard 都有自己的 CPU、内存、存储和连接池。它用多机分摊存储容量和读写吞吐。",
-    "why_en": "Sharding horizontally splits data across multiple database machines so storage and throughput scale with the number of shards.",
+    "why": "Sharding 在系统设计里通常指数据层/数据库/存储的水平分片：同一张逻辑表按 shard key 分到多台 DB 节点。服务层也会横向扩容，但通常叫 replicas/load balancing，不叫数据库 sharding。",
+    "why_en": "In system-design interviews, sharding usually means horizontally splitting data across database or storage nodes. Service instances can also scale horizontally, but that is usually called replicas or load balancing, not database sharding.",
     "tags": [
       "sharding",
       "definition",
       "scaling"
     ],
+    "table": {
+      "headers": [
+        "层",
+        "说法",
+        "作用"
+      ],
+      "rows": [
+        [
+          "DB/存储",
+          "sharding",
+          "拆数据/读写"
+        ],
+        [
+          "服务",
+          "replicas/LB",
+          "拆请求"
+        ],
+        [
+          "队列/缓存",
+          "partition/slot",
+          "拆消息/key"
+        ]
+      ]
+    },
     "optionExplanations": [
       "把数据放在单机而不是多台机器上，这是 partitioning 的定义而非 sharding。",
       "这正是 sharding 的核心定义，把数据跨多台机器分散。",
@@ -46,6 +70,11 @@
         "term": "Sharding",
         "meaning": "把数据水平拆分到多台独立数据库机器上，每个 shard 持有一部分数据。",
         "meaningEn": "Sharding horizontally splits data across multiple independent database machines, each holding a subset of the data."
+      },
+      {
+        "term": "服务水平扩容",
+        "meaning": "部署多个服务实例，由负载均衡器分发请求；它分摊计算请求，但不一定拥有互斥的数据分片。",
+        "meaningEn": "Service horizontal scaling runs multiple service instances behind a load balancer; it spreads compute requests but does not necessarily split owned data."
       }
     ]
   },
@@ -130,13 +159,50 @@
       1,
       2
     ],
-    "why": "Partitioning 改善单实例内的数据组织和维护成本，但不等于多机扩展。它可以少扫分区、减小索引和维护范围，但机器资源仍然是同一台。",
-    "why_en": "Partitioning can split rows or columns inside one instance, but it does not add more database machines.",
+    "why": "单机内 partitioning 的关键词是「同一台数据库实例」。Horizontal 按行拆，vertical 按列拆；它能减少扫描和维护范围，但不会把写吞吐扩展到多台机器。",
+    "why_en": "Single-machine partitioning stays inside one database instance. Horizontal partitioning splits rows and vertical partitioning splits columns; it can reduce scan and maintenance scope, but it does not add machines or scale writes across machines.",
     "tags": [
       "partitioning",
       "horizontal",
       "vertical"
     ],
+    "table": {
+      "headers": [
+        "切法",
+        "适合",
+        "例子"
+      ],
+      "rows": [
+        [
+          "time range",
+          "时间查询/清理",
+          "按月 orders"
+        ],
+        [
+          "id range",
+          "范围查询",
+          "id 1-1M"
+        ],
+        [
+          "list",
+          "固定类别",
+          "region/status"
+        ],
+        [
+          "hash",
+          "均匀打散",
+          "hash(user_id)"
+        ],
+        [
+          "vertical",
+          "宽表拆列",
+          "blob 单独表"
+        ]
+      ]
+    },
+    "whenOtherWins": "同一字段可以参与多层 key，但职责不同；高写入系统不要把单调递增的 created_at 同时当 shard key 和 partition key。",
+    "codeSample": "# 三个 key 可以不同，各管一层\n# shard key: 选哪台数据库机器\n# partition key: 选这台机器里的哪个粗粒度分区\n# sort/index key: 在分区内快速定位和排序\n\ndef route_order(order):\n    shard_id = hash(order.user_id) % NUM_SHARDS       # DB machine\n    partition = month(order.created_at)               # orders_2026_06\n    index_key = (order.user_id, -order.created_at)     # newest first\n    insert(shard_id, f\"orders_{partition}\", order, index_key)\n\n# partition 只把 10 年数据缩小到 1 个月；这个月里仍可能有千万行\n# index/sort key 再在 6 月分区内快速找到 user 42，并按 created_at 倒序读\nquery(user_id=42, month=\"2026-06\", order_by=\"created_at DESC\")",
+    "lang": "python",
     "optionExplanations": [
       "正确，水平分片就是按行分组，按条件（如年份）拆表。",
       "正确，垂直分片就是把不同列拆到不同表或存储。",
@@ -152,8 +218,23 @@
     "termDefinitions": [
       {
         "term": "Partitioning",
-        "meaning": "在单个数据库实例内部把大表拆成更小的逻辑分区，不增加机器数量。",
-        "meaningEn": "Partitioning splits a large table into smaller logical pieces inside a single database instance without adding machines."
+        "meaning": "在单个数据库实例内部把大表拆成更小的逻辑分区，不增加机器数量；它是分桶，不等于把行都排好序。",
+        "meaningEn": "Partitioning splits a large table into smaller logical pieces inside a single database instance without adding machines; it is bucketing, not automatically sorting every row."
+      },
+      {
+        "term": "Partition key",
+        "meaning": "决定一行落入哪个分区的字段或表达式；它是存储/路由规则，不是 foreign key，也不是 secondary index。",
+        "meaningEn": "A partition key is the field or expression that decides which partition a row lands in; it is a storage/routing rule, not a foreign key or secondary index."
+      },
+      {
+        "term": "Sort key",
+        "meaning": "决定同一分组或索引内记录的读取顺序；它不负责选机器，常见例子是 created_at DESC。",
+        "meaningEn": "A sort key controls the order of records within a group or index; it does not choose the machine, and a common example is created_at DESC."
+      },
+      {
+        "term": "Index",
+        "meaning": "分区内部的快速查找结构；partition 先缩小到一个大桶，index 再在桶里精确定位。",
+        "meaningEn": "An index is a fast lookup structure inside a partition; partitioning narrows to a large bucket, then the index locates rows inside it."
       },
       {
         "term": "Horizontal partitioning",
@@ -192,8 +273,8 @@
     "answer": [
       1
     ],
-    "why": "如果瓶颈主要是大表扫描和维护范围，单机 partitioning 可能足够。Sharding 是单机容量或吞吐撑不住时的更重方案。",
-    "why_en": "If the issue is large-table scans inside one still-capable machine, partitioning can help before introducing sharding.",
+    "why": "如果瓶颈是大表扫描、索引/维护范围或历史数据清理，单机 partitioning 可能足够。它不会加机器，但能让数据库少扫、少维护、好清理。",
+    "why_en": "If the bottleneck is large-table scans, index or maintenance scope, or historical-data cleanup, single-machine partitioning may be enough. It does not add machines, but it lets the database scan less, maintain less, and clean up data more easily.",
     "whenOtherWins": "当单机存储、写吞吐或读吞吐已经接近上限，即使分区也不够时，才应进入 sharding 讨论。",
     "tags": [
       "partitioning",
@@ -201,6 +282,32 @@
       "scaling"
     ],
     "tradeoff": "partitioning（轻量，先解决扫描范围问题）vs sharding（更重，只有单机容量/吞吐真撑不住才值得）",
+    "table": {
+      "headers": [
+        "收益",
+        "意思",
+        "例子"
+      ],
+      "rows": [
+        [
+          "少扫描",
+          "pruning",
+          "只扫上月"
+        ],
+        [
+          "小索引",
+          "分区维护",
+          "少改索引页"
+        ],
+        [
+          "易清理",
+          "drop 分区",
+          "删旧订单"
+        ]
+      ]
+    },
+    "codeSample": "SELECT * FROM orders\nWHERE created_at >= '2026-06-01'\n  AND created_at <  '2026-07-01';\n-- 如果按月 partition，DB 只扫 2026-06 分区\n\nALTER TABLE orders DETACH PARTITION orders_2024_01;\n-- 清理旧数据可以按分区处理，不用逐行 delete",
+    "lang": "sql",
     "optionExplanations": [
       "64 台机器太重：瓶颈只是扫描范围，不是单机容量或吞吐。",
       "对：按时间分区能让查询只扫相关时间段，先减轻单机扫描压力。",
@@ -218,6 +325,11 @@
         "term": "Partitioning",
         "meaning": "在单个数据库实例内部把大表拆成更小的逻辑分区，不增加机器数量。",
         "meaningEn": "Partitioning splits a large table into smaller logical pieces inside a single database instance without adding machines."
+      },
+      {
+        "term": "Partition pruning",
+        "meaning": "查询条件命中 partition key 时，数据库跳过无关分区，只扫描相关分区。",
+        "meaningEn": "Partition pruning lets the database skip irrelevant partitions when the query predicate matches the partition key."
       },
       {
         "term": "Sharding",
@@ -536,13 +648,15 @@
     "answer": [
       0
     ],
-    "why": "时间范围分片会让新数据集中写到最新 shard，旧 shard 大多只承担读历史数据。对写密集系统，这会抵消 sharding 的分摊效果。",
-    "why_en": "Time-range sharding often creates a write hotspot because all new records land in the newest shard.",
+    "why": "你的理解对：持续写入表里的 `created_at` 基本都是 now，所以 range router 会把新写入都送到最新时间范围的 shard。旧 shard 主要读历史，新 shard 扛全部写入，热点就出现了。",
+    "why_en": "Because new rows have created_at close to now, a range router sends almost all inserts to the newest time-range shard. Older shards mostly serve historical reads, while the newest shard carries the write load.",
     "tags": [
       "time-sharding",
       "hotspot",
       "writes"
     ],
+    "whenOtherWins": "按时间 range sharding 适合历史归档、按时间范围扫描、冷数据分层；高写入主链路更常用 hash(user_id/order_id/tenant_id) 打散，或用 time bucket + hash 子分片。",
+    "codeSample": "Shard A: created_at < 2026-07-01\nShard B: 2026-07-01 <= created_at < 2026-07-08\nShard C: created_at >= 2026-07-08\n\nINSERT order(created_at = now()) -> Shard C\nINSERT order(created_at = now()) -> Shard C\nINSERT order(created_at = now()) -> Shard C\n# 新写入全挤到最新时间段，Shard C 变成写热点",
     "optionExplanations": [
       "正确，时间范围分片会让新数据都写到最新时间范围的 shard，导致写热点。",
       "错误，历史 shard 往往只接收读流量，新 shard 会被写入压垮。",
@@ -655,23 +769,49 @@
     "answer": [
       0
     ],
-    "why": "多租户数据天然按租户边界访问，range 能让某公司数据落在可预测范围内，并让不同公司的访问分散到不同 shard。",
-    "why_en": "Range sharding can fit multi-tenant systems when tenants naturally access separate key ranges.",
-    "whenOtherWins": "如果 tenant 大小极不均匀或少数 tenant 特别热，hash 或 directory-based 方案可能更容易重新平衡。",
+    "why": "你的直觉对：shard key 应该贴近 tenant/company_id。这里选 range-based 指的是分布策略：给每个 tenant 一段连续 ID 范围，再按这些范围路由到 shard。",
+    "why_en": "The shard key should align with tenant or company identity; range-based here refers to the distribution strategy, where each tenant receives a continuous ID range that maps to a shard.",
+    "whenOtherWins": "如果 tenant 大小极不均匀、少数 tenant 特别热，或需要频繁迁移单个租户，directory-based 或 hash 方案更容易重平衡。",
+    "table": {
+      "headers": [
+        "决策",
+        "本题选择",
+        "作用"
+      ],
+      "rows": [
+        [
+          "shard key",
+          "tenant_id",
+          "按公司定位数据"
+        ],
+        [
+          "分布策略",
+          "range",
+          "tenant ID 段到 shard"
+        ],
+        [
+          "查询",
+          "tenant_id",
+          "命中单 shard"
+        ]
+      ]
+    },
+    "codeSample": "tenant A -> id range 1_000_000 - 1_999_999 -> Shard 1\ntenant B -> id range 2_000_000 - 2_999_999 -> Shard 2\n\nGET /tenants/B/users\n# router sees tenant B / its ID range -> Shard 2\n\n# 不是按 created_at 排序；是按 tenant 分配的连续 ID 段路由",
+    "lang": "text",
     "tags": [
       "range-sharding",
       "multi-tenant",
       "fit"
     ],
-    "tradeoff": "range sharding（租户按 ID 区间访问，简单可预测）vs hash/directory sharding（租户大小差异悬殊或需要动态迁移热租户时更灵活）",
+    "tradeoff": "range sharding（tenant 范围路由简单可预测）vs hash/directory sharding（tenant 大小差异悬殊或热租户迁移时更灵活）",
     "optionExplanations": [
-      "正确，租户 ID 范围自然对应 shard 范围，可让某公司数据落在可预测的范围。",
+      "正确，但要说清楚：company/tenant_id 是访问边界，range 是这些 ID 段到 shard 的映射方式。",
       "错误，随机选择会破坏数据定位和任何可预测的分布。",
       "错误，单一 shard 无法扩展，会导致严重热点。",
       "错误，只按最新时间分片无法分隔多租户，也会导致新租户写热点。"
     ],
     "optionExplanations_en": [
-      "Correct; tenant ID ranges naturally map to shard ranges, keeping each tenant's data predictable.",
+      "Correct, but be precise: company or tenant id is the access boundary, and range is how those id ranges map to shards.",
       "Incorrect; random selection destroys data location and any predictable distribution.",
       "Incorrect; a single shard cannot scale and creates severe hotspots.",
       "Incorrect; time-only sharding cannot isolate tenants and creates new-tenant write hotspots."
@@ -681,6 +821,16 @@
         "term": "Range-based sharding",
         "meaning": "把 shard key 的连续值区间分配给不同 shard，例如 user_id 1–1M 到 shard 1。",
         "meaningEn": "Range-based sharding assigns continuous ranges of the shard key's values to different shards."
+      },
+      {
+        "term": "shard key",
+        "meaning": "用来决定一条记录应该路由到哪个 shard 的字段；本题通常是 tenant_id/company_id 或其分配到的 ID 段。",
+        "meaningEn": "The shard key is the field used to route a record to a shard; in this scenario it is usually tenant_id/company_id or the ID range assigned to that tenant."
+      },
+      {
+        "term": "distribution strategy",
+        "meaning": "把 shard key 的值映射到机器的方式，例如 range、hash 或 directory。",
+        "meaningEn": "A distribution strategy maps shard-key values to machines, such as range, hash, or directory."
       }
     ]
   },
@@ -886,16 +1036,41 @@
     "answer": [
       0
     ],
-    "why": "一致性哈希把数据和节点映射到环或 hash 空间，节点变化时只影响相邻范围，减少大规模迁移。",
-    "why_en": "Consistent hashing minimizes data movement when shards are added or removed.",
-    "whenOtherWins": "如果 shard 数固定且规模很小，简单 modulo 更容易实现；但面试里要说明后续扩容代价。",
+    "why": "公式不是 `hash(key) % N`，而是 `h = H(key)` 后在 hash ring 上找顺时针第一个节点。新增节点只接走它前一个节点到自己之间的 key 范围。",
+    "why_en": "The rule is not hash(key) % N. Compute h=H(key), then choose the first node clockwise on the hash ring. A new node only takes the key range between its predecessor and itself.",
+    "whenOtherWins": "节点集合固定且很小时，简单 modulo 更容易；节点会频繁增减时，一致性哈希更稳。",
     "tags": [
       "consistent-hashing",
       "resharding",
       "fit"
     ],
-    "tradeoff": "consistent hashing（加/减节点只迁移相邻一小段）vs 简单 modulo（改 N 后几乎全部重映射，实现更简单）",
-    "codeSample": "ring = sorted(hash(node) for node in nodes)\ntarget = next(n for n in ring if n >= hash(key))  # wrap to first if none\n# adding one node only remaps keys between it and its neighbor",
+    "tradeoff": "consistent hashing（扩缩容迁移少）vs modulo（实现简单但改 N 后大量重映射）",
+    "table": {
+      "headers": [
+        "用途",
+        "例子",
+        "目的"
+      ],
+      "rows": [
+        [
+          "cache",
+          "Redis/Memcached",
+          "少失效"
+        ],
+        [
+          "DB shard",
+          "Cassandra 风格",
+          "少迁移"
+        ],
+        [
+          "service",
+          "stateful worker",
+          "稳定路由"
+        ]
+      ]
+    },
+    "diagram": "flowchart LR\n  K[\"H(key)=42\"] --> A[\"clockwise\"]\n  A --> B[\"first node >= 42\"]\n  B --> C[\"Shard B\"]",
+    "codeSample": "def build_ring(nodes, vnodes=100):\n    ring = []\n    for node in nodes:\n        for i in range(vnodes):\n            ring.append((H(f'{node}:{i}'), node))\n    return sorted(ring)\n\ndef pick_node(ring, key):\n    h = H(key)\n    for pos, node in ring:\n        if pos >= h:\n            return node\n    return ring[0][1]  # wrap around",
     "lang": "python",
     "optionExplanations": [
       "对：环上只有相邻的一小段 key 会被重新分配，其余留在原地，这是它比简单取模稳的原因。",
@@ -912,8 +1087,13 @@
     "termDefinitions": [
       {
         "term": "Consistent hashing",
-        "meaning": "把节点和 key 映射到同一个 hash 环上，节点增减时只影响相邻的一小段范围。",
+        "meaning": "把节点和 key 映射到同一个 hash 环上，key 归顺时针遇到的第一个节点；节点增减时只影响相邻范围。",
         "meaningEn": "Consistent hashing maps nodes and keys onto the same hash ring, so adding or removing a node only remaps a small neighboring range."
+      },
+      {
+        "term": "virtual node",
+        "meaning": "把一台物理节点放到 hash ring 的多个位置，让数据分布更均匀。",
+        "meaningEn": "A virtual node places one physical node at many ring positions to make distribution more even."
       },
       {
         "term": "Hash-based sharding",
@@ -1015,14 +1195,35 @@
       1,
       2
     ],
-    "why": "Directory 的灵活性来自显式映射，但所有请求都依赖这张映射。目录服务要高可用、低延迟，否则数据 shard 健康也没法路由。",
-    "why_en": "Directory sharding is flexible but adds a lookup to every request and makes the directory a critical dependency.",
+    "why": "Directory 的灵活性来自显式映射：可以把 user 42 单独指到 shard-9。但请求路径多了一步查目录；目录服务慢或挂了，即使数据 shard 正常也不知道该去哪。",
+    "why_en": "Directory sharding is flexible because explicit mappings can route user 42 to shard-9. But the request path adds a directory lookup; if the directory is slow or down, healthy data shards still cannot be reached.",
     "tags": [
       "directory-sharding",
       "tradeoffs",
       "latency"
     ],
-    "tradeoff": "directory-based sharding（灵活迁移热 key）vs hash/range sharding（无需查表，路由更快，但迁移不灵活）",
+    "tradeoff": "directory-based sharding（灵活迁移热 key，但多一次 lookup）vs hash/range sharding（无需查表，路由更快，但迁移不灵活）",
+    "table": {
+      "headers": [
+        "策略",
+        "路由",
+        "代价"
+      ],
+      "rows": [
+        [
+          "hash",
+          "公式计算",
+          "迁移不灵活"
+        ],
+        [
+          "directory",
+          "查映射表",
+          "多一次 lookup"
+        ]
+      ]
+    },
+    "codeSample": "# hash/range: 不查目录，直接算\nshard = hash(user_id) % N\nquery(shard, user_id)\n\n# directory: 先查映射，再访问 shard\nshard = directory.get(user_id)   # extra lookup: Redis/DB/config service\nquery(shard, user_id)\n\n# 好处：可以单独改一条映射，把热用户搬走\ndirectory.set(celebrity_user_id, 'dedicated-shard-9')",
+    "lang": "python",
     "optionExplanations": [
       "正确，directory 记录显式映射，可以灵活单独迁移热 key。",
       "正确，每次请求都要查目录，必然增加延迟。",
@@ -1040,6 +1241,11 @@
         "term": "Directory-based sharding",
         "meaning": "用一张查找表或目录服务记录每个 key 当前在哪个 shard 上。",
         "meaningEn": "Directory-based sharding uses a lookup table or service that records which shard each key currently lives on."
+      },
+      {
+        "term": "directory lookup",
+        "meaning": "请求先访问目录服务，得到 key 到 shard 的映射，再去真正的数据 shard。",
+        "meaningEn": "A directory lookup first asks the directory service for the key-to-shard mapping, then routes to the actual data shard."
       }
     ]
   },
@@ -1751,8 +1957,8 @@
     "answer": [
       2
     ],
-    "why": "单库事务只覆盖一个数据库实例。如果用户账户在 shard 1、交易记录在 shard 2，就需要跨独立数据库协调一致性。",
-    "why_en": "Sharding complicates transactions because related writes may live on different independent databases.",
+    "why": "Sharding 常是因为单库容量或读写压力不够；事务复杂是副作用。单库事务只覆盖一个数据库实例，如果账户在 shard 1、交易记录在 shard 2，就要跨 DB 协调一致性。",
+    "why_en": "Sharding is often introduced for capacity or read/write pressure; transaction complexity is a side effect. A single-database transaction covers one database instance, so related writes on different shards need coordination.",
     "tags": [
       "transactions",
       "consistency",
@@ -1801,16 +2007,16 @@
     "answer": [
       3
     ],
-    "why": "2PC 能提供强一致提交语义，但用性能和可用性换一致性。多数生产系统会尽量避免把它放在高频路径上。",
-    "why_en": "Two-phase commit gives stronger consistency but is slow and fragile under coordinator or participant failures.",
+    "why": "2PC 解决的是跨多个 DB 的原子提交：要么所有 shard 都提交，要么都回滚。代价是多轮网络通信、锁等待，以及协调者或参与者故障时可能卡住。",
+    "why_en": "Two-phase commit provides atomic commit across multiple databases: either every shard commits or all abort. The cost is extra network rounds, lock waiting, and blocking under coordinator or participant failures.",
     "tags": [
       "transactions",
       "2pc",
       "tradeoffs"
     ],
     "tradeoff": "2PC（强一致提交，但慢、协调者/参与者故障会卡住）vs 避免跨 shard 事务或用 saga（更快更有弹性，只拿 eventual consistency）",
-    "codeSample": "Coordinator -> ShardA: PREPARE\nCoordinator -> ShardB: PREPARE\nShardA -> Coordinator: READY\nShardB -> Coordinator: READY\nCoordinator -> ShardA: COMMIT\nCoordinator -> ShardB: COMMIT\n# if ShardB times out after READY, the whole transaction can block",
-    "lang": "text",
+    "codeSample": "def two_phase_commit(txn, participants):\n    # phase 1: prepare，参与者写 prepare log 并锁住相关行\n    votes = [p.prepare(txn) for p in participants]\n\n    # phase 2: all-or-nothing decision\n    if all(v == 'READY' for v in votes):\n        for p in participants:\n            p.commit(txn)\n    else:\n        for p in participants:\n            p.rollback(txn)\n\n# 如果 ShardA 已 READY 但 coordinator 挂了，ShardA 不能擅自提交/回滚，只能等决定",
+    "lang": "python",
     "optionExplanations": [
       "错，2PC 需要一个协调者来管理准备/提交流程。",
       "错，2PC 本身不快，而且有明确的故障模式。",
@@ -1827,8 +2033,13 @@
       {
         "term": "2PC",
         "fullName": "Two-Phase Commit",
-        "meaning": "2PC（Two-Phase Commit，两阶段提交）：协调者先让所有参与者准备好，再统一提交或回滚的分布式事务协议。",
+        "meaning": "2PC（Two-Phase Commit，两阶段提交）：协调者先问所有参与者能否提交，全部 READY 才统一 COMMIT，否则统一 ROLLBACK。",
         "meaningEn": "Two-Phase Commit is a distributed transaction protocol where a coordinator first asks every participant to prepare, then tells them all to commit or abort together."
+      },
+      {
+        "term": "coordinator",
+        "meaning": "2PC 里的决策者，负责收集 READY/失败投票，并广播最终 COMMIT 或 ROLLBACK。",
+        "meaningEn": "The coordinator is the 2PC decision maker that collects READY or failure votes and broadcasts the final COMMIT or ROLLBACK."
       }
     ]
   },
@@ -2077,8 +2288,8 @@
     "answer": [
       1
     ],
-    "why": "面试里可以说它们支持自动分区/路由，但不要误说所有系统都用同一种一致性哈希实现。机制不同，用户要关心的仍是 key 和访问模式。",
-    "why_en": "These databases all distribute data by key, but their internal partitioning and balancing mechanisms differ.",
+    "why": "三者都按 key 分布数据，但内部单位不同：Cassandra 看 token/vnode，DynamoDB 看内部 partition，MongoDB 看 chunk。别把它们都说成同一套一致性哈希。",
+    "why_en": "All three distribute data by key, but the internal unit differs: Cassandra uses tokens/vnodes, DynamoDB uses internal partitions, and MongoDB uses chunks. Do not describe them as one identical consistent-hashing implementation.",
     "tags": [
       "cassandra",
       "dynamodb",
@@ -2110,8 +2321,8 @@
         ]
       ]
     },
-    "codeSample": "CREATE TABLE users (\n  user_id uuid PRIMARY KEY,\n  name text\n);\n-- Cassandra's partitioner (e.g. Murmur3) hashes user_id onto the token ring",
-    "lang": "sql",
+    "codeSample": "# same idea: choose a key; different internal units\n\n# Cassandra\npartition_key = user_id\ntoken = Murmur3(partition_key)\nnode = token_ring.owner(token)      # vnode/token range owns it\n\n# DynamoDB\npk = user_id\ninternal_partition = aws_hash(pk)   # AWS may split/merge hot or large partitions\n\n# MongoDB\nshard_key = user_id                 # range or hashed shard key\nchunk = find_chunk(shard_key)\nshard = chunk.owner                 # balancer can migrate chunks",
+    "lang": "python",
     "optionMeanings": [
       "假设三者共用同一套换环实现。",
       "点出三者共性（按 key 分布）与差异（内部机制不同）。",
@@ -2173,6 +2384,16 @@
         "term": "Partitioner",
         "meaning": "Cassandra 用来把 key 映射到 token 环上的组件，例如 Murmur3Partitioner。",
         "meaningEn": "A partitioner is the Cassandra component that maps keys onto the token ring, such as Murmur3Partitioner."
+      },
+      {
+        "term": "token / vnode",
+        "meaning": "Cassandra 里 token 是 hash 空间位置；vnode 是一台物理节点拥有的多个 token 范围，用来平衡数据和迁移压力。",
+        "meaningEn": "In Cassandra, a token is a position in hash space; a vnode is one of many token ranges owned by a physical node to balance data and movement."
+      },
+      {
+        "term": "chunk",
+        "meaning": "MongoDB sharding 的迁移单位，是一段 range 或 hashed shard key 范围；balancer 会把 chunk 在 shard 间搬迁。",
+        "meaningEn": "A MongoDB chunk is the unit of migration: a range of the range or hashed shard key that the balancer can move between shards."
       }
     ]
   },
@@ -2498,13 +2719,15 @@
       1,
       2
     ],
-    "why": "Shard key 是 sharding 设计的核心。选错 key 后，很多问题无法靠加更多 shard 轻松弥补。",
-    "why_en": "A bad shard key causes imbalance, hot spots, and frequent fan-out queries.",
+    "why": "fan-out 是查多个 shard 后 merge/aggregate；查询不带 shard key 时最容易发生。",
+    "why_en": "A bad shard key causes imbalance, hot spots, and frequent fan-out queries: one query asks many shards and then merges or aggregates the results.",
     "tags": [
       "shard-key",
       "pitfalls",
       "hotspot"
     ],
+    "codeSample": "def query_by_non_shard_key(product_id):\n    rows = []\n    for shard in all_shards:\n        rows += shard.query(product_id=product_id)\n    return merge_or_aggregate(rows)\n\n# 有 shard key 就只查一个 shard\nquery_by_user = pick_shard(user_id).query(user_id=user_id)",
+    "lang": "python",
     "optionMeanings": [
       "值分布集中在少数几个，导致某些 shard 数据量远超其他。",
       "某个 shard 承受的流量远高于其他 shard。",
@@ -2554,7 +2777,7 @@
       },
       {
         "term": "Fan-out",
-        "meaning": "一次请求被同时发给所有或多个 shard，然后等待汇总结果。",
+        "meaning": "一次查询被发给所有或多个 shard，再把结果合并、排序或聚合回来。",
         "meaningEn": "Fan-out means one request is sent to all or many shards at once and their results are merged."
       }
     ]
@@ -2568,8 +2791,34 @@
     "q": "补全三种 sharding 策略的关键词：",
     "q_en": "Complete the keywords for the three sharding strategies.",
     "text": "{{Range}} sharding 简单且支持范围扫描；{{Hash}} sharding 默认更均匀；{{Directory}} sharding 最灵活但每次请求多一次 lookup。",
-    "why": "三种策略没有绝对赢家：range 强在范围，hash 强在均匀，directory 强在动态控制。",
-    "why_en": "Range, hash, and directory sharding trade off range scans, balance, and routing flexibility.",
+    "why": "Range 用原始 key 的商/区间，保留连续性；raw modulo 用余数把相邻 key 交错分桶；hash sharding 是先 H(key) 再取桶。三者别混。",
+    "why_en": "Range sharding splits continuous ranges of the original key; hash sharding first scatters keys into hash space; directory sharding looks up an explicit mapping. They trade off range scans, balance, and flexibility.",
+    "table": {
+      "headers": [
+        "策略",
+        "切什么",
+        "强项"
+      ],
+      "rows": [
+        [
+          "range",
+          "原始 key",
+          "范围查询"
+        ],
+        [
+          "hash",
+          "hash 空间",
+          "均匀打散"
+        ],
+        [
+          "directory",
+          "映射表",
+          "单独迁移"
+        ]
+      ]
+    },
+    "codeSample": "# range / quotient: 连续 user_id 放一起\nshard = user_id // 1_000_000      # 1..999999 -> shard 0\n\n# raw modulo: 不 hash，只按余数交错分桶\nbucket = user_id % 4              # 100->0, 101->1\n\n# hash sharding: 先打散，再取桶/slot\nslot = H(user_id) % 16384\nshard = slot_owner[slot]\n\n# directory: 查显式映射\nshard = directory.get(user_id)",
+    "lang": "python",
     "tags": [
       "strategy-summary",
       "range-sharding",
@@ -2579,7 +2828,7 @@
     "termDefinitions": [
       {
         "term": "Range-based sharding",
-        "meaning": "把 shard key 的连续值区间分配给不同 shard，例如 user_id 1–1M 到 shard 1。",
+        "meaning": "把原始 shard key 的连续值区间分配给不同 shard，例如 user_id 1–1M 到 shard 1。",
         "meaningEn": "Range-based sharding assigns continuous ranges of the shard key's values to different shards."
       },
       {
@@ -2588,9 +2837,19 @@
         "meaningEn": "Hash-based sharding hashes the shard key and maps the result to a shard, typically via modulo."
       },
       {
+        "term": "raw modulo bucket",
+        "meaning": "直接用原始 key 的余数分桶，例如 user_id % 4；它会交错相邻 key，但不等于先 hash 打散。",
+        "meaningEn": "A raw modulo bucket uses the original key's remainder, such as user_id % 4; it interleaves adjacent keys but is not the same as hashing first."
+      },
+      {
         "term": "Directory-based sharding",
-        "meaning": "用一张查找表或目录服务记录每个 key 当前在哪个 shard 上。",
+        "meaning": "用查找表或目录服务记录每个 key 当前在哪个 shard 上；目录服务可以由 DB、Redis、ZooKeeper、etcd 等承载。",
         "meaningEn": "Directory-based sharding uses a lookup table or service that records which shard each key currently lives on."
+      },
+      {
+        "term": "hash space",
+        "meaning": "hash 函数输出的数字空间；hash sharding 切的是这个空间，而不是原始 key 的自然顺序。",
+        "meaningEn": "Hash space is the numeric output space of a hash function; hash sharding splits this space, not the natural order of the original key."
       }
     ]
   },
@@ -2661,8 +2920,8 @@
     "answer": [
       3
     ],
-    "why": "Sharding 设计最核心的是“按什么字段分组”和“用什么规则把这些组分布到机器”。这两个决定会影响热点、查询和扩容。",
-    "why_en": "The two core sharding decisions are the shard key and the distribution strategy.",
+    "why": "Shard key 决定“按什么字段分组”，distribution strategy 决定“这些 key 值怎么映射到机器”。同一个 user_id，可以 range、hash 或 directory 三种方式分布。",
+    "why_en": "The shard key decides which field groups the data; the distribution strategy decides how those key values map to machines. The same user_id key can be distributed by range, hash, or directory.",
     "whenOtherWins": "如果系统还没证明单库瓶颈，最重要的决策不是怎么 shard，而是先做容量估算和单库/复制方案评估。",
     "tags": [
       "sharding",
@@ -2670,6 +2929,37 @@
       "fit"
     ],
     "tradeoff": "shard key 选择（数据怎么分组）vs 分布策略选择（这些组怎么摊到机器上）——两个独立但相关的决策",
+    "table": {
+      "headers": [
+        "决策",
+        "问题",
+        "例子"
+      ],
+      "rows": [
+        [
+          "shard key",
+          "按谁分",
+          "user_id"
+        ],
+        [
+          "range",
+          "连续区间",
+          "1-1M -> A"
+        ],
+        [
+          "hash",
+          "打散映射",
+          "H(user_id)%N"
+        ],
+        [
+          "directory",
+          "查映射",
+          "user->shard"
+        ]
+      ]
+    },
+    "codeSample": "key = user_id\n\n# 三种 distribution strategy\nshard = range_map(key)       # user 1-1M -> shard A\nshard = H(key) % N           # hash 打散\nshard = directory.get(key)   # 显式映射",
+    "lang": "python",
     "optionExplanations": [
       "错误，UI 主题和字体大小是 UI 问题，与 sharding 无关。",
       "错误，logo 和 README 与 sharding 设计无关。",
@@ -2687,6 +2977,414 @@
         "term": "Shard key",
         "meaning": "决定一条记录被分到哪个 shard 的字段，例如 user_id。",
         "meaningEn": "The shard key is the field, such as user_id, that determines which shard a record is routed to."
+      },
+      {
+        "term": "distribution strategy",
+        "meaning": "把 shard key 的值映射到具体机器的规则，例如 range、hash 或 directory。",
+        "meaningEn": "A distribution strategy maps shard-key values to machines, such as range, hash, or directory."
+      }
+    ]
+  },
+  {
+    "id": "sd-core-concepts-sharding-046",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "partitioning-sharding-code",
+    "scenario": "你想看真实代码层面如何同时做单机 partitioning 和应用层 sharding。",
+    "scenario_en": "You want a concrete code-level example of single-database partitioning plus application-level sharding.",
+    "q": "这段代码里，partitioning 和 sharding 分别在哪里发生？",
+    "q_en": "Where do partitioning and sharding happen in this code?",
+    "options": [
+      "SQL 分区；Python 选 shard",
+      "SQL 索引；Python 做分区",
+      "partitioning 和 sharding 都只发生在 `ORDER BY created_at`",
+      "只要有多个表名，就一定已经跨多台机器 sharding"
+    ],
+    "options_en": [
+      "SQL partitions; Python picks the shard.",
+      "SQL indexes; Python partitions.",
+      "Both partitioning and sharding only happen in `ORDER BY created_at`.",
+      "Having multiple table names always means sharding across machines."
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "-- PostgreSQL: 单个 DB 内部按时间 partition\nCREATE TABLE orders (\n  order_id   BIGINT,\n  user_id    BIGINT NOT NULL,\n  created_at TIMESTAMP NOT NULL,\n  amount     NUMERIC NOT NULL\n) PARTITION BY RANGE (created_at);\n\nCREATE TABLE orders_2026_06 PARTITION OF orders\nFOR VALUES FROM ('2026-06-01') TO ('2026-07-01');\n\nCREATE INDEX orders_2026_06_user_time_idx\nON orders_2026_06 (user_id, created_at DESC);\n\n-- Python/app: 先按 user_id 选 DB shard，再写入同名逻辑表\nimport hashlib\n\nSHARDS = {\n    0: db_conn_0,\n    1: db_conn_1,\n    2: db_conn_2,\n    3: db_conn_3,\n}\n\ndef shard_for_user(user_id: int) -> int:\n    digest = hashlib.sha256(str(user_id).encode()).digest()\n    return int.from_bytes(digest[:4], 'big') % len(SHARDS)\n\ndef insert_order(order):\n    db = SHARDS[shard_for_user(order['user_id'])]\n    db.execute(\n        'INSERT INTO orders(order_id, user_id, created_at, amount) VALUES (%s, %s, %s, %s)',\n        (order['order_id'], order['user_id'], order['created_at'], order['amount'])\n    )\n    # DB 收到 INSERT 后，再按 created_at 自动落到 orders_2026_06 等本地 partition",
+    "lang": "text",
+    "why": "Partitioning 发生在单个 DB 内部，数据库根据 `created_at` 把行放进本地分区。Sharding 发生在应用/路由层，先根据 `user_id` 选择哪一个 DB 连接。",
+    "why_en": "Partitioning happens inside one database: the database places rows into local partitions by created_at. Sharding happens in the application or routing layer: it chooses which database connection to use by user_id.",
+    "whenOtherWins": "生产系统常用 Vitess、Citus、MongoDB、Cassandra 或 DynamoDB 托管路由细节，但概念仍是先选分布 key，再决定数据落点。",
+    "tradeoff": "应用层手写 shard routing（直观但要自己处理扩容/迁移）vs 托管/中间件 sharding（省心但要理解其 key 选择限制）",
+    "tags": [
+      "partitioning",
+      "sharding",
+      "code",
+      "routing"
+    ],
+    "optionExplanations": [
+      "正确，SQL 定义单机分区规则，Python 根据 user_id 选择数据库机器。",
+      "错误，index 是查询加速结构，不是跨机器分片；INSERT 只是写入动作。",
+      "错误，排序只决定返回顺序，不决定数据落在哪台机器或哪个分区。",
+      "错误，多表/多分区可以仍在同一台 DB；跨机器才是 sharding。"
+    ],
+    "optionExplanations_en": [
+      "Correct; SQL defines local partitioning, while Python chooses the database machine by user_id.",
+      "Incorrect; an index speeds queries but is not cross-machine sharding, and INSERT is just the write operation.",
+      "Incorrect; sorting controls result order, not which machine or partition stores the data.",
+      "Incorrect; multiple tables or partitions can still live on one database machine; sharding requires crossing machines."
+    ],
+    "termDefinitions": [
+      {
+        "term": "DB shard",
+        "meaning": "一台持有部分数据的数据库实例；应用或中间件先选中它，再执行 SQL。",
+        "meaningEn": "A DB shard is a database instance that holds a subset of data; the app or middleware selects it before running SQL."
+      },
+      {
+        "term": "local partition",
+        "meaning": "同一个 DB 实例内部的表分区，例如按月份拆出的 orders_2026_06。",
+        "meaningEn": "A local partition is a table partition inside one database instance, such as orders_2026_06."
+      }
+    ]
+  },
+  {
+    "id": "sd-core-concepts-sharding-047",
+    "format": "multi",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "partition-key-examples",
+    "scenario": "你要为不同系统选择 partition key，但同一个词在 SQL partitioning 和 NoSQL/DynamoDB 里含义层级不同。",
+    "scenario_en": "You need to choose partition keys for different systems, but the term means different layers in SQL partitioning versus NoSQL or DynamoDB.",
+    "q": "哪些 partition key 选择通常合理？（多选）",
+    "q_en": "Which partition-key choices are usually reasonable? (Select all that apply.)",
+    "options": [
+      "订单/交易表常按 created_at 做 SQL range partition，方便时间查询和历史清理",
+      "DynamoDB 用户资料表常用 user_id 做 partition key，方便 GetItem/Query 命中单用户",
+      "高写入事件表直接按 boolean is_premium 分区，通常能均匀打散负载",
+      "多租户 SaaS 常用 tenant_id 或 tenant 分配的 ID 段，让公司内查询局部化"
+    ],
+    "options_en": [
+      "Order or transaction tables often use created_at for SQL range partitioning to support time queries and retention.",
+      "A DynamoDB user profile table often uses user_id as the partition key so GetItem or Query targets one user.",
+      "A high-write event table should use boolean is_premium as the partition key to evenly spread load.",
+      "Multi-tenant SaaS often uses tenant_id or tenant-assigned ID ranges so per-company queries stay local."
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "选 partition key 先看最常见查询和数据生命周期。SQL 里常用于 pruning/清理；DynamoDB 里更像分布 key。",
+    "why_en": "Choose a partition key from the dominant query pattern and data lifecycle. In SQL, a partition key often enables pruning and retention; in DynamoDB-like NoSQL systems, it is closer to a distribution key that decides the internal partition.",
+    "table": {
+      "headers": [
+        "场景",
+        "常见 key",
+        "原因"
+      ],
+      "rows": [
+        [
+          "orders",
+          "created_at",
+          "按月查/清理"
+        ],
+        [
+          "metrics",
+          "time bucket",
+          "时间范围查询"
+        ],
+        [
+          "user profile",
+          "user_id",
+          "单用户读取"
+        ],
+        [
+          "chat msgs",
+          "chat_id + time",
+          "会话内分页"
+        ],
+        [
+          "SaaS",
+          "tenant_id",
+          "公司内局部化"
+        ]
+      ]
+    },
+    "codeSample": "-- SQL partitioning: partition key 帮 DB 跳过无关分区\nPARTITION BY RANGE (created_at)  -- orders_2026_06, orders_2026_07\n\n-- DynamoDB/NoSQL: partition key 更像分布 key\nPK = user_id                    -- Get user profile by user_id\n\n-- Chat: 常见组合\nPK = chat_id                    -- 一个会话的消息放一起\nSK = created_at                 -- 会话内按时间分页",
+    "lang": "sql",
+    "whenOtherWins": "避免低基数字段如 boolean/status 单独做高写入 partition key；它们值太少，容易倾斜和热点。",
+    "tradeoff": "按查询模式选 key（读快、清理方便）vs 只追求均匀打散（可能破坏范围查询和局部性）",
+    "tags": [
+      "partition-key",
+      "sql-partitioning",
+      "dynamodb",
+      "examples"
+    ],
+    "optionExplanations": [
+      "正确，时间范围 partition 适合订单、交易、日志这类按时间查和按时间清理的数据。",
+      "正确，DynamoDB 的 partition key 决定内部路由，user_id 适合用户资料的单用户访问。",
+      "错误，boolean 只有两个值，通常会造成严重倾斜，不能均匀打散高写入。",
+      "正确，多租户系统常按 tenant 边界访问，用 tenant_id 或 tenant ID 段能减少跨分区查询。"
+    ],
+    "optionExplanations_en": [
+      "Correct; time-range partitioning fits orders, transactions, and logs that are queried and retained by time.",
+      "Correct; DynamoDB's partition key drives internal routing, and user_id fits per-user profile access.",
+      "Incorrect; a boolean has only two values and usually creates severe skew rather than even distribution.",
+      "Correct; multi-tenant systems are often accessed by tenant boundary, so tenant_id or tenant ID ranges reduce cross-partition work."
+    ],
+    "optionMeanings": [
+      "时间字段用于 SQL 分区。",
+      "user_id 用于 NoSQL 路由。",
+      "boolean 低基数分区。",
+      "tenant 边界局部化。"
+    ],
+    "optionDirectness": [
+      "适合按时间查和清理。",
+      "适合单用户读写。",
+      "不适合高写入打散。",
+      "适合公司内访问。"
+    ],
+    "optionMeanings_en": [
+      "Use a time field for SQL partitioning.",
+      "Use user_id for NoSQL routing.",
+      "Partition by a low-cardinality boolean.",
+      "Localize by tenant boundary."
+    ],
+    "optionDirectness_en": [
+      "Fits time queries and retention.",
+      "Fits per-user reads and writes.",
+      "Poor for spreading high write load.",
+      "Fits per-company access."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SQL partition key",
+        "meaning": "单个数据库内部用来选择表分区的字段，常用于 partition pruning 和历史数据清理。",
+        "meaningEn": "A SQL partition key selects a table partition inside one database, often for partition pruning and retention."
+      },
+      {
+        "term": "DynamoDB partition key",
+        "meaning": "DynamoDB 里决定 item 落到哪个内部分区的字段，更接近分布/路由 key。",
+        "meaningEn": "A DynamoDB partition key decides which internal partition an item lands in, closer to a distribution or routing key."
+      },
+      {
+        "term": "time bucket",
+        "meaning": "把时间切成固定窗口，例如按小时、天或月分桶。",
+        "meaningEn": "A time bucket groups timestamps into fixed windows such as hours, days, or months."
+      }
+    ]
+  },
+  {
+    "id": "sd-core-concepts-sharding-048",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "shard-key-vs-partition-key",
+    "scenario": "一个系统可能既有跨机器 sharding，又有每台 DB 内部的 local partitioning。你要判断两层 key 是否应该相同。",
+    "scenario_en": "A system may use both cross-machine sharding and local partitioning inside each DB. You need to decide whether the two keys should be the same.",
+    "q": "关于 shard key 和 partition key 是否选同一个，哪些说法正确？（多选）",
+    "q_en": "Which statements about choosing the same or different shard and partition keys are correct? (Select all that apply.)",
+    "options": [
+      "用户资料表按 user_id 单点读写，NoSQL/DynamoDB 的 partition key 常可直接用 user_id",
+      "订单/聊天/日志常用一个 key 选机器，再用时间 key 做本地 partition",
+      "高写入系统应该把 created_at 同时作为 shard key 和 partition key",
+      "多租户 SaaS 若主要按公司访问，tenant_id 常适合作为 shard key"
+    ],
+    "options_en": [
+      "For user-profile point reads and writes, a NoSQL/DynamoDB partition key can often be user_id.",
+      "Orders, chat, and logs often use one key to choose the machine and a time key for local partitions.",
+      "High-write systems should use created_at as both the shard key and partition key.",
+      "For multi-tenant SaaS accessed mainly by company, tenant_id is often a good shard key."
+    ],
+    "answer": [
+      0,
+      1,
+      3
+    ],
+    "why": "相同或不同都可以：同 key 适合用户/租户局部访问；不同 key 常用于一层选机器，一层按时间剪枝和清理。",
+    "why_en": "Either can be right. The same key fits per-user or per-tenant locality; different keys are common when user_id/chat_id/tenant_id picks the machine and created_at or a time bucket handles local pruning and retention.",
+    "table": {
+      "headers": [
+        "场景",
+        "shard",
+        "part",
+        "关系"
+      ],
+      "rows": [
+        [
+          "profile",
+          "user_id",
+          "-",
+          "同"
+        ],
+        [
+          "orders",
+          "user_id",
+          "time",
+          "不同"
+        ],
+        [
+          "chat",
+          "chat_id",
+          "time",
+          "不同"
+        ],
+        [
+          "SaaS",
+          "tenant",
+          "tenant/time",
+          "看"
+        ],
+        [
+          "logs",
+          "hash",
+          "time",
+          "不同"
+        ]
+      ]
+    },
+    "codeSample": "# same: NoSQL 用户资料\nPK = user_id\n\n# different: sharded SQL 订单\nshard = hash(user_id) % N     # 选机器\npart = month(created_at)      # 机内分区\nidx = (user_id, -created_at)  # 分区内排序/查找",
+    "lang": "python",
+    "whenOtherWins": "如果同 key 会造成热点或难以清历史，就拆开：一个 key 管分布，另一个管时间剪枝。",
+    "tradeoff": "同 key（简单、局部性强）vs 不同 key（同时兼顾分布、时间查询和清理）",
+    "tags": [
+      "shard-key",
+      "partition-key",
+      "examples",
+      "tradeoff"
+    ],
+    "optionExplanations": [
+      "正确，用户资料通常按 user_id 访问，用 user_id 做分布/partition key 很自然。",
+      "正确，这类表常先按实体选机器，再按时间做本地分区和清理。",
+      "错误，created_at 单调递增，做 shard key 会把新写入压到最新范围形成热点。",
+      "正确，租户边界访问明显时，tenant_id 能让公司内数据局部化。"
+    ],
+    "optionExplanations_en": [
+      "Correct; user profiles are usually accessed by user_id, so user_id is a natural distribution or partition key.",
+      "Correct; these tables often choose the machine by entity and use time for local partitioning and retention.",
+      "Incorrect; created_at is monotonically increasing and can push new writes into the newest range hotspot.",
+      "Correct; when access follows tenant boundaries, tenant_id keeps company data local."
+    ],
+    "optionMeanings": [
+      "user_id 同时承担路由。",
+      "实体 key 和时间 key 分层。",
+      "created_at 同时做两层。",
+      "tenant_id 保持租户局部性。"
+    ],
+    "optionDirectness": [
+      "适合单用户点查。",
+      "适合订单/聊天/日志。",
+      "容易写热点。",
+      "适合多租户查询。"
+    ],
+    "optionMeanings_en": [
+      "user_id also handles routing.",
+      "Entity key and time key are layered.",
+      "created_at is used for both layers.",
+      "tenant_id preserves tenant locality."
+    ],
+    "optionDirectness_en": [
+      "Fits per-user point reads.",
+      "Fits orders, chat, and logs.",
+      "Likely creates write hotspots.",
+      "Fits multi-tenant queries."
+    ],
+    "termDefinitions": [
+      {
+        "term": "shard key",
+        "meaning": "跨机器路由用的字段，决定请求或数据去哪个 DB shard。",
+        "meaningEn": "A shard key routes across machines and decides which DB shard receives the request or data."
+      },
+      {
+        "term": "local partition key",
+        "meaning": "单个 DB shard 内部分区用的字段，常用于 pruning、排序范围和历史清理。",
+        "meaningEn": "A local partition key splits data inside one DB shard, often for pruning, range scans, and retention."
+      }
+    ]
+  },
+  {
+    "id": "sd-core-concepts-sharding-049",
+    "format": "code",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cross-shard-merge",
+    "scenario": "订单表按 user_id sharding；现在要按 product_id 查全站订单。",
+    "scenario_en": "Orders are sharded by user_id; now you need to query site-wide orders by product_id.",
+    "q": "这段代码体现了什么设计后果？",
+    "q_en": "What design consequence does this code illustrate?",
+    "options": [
+      "非 shard key 查询可能 fan-out + merge",
+      "有 index 就不会跨 shard",
+      "跨 shard 写入不用协调",
+      "partition key 自动解决 join"
+    ],
+    "options_en": [
+      "A non-shard-key query may fan out and merge.",
+      "An index means cross-shard queries never happen.",
+      "Cross-shard writes need no coordination.",
+      "A partition key automatically fixes joins."
+    ],
+    "answer": [
+      0
+    ],
+    "codeSample": "SHARDS = [db0, db1, db2, db3]\n\ndef shard(user_id):\n    return hash(user_id) % len(SHARDS)\n\n# has shard key: one DB\ndef by_user(user_id):\n    return SHARDS[shard(user_id)].orders.where(user_id=user_id)\n\n# misses shard key: fan-out + merge\ndef by_product(product_id):\n    rows = []\n    for db in SHARDS:\n        rows += db.orders.where(product_id=product_id)\n    return merge_sort(rows, by='created_at')\n\n# two shard keys: coordinate if split\ndef transfer(a, b, amount):\n    return local_txn(a, b, amount) if shard(a) == shard(b) else saga_or_2pc(a, b, amount)",
+    "lang": "python",
+    "why": "按 user_id 单 shard；按 product_id 要 fan-out+merge；跨 shard 写要协调。",
+    "why_en": "The shard key defines the fast path. A user_id query hits one shard; a product_id query finds data spread across user shards, so it fans out and merges. Cross-shard writes need saga or 2PC.",
+    "whenOtherWins": "product_id 高频时，建 product_id 读模型，别每次 fan-out。",
+    "tradeoff": "user_id sharding（用户快）vs product_id 读模型（产品快）vs fan-out（简单但贵）",
+    "tags": [
+      "cross-shard",
+      "fanout",
+      "merge",
+      "query-patterns"
+    ],
+    "optionExplanations": [
+      "正确，代码里的 by_product 会访问所有 SHARDS。",
+      "错误，index 只加速 shard 内部。",
+      "错误，跨 shard 写需要协调。",
+      "错误，partition key 不会自动消除 join。"
+    ],
+    "optionExplanations_en": [
+      "Correct; by_product in the code visits every SHARD.",
+      "Incorrect; indexes are local to a shard.",
+      "Incorrect; cross-shard writes need coordination.",
+      "Incorrect; partition keys do not automatically remove joins."
+    ],
+    "optionMeanings": [
+      "非主访问路径。",
+      "误解 index。",
+      "误解事务。",
+      "误解 partition。"
+    ],
+    "optionDirectness": [
+      "对应 by_product。",
+      "只在 shard 内有效。",
+      "跨 DB 不成立。",
+      "不保证共置。"
+    ],
+    "optionMeanings_en": [
+      "Non-primary access path.",
+      "Misreads indexes.",
+      "Misreads transactions.",
+      "Misreads partitions."
+    ],
+    "optionDirectness_en": [
+      "Matches by_product.",
+      "Only works inside a shard.",
+      "Not true across DBs.",
+      "Does not guarantee co-location."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fan-out",
+        "meaning": "一次请求打到多个 shard 后合并结果。",
+        "meaningEn": "Fan-out queries multiple shards and merges results."
+      },
+      {
+        "term": "read model",
+        "meaning": "为某种查询额外维护的数据视图。",
+        "meaningEn": "A data view maintained for one query pattern."
       }
     ]
   }
