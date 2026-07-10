@@ -240,7 +240,7 @@
     "answer": [
       2
     ],
-    "why": "决定性约束是后端服务每次请求都要读很小的内部配置。进程内缓存直接读本机内存，连 Redis 网络跳都省；CDN 是给用户就近拿公开内容，不适合服务端内部 flag。",
+    "why": "后端每请求都读很小的内部配置时，进程内直接读本机内存、连 Redis 跳都省；CDN 给用户拿公开内容，不管内部 flag。",
     "why_en": "For tiny internal config read by the backend on every request, in-process cache avoids even the Redis network hop. A CDN is for users fetching public cacheable content at the edge.",
     "whenOtherWins": "配置若要跨实例立刻一致，外部 Redis/配置中心更好。",
     "tags": [
@@ -302,13 +302,13 @@
     "lang": "python",
     "optionExplanations": [
       "加索引仍走 DB+网络，省不掉每请求读开销。",
-      "CDN 面向用户拿公开内容，不管内部 flag。",
+      "CDN 面向终端用户分发公开内容，覆盖不到服务端 flag。",
       "对：小热少变、想省 Redis 跳时，进程内直接读本机内存。",
       "Redis 能共享，但每读多一跳，这里不需要。"
     ],
     "optionExplanations_en": [
       "An index still hits DB and network, so it can't remove the per-request cost.",
-      "A CDN serves public content to users, not internal flags.",
+      "A CDN distributes public content to end users and cannot cover server-side flags.",
       "Right: for tiny, hot, stable data avoiding the Redis hop, in-process reads local memory.",
       "Redis shares but adds a hop per read, not needed here."
     ]
@@ -389,7 +389,7 @@
     "answer": [
       2
     ],
-    "why": "决定性维度是缓存位置：Redis 是独立服务，多台服务器读同一份；进程内缓存住在各自实例内存里。代价是 Redis 多网络跳，本地缓存多一致性麻烦。",
+    "why": "缓存位置决定共享性：Redis 是独立服务、多机读同一份；进程内住各自内存，代价是本地多一致性麻烦。",
     "why_en": "Redis is shared because it is an external service, while in-process cache is per instance and trades sharing for local speed.",
     "tags": [
       "caching",
@@ -421,13 +421,13 @@
     "optionExplanations": [
       "错：只有都接同一个外部服务时才都共享，本地缓存不会。",
       "说反了：进程内是各自的副本，Redis 才是共享的。",
-      "对：Redis 是独立服务、多机读同一份；进程内住在各自内存。",
+      "对：Redis 作为独立服务被多机共享，进程内则各存各的。",
       "错：Redis 本就是给多机共享用的，不是单机专用。"
     ],
     "optionExplanations_en": [
       "Wrong: both share only if they point to the same external service; local caches don't.",
       "Backwards: in-process is a per-instance copy; Redis is the shared one.",
-      "Right: Redis is a standalone service many servers read; in-process lives in each memory.",
+      "Right: Redis is a standalone service shared by many servers; in-process is per-instance.",
       "Wrong: Redis exists precisely for cross-server sharing, not single-machine use."
     ]
   },
@@ -648,7 +648,7 @@
     "answer": [
       1
     ],
-    "why": "无强一致/高写吞吐时，默认 Cache-Aside：读 cache，miss 查 DB 回填。简单、只缓存被读数据；但 miss 慢、可能陈旧。",
+    "why": "无强一致/高写吞吐要求时默认 Cache-Aside：读 cache、miss 查库回填；简单但 miss 慢、可能陈旧。",
     "why_en": "Without special consistency or write-throughput needs, cache-aside is the default: read cache first, and on a miss the app reads DB and fills cache.",
     "whenOtherWins": "写后必须立刻读到最新时，改用 Write-Through。",
     "tags": [
@@ -770,7 +770,7 @@
     "answer": [
       0
     ],
-    "why": "意思不是 DB 查两次，而是先问 cache 发现没有，再查 DB 并回填。命中只走 cache；未命中要走 cache + DB + set cache，所以那一次请求更慢。",
+    "why": "不是查两次：先问 cache 没有再查 DB 回填。命中只走 cache；miss 走 cache+DB+回填，那次更慢。",
     "why_en": "It does not mean querying the DB twice. A miss checks cache, then reads DB and fills cache, so that request pays cache plus DB latency.",
     "options_en": [
       "A cache miss adds one extra database round trip of latency.",
@@ -855,7 +855,7 @@
     "answer": [
       2
     ],
-    "why": "Write-Through 写缓存时同步写数据库，两边都成功才算完成，因此比 Cache-Aside 更容易保持读新鲜；但仍要处理失败、绕过写路径和并发 race。代价是写更慢。",
+    "why": "写穿透同步写缓存和库、两边成功才算完成，所以读更容易保持新鲜；代价是每次写更慢。",
     "why_en": "Write-through writes to the cache and synchronously to the database before acknowledging, making freshness easier than cache-aside, but failures, bypass writes, and races still need handling.",
     "options_en": [
       "Cache-aside (lazy loading).",
@@ -981,7 +981,7 @@
     "answer": [
       3
     ],
-    "why": "Write-Behind 只写缓存，再由缓存异步批量落库，写非常快；风险是缓存崩溃、还没刷盘就丢数据。分析/指标这类能容忍偶尔丢失的高写吞吐场景最合适。",
+    "why": "写回只写缓存、异步批量落库，写非常快，但崩溃前没刷盘会丢；适合能容忍偶尔丢的高写吞吐。",
     "why_en": "Write-behind writes only to the cache and flushes to the database asynchronously in batches, giving very high write throughput while risking data loss on a crash.",
     "options_en": [
       "Write-through with synchronous double writes (slow, durable).",
@@ -1183,7 +1183,7 @@
     "answer": [
       1
     ],
-    "why": "Read-Through 回答读 miss 谁查库：缓存层查。Write-Through/Write-Behind 回答写怎么落库，是另一维度，可和 Read-Through 搭配。",
+    "why": "Read-Through 是读侧模式：miss 时缓存层自己查库。写侧的 Write-Through/Write-Behind 是另一维度，可搭配。",
     "why_en": "Read-through is a read-side pattern: on a miss, the cache layer fetches from DB. Write-through/write-behind are write-side patterns and can be paired with read-through.",
     "options_en": [
       "Cache-aside.",
@@ -1636,13 +1636,13 @@
     ],
     "optionExplanations": [
       "错：按访问频次是 LFU 的做法，不是 FIFO。",
-      "对：FIFO 只按插入时间淘汰最老，忽略使用，可能删掉仍很热的数据。",
+      "对：只按进入顺序、不看使用模式，正是 FIFO 的定义。",
       "错：LRU 看访问时间，FIFO 不看，两者不等价。",
       "错：最常用的是 LRU；FIFO 因识别不了热点很少单用。"
     ],
     "optionExplanations_en": [
       "Wrong: evicting by frequency is LFU, not FIFO.",
-      "Right: FIFO evicts the oldest by insertion time, ignoring usage, so it can drop still-hot data.",
+      "Right: evicting purely by arrival order regardless of usage is exactly FIFO.",
       "Wrong: LRU tracks access time, FIFO doesn't, so they aren't equivalent.",
       "Wrong: LRU is the common default; FIFO is rarely used alone since it can't spot hot keys."
     ]
@@ -1825,7 +1825,7 @@
     "answer": [
       2
     ],
-    "why": "这是缓存击穿/惊群。single flight 按 cache key 合并：同一时刻 miss feed:home 只放一个请求重建，其余等结果；不同 key 不合并。",
+    "why": "这是缓存击穿/惊群：同一 key 过期瞬间大量并发 miss 重建。single flight 按 key 合并成一次重建，其余等结果。",
     "why_en": "This is a cache stampede. Single flight coalesces by cache key: concurrent misses for feed:home share one rebuild, while different keys do not merge.",
     "options_en": [
       "Hot-key problem; replicate the key.",
@@ -1858,13 +1858,13 @@
     "optionExplanations": [
       "热 key 是持续超高流量；这里是过期瞬间的重建洪峰。",
       "布隆过滤器挡不存在的 key，但这 key 存在。",
-      "对：同一 key 同时过期→并发重建，单飞按 key 合并成一次回源。",
+      "对：过期瞬间的并发重建，单飞按 key 合并成一次。",
       "题里没有写冲突，分布式事务无谓增复杂度。"
     ],
     "optionExplanations_en": [
       "Hot-key is sustained traffic; here it's a rebuild burst at expiry.",
       "A Bloom filter blocks nonexistent keys, but this one exists.",
-      "Right: same key expiring at once → concurrent rebuild; single-flight coalesces into one fetch.",
+      "Right: a rebuild burst at expiry; single-flight coalesces per key into one.",
       "There's no write conflict; a distributed transaction only adds complexity."
     ]
   },
@@ -1887,7 +1887,7 @@
     "answer": [
       1
     ],
-    "why": "预热只挡可预测的 TTL 过期。写时失效是写成功后立刻 delete cache，不等 TTL；定时刷只能缩短冷窗口，挡不住第一波 miss。",
+    "why": "预热只挡可预测的 TTL 过期；写时失效是写完立刻 delete、不等 TTL，挡不住第一波 miss。",
     "why_en": "Warming refreshes before a known expiry. Write-time invalidation deletes cache right after a write, not when TTL expires; periodic warming only narrows the cold window.",
     "options_en": [
       "It works equally for every kind of invalidation.",
@@ -1954,13 +1954,13 @@
     "lang": "python",
     "optionExplanations": [
       "错：写时删除时机不可预测，预热挡不住那波 miss。",
-      "对：预热只提前处理可预测的 TTL 过期；写时失效它挡不住。",
+      "对：预热只能提前覆盖已知的过期时间；写时删除挡不住。",
       "错：不一致来自陈旧/双写，预热做对反而更新鲜。",
       "错：预热是事前刷新，请求合并是并发时挡，不是一回事。"
     ],
     "optionExplanations_en": [
       "Wrong: write-time deletion is unpredictable, so warming can't stop that miss wave.",
-      "Right: warming only handles predictable TTL expiry; it can't cover write-time invalidation.",
+      "Right: warming only covers a known expiry time ahead; write-time deletion escapes it.",
       "Wrong: inconsistency comes from staleness/dual writes; done right, warming keeps data fresher.",
       "Wrong: warming refreshes before; coalescing blocks during concurrency — not the same."
     ]
@@ -2297,7 +2297,7 @@
     "answer": [
       1
     ],
-    "why": "Cache-Aside 的未命中逻辑写在应用里（应用查库、回填缓存）；Read-Through 把这段逻辑下沉到缓存本身，应用只跟缓存交互。",
+    "why": "Cache-Aside 的 miss 逻辑在应用（应用查库回填）；Read-Through 把它下沉到缓存，应用只跟缓存交互。",
     "why_en": "In cache-aside the application fetches from the database and populates the cache, while in read-through the cache itself does the fetch and fill.",
     "options_en": [
       "Both let the cache layer itself query the DB and backfill on a miss.",

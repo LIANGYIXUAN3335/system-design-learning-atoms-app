@@ -42,7 +42,7 @@
 
 ### Step 3 · 机检（observe）
 
-跑上面的验证命令。**audit error（template_filler / fit.missing_when_other_wins / too_long 超硬上限 / explanation.truncated）任意一条 >0 → 回 Step 2**，最多两轮；两轮后仍 fail 的卡标记 `"needsHuman": true` 并继续。
+跑上面的验证命令。**验收门（rubric §0）= 无 error 且 每卡 score ≥ 90**：任一 error（template_filler / fit.missing_when_other_wins / too_long 超硬上限 / explanation.truncated），或某卡 score < 90 → 回 Step 2，最多两轮；两轮后仍 fail 的卡标记 `"needsHuman": true` 并继续。audit 末尾会打印 `score (pass = no error & >= 90)` 汇总 + 最低分卡清单。
 
 ### Step 4 · Judge 抽查（机器查不了的四项）
 
@@ -98,12 +98,12 @@ verify: 全绿
    延迟/QPS/GB/CPU/连接数等资源判断尽量给粗量级锚点（假设→公式→结论→设计含义）；
    "更简单/更快"必须落到具体接口参数或操作；中文解释必须像面试口语，一句一个判断，
    禁止"选择它会把排查带向…"这类 AI 文档腔；清单卡每项一句"挡什么风险/减哪里压力"）
-   → 机检到 error=0 → 10 张 judge 抽查表 → 按格式汇报。
+   → 机检到全部卡 pass（无 error 且 score≥90，rubric §0）→ 10 张 judge 抽查表 → 按格式汇报。
 
 4. 硬性禁止：改 id/format/atomType；跨 deck 批量替换；为凑字段写模板句（audit 会以 error 拒收）；
    删除 Gate 0 之外的卡。
 
-5. 完成标准：validate-deck + audit(error=0) + npm run verify 全绿，输出 Step 5 汇报。
+5. 完成标准：validate-deck + audit(全部卡 pass：无 error 且 score≥90) + npm run verify 全绿，输出 Step 5 汇报。
 ```
 
 试点 deck 验收通过后，把第 2 条换成下一批文件名循环即可。

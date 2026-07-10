@@ -273,8 +273,12 @@ function auditCard(card, rel) {
       Array.isArray(card.optionMeanings) ||
       Array.isArray(card.optionScenarioImpacts) ||
       Array.isArray(card.optionDirectness);
-    if (!hasAnyRichField && options.some((option) => JARGON_RE.test(option))) {
-      add(issues, 'jargon_not_explained', 2, 'technical choices include jargon but no rich per-option explanation fields');
+    // A single coherent optionExplanations note or termDefinitions now count as "jargon explained"
+    // — the rich three-part fields are deprecated (rubric §1.3-S0).
+    const hasOptionNotes = hasAnyRichField || (Array.isArray(card.optionExplanations) && card.optionExplanations.some(Boolean));
+    const hasTermDefs = Array.isArray(card.termDefinitions) && card.termDefinitions.length > 0;
+    if (!hasOptionNotes && !hasTermDefs && options.some((option) => JARGON_RE.test(option))) {
+      add(issues, 'jargon_not_explained', 2, 'options contain jargon but no option notes or termDefinitions to explain it');
     }
   }
 

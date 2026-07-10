@@ -29,42 +29,6 @@
     "tradeoff": "读吞吐水平扩展 vs 复制延迟带来的短暂陈旧读",
     "whenOtherWins": "若某用户必须立刻读到自己刚写的值（read-your-writes），就把该用户的读临时路由到主库——决定因素是能否容忍复制延迟。",
     "diagram": "flowchart LR\n  C[客户端] -->|写| L[(主库 Leader)]\n  C -->|读| F1[(从库 Follower)]\n  C -->|读| F2[(从库 Follower)]\n  L -.->|异步复制| F1\n  L -.->|异步复制| F2",
-    "optionMeanings": [
-      "为主库配一个或多个异步复制的只读从库。",
-      "不做水平扩展，靠单机纵向加资源顶读写。",
-      "读请求前先抢一把跨节点互斥锁再查询。",
-      "去掉从库，读写全部压回唯一一台机器。"
-    ],
-    "optionScenarioImpacts": [
-      "读请求分摊到多个从库，吞吐随从库数量增长。",
-      "单机纵向扩容有硬件上限，读写还会互相抢资源。",
-      "锁只解决互斥写冲突，不提升读吞吐，反而拖慢并发读。",
-      "没有从库分担，读写全部压在一台机器，扩展性最差。"
-    ],
-    "optionDirectness": [
-      "读多写少且能容忍复制延迟时，这是默认起手方案。",
-      "只有读写量都很小、纵向加机器就够用时才合理。",
-      "分布式锁用于互斥写冲突，不是读扩展手段。",
-      "只有完全不需要高可用和读扩展时才会这样做。"
-    ],
-    "optionMeanings_en": [
-      "Add one or more asynchronous read-only followers behind the leader.",
-      "Do not scale horizontally; rely on a larger single leader.",
-      "Acquire a cross-node mutex before each read request.",
-      "Remove followers and send all traffic to one machine."
-    ],
-    "optionScenarioImpacts_en": [
-      "Reads spread across followers, so read throughput grows with replica count.",
-      "Vertical scaling has a hardware ceiling, and reads still compete with writes.",
-      "The lock protects write conflicts; it adds latency to concurrent reads.",
-      "Without followers, all reads and writes bottleneck on one node."
-    ],
-    "optionDirectness_en": [
-      "Use this when reads dominate and slight replica lag is acceptable.",
-      "Use this only while the whole workload fits comfortably on one box.",
-      "Use this for mutual exclusion, not read scaling.",
-      "Use this only when neither high availability nor read scaling matters."
-    ],
     "codeSample": "# App picks a follower for reads, the leader for writes\nreadDsn  = \"postgresql://app@replica1.db.internal/shop?target_session_attrs=read-only\"\nwriteDsn = \"postgresql://app@primary.db.internal/shop\"\n\n# target_session_attrs=read-only: the Postgres client rejects\n# a primary host and tries the next read-only replica instead.",
     "lang": "text",
     "tags": [
@@ -110,7 +74,19 @@
         "meaningEn": "Read-your-writes consistency guarantees a user immediately sees the value they just wrote."
       }
     ],
-    "origin": "seed"
+    "origin": "seed",
+    "optionExplanations": [
+      "读多写少、能接受几百毫秒内的陈旧数据时，给主库挂异步只读从库最省事——读请求分摊出去，吞吐跟着从库数量往上走。",
+      "只有读写量都很小、纵向加一台更大的机器就扛得住时才该这样做；这里读流量已经远超单机上限，读写还会互相抢资源。",
+      "分布式锁用来协调多节点间的互斥写冲突，不是拿来扩展读的；给每次读加锁反而会拖慢并发读，帮不上这里的忙。",
+      "去掉从库等于把读写全压回一台机器，既没有读扩展也没有容灾，是这几个选项里最经不起规模考验的做法。"
+    ],
+    "optionExplanations_en": [
+      "When reads dominate and a few hundred milliseconds of staleness is fine, bolting on asynchronous read replicas is the easy win — traffic spreads out and throughput grows with replica count.",
+      "This only makes sense when the whole workload is small enough for a single bigger box; here reads already dwarf what one machine can serve, and reads would keep fighting writes for resources.",
+      "A distributed lock coordinates conflicting writes across nodes, not read scaling; wrapping every read in a lock just slows down concurrent reads without adding capacity.",
+      "Dropping the followers pushes every read and write back onto one machine, losing both read scaling and failover — the weakest option here once traffic grows."
+    ]
   },
   {
     "id": "cr-002",
@@ -164,42 +140,6 @@
     },
     "codeSample": "# postgresql.conf on the leader\nsynchronous_commit = on\nsynchronous_standby_names = 'ANY 1 (replica1, replica2)'\n\n# A write only returns success once >=1 listed standby confirms it.\n# Set synchronous_standby_names = '' to fall back to fully async.",
     "lang": "ini",
-    "optionMeanings": [
-      "把同步复制的安全代价和异步复制的速度代价说反了。",
-      "把异步复制说成绝不丢数据，忽略了它的核心风险。",
-      "同步复制换写延迟保安全，异步复制换速度担丢写风险。",
-      "假设两种复制方式在延迟和丢失风险上没有差别。"
-    ],
-    "optionScenarioImpacts": [
-      "若照此设计，会为了求快选异步却误以为它更安全。",
-      "若照此设计，会低估异步复制在主库崩溃时的丢写风险。",
-      "能按约束选型：账务写偏同步，日志和埋点偏异步。",
-      "会让人误以为复制方式选哪个都无所谓。"
-    ],
-    "optionDirectness": [
-      "同步复制的代价是写变慢而不是丢数据，方向说反了。",
-      "异步复制会丢最近未复制的写，不是零丢失，方向说反了。",
-      "需要在数据安全和写延迟之间做选择时，这句话保留了两边代价。",
-      "两者在延迟和丢失风险上有明确差异，这个说法不成立。"
-    ],
-    "optionMeanings_en": [
-      "This reverses synchronous replication's safety benefit and asynchronous replication's speed benefit.",
-      "This treats asynchronous replication as lossless and misses its main risk.",
-      "Synchronous pays write latency for safety; asynchronous pays loss risk for speed.",
-      "This assumes both modes have the same latency and data-loss risk."
-    ],
-    "optionScenarioImpacts_en": [
-      "You might choose asynchronous replication for speed while wrongly believing it is safer.",
-      "You would underestimate write loss after a leader crash.",
-      "You can pick synchronous replication for money-like writes and asynchronous replication for logs or metrics.",
-      "You would treat the replication mode as irrelevant."
-    ],
-    "optionDirectness_en": [
-      "Synchronous replication gets slower, not less durable, so the direction is wrong.",
-      "Asynchronous replication can lose unreplicated writes, so zero loss is the wrong claim.",
-      "Use this framing when choosing between write safety and write latency.",
-      "The two modes differ directly on latency and loss risk."
-    ],
     "tags": [
       "replication",
       "contrast",
@@ -225,7 +165,19 @@
         "meaningEn": "A follower acknowledgment is the confirmation a replica sends back after it receives and applies a replicated write."
       }
     ],
-    "origin": "seed"
+    "origin": "seed",
+    "optionExplanations": [
+      "把同步复制的代价和异步复制的代价说反了——同步复制是为了更安全才等确认，牺牲的是速度，不是相反。",
+      "异步复制不等于零丢失；主库确认写成功后才转发给从库，主库崩在转发前，这部分写就没了。",
+      "方向说对了——同步复制拿写延迟换数据安全，异步复制拿丢写风险换更快的写。",
+      "延迟和丢失风险恰恰是两种复制方式的核心区别，说'完全相同'抹掉了这道题真正要考的取舍。"
+    ],
+    "optionExplanations_en": [
+      "This flips the tradeoff — synchronous replication trades speed for safety by waiting on an acknowledgment, not the other way around.",
+      "Asynchronous replication is not lossless; the leader returns success before a follower confirms, so a crash right after can drop that write.",
+      "This gets the direction right — synchronous replication pays write latency for durability, asynchronous pays a small loss risk for speed.",
+      "Latency and loss risk are exactly what separates the two modes, so calling them identical erases the tradeoff this question is testing."
+    ]
   },
   {
     "id": "cr-003",
@@ -257,42 +209,6 @@
     "diagram": "sequenceDiagram\n  participant C as 客户端\n  participant L as 主库\n  participant F as 从库\n  C->>L: 写 资料=新\n  L-->>F: 异步复制 有延迟\n  C->>F: 立刻读 资料\n  F-->>C: 返回旧值",
     "codeSample": "-- Run on a follower to see how far behind it is\nSELECT now() - pg_last_xact_replay_timestamp() AS replica_lag;\n-- lag > 0 means this follower may still return the pre-write value",
     "lang": "sql",
-    "optionMeanings": [
-      "假设复制是同步或瞬时完成，从库立刻和主库一致。",
-      "认识到异步复制有延迟窗口，从库可能还没赶上。",
-      "假设复制延迟会让读请求直接报错。",
-      "假设主库会因为读端异常自动撤销刚才的写。"
-    ],
-    "optionScenarioImpacts": [
-      "会让人误以为写后自己一定能立刻读到最新值。",
-      "能解释为什么要做黏性路由或短暂读主库来缓解陈旧读。",
-      "会让人以为陈旧读会被系统拦下，其实并不会报错。",
-      "会让人误以为数据一致性问题会被系统自动修复。"
-    ],
-    "optionDirectness": [
-      "只有同步复制或读写都打主库时才成立，这里是异步。",
-      "复制延迟窗口内从库读到旧值，这是异步复制的直接后果。",
-      "复制延迟不会让读请求失败，只会返回旧数据。",
-      "复制延迟不影响主库上已经提交的写，不会被回滚。"
-    ],
-    "optionMeanings_en": [
-      "This assumes replication is synchronous or instant.",
-      "This recognizes the lag window before a follower catches up.",
-      "This assumes replication lag turns a read into an error.",
-      "This assumes a read-side issue can undo a committed leader write."
-    ],
-    "optionScenarioImpacts_en": [
-      "You would overpromise read-your-writes after a follower read.",
-      "You can justify sticky routing or temporary leader reads after a write.",
-      "You would expect an error, but the system usually returns stale data.",
-      "You would expect automatic rollback for a consistency symptom."
-    ],
-    "optionDirectness_en": [
-      "This only holds with synchronous replication or leader reads.",
-      "Follower staleness during lag is the direct consequence here.",
-      "Lag does not fail the read; it returns an older value.",
-      "Lag does not roll back a write already committed on the leader."
-    ],
     "tags": [
       "replication",
       "replication-lag",
@@ -330,7 +246,19 @@
         "meaningEn": "The leader, or primary, is the database node that accepts all writes."
       }
     ],
-    "origin": "seed"
+    "origin": "seed",
+    "optionExplanations": [
+      "这是把异步复制当成了同步或瞬时完成——从库还没追上主库前，读到的可能不是最新写。",
+      "复制延迟窗口内从库还没追上主库，读到旧值是异步复制下最常见的结果，也是这里的正解。",
+      "复制延迟不会让读请求失败，从库照常返回数据，只是数据可能是旧的。",
+      "复制延迟只影响从库何时看到变更，不会让主库上已经提交的写被撤销。"
+    ],
+    "optionExplanations_en": [
+      "This assumes replication is synchronous or instant, but a follower that has not caught up yet can hand back stale data.",
+      "During the lag window before a follower catches up, returning the old value is the normal outcome of asynchronous replication — the right answer here.",
+      "Lag does not fail the read; the follower still answers, just with data that has not caught up yet.",
+      "Lag only affects when a follower sees the change; it does not undo a write already committed on the leader."
+    ]
   },
   {
     "id": "cr-004",
@@ -395,42 +323,6 @@
     },
     "codeSample": "-- Cassandra: N=3 replicas, ask for quorum on both sides\nCONSISTENCY QUORUM;\nINSERT INTO users (id, name) VALUES (42, 'Ada');\nSELECT * FROM users WHERE id = 42;\n-- QUORUM on N=3 means W=2 and R=2, so W+R(4) > N(3)",
     "lang": "cql",
-    "optionMeanings": [
-      "只要求一个副本确认写、一个副本响应读，法定数最弱。",
-      "在最弱法定数基础上直接停止副本间同步。",
-      "完全不设定量化的读写法定数关系。",
-      "让写法定数和读法定数都过半，确保两者交集非空。"
-    ],
-    "optionScenarioImpacts": [
-      "W+R=2≤N=3，读写集合可能不重叠，易读到旧值。",
-      "关闭复制后从库根本拿不到任何写入，数据完全不同步。",
-      "没有约束，读到最新值全凭运气，无法给出一致性保证。",
-      "W+R=4>N=3，读写集合相交，读端可用版本挑最新值。"
-    ],
-    "optionDirectness": [
-      "只有能接受经常读到旧值时才可用，不满足题目要求。",
-      "关闭复制等于放弃多副本本身，违背了本题的前提。",
-      "没有法定数规则时无法保证一致性，不满足题目要求。",
-      "N=3 时，这是满足 W+R>N 的最小配置。"
-    ],
-    "optionMeanings_en": [
-      "Only one replica must acknowledge the write and one must answer the read.",
-      "This combines the weakest quorum with no replication at all.",
-      "This does not define a quantitative quorum relationship.",
-      "Both read and write quorums are majorities, so they overlap."
-    ],
-    "optionScenarioImpacts_en": [
-      "W+R=2 <= N=3, so read and write sets may miss each other.",
-      "With replication off, followers never receive the write.",
-      "Fresh reads become luck, not a consistency guarantee.",
-      "W+R=4 > N=3, so the reader can compare versions at the overlap."
-    ],
-    "optionDirectness_en": [
-      "Use this only when frequent stale reads are acceptable.",
-      "This abandons the multi-replica premise of the question.",
-      "Without quorum rules, you cannot reason about consistency.",
-      "For N=3, this is the smallest pair that satisfies W+R>N."
-    ],
     "tags": [
       "replication",
       "quorum",
@@ -474,7 +366,19 @@
         "meaningEn": "Leaderless replication has no fixed leader; any replica can accept reads and writes."
       }
     ],
-    "origin": "seed"
+    "origin": "seed",
+    "optionExplanations": [
+      "W+R=2 没超过 N=3，读写法定数可能压根不重叠，读到的还是旧版本。",
+      "在最弱法定数基础上还关掉复制，从库根本收不到写入，直接谈不上一致性。",
+      "不设定 W、R 的量化关系，能不能读到最新写全靠运气，给不出任何保证。",
+      "W=2、R=2 让 W+R=4>N=3，读写法定数必然相交，是 N=3 时满足条件的最小配置。"
+    ],
+    "optionExplanations_en": [
+      "W+R=2 does not exceed N=3, so the read and write quorums can miss each other entirely, and the read can land on a stale replica.",
+      "This pairs the weakest quorum with no replication at all, so followers never even receive the write.",
+      "Without a quantitative relationship between W and R, whether you read the latest write is pure luck, not a guarantee.",
+      "W=2 and R=2 makes W+R=4 exceed N=3, so the quorums are guaranteed to overlap — the smallest pair that works for N=3."
+    ]
   },
   {
     "id": "cr-005",
@@ -563,42 +467,6 @@
     "diagram": "stateDiagram-v2\n  [*] --> Follower\n  Follower --> Candidate: 检测到主库失联\n  Candidate --> Leader: 赢得选举\n  Candidate --> Follower: 收到更高任期\n  Leader --> Follower: 发现更高任期",
     "codeSample": "# Redis Sentinel manually triggering / observing failover\nSENTINEL failover mymaster\n# Sentinels promote a replica to master once quorum sentinels agree\n# the old master is down; clients reconnect via\n# SENTINEL get-master-addr-by-name mymaster",
     "lang": "redis",
-    "optionMeanings": [
-      "假设主库故障是不可恢复的永久性事件。",
-      "描述故障转移的标准流程：选举产生新主库。",
-      "假设可以绕过复制协议，手工改从库文件。",
-      "假设系统会切换成没有主库角色的架构。"
-    ],
-    "optionScenarioImpacts": [
-      "会让人误以为主从架构没有自愈能力。",
-      "能解释系统如何在选举窗口后恢复写入。",
-      "手工改文件会破坏复制一致性，出现两份不同的数据。",
-      "混淆了故障转移和架构类型切换，两者是两回事。"
-    ],
-    "optionDirectness": [
-      "主从架构标准都带故障转移机制，不会永久瘫痪。",
-      "这是主从复制故障转移的标准恢复路径。",
-      "正常运维不会让客户端直接碰复制的数据文件。",
-      "故障转移只是换一个主库，不会改变复制架构本身。"
-    ],
-    "optionMeanings_en": [
-      "This treats leader failure as permanent and unrecoverable.",
-      "This is the standard failover path: elect a new leader.",
-      "This bypasses the replication protocol and edits replica files directly.",
-      "This assumes the system changes into a leaderless architecture."
-    ],
-    "optionScenarioImpacts_en": [
-      "You would miss the self-healing path in leader-follower systems.",
-      "Writes resume after the election window closes.",
-      "Manual file edits can split the data into inconsistent copies.",
-      "You would confuse failover with changing the replication model."
-    ],
-    "optionDirectness_en": [
-      "Leader-follower systems normally include a failover mechanism.",
-      "This is the normal recovery path for leader-follower replication.",
-      "Clients should not write directly into replication data files.",
-      "Failover changes the leader; it does not change the architecture."
-    ],
     "tags": [
       "replication",
       "failover",
@@ -654,6 +522,18 @@
         "meaningEn": "In failover, a quorum is the minimum number of Sentinels that must agree the leader is down."
       }
     ],
-    "origin": "seed"
+    "origin": "seed",
+    "optionExplanations": [
+      "主从架构标准都带故障转移机制，主库宕机不会让系统永久瘫痪，只是短暂不可写。",
+      "从库发现联系不上主库后触发选举，赢的那个升级为新主库开始收写，是主从架构标准的自愈路径，短暂不可写窗口过后系统就恢复了。",
+      "绕开复制协议手工改从库文件会把数据改出两份不一致的版本，不是正常恢复方式。",
+      "故障转移换的是谁当主库，不会把整个架构切换成无主复制，这是两回事。"
+    ],
+    "optionExplanations_en": [
+      "Leader-follower setups ship with failover built in, so the outage is brief, not permanent.",
+      "Once followers notice the leader is unreachable they run an election; the winner is promoted and starts taking writes — the standard self-healing path here.",
+      "Bypassing replication to hand-edit a follower's files on disk just forks the data into two inconsistent copies, not a real recovery.",
+      "Failover only changes who the leader is; it does not turn the whole system into a leaderless architecture."
+    ]
   }
 ]
