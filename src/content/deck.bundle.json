@@ -498269,6 +498269,970 @@
     ]
   },
   {
+    "id": "sd-problem-breakdowns-bulk-email-move-001",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "requirements",
+    "scenario": "邮箱有几十万封邮件，搜索匹配到数千封，要把它们批量移动到 newsletter 文件夹。",
+    "scenario_en": "A mailbox has hundreds of thousands of emails; a search matches several thousand, which must be bulk-moved to the newsletter folder.",
+    "q": "这个批量移动 API 该做成同步还是异步？",
+    "q_en": "Should this bulk-move API be synchronous or asynchronous?",
+    "options": [
+      "异步：立刻返回 job_id + queued，后台慢慢移动",
+      "同步：请求里一次性把几千封邮件都移完再返回",
+      "让前端一封一封地串行调用移动接口",
+      "不用后端，直接在浏览器里改所有邮件"
+    ],
+    "options_en": [
+      "Asynchronous: return a job_id + queued immediately and move in the background",
+      "Synchronous: move all several-thousand emails within the request before returning",
+      "Have the frontend call a move endpoint one email at a time, serially",
+      "Skip the backend and change all emails in the browser"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：几千封的活儿放后台，API 秒回 job_id，用户不被阻塞、也不会请求超时。",
+      "错：同步移几千封会长时间阻塞、极易超时，是坏设计。",
+      "错：前端串行调几千次又慢又脆，一断就残缺。",
+      "错：移动是服务端数据操作，浏览器改不了、也不安全。"
+    ],
+    "optionExplanations_en": [
+      "Right: push the several-thousand moves to the background and return a job_id instantly, so the user is not blocked and the request cannot time out.",
+      "Wrong: moving thousands synchronously blocks for a long time and easily times out — a bad design.",
+      "Wrong: thousands of serial frontend calls are slow and fragile; one drop leaves it half-done.",
+      "Wrong: moving is a server-side data operation; the browser cannot and should not do it."
+    ],
+    "why": "数千封的批量操作要异步：POST 立刻入队并返回 job_id + status=queued，真正的移动在后台 worker 里做。同步会长时间阻塞、请求超时。",
+    "why_en": "A several-thousand-item bulk op must be async: the POST enqueues and returns a job_id + status=queued instantly, while the real moving happens in background workers. Synchronous would block and time out.",
+    "tags": [
+      "bulk-move",
+      "async",
+      "job",
+      "fit",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "异步作业",
+        "fullName": "async job",
+        "meaning": "请求只负责「登记任务 + 立刻返回 job_id」，实际耗时工作交给后台 worker 慢慢做，客户端事后查进度",
+        "meaningEn": "An async job means the request just records the task and returns a job_id immediately; the heavy work runs in background workers and the client polls progress later."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-002",
+    "format": "code",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "api-design",
+    "scenario": "为批量移动设计一组 REST 接口：发起、查进度、拉明细。",
+    "scenario_en": "Design a REST API set for bulk move: kick off, check progress, list details.",
+    "q": "这组批量移动接口的合理形态是？",
+    "q_en": "What is a reasonable shape for this bulk-move API?",
+    "options": [
+      "POST 发起(带 search token+目标文件夹)→{job_id,queued}；GET 查 job 进度；GET job/items 分页拉明细",
+      "只用一个同步 POST，一次返回全部移动结果",
+      "用 GET 发起移动、把邮件 ID 全塞进 URL 查询串",
+      "每封邮件一个独立 endpoint，前端自己拼"
+    ],
+    "options_en": [
+      "POST to start (search token + destination folder) → {job_id, queued}; GET job progress; GET job/items paginated details",
+      "A single synchronous POST that returns all move results at once",
+      "Use GET to start the move and stuff all email ids into the query string",
+      "One endpoint per email, assembled by the frontend"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：一个 POST 发起(返回 job_id)、一个 GET 查进度、一个 GET 分页拉明细——异步三件套。",
+      "错：同步返回全部结果就退回阻塞式设计了。",
+      "错：GET 不该有副作用，URL 也塞不下几千个 ID。",
+      "错：一封一个 endpoint 违背批量的初衷。"
+    ],
+    "optionExplanations_en": [
+      "Right: one POST to start (returns job_id), one GET for progress, one GET for paginated details — the async trio.",
+      "Wrong: returning all results synchronously falls back to the blocking design.",
+      "Wrong: GET should be side-effect-free, and a URL cannot hold thousands of ids.",
+      "Wrong: one endpoint per email defeats the point of a bulk op."
+    ],
+    "codeSample": "# ① 发起批量移动\nPOST /v1/mailboxes/{mailboxId}/bulk-move       # mailboxId = 哪个邮箱\nAuthorization: Bearer <token>                  # 身份「谁在操作」从请求头来，不放进 body\nBody {\n  search_result_token: \"sr_123\",               # 移「哪些」邮件（那批搜索结果）\n  destination_folder_id: \"newsletter\"          # 移「到哪个」文件夹\n}\n→ 202 Accepted { job_id: \"job_9\", status: \"queued\" }   # 已受理，给作业号\n\n# ② 查进度\nGET /v1/bulk-move-jobs/{job_id}\n→ { status:\"running\", total_count, processed_count, success_count, fail_count }\n\n# ③ 分页拉每封的明细\nGET /v1/bulk-move-jobs/{job_id}/items?page_size=50&cursor=...\n→ { items:[ {message_id, status} ], next_cursor }",
+    "lang": "text",
+    "why": "异步 API 三件套：POST 发起→立刻回 job_id+queued；GET job 查进度(total/processed/success/fail)；GET job/items 分页拉每封的结果。发起用 POST(有副作用)，查询用 GET。",
+    "why_en": "The async trio: POST to start → job_id + queued instantly; GET job for progress (total/processed/success/fail); GET job/items paginated for per-message results. Start with POST (side effects), read with GET.",
+    "tags": [
+      "bulk-move",
+      "api-design",
+      "rest",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "search_result_token",
+        "fullName": "",
+        "meaning": "代表「已经算好的那批搜索结果」的令牌，避免把几千个 message id 直接塞进请求",
+        "meaningEn": "A token representing the already-computed search result set, so you avoid putting thousands of message ids in the request."
+      },
+      {
+        "term": "202 Accepted",
+        "fullName": "",
+        "meaning": "HTTP 状态码：请求已受理但还没处理完——异步作业发起后的标准返回",
+        "meaningEn": "HTTP 202 Accepted: the request was accepted but not yet completed — the standard return for kicking off an async job."
+      },
+      {
+        "term": "身份 vs search_result_token",
+        "fullName": "",
+        "meaning": "两码事：「谁在操作」由请求头里的鉴权 token(session/JWT)决定、不放 body(放 body 客户端能伪造)；search_result_token 只回答「移哪些邮件」(那批搜索结果)。别拿 user id 当 body token",
+        "meaningEn": "Two separate things: WHO is acting comes from the auth token in the header (session/JWT), never the body (spoofable); search_result_token only says WHICH emails to move. Do not put a user id as a body token."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-003",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "authz",
+    "scenario": "批量移动请求刚打到服务端，还没开始建作业。",
+    "scenario_en": "The bulk-move request just hit the server, before any job is created.",
+    "q": "服务端收到请求后，第一件该做的事是什么？",
+    "q_en": "What is the first thing the server should do on receiving the request?",
+    "options": [
+      "鉴权：确认这个用户有权移动这些邮件、访问目标文件夹",
+      "立刻把几千封邮件全部移动完",
+      "先给前端发一封确认邮件",
+      "先重建整个搜索索引"
+    ],
+    "options_en": [
+      "Authorize: verify this user may move these emails and access the destination folder",
+      "Immediately move all several-thousand emails",
+      "First send the frontend a confirmation email",
+      "First rebuild the entire search index"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：先鉴权(authn/authz)——用户是谁、有没有权限动这些邮件和目标文件夹，否则是越权漏洞。",
+      "错：还没鉴权就动数据，且移动本身要走异步作业。",
+      "错：确认邮件不是移动流程该做的事。",
+      "错：搜索已给定，不需要在移动前重建索引。"
+    ],
+    "optionExplanations_en": [
+      "Right: authorize first — who the user is and whether they may touch these emails and the destination folder; otherwise it is a privilege-escalation hole.",
+      "Wrong: touching data before authorizing, and the move itself must go async.",
+      "Wrong: a confirmation email is not part of the move flow.",
+      "Wrong: search is given; no need to rebuild the index before moving."
+    ],
+    "why": "第一步是鉴权(authentication + authorization)：确认用户身份，并检查他有权移动这些邮件、写入目标文件夹。跳过这步就是越权/数据泄漏漏洞。这也是面试官特意问的点。",
+    "why_en": "The first step is auth (authentication + authorization): confirm the user and check they may move these emails and write to the destination folder. Skipping it is a privilege-escalation hole — a point the interviewer specifically probed.",
+    "tags": [
+      "bulk-move",
+      "authz",
+      "security",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "authz",
+        "fullName": "authorization",
+        "meaning": "鉴权：确认「已登录的这个用户，有没有权限做这个操作/访问这些资源」；区别于 authn(确认你是谁)",
+        "meaningEn": "Authorization checks whether the authenticated user is allowed to perform this action / access these resources — distinct from authentication (who you are)."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "architecture",
+    "scenario": "把批量移动的服务端架构画出来。",
+    "scenario_en": "Sketch the server architecture for bulk move.",
+    "q": "哪条链路是这题的合理架构？",
+    "q_en": "Which is a reasonable architecture for this problem?",
+    "options": [
+      "client→API GW→bulk-move 服务(写 job 库 + 入队)→队列→worker 池逐条移动",
+      "client 直接连数据库，自己发 SQL 移动",
+      "API 服务在请求里同步移完所有邮件，不用队列",
+      "所有移动都在 API 网关这一层完成"
+    ],
+    "options_en": [
+      "client → API GW → bulk-move service (writes job DB + enqueues) → queue → worker pool moving one by one",
+      "The client connects directly to the DB and issues SQL to move",
+      "The API service moves all emails synchronously in the request, no queue",
+      "All moving happens at the API gateway layer"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：网关转发→服务建 job 并把每封的任务入队→worker 池并行消费移动，异步、可扩、可重试。",
+      "错：客户端直连库是安全和耦合灾难。",
+      "错：同步移完就没有异步作业和 worker 池了。",
+      "错：网关只做路由/鉴权，不干重活。"
+    ],
+    "optionExplanations_en": [
+      "Right: gateway forwards → service creates the job and enqueues a task per email → a worker pool consumes and moves in parallel; async, scalable, retryable.",
+      "Wrong: a client connecting directly to the DB is a security and coupling disaster.",
+      "Wrong: moving synchronously drops the async job and worker pool.",
+      "Wrong: the gateway only routes/authorizes, not heavy work."
+    ],
+    "diagram": "flowchart LR\n  C[\"client\"] --> G[\"API Gateway\"] --> S[\"bulk-move 服务\"]\n  S -->|建作业| DB[(\"job DB\\njobs / message / task\")]\n  S -->|每封一个任务入队| Q[\"队列\"]\n  Q --> W[\"worker 池\"]\n  W -->|移动 + 更新状态| DB",
+    "why": "标准异步批处理架构：client→API 网关→bulk-move 服务，服务把 job 写进库、并把每封邮件的移动任务丢进队列；下游 worker 池并行消费、逐条移动并回写状态。异步、可水平扩、失败可重试。",
+    "why_en": "A standard async batch architecture: client → API gateway → bulk-move service, which writes the job to the DB and enqueues a move task per email; a downstream worker pool consumes in parallel, moves one by one, and writes back status. Async, horizontally scalable, retryable.",
+    "tags": [
+      "bulk-move",
+      "architecture",
+      "queue",
+      "worker-pool",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-005",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "search-token-vs-query",
+    "scenario": "批量移动要知道「移哪些邮件」。搜索已由别的服务给出。",
+    "scenario_en": "Bulk move needs to know which emails to move; search is provided by another service.",
+    "q": "「移哪些」用存好的结果集，还是存查询重跑？",
+    "q_en": "Should \"which emails\" come from a stored result set or from re-running a stored query?",
+    "options": [
+      "两种都行：存 search_result_token(结果集快照)，或存查询条件、发起时在服务端重跑",
+      "只能把几千个 message id 全部塞进请求体",
+      "必须让用户在前端把每封邮件都勾一遍再传上来",
+      "直接移动全邮箱，不用管搜索结果"
+    ],
+    "options_en": [
+      "Either works: store a search_result_token (a snapshot of the set), or store the query and re-run it server-side on kickoff",
+      "You must stuff all several-thousand message ids into the request body",
+      "The user must tick every email in the frontend and upload them",
+      "Just move the whole mailbox and ignore the search result"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：token=结果快照(稳定、不随邮箱变)；重跑查询=省存储但结果可能已变。看要不要「所见即所得」。",
+      "错：几千个 id 塞请求体又大又脆。",
+      "错：手动勾几千封不现实。",
+      "错：移全邮箱不是用户要的。"
+    ],
+    "optionExplanations_en": [
+      "Right: a token is a snapshot (stable, unaffected by mailbox changes); re-running the query saves storage but the set may have changed. Depends on whether you need what-you-saw-is-what-you-get.",
+      "Wrong: thousands of ids in the body are bulky and fragile.",
+      "Wrong: ticking thousands by hand is unrealistic.",
+      "Wrong: moving the whole mailbox is not what the user asked."
+    ],
+    "why": "两条路：①存 search_result_token——搜索结果的快照，稳定(移动时仍是当初看到的那批)、但要存；②只存查询条件，发起时在服务端重跑——省存储，但邮箱变了结果可能不同。取舍=一致性快照 vs 存储成本。",
+    "why_en": "Two options: (1) store a search_result_token — a snapshot of the results, stable (you move exactly what you saw) but needs storage; (2) store the query and re-run it server-side on kickoff — cheaper, but the set may differ if the mailbox changed. Trade-off: consistent snapshot vs storage cost.",
+    "tradeoff": "存结果集快照(稳定·占存储) vs 存查询重跑(省存储·结果可能变)",
+    "tags": [
+      "bulk-move",
+      "search",
+      "contrast",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-006",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "task-table-audit",
+    "scenario": "message 表只存每封邮件「当前在哪个文件夹」。",
+    "scenario_en": "The message table only stores each email's current folder.",
+    "q": "为什么还要一张 task 表（每次移动一条记录）？",
+    "q_en": "Why also keep a task table (one row per move)?",
+    "options": [
+      "做审计/历史：message 表只有当前快照，task 表能重建「这封为什么到了这个文件夹」",
+      "因为 message 表存不下 message_id",
+      "为了让搜索更快",
+      "因为队列必须有一张同名表"
+    ],
+    "options_en": [
+      "For audit/history: the message table is only the current snapshot; the task table reconstructs why an email ended up in a folder",
+      "Because the message table cannot store message_id",
+      "To make search faster",
+      "Because the queue requires a same-named table"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：message 表=当前状态，看不出历史；task 表逐条记录每次移动(源→目标)，可回溯审计。",
+      "错：message 表当然存得下 message_id。",
+      "错：task 表跟搜索性能无关。",
+      "错：队列不要求这张表。"
+    ],
+    "optionExplanations_en": [
+      "Right: the message table is current state with no history; the task table records each move (source → destination) for auditability.",
+      "Wrong: the message table can of course store message_id.",
+      "Wrong: the task table is unrelated to search speed.",
+      "Wrong: the queue does not require this table."
+    ],
+    "why": "message 表只有「当前在哪个文件夹」的快照，看不出历史。task 表每次移动记一条(message_id、源文件夹、目标文件夹、job_id、status、时间)，用于审计——事后能回答「这封邮件为什么在这个文件夹」。",
+    "why_en": "The message table holds only a current-folder snapshot with no history. The task table records each move (message_id, source folder, destination folder, job_id, status, time) for audit — so you can later answer \"why is this email in this folder\".",
+    "tags": [
+      "bulk-move",
+      "data-model",
+      "audit",
+      "task-table",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "审计表",
+        "fullName": "audit / history table",
+        "meaning": "只记录「发生过什么」的追加表；主表存当前状态，审计表存变更历史，用于回溯与合规",
+        "meaningEn": "An append-only table recording what happened; the main table holds current state while the audit table holds change history for traceability and compliance."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "generalize-task",
+    "scenario": "面试官问：明天要支持批量删除、批量归档等其它批操作，task 表怎么改才通用？",
+    "scenario_en": "The interviewer asks: to also support bulk delete, archive, and other batch ops tomorrow, how should the task table generalize?",
+    "q": "怎么把 task 表从「只支持移动」泛化成「任意批操作」？",
+    "q_en": "How do you generalize the task table from move-only to any batch op?",
+    "options": [
+      "加 task_type + task_payload：类型定义干什么，payload 放该操作的参数(如源/目标文件夹)",
+      "为每种操作各建一张全新的表",
+      "把操作类型硬编码进列名",
+      "删掉 task 表，改由前端记录操作"
+    ],
+    "options_en": [
+      "Add task_type + task_payload: the type says what to do, the payload holds that op's params (e.g. source/destination folder)",
+      "Create a brand-new table for every operation type",
+      "Hard-code the operation type into column names",
+      "Drop the task table and let the frontend record operations"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：把「移动专属」的源/目标字段收进通用的 task_payload，另加 task_type，一张表支持任意批操作。",
+      "错：每操作一张表会表爆炸、worker 也要各写一套。",
+      "错：把类型编进列名就是不可扩展的硬编码。",
+      "错：审计/执行状态必须在服务端，不能交前端。"
+    ],
+    "optionExplanations_en": [
+      "Right: fold the move-specific source/destination into a generic task_payload and add a task_type, so one table supports any batch op.",
+      "Wrong: a table per operation explodes tables and forces separate worker code.",
+      "Wrong: encoding the type into column names is unscalable hard-coding.",
+      "Wrong: audit/execution state must live server-side, not in the frontend."
+    ],
+    "why": "原 task 表有 source_folder_id/destination_folder_id，跟「移动」死绑。泛化：加 task_type(操作类型) + task_payload(该操作的参数)，移动就把源/目标放进 payload。这样批删除、批归档等复用同一张表和同一套 worker 框架。这是这题的 OOD 关键泛化点。",
+    "why_en": "The original task table has source/destination folder ids, tightly bound to \"move\". Generalize by adding task_type (what op) + task_payload (that op's params); a move puts source/destination in the payload. Then bulk delete, archive, etc. reuse the same table and worker framework — the key OOD generalization here.",
+    "tradeoff": "移动专属字段(简单·不通用) vs task_type+payload(通用·多一层解释)",
+    "tags": [
+      "bulk-move",
+      "ood",
+      "generalization",
+      "task-table",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "task_type + payload",
+        "fullName": "",
+        "meaning": "通用任务建模：一列存「操作类型」，一列(JSON)存该类型的具体参数——一张表/一套 worker 支持多种操作，加新操作只加 type 不改表",
+        "meaningEn": "Generic task modeling: one column for the operation type and one (JSON) for that type's params — one table/worker set supports many ops; a new op just adds a type, no schema change."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-008",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "queue-worker",
+    "scenario": "一次匹配到 1 万封邮件要移动。",
+    "scenario_en": "10,000 emails match and must be moved in one job.",
+    "q": "队列 + worker 池怎么把这活干完？",
+    "q_en": "How do the queue and worker pool get this done?",
+    "options": [
+      "每封邮件建一个任务入队；worker 池各自拉一条、执行移动、回写状态，天然并行+可重试",
+      "把 1 万封打包成一条巨型消息，一个 worker 一次做完",
+      "每个 worker 各扫全表找自己该做的邮件",
+      "不用队列，服务在请求里同步循环 1 万次"
+    ],
+    "options_en": [
+      "Enqueue one task per email; workers each pull one, do the move, write status back — naturally parallel and retryable",
+      "Pack all 10k into one giant message for a single worker to finish",
+      "Each worker scans the whole table to find its emails",
+      "No queue; the service loops 10k times synchronously in the request"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：一封一任务，worker 池并行消费，某条失败只重投那一条，不影响其余。",
+      "错：巨型单消息=单点、没并行、失败全丢。",
+      "错：各自扫全表既慢又会抢同一封。",
+      "错：同步循环 1 万次又回到阻塞设计。"
+    ],
+    "optionExplanations_en": [
+      "Right: one task per email, workers consume in parallel, and a failed one is redelivered alone without affecting the rest.",
+      "Wrong: one giant message is a single point, no parallelism, and one failure loses everything.",
+      "Wrong: scanning the whole table each is slow and workers fight over the same email.",
+      "Wrong: a synchronous 10k loop returns to the blocking design."
+    ],
+    "why": "生产者把每封邮件的移动做成一个任务入队(1 万封→1 万任务)；worker 池是消费者，每个 worker 拉一条、执行移动、更新该任务状态。粒度到单封→天然并行、单条失败可单独重试，互不影响。",
+    "why_en": "The producer enqueues one move task per email (10k emails → 10k tasks); the worker pool are consumers, each pulling one, doing the move, and updating that task's status. Per-email granularity gives natural parallelism and lets a single failure retry alone without affecting others.",
+    "tags": [
+      "bulk-move",
+      "queue",
+      "worker-pool",
+      "fit",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "生产者/消费者",
+        "fullName": "producer / consumer",
+        "meaning": "生产者把任务丢进队列，消费者(worker 池)各自拉取处理；队列在中间削峰、解耦、支持重试",
+        "meaningEn": "A producer puts tasks on a queue and consumers (a worker pool) pull and process them; the queue in between smooths spikes, decouples, and enables retries."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "atomic-move",
+    "scenario": "worker 移动一封邮件：既要改它的所在文件夹，又要标这条任务已完成。",
+    "scenario_en": "A worker moves one email: change its folder and mark the task done.",
+    "q": "worker 该怎么保证这封邮件的移动不出现「半完成」？",
+    "q_en": "How should the worker avoid a half-done move for one email?",
+    "options": [
+      "同一个事务里：改 message 的 current_folder_id + 把该 task 标为 finished，一起提交",
+      "先改文件夹，几秒后再单独去标任务，中间不管崩没崩",
+      "只标任务完成，别真去改文件夹",
+      "每封移动都锁全表，串行做"
+    ],
+    "options_en": [
+      "In one transaction: change the message current_folder_id AND mark the task finished, committed together",
+      "Change the folder, then separately mark the task seconds later, ignoring crashes in between",
+      "Only mark the task done without actually changing the folder",
+      "Lock the whole table for every move and do them serially"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：改文件夹和标任务放同一事务，要么都成、要么都回滚，不会出现「移了但没记」或反之。",
+      "错：两步分开，中间崩溃就状态不一致(半完成)。",
+      "错：不真移动就没意义。",
+      "错：锁全表串行毁掉并行、吞吐崩。"
+    ],
+    "optionExplanations_en": [
+      "Right: put the folder change and task mark in one transaction — both commit or both roll back, so you never get \"moved but not recorded\" or vice versa.",
+      "Wrong: two separate steps leave inconsistent (half-done) state if it crashes between them.",
+      "Wrong: not actually moving is pointless.",
+      "Wrong: locking the whole table serializes everything and kills throughput."
+    ],
+    "why": "移动一封 = 改它的 current_folder_id + 把这条 task 标 finished，两件事放在同一个数据库事务里一起提交：要么都成、要么都回滚，杜绝「改了文件夹但任务没记」的半完成。配合任务重试要幂等(已完成的重投就跳过)。",
+    "why_en": "Moving one email = change its current_folder_id + mark the task finished, committed in one DB transaction: both succeed or both roll back, preventing a half-done \"folder changed but task not recorded\". Pair with idempotent retries (a redelivered already-done task is skipped).",
+    "tags": [
+      "bulk-move",
+      "transaction",
+      "consistency",
+      "idempotency",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "幂等",
+        "fullName": "idempotent",
+        "meaning": "同一任务执行一次或多次结果相同；这里靠「先查任务状态、已 finished 就跳过」保证重投无害",
+        "meaningEn": "Idempotent means running a task once or many times has the same effect; here, checking task status and skipping if already finished makes redelivery harmless."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "job-completion",
+    "scenario": "面试官追问：谁把 job 的 status 标成 completed？总不能等 UI 轮询来标。",
+    "scenario_en": "The interviewer probes: who marks the job status completed? You cannot rely on the UI polling to flip it.",
+    "q": "job 完成状态该怎么判定和推送？",
+    "q_en": "How should job completion be detected and delivered?",
+    "options": [
+      "服务端在 processed==total 时自己标 completed，并用 SSE/WebSocket 推给 UI",
+      "等 UI 每次轮询时顺便帮忙把 job 标成 completed",
+      "让每个 worker 都直接去改 job 的最终状态",
+      "永远靠前端每秒轮询数据库来判断"
+    ],
+    "options_en": [
+      "The server marks completed when processed==total, and pushes to the UI via SSE/WebSocket",
+      "Let the UI flip the job to completed whenever it happens to poll",
+      "Have every worker directly set the job's final status",
+      "Rely forever on the frontend polling the DB every second"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：worker 递增 processed/success/fail 计数，服务端在 processed==total 时判定并标 completed，再用 SSE/WebSocket 主动推 UI。",
+      "错：靠 UI 轮询来标状态，UI 不轮询就永远不完成——逻辑放错地方。",
+      "错：每个 worker 各改 job 终态会互相打架、判不准。",
+      "错：纯轮询浪费且延迟，push 更好。"
+    ],
+    "optionExplanations_en": [
+      "Right: workers increment processed/success/fail counts, the server decides completion when processed==total and marks it, then pushes to the UI via SSE/WebSocket.",
+      "Wrong: relying on the UI to flip status means it never completes if the UI stops polling — logic in the wrong place.",
+      "Wrong: every worker setting the final job status fights and mis-decides.",
+      "Wrong: pure polling wastes work and adds latency; push is better."
+    ],
+    "why": "worker 每完成一条就原子递增 job 的 processed/success/fail；服务端(而不是 UI)在 processed==total 时判定完成、把 status 标 completed，再通过 SSE/WebSocket 主动通知 UI。别把「标完成」的责任放在前端轮询上。",
+    "why_en": "Each finished task atomically increments the job's processed/success/fail counts; the server (not the UI) decides completion when processed==total, marks the status completed, and pushes it to the UI via SSE/WebSocket. Do not put the \"mark complete\" responsibility on frontend polling.",
+    "whenOtherWins": "若量很小、无实时性要求，简单轮询也能接受；但要「服务端权威判定完成」这点不变。",
+    "tags": [
+      "bulk-move",
+      "job-status",
+      "sse",
+      "push",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "服务端经一条长连接单向推送给客户端；作业完成时推一条通知，比前端反复轮询省且实时",
+        "meaningEn": "Server-Sent Events push updates server→client over one long-lived connection; pushing a completion event beats repeated frontend polling."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "report-export",
+    "scenario": "面试官问：UI 想要一份「哪些成功、哪些失败」的报告，量还很大，甚至要 CSV/PDF。",
+    "scenario_en": "The interviewer asks: the UI wants a report of which succeeded/failed — large, possibly as CSV/PDF.",
+    "q": "这份报告该怎么给？",
+    "q_en": "How should this report be delivered?",
+    "options": [
+      "明细用分页 GET(cursor)从 task 表拉；CSV/PDF 走异步导出到 S3 给下载链接；且报告在 job 完成时生成一次",
+      "一次性把几万条明细全塞进一个响应返回",
+      "每次 UI 请求就重新现算一份 CSV",
+      "把报告塞进 job 状态接口的一个字段里返回"
+    ],
+    "options_en": [
+      "Paginate details with GET (cursor) from the task table; export CSV/PDF asynchronously to S3 with a download link; and generate the report once at job completion",
+      "Return all tens-of-thousands of rows in one response",
+      "Regenerate a fresh CSV on every UI request",
+      "Stuff the report into a field of the job-status endpoint"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：明细分页(cursor)拉、文件走异步导出到 S3 返回 URI、且在 job 完成时生成一次报告——UI 多次取也不重算。",
+      "错：几万条一次返回会撑爆响应。",
+      "错：每次请求现算=重复生成、浪费。",
+      "错：大报告塞进状态字段既臃肿又不该。"
+    ],
+    "optionExplanations_en": [
+      "Right: paginate details (cursor), export files asynchronously to S3 returning a URI, and generate the report once at job completion so repeated fetches do not recompute.",
+      "Wrong: returning tens of thousands of rows at once blows up the response.",
+      "Wrong: recomputing on every request wastes work.",
+      "Wrong: a big report does not belong in a status field."
+    ],
+    "why": "三层：①逐条明细用分页 GET(page_size+cursor)从 task 表拉；②要 CSV/PDF 就走异步导出作业→生成文件存 S3→返回下载 URI；③关键：报告在 job 完成时作为收尾阶段生成一次，UI 多次 GET 直接取现成的，不重复现算。",
+    "why_en": "Three layers: (1) paginate per-message details via GET (page_size + cursor) from the task table; (2) for CSV/PDF, run an async export job → generate the file to S3 → return a download URI; (3) key: generate the report once as the job's final stage, so repeated UI GETs read the ready file instead of recomputing.",
+    "tags": [
+      "bulk-move",
+      "report",
+      "pagination",
+      "export",
+      "s3",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "游标分页",
+        "fullName": "cursor pagination",
+        "meaning": "用「上一页末尾的位置(cursor)」取下一页，适合大列表稳定翻页；比 offset 在数据变动时更稳",
+        "meaningEn": "Cursor pagination fetches the next page from the last item's position — stable for large, changing lists, unlike offset."
+      },
+      {
+        "term": "异步导出",
+        "fullName": "",
+        "meaning": "大文件(CSV/PDF)不在请求里现生成，而是后台作业生成后存对象存储(S3)、返回下载链接",
+        "meaningEn": "Async export generates a large file (CSV/PDF) in a background job, stores it in object storage (S3), and returns a download link."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-012",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "code-atomic-move",
+    "scenario": "worker 从队列拿到一个「把 msg 移到目标文件夹」的任务。",
+    "scenario_en": "A worker pulls a \"move msg to destination folder\" task from the queue.",
+    "q": "哪段代码正确地完成一次移动？",
+    "q_en": "Which snippet correctly performs one move?",
+    "options": [
+      "BEGIN; UPDATE message SET folder=? WHERE id=?; UPDATE task SET status=done WHERE id=?; COMMIT;",
+      "UPDATE message SET folder=? WHERE id=?;  然后另一个连接里 UPDATE task SET status=done;",
+      "UPDATE task SET status=done WHERE id=?;  -- 只标完成，不改文件夹",
+      "DELETE FROM message WHERE id=?;  -- 删掉而不是移动"
+    ],
+    "options_en": [
+      "BEGIN; UPDATE message SET folder=? WHERE id=?; UPDATE task SET status=done WHERE id=?; COMMIT;",
+      "UPDATE message SET folder=?; then in a separate connection UPDATE task SET status=done;",
+      "UPDATE task SET status=done WHERE id=?;  -- only mark done, do not change folder",
+      "DELETE FROM message WHERE id=?;  -- delete instead of move"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：改文件夹 + 标任务在同一事务，要么全成要么全回滚，不会半完成。",
+      "错：两次独立提交，崩在中间就状态不一致。",
+      "错：没真移动，只标了完成。",
+      "错：移动是改 folder，不是删除邮件。"
+    ],
+    "optionExplanations_en": [
+      "Right: folder change + task mark in one transaction — all or nothing, no half-done state.",
+      "Wrong: two independent commits leave inconsistency if it crashes between them.",
+      "Wrong: nothing is actually moved, only marked done.",
+      "Wrong: moving means changing the folder, not deleting the email."
+    ],
+    "why": "移动 = 改 message 的 folder + 把 task 标 done，放在同一个数据库事务里；两步要么都成、要么都回滚，杜绝「移了但没记 / 记了但没移」。",
+    "why_en": "A move = change the message folder + mark the task done, in one DB transaction; both commit or both roll back, avoiding \"moved but not recorded / recorded but not moved\".",
+    "lang": "sql",
+    "tags": [
+      "bulk-move",
+      "code",
+      "transaction",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "数据库事务",
+        "fullName": "transaction",
+        "meaning": "BEGIN…COMMIT 包起来的一组写，具备原子性：全部成功或全部回滚，中间崩溃不留半成品",
+        "meaningEn": "A transaction (BEGIN…COMMIT) groups writes atomically: all succeed or all roll back, so a crash leaves no half-done state."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-013",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "code-idempotent",
+    "scenario": "队列是 at-least-once：同一个移动任务可能被重投两次。",
+    "scenario_en": "The queue is at-least-once: the same move task may be redelivered twice.",
+    "q": "哪段 worker 逻辑对「重复投递」是安全的？",
+    "q_en": "Which worker logic is safe against duplicate delivery?",
+    "options": [
+      "if task.status==done: return   # 幂等：已做过就跳过\n  with txn: move(msg); mark_done(task)",
+      "move(msg); mark_done(task)     # 不查状态，来一次做一次",
+      "for _ in range(3): move(msg)   # 保险起见移三遍",
+      "mark_done(task)                # 直接标完成，不移动"
+    ],
+    "options_en": [
+      "if task.status==done: return   # idempotent: skip if already done\n  with txn: move(msg); mark_done(task)",
+      "move(msg); mark_done(task)     # no status check, act on every delivery",
+      "for _ in range(3): move(msg)   # move three times to be safe",
+      "mark_done(task)                # just mark done, no move"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：先查状态、已完成就跳过，重投也无害（幂等）；否则在事务里移动+标完成。",
+      "错：不查状态，重投会把同一封重复处理。",
+      "错：故意移三遍更糟，纯属重复。",
+      "错：不移动只标完成，等于没干活。"
+    ],
+    "optionExplanations_en": [
+      "Right: check status first and skip if done (idempotent), so redelivery is harmless; otherwise move + mark done in a transaction.",
+      "Wrong: no check means redelivery reprocesses the same email.",
+      "Wrong: moving three times is deliberately worse.",
+      "Wrong: marking done without moving does no real work."
+    ],
+    "why": "队列 at-least-once → 任务会重投。worker 要幂等：先查任务状态，已 done 就直接返回；否则在事务里移动并标完成。这样重复投递不会重复移动。",
+    "why_en": "An at-least-once queue redelivers tasks, so the worker must be idempotent: check the task status, return if already done; otherwise move and mark done in a transaction. Then duplicate delivery does not double-move.",
+    "lang": "python",
+    "tags": [
+      "bulk-move",
+      "code",
+      "idempotency",
+      "at-least-once",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "at-least-once",
+        "fullName": "",
+        "meaning": "队列的投递语义：保证不丢，但可能重复投递，所以消费者必须幂等",
+        "meaningEn": "An at-least-once queue never drops a message but may redeliver it, so consumers must be idempotent."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-014",
+    "format": "code",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "code-counter",
+    "scenario": "几十个 worker 并发地把 job 的 processed_count 各自 +1。",
+    "scenario_en": "Dozens of workers concurrently each increment the job processed_count by 1.",
+    "q": "哪种计数更新不会漏计（无并发竞态）？",
+    "q_en": "Which counter update avoids lost increments (no race)?",
+    "options": [
+      "UPDATE jobs SET processed_count = processed_count + 1 WHERE job_id=?   -- 或 Redis INCR",
+      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- 读改写",
+      "每个 worker 存自己的局部计数，永不合并",
+      "让前端每次轮询时自己重新数一遍"
+    ],
+    "options_en": [
+      "UPDATE jobs SET processed_count = processed_count + 1 WHERE job_id=?   -- or Redis INCR",
+      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- read-modify-write",
+      "Each worker keeps its own local count, never merged",
+      "Let the frontend re-count on every poll"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：在数据库里原地 +1（或 Redis INCR）是原子的，并发也不漏计。",
+      "错：读→加→写有窗口，两个 worker 同时读到同值就丢一次自增（lost update）。",
+      "错：局部计数永不合并，job 永远数不全。",
+      "错：前端重数是聚合压力，且不是权威计数。"
+    ],
+    "optionExplanations_en": [
+      "Right: an in-place +1 in the DB (or Redis INCR) is atomic and loses no increments under concurrency.",
+      "Wrong: read→add→write has a window; two workers reading the same value lose one increment (lost update).",
+      "Wrong: local counts never merged means the job is never fully counted.",
+      "Wrong: re-counting in the frontend is aggregation load and not authoritative."
+    ],
+    "why": "并发自增要原子：用 `SET x = x + 1` 这种数据库原地更新或 Redis `INCR`，一步完成。若「读出来→加一→写回去」，两个 worker 同时读到旧值就会覆盖彼此、漏计（lost update）。",
+    "why_en": "Concurrent increments must be atomic: use an in-place `SET x = x + 1` DB update or Redis `INCR`, done in one step. A read→add→write instead lets two workers read the same old value and overwrite each other, losing an increment (lost update).",
+    "lang": "sql",
+    "tags": [
+      "bulk-move",
+      "code",
+      "race",
+      "lost-update",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "lost update",
+        "fullName": "丢失更新",
+        "meaning": "两个并发的「读-改-写」都基于同一旧值，后写的覆盖前写的，导致一次更新丢失",
+        "meaningEn": "A lost update: two concurrent read-modify-write ops start from the same old value and one overwrites the other, losing an update."
+      }
+    ],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-015",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "mistakes-design",
+    "scenario": "复盘这题的 API/设计层。",
+    "scenario_en": "Reviewing this problem at the API/design level.",
+    "q": "下面哪些是这题常见的「设计」错误？（多选）",
+    "q_en": "Which are common design-level mistakes here? (multi-select)",
+    "options": [
+      "同步 API：在请求里把几千封移完再返回",
+      "靠前端轮询顺便把 job 标成 completed",
+      "每次 UI 要报告就现算一份，不缓存",
+      "提供一个 GET 接口查 job 进度"
+    ],
+    "options_en": [
+      "A synchronous API that moves all thousands within the request",
+      "Relying on frontend polling to flip the job to completed",
+      "Recomputing the report on every UI request, uncached",
+      "Providing a GET endpoint to check job progress"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "错误：同步移几千封会阻塞、超时——该异步作业。",
+      "错误：完成判定放在服务端(processed==total)，不能等 UI 轮询来标。",
+      "错误：报告应在 job 完成时生成一次，UI 反复取现成的。",
+      "这是对的：查进度就该有个 GET 接口，不是错误。"
+    ],
+    "optionExplanations_en": [
+      "Mistake: moving thousands synchronously blocks and times out — should be an async job.",
+      "Mistake: completion is decided server-side (processed==total), not flipped by UI polling.",
+      "Mistake: the report should be generated once at completion and re-served, not recomputed.",
+      "This is correct: a GET progress endpoint is right, not a mistake."
+    ],
+    "why": "设计层三个坑：①同步移几千封(阻塞/超时)②靠前端轮询标完成(判定放错层)③每次请求现算报告(重复生成)。正解：异步作业 + 服务端判定完成 + 报告完成时生成一次。查进度的 GET 接口是对的。",
+    "why_en": "Three design pitfalls: (1) moving thousands synchronously (blocks/times out); (2) relying on frontend polling to mark complete (wrong layer); (3) recomputing the report per request. Fix: async job + server-decided completion + report generated once. A GET progress endpoint is correct.",
+    "tags": [
+      "bulk-move",
+      "mistakes",
+      "design",
+      "multi",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-016",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "mistakes-architecture",
+    "scenario": "复盘这题的服务端架构层。",
+    "scenario_en": "Reviewing this problem at the server-architecture level.",
+    "q": "下面哪些是这题常见的「架构」错误？（多选）",
+    "q_en": "Which are common architecture-level mistakes here? (multi-select)",
+    "options": [
+      "不要队列，服务在请求里同步循环几千次",
+      "把几千封打包成一条巨型消息，一个 worker 做完",
+      "让客户端直连数据库、自己发 SQL 移动",
+      "用 worker 池并行消费队列、逐条移动"
+    ],
+    "options_en": [
+      "No queue; the service loops thousands of times synchronously in the request",
+      "Pack all thousands into one giant message for a single worker",
+      "Let the client connect directly to the DB and issue SQL",
+      "Use a worker pool to consume the queue in parallel, moving one by one"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "错误：没队列的同步循环就是阻塞设计。",
+      "错误：巨型单消息=单点、无并行、失败全丢。",
+      "错误：客户端直连库是安全与耦合灾难。",
+      "这是对的：队列+worker 池并行消费才是正解。"
+    ],
+    "optionExplanations_en": [
+      "Mistake: a synchronous loop with no queue is the blocking design.",
+      "Mistake: one giant message is a single point, no parallelism, all-or-nothing failure.",
+      "Mistake: a client connecting directly to the DB is a security and coupling disaster.",
+      "This is correct: a queue + worker pool consuming in parallel is the right answer."
+    ],
+    "why": "架构层三个坑：①无队列同步循环(阻塞)②巨型单消息(单点/无并行/失败全丢)③客户端直连数据库(安全+耦合灾难)。正解：网关→服务→队列→worker 池并行消费、单条可重试。",
+    "why_en": "Three architecture pitfalls: (1) synchronous loop with no queue (blocking); (2) one giant message (single point, no parallelism, all-or-nothing); (3) client connecting directly to the DB (security + coupling disaster). Fix: gateway → service → queue → worker pool consuming in parallel with per-item retry.",
+    "tags": [
+      "bulk-move",
+      "mistakes",
+      "architecture",
+      "multi",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-017",
+    "format": "multi",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "mistakes-data-model",
+    "scenario": "复盘这题的数据模型层。",
+    "scenario_en": "Reviewing this problem at the data-model level.",
+    "q": "下面哪些是这题常见的「数据模型」错误？（多选）",
+    "q_en": "Which are common data-model-level mistakes here? (multi-select)",
+    "options": [
+      "不建 task 表，只靠 message 表的当前状态",
+      "task 表死绑 source/destination 文件夹，无法泛化",
+      "job 表没有 total_count，无法判定何时完成",
+      "用 task_type + payload 让任务模型通用"
+    ],
+    "options_en": [
+      "No task table, relying only on the message table current state",
+      "A task table hard-bound to source/destination folder, not generalizable",
+      "A job table with no total_count, so completion cannot be detected",
+      "Using task_type + payload to make the task model generic"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "错误：没 task 表就没有历史，无法审计「为什么这封在这个文件夹」。",
+      "错误：死绑移动字段就没法扩到批删除/归档等操作。",
+      "错误：没 total_count 就无法判断 processed==total，判不了完成。",
+      "这是对的：task_type + payload 正是让它通用的正解。"
+    ],
+    "optionExplanations_en": [
+      "Mistake: no task table means no history and no audit of \"why is this email here\".",
+      "Mistake: hard-bound move fields cannot extend to bulk delete/archive, etc.",
+      "Mistake: no total_count means you cannot check processed==total to detect completion.",
+      "This is correct: task_type + payload is exactly what makes it generic."
+    ],
+    "why": "数据模型层三个坑：①没 task 表(无历史/无法审计)②task 表死绑源/目标文件夹(不能泛化)③job 表缺 total_count(判不了完成)。正解：task 表做审计 + task_type/payload 泛化 + job 存 total_count。",
+    "why_en": "Three data-model pitfalls: (1) no task table (no history/audit); (2) task table hard-bound to source/destination folder (not generalizable); (3) job table missing total_count (cannot detect completion). Fix: a task table for audit + task_type/payload for generality + total_count on the job.",
+    "tags": [
+      "bulk-move",
+      "mistakes",
+      "data-model",
+      "multi",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
     "id": "sd-problem-breakdowns-camelcamelcamel-001",
     "format": "mcq",
     "atomType": "fact",

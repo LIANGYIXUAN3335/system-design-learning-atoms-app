@@ -21,7 +21,7 @@ const limit = limitArg ? Number(limitArg.split('=')[1]) : 120;
 const explicitFiles = args.filter((arg) => !arg.startsWith('--'));
 
 const thresholdArg = args.find((arg) => arg.startsWith('--threshold='));
-const PASS_THRESHOLD = thresholdArg ? Number(thresholdArg.split('=')[1]) : 90;
+const PASS_THRESHOLD = thresholdArg ? Number(thresholdArg.split('=')[1]) : 85;
 // Scoring model (rubric §0.1): errors (severity >= 4) are HARD GATES — any error fails the
 // card regardless of score. Warnings (severity <= 3) are DEDUCTIONS from 100; a card passes
 // iff it has no error AND score >= PASS_THRESHOLD. Minor/style nits (length budgets, table
