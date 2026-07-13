@@ -1218,8 +1218,32 @@
     "termDefinitions": [
       {
         "term": "MULTI/EXEC",
-        "meaning": "Redis 把多条命令打包成一个原子事务执行的机制。",
-        "meaningEn": "MULTI/EXEC groups several Redis commands into one atomic transaction."
+        "meaning": "Redis 事务:MULTI 开始、把命令排队、EXEC 一次性原子执行,中间不被别的命令插入。但它「只让这批写原子」——不能在事务里读一个值再据此分支,所以救不了「读完再判再写」的竞态",
+        "meaningEn": "A Redis transaction: MULTI queues commands and EXEC runs them atomically with no interleaving. But it only makes that batch of writes atomic — you cannot read a value and branch on it inside it, so it does not fix a read-then-decide-then-write race."
+      },
+      {
+        "term": "WATCH",
+        "fullName": "",
+        "meaning": "Redis 乐观锁:WATCH 一个 key 后,若它在 EXEC 前被别人改过,整个 MULTI/EXEC 作废(EXEC 返 nil),你重试。用来补上「读到的值可能已过期」这个洞",
+        "meaningEn": "Redis optimistic locking: after WATCH a key, if it changes before EXEC the whole MULTI/EXEC aborts (EXEC returns nil) and you retry — plugging the \"the value you read may be stale\" hole."
+      },
+      {
+        "term": "EVAL / EVALSHA",
+        "fullName": "",
+        "meaning": "在 Redis 内部原子跑一段 Lua 脚本(Redis 单线程→脚本跑完中间无插入)。EVAL 传脚本文本;EVALSHA 传 SCRIPT LOAD 后的 SHA(省带宽)。限流就把「读+判+写」整段锁进一个脚本",
+        "meaningEn": "Run a Lua script atomically inside Redis (single-threaded → runs to completion with no interleaving). EVAL sends the script text; EVALSHA sends the SHA of a SCRIPT LOAD-ed script (saves bandwidth). Rate limiting locks read+decide+write into one script."
+      },
+      {
+        "term": "HGET / HSET / HMGET",
+        "fullName": "",
+        "meaning": "读/写 Redis hash 的字段。bucket 状态(tokens、last_refill)存成一个 hash;HMGET 一次读多个字段、HSET 写一个字段",
+        "meaningEn": "Read/write fields of a Redis hash. Bucket state (tokens, last_refill) is stored as a hash; HMGET reads several fields at once, HSET writes one."
+      },
+      {
+        "term": "INCR + EXPIRE",
+        "fullName": "",
+        "meaning": "固定窗口计数最简做法:INCR key 原子 +1、EXPIRE 设窗口 TTL。坑:两条命令,崩在中间就没 TTL → 用 Lua 或 SET key 1 EX n NX 一步搞定",
+        "meaningEn": "The simplest fixed-window counter: INCR key (atomic +1) and EXPIRE for the window TTL. Pitfall: two commands — a crash between leaves no TTL; use Lua or SET key 1 EX n NX to do it in one step."
       }
     ],
     "optionExplanations": [
@@ -1233,7 +1257,37 @@
       "MULTI/EXEC does actually perform the write — the problem isn't whether it runs, it's that the read isn't wrapped inside it.",
       "A Redis hash stores a timestamp just fine — that's unrelated to the atomicity problem here.",
       "EXPIRE only clears the one key it's applied to, not every user's data — this overstates its blast radius."
-    ]
+    ],
+    "codeSample": "# ❌ 有竞态:「读→判断→写」是分开三步,MULTI 只保证「写」原子\ncount = HMGET rl:u1 tokens            # 两个 gateway 都读到 tokens=1\nif count > 0:                         # 都判「可放行」\n    MULTI; HSET rl:u1 tokens 0; EXEC  # 都写 0 → 两个都放行 = 超发!\n\n# ✅ 修法1 WATCH(乐观锁):key 在 EXEC 前被改就整体作废、重试\nWATCH rl:u1\ncount = HGET rl:u1 tokens\nMULTI; HSET rl:u1 tokens count-1; EXEC   # 期间 key 变了 → EXEC 返 nil → 重试\n\n# ✅ 修法2 EVAL Lua(最常用):读+判+写在一个脚本里原子跑\nEVAL \"local c=tonumber(redis.call('HGET',KEYS[1],'tokens'))\n      if c>0 then redis.call('HSET',KEYS[1],'tokens',c-1); return 1\n      else return 0 end\" 1 rl:u1",
+    "lang": "text",
+    "table": {
+      "headers": [
+        "做法",
+        "原子?",
+        "怎么保证",
+        "代价"
+      ],
+      "rows": [
+        [
+          "HMGET→判断→HSET",
+          "❌",
+          "读/判/写分离",
+          "check-then-set 竞态、超发"
+        ],
+        [
+          "WATCH+MULTI/EXEC",
+          "✅乐观",
+          "key 变了就作废重试",
+          "多轮往返 + 重试循环"
+        ],
+        [
+          "EVAL (Lua)",
+          "✅最佳",
+          "读+判+写整段原子",
+          "要写 Lua"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-distributed-rate-limiter-021",
@@ -2190,6 +2244,14 @@
       "Rate-limit state is sharded by client key, so a hot key here means one client sending extreme traffic and overloading the single shard that owns it.",
       "A hot key is about traffic distribution, unrelated to whether a database table's schema is well designed.",
       "If every user's traffic were perfectly even, there'd be no hot-key problem overloading a single shard in the first place."
+    ],
+    "termDefinitions": [
+      {
+        "term": "hot key",
+        "fullName": "热点键",
+        "meaning": "一个 key 承受了不成比例的巨量请求。限流里=某个 client(状态按其 key 分片)请求量极大,所有计数都砸向它所在的那一个 shard、把该 shard 压垮(别的 shard 却闲着)。成因:合法大客户 / 攻击滥用 / NAT 把很多人聚成一个 IP。缓解:各 gateway 本地预计数+周期同步,或把热 key 拆成 key+随机后缀分散到多 shard 再求和",
+        "meaningEn": "A hot key takes a disproportionate share of traffic. In rate limiting it means one client (sharded by its key) sends huge volume, so all its counter ops hit the single shard owning it and overload it while others idle. Causes: a big legit customer, an attacker, or NAT aggregating many users into one IP. Mitigate with local pre-counting + periodic sync, or splitting the hot key into key+random-suffix sub-keys across shards and summing."
+      }
     ]
   },
   {
@@ -2372,6 +2434,20 @@
       "Hard-coding rules into client code means a limit change only takes effect once every client has been upgraded — the opposite of a quick, temporary adjustment.",
       "Changing memory by hand over SSH updates one gateway at a time, which doesn't scale to keeping every gateway in sync.",
       "Storing rules in a config store that gateways poll and cache locally is simple to build, and propagating within tens of seconds is exactly what this scenario can tolerate."
+    ],
+    "termDefinitions": [
+      {
+        "term": "配置分发:poll vs push",
+        "fullName": "",
+        "meaning": "把配置(限流规则)发到各 gateway 的两种方式:poll=每台定期去配置库拉+本地缓存(简单,生效延迟=拉取间隔,如30秒);push=配置变了主动推给各台(实时,但要推送/订阅设施,更复杂)。容忍几十秒→选 poll(更简单),这题正是",
+        "meaningEn": "Two ways to distribute config (rate-limit rules) to gateways: poll = each gateway periodically fetches from a config store and caches (simple; propagation delay = poll interval, e.g. 30s); push = the store pushes changes (real-time but needs pub/sub infra). If tens of seconds is acceptable, poll is simpler."
+      },
+      {
+        "term": "SSH",
+        "fullName": "Secure Shell",
+        "meaning": "安全地远程登录到另一台服务器命令行的协议/工具。你在自己电脑上敲 ssh user@服务器IP,连接被加密,然后就像坐在那台服务器前一样敲命令(看日志、改配置、重启服务)。服务器在机房/云里没接键盘,运维就靠 SSH 进去操作。「人工 SSH 改内存」=工程师手动登进每台机器改 → 不 scale",
+        "meaningEn": "SSH (Secure Shell) securely logs you into a remote server command line. You run ssh user@host from your laptop; the connection is encrypted and you get a shell on that server (view logs, edit config, restart). Servers sit in data centers with no keyboard, so ops use SSH to operate them. Manually SSH-ing to edit memory means logging into each machine by hand, which does not scale."
+      }
     ]
   },
   {
@@ -2579,6 +2655,12 @@
         "term": "故障模式 / failure mode",
         "meaning": "Redis 慢、超时或 shard 挂掉时系统如何反应：fail-open 是放行保可用性但可能打爆后端，fail-closed 是拒绝保护后端但会挡住正常用户。",
         "meaningEn": "A failure mode is how the system behaves when Redis is slow or down, such as fail-open for availability or fail-closed for backend protection."
+      },
+      {
+        "term": "降级",
+        "fullName": "graceful degradation",
+        "meaning": "当限流依赖(Redis)故障/超时、判不了限额时,系统「优雅退化」到一个后备行为而不是崩溃。两个主选:fail-open(放行,保可用、失保护)、fail-closed(拒绝,保后端、牺牲可用);更软的还有:退回本地内存近似计数、用上次缓存的规则、临时上一个粗粒度全局限流。所以「降级」=故障时怎么优雅后备,fail-open/close 是它最主要的两个选项",
+        "meaningEn": "Graceful degradation: when the rate-limit dependency (Redis) fails/times out and you cannot check limits, the system falls back to a safe behavior instead of crashing. Two main choices: fail-open (allow — keep availability, lose protection) and fail-closed (reject — protect backend, lose availability); softer options include local approximate counting, using last cached rules, or a coarse global cap."
       }
     ],
     "table": {

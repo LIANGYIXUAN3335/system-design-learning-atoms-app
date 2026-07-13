@@ -352532,8 +352532,8 @@
     "sub": "failover",
     "q": "自动 failover 的关键步骤怎么排？",
     "q_en": "What are the key steps in automatic failover?",
-    "why": "failover 不只是选新主，还要让所有参与者同意新主，并防止旧主回来继续接写。",
-    "why_en": "Failover is not just choosing a new primary; everyone must agree on it and the old primary must stop accepting writes.",
+    "why": "failover 的状态链是：心跳超时怀疑 leader→提升日志最新的 follower→客户端切到新 leader→旧 leader 回来先降级或隔离。代价是超时太短会误判，异步复制还可能留下少量丢写窗口。",
+    "why_en": "Failover means detect timeout, promote the freshest follower, reroute clients, and fence the old leader to avoid split brain.",
     "tags": [
       "ddia",
       "ch05",
@@ -352554,17 +352554,37 @@
       2,
       3
     ],
-    "diagram": "flowchart LR\n  D[detect failure] --> E[elect/promote]\n  E --> R[reroute clients]\n  R --> F[fence old leader]",
+    "diagram": "flowchart LR\n  D[timeout or missed heartbeat] --> E[promote freshest follower]\n  E --> R[reroute clients]\n  R --> F[fence/demote old leader]\n  F --> S[avoid split brain]",
     "termDefinitions": [
       {
         "term": "failover",
-        "meaning": "Failover 是主节点故障后把备用节点提升为新主节点的过程。",
-        "meaningEn": "Failover promotes a standby node to become the new primary after a failure."
+        "meaning": "Failover 是检测主节点失效后，把合适副本提升为新主并恢复写入的流程。",
+        "meaningEn": "Failover detects a failed primary, promotes a replica, and restores writes."
+      },
+      {
+        "term": "leader",
+        "meaning": "Leader 是单主复制中接收写入并决定复制日志顺序的主节点。",
+        "meaningEn": "A leader is the primary node that accepts writes and orders the replication log."
+      },
+      {
+        "term": "follower",
+        "meaning": "Follower 是从 leader 拉取并重放复制日志的副本，故障时可能被提升。",
+        "meaningEn": "A follower replays the leader's replication log and may be promoted during failover."
+      },
+      {
+        "term": "heartbeat",
+        "meaning": "心跳是节点定期发送的健康信号，超时只能说明可能失效。",
+        "meaningEn": "A heartbeat is a periodic health signal; a timeout only suggests a possible failure."
       },
       {
         "term": "fencing",
-        "meaning": "Fencing 是隔离旧主节点的保护动作，防止它继续接收写入。",
-        "meaningEn": "Fencing isolates an old primary so it cannot keep accepting writes."
+        "meaning": "Fencing 是撤销或隔离旧主写入权，防止它恢复后继续接写。",
+        "meaningEn": "Fencing revokes or isolates the old primary's write authority after recovery."
+      },
+      {
+        "term": "split brain",
+        "meaning": "Split brain 是两个节点同时认为自己是主节点并接收冲突写入。",
+        "meaningEn": "Split brain means two nodes both believe they are primary and accept conflicting writes."
       }
     ],
     "track": "classic-sd",
@@ -373353,9 +373373,10 @@
     "answer": [
       0
     ],
-    "why": "当查询集合相对固定、文档流动时，可以把查询当索引来匹配新文档。代价是新增或修改大量查询也需要维护匹配结构。",
-    "why_en": "When queries are stable and documents stream in, the system can index queries and match each new document against them.",
-    "tradeoff": "固定查询集合 vs 固定文档集合",
+    "why": "这里不是“没有索引”，而是索引对象反过来：固定查询被维护成匹配结构，新文档流过它。代价是查询集合大幅变化时，更新这套结构会变贵。",
+    "why_en": "The direction flips: index the stable queries, stream each new document through them, and pay extra when many queries change.",
+    "tradeoff": "固定查询索引 vs 固定文档索引",
+    "whenOtherWins": "如果用户查询临时多变、文档集合相对稳定，传统搜索的文档倒排索引更合适。",
     "tags": [
       "ddia",
       "ch11",
@@ -373365,44 +373386,54 @@
     ],
     "table": {
       "headers": [
-        "方案",
-        "适合",
-        "代价"
+        "模式",
+        "固定侧",
+        "流动侧",
+        "维护成本"
       ],
       "rows": [
         [
-          "新文档流过固定查询集",
-          "前提换成它擅长的问题形状时才合适",
-          "新文档流过固定查询集成本"
+          "Stream search",
+          "查询集合",
+          "新文档",
+          "维护查询结构"
         ],
         [
-          "stream search 不需要…",
-          "前提换成它擅长的问题形状时才合适",
-          "stream sear…成本"
-        ],
-        [
-          "传统搜索只能处理实时新闻",
-          "前提换成它擅长的问题形状时才合适",
-          "传统搜索只能处理实时新闻成本"
-        ],
-        [
-          "两者都要每秒重建全量索引",
-          "数据小、低频或离线修复时才合适",
-          "搬运/扫描贵"
+          "传统搜索",
+          "文档集合",
+          "临时查询",
+          "维护文档索引"
         ]
       ]
     },
     "optionExplanations": [
-      "客户的查询集合相对固定，新闻文章才是源源不断进来的那一方；把这些固定查询当作索引，让每篇新流过来的文档去匹配它们，正是流搜索方向反过来的地方。",
-      "stream search 同样需要维护针对查询建的索引状态，用来快速匹配大量新文档，不是不需要任何索引结构。",
-      "传统搜索同样能通过持续索引新内容来处理实时新闻，说它只能处理实时新闻是把两种方向搞反了。",
-      "stream search 通常在查询集合变化时才更新匹配结构，不需要每秒都重建全量索引，这个说法夸大了它的开销。"
+      "客户查询长期固定，文章才不断进来；把查询维护成匹配结构，让每篇新文档流过它们，就是 stream search 的反向索引思路。",
+      "错误在“无状态”：stream search 仍要保存查询匹配结构，只是索引对象从文档换成查询。",
+      "传统搜索也能处理新闻实时入库；它的典型方向是先维护文档索引，再让临时查询去查这个索引。",
+      "每秒全量重建是误解；通常只在文档或查询变化时增量更新对应索引。"
     ],
     "optionExplanations_en": [
-      "With the customer's set of queries relatively fixed and news articles being the side that keeps flowing in, treating those fixed queries as the index and matching each new document against them is exactly the reversed direction of stream search.",
-      "Stream search still needs to maintain index state built from the queries, used to quickly match against the flood of new documents — it isn't index-free.",
-      "Traditional search can likewise handle live news by continuously indexing new content, so claiming it can only handle live news gets the two directions backwards.",
-      "Stream search typically only updates its matching structure when the query set changes, not rebuilding a full index every second — this option overstates its cost."
+      "Customer queries stay fixed while articles arrive, so stream search keeps a query-matching structure and runs each new document through it.",
+      "The mistake is 'stateless': stream search still stores query state; the indexed side has changed from documents to queries.",
+      "Traditional search can index live news too; its usual direction is document index first, then ad-hoc queries over it.",
+      "Full rebuild every second is the false part; systems normally update the relevant index incrementally as documents or queries change."
+    ],
+    "termDefinitions": [
+      {
+        "term": "stream search",
+        "meaning": "Stream search 是把长期查询编译成匹配结构，让新文档到来时逐条匹配这些查询。",
+        "meaningEn": "Stream search compiles long-lived queries into a matching structure and tests each arriving document against them."
+      },
+      {
+        "term": "index state",
+        "meaning": "索引状态是为了加速匹配而维护的数据结构，可以索引文档，也可以索引查询。",
+        "meaningEn": "Index state is the maintained data structure that speeds matching, whether it indexes documents or queries."
+      },
+      {
+        "term": "ad-hoc query",
+        "meaning": "临时查询是用户当下提交、事先不固定的查询。",
+        "meaningEn": "An ad-hoc query is submitted on demand rather than being known in advance."
+      }
     ],
     "track": "classic-sd",
     "category": "Data Intensive Design"
@@ -389247,30 +389278,31 @@
     ],
     "termDefinitions": [
       {
-        "meaning": "HTTPS 底层使用的传输加密协议；在客户端/服务和 DynamoDB API 之间建立加密通道，防止请求和响应在网络路上被窃听或篡改。",
-        "meaningEn": "TLS is the transport encryption protocol underneath HTTPS; it creates an encrypted channel between a client or service and the DynamoDB API so requests and responses cannot be read or tampered with in transit.",
+        "meaning": "HTTPS 底层的传输加密协议:在客户端和 DynamoDB API 之间建加密通道,防请求/响应在网络上被窃听或篡改",
+        "meaningEn": "TLS (Transport Layer Security) is the transport encryption under HTTPS: it builds an encrypted channel between the client and the DynamoDB API so requests/responses cannot be sniffed or tampered with in transit.",
         "fullName": "Transport Layer Security",
         "term": "TLS"
       },
       {
-        "meaning": "服务端静态加密：DynamoDB 在把数据写入磁盘、索引、备份等持久介质前加密，读取时再透明解密；应用代码通常无感。",
-        "meaningEn": "Server-side encryption at rest means DynamoDB encrypts data before writing it to durable media such as table storage, indexes, and backups, then decrypts it transparently on reads.",
+        "meaning": "静态加密:数据落盘存储时被加密。DynamoDB 从建表起默认开、不能关、不额外收费,底层用信封加密+KMS。防的是「磁盘/备份被拿走」",
+        "meaningEn": "Encryption at rest: data is encrypted when stored on disk. DynamoDB has it on by default from table creation, cannot disable, no extra cost, using envelope encryption + KMS. Protects against stolen disks/backups.",
         "term": "encryption at rest"
       },
       {
-        "meaning": "传输中加密保护正在网络上传输的数据；TLS 负责这一层。",
-        "meaningEn": "Encryption in transit protects data while it moves over the network; TLS provides this layer.",
+        "meaning": "传输加密:数据在网络上传输时被加密,靠 TLS。DynamoDB API 强制 HTTPS。防的是「网络路上被窃听/篡改」。和静态加密是两个阶段:一个存着时、一个传输时",
+        "meaningEn": "Encryption in transit: data is encrypted while moving over the network, via TLS. The DynamoDB API is HTTPS-only. Protects against eavesdropping/tampering on the wire — a different stage from at-rest.",
         "term": "encryption in transit"
       },
       {
-        "meaning": "信封加密：用一次性/局部 data key 加密真实数据，再用更上层的 KMS/wrapping key 加密这个 data key；存储旁边通常保存密文数据和被加密的 data key。",
-        "meaningEn": "Envelope encryption encrypts the data with a local data key, then encrypts that data key with a higher-level KMS or wrapping key; storage keeps the ciphertext plus the encrypted data key.",
+        "meaning": "信封加密(密钥分两层):①用一把「数据密钥(DEK)」加密真正的数据 ②再用「主密钥(在 KMS 里)」把这把数据密钥加密(=「装进信封」)③加密后的数据密钥跟数据存一起。好处:主密钥永不离开 KMS;轮换主密钥只需重新加密那些小小的数据密钥、不用重加密全部数据;数据密钥做大批量对称加密(快)、主密钥只封套",
+        "meaningEn": "Envelope encryption (two key layers): (1) a data key (DEK) encrypts the actual data; (2) a master key (in KMS) encrypts that data key (\"wrapped in an envelope\"); (3) the encrypted data key is stored with the data. Benefits: the master key never leaves KMS; rotating it only re-encrypts the small data keys, not all data; the data key does fast bulk symmetric encryption.",
         "term": "envelope encryption"
       },
       {
-        "meaning": "真正拿来加密一批数据的对称密钥；它本身不会裸存，而是被 KMS/wrapping key 加密后保存。",
-        "meaningEn": "A data key is the symmetric key that encrypts a batch of data; it is stored only after being encrypted by a KMS or wrapping key.",
-        "term": "data key"
+        "meaning": "真正用来加密数据的那把密钥。它本身以「被主密钥加密后」的形态存着(信封加密);读数据时先用 KMS 里的主密钥把它解开,再用它解数据",
+        "meaningEn": "The data key (DEK) is the key that actually encrypts the data. It is stored in encrypted form (wrapped by the master key); to read, the master key in KMS unwraps it, then it decrypts the data.",
+        "term": "data key",
+        "fullName": "DEK, data encryption key"
       }
     ],
     "diagram": "flowchart LR\n  App[\"应用/服务\"] -->|\"TLS / HTTPS\\n传输中加密\"| API[\"DynamoDB API\"]\n  API -->|\"服务端静态加密\\n写入前加密\"| Store[\"密文数据\\n表 / 索引 / 备份\"]\n  KMS[\"KMS / wrapping key\"] -->|\"加密 data key\"| DK[\"encrypted data key\"]\n  DK -.-> Store",
@@ -390438,27 +390470,33 @@
     ],
     "termDefinitions": [
       {
-        "meaning": "DynamoDB 专属的内存缓存服务，提供微秒级读延迟。",
-        "meaningEn": "DAX is DynamoDB's purpose-built in-memory cache that delivers microsecond read latency.",
+        "meaning": "专给 DynamoDB 用的全托管「内存缓存」,挡在 DynamoDB 前面:命中的读从毫秒降到微秒级、还省 RCU。是「加速读」的缓存,不是变更流",
+        "meaningEn": "DAX (DynamoDB Accelerator) is a fully-managed in-memory cache in front of DynamoDB: cached reads drop from milliseconds to microseconds and save RCUs. It is a read cache, not a change stream.",
         "fullName": "DynamoDB Accelerator",
         "term": "DAX"
       },
       {
-        "meaning": "DynamoDB 内置的 CDC 功能，把表变更记录成可消费的 stream record。",
-        "meaningEn": "DynamoDB Streams is the built-in CDC feature that records table changes as consumable stream records.",
+        "meaning": "DynamoDB 的 CDC:把每次 item 的增/改/删按顺序变成一串变更事件,供下游(Lambda/Kinesis)实时消费——用来做异步派生视图(更新搜索索引、维护聚合、复制、触发通知)",
+        "meaningEn": "DynamoDB Streams is CDC: every item insert/update/delete becomes an ordered stream of change events for downstream consumers (Lambda/Kinesis) to build async derived views (search index, aggregates, replication, notifications).",
         "term": "DynamoDB Streams"
       },
       {
-        "meaning": "数据库事务的四个安全属性：原子性、一致性、隔离性、持久性。",
-        "meaningEn": "ACID describes the four safety guarantees a transaction provides: atomicity, consistency, isolation, and durability.",
+        "meaning": "DynamoDB 支持 ACID 事务(TransactWriteItems/TransactGetItems):可对多个 item(含跨表)原子写入,要么全成要么全回滚。预订/下单可一步原子完成,不必自己写 saga 补偿。代价:2 倍容量、单事务最多 100 item",
+        "meaningEn": "DynamoDB supports ACID transactions (TransactWriteItems/TransactGetItems): atomically write multiple items, even across tables, all-or-nothing. Booking/order flows become one atomic step with no manual saga. Cost: 2x capacity, up to 100 items per transaction.",
         "fullName": "Atomicity, Consistency, Isolation, Durability",
         "term": "ACID"
       },
       {
-        "meaning": "捕获数据库变更事件（增删改）供下游实时消费的机制。",
-        "meaningEn": "Change Data Capture streams a database's insert, update, and delete events to downstream consumers in real time.",
+        "meaning": "捕获数据库的变更(增/改/删)并变成一串事件、供下游实时消费的机制——下游不用轮询,DB 把变更「推」出来。常用来把变更喂给 Elasticsearch 建索引、维护物化视图、复制数据。DynamoDB Streams、Debezium(读 MySQL/PG 的 binlog/WAL)都是 CDC",
+        "meaningEn": "CDC (Change Data Capture) captures a database inserts/updates/deletes as a stream of events for downstream real-time consumption — no polling; the DB pushes its changes. Often used to feed Elasticsearch, maintain materialized views, or replicate. DynamoDB Streams and Debezium (MySQL/PG binlog/WAL) are CDC.",
         "fullName": "Change Data Capture",
         "term": "CDC"
+      },
+      {
+        "term": "DAX vs Streams",
+        "fullName": "",
+        "meaning": "别混:DAX=缓存,加速「读」(毫秒→微秒);Streams=CDC,把「写/变更」变成事件流给下游。一个管读得快、一个管变更传播,方向不同",
+        "meaningEn": "Do not confuse: DAX is a cache that speeds up reads (ms→μs); Streams is CDC that turns writes/changes into an event stream for downstream. One is read speed, the other is change propagation."
       }
     ],
     "tradeoff": "全托管强能力 vs 成本与供应商锁定的代价",
@@ -390704,15 +390742,21 @@
     "tradeoff": "强一致读的正确性优先 vs 最终一致读的性能优先",
     "termDefinitions": [
       {
-        "meaning": "DynamoDB 读请求里的参数，设为 true 即要求强一致读。",
-        "meaningEn": "ConsistentRead is a per-request parameter that, when set to true, requires a strongly consistent read.",
+        "meaning": "DynamoDB 读的一致性开关。默认 false=最终一致(任意副本服务、可能读到略旧、0.5 RCU/4KB);设 true=强一致(必须读 leader 副本、保证最新、1 RCU/4KB=2倍)",
+        "meaningEn": "DynamoDB read consistency flag. Default false = eventually consistent (any replica, may be slightly stale, 0.5 RCU/4KB); true = strongly consistent (must read the leader replica, latest data, 1 RCU/4KB = double).",
         "term": "ConsistentRead"
       },
       {
-        "meaning": "读容量单位：一个 RCU 每秒最多读 4KB（强一致 1 次或最终一致 2 次）。",
-        "meaningEn": "A Read Capacity Unit reads up to four kilobytes per second, once with strong consistency or twice with eventual consistency.",
+        "meaning": "DynamoDB 读容量单位。1 RCU=每秒一次强一致读(≤4KB)=每秒两次最终一致读(≤4KB)。所以强一致读花 1 RCU、最终一致只花 0.5 RCU→强一致=2倍成本",
+        "meaningEn": "Read Capacity Unit. 1 RCU = one strongly-consistent read/sec (≤4KB) = two eventually-consistent reads/sec; a strong read costs 1 RCU, an eventual read 0.5 — strong is 2x.",
         "fullName": "Read Capacity Unit",
         "term": "RCU"
+      },
+      {
+        "term": "leader 副本",
+        "fullName": "",
+        "meaning": "DynamoDB 每个 item 存多个副本(通常 3 个跨 AZ),其中一个是 leader:写先落 leader 再复制给 follower。强一致读必须读 leader(它一定有最新写);最终一致读可读任意副本(follower 可能略滞后→读到旧值)",
+        "meaningEn": "DynamoDB stores each item on multiple replicas (usually 3 across AZs); one is the leader — writes hit it first, then replicate. A strongly consistent read must read the leader (it has the latest write); an eventually consistent read may read any replica (a follower may lag)."
       }
     ],
     "track": "classic-sd",
@@ -413855,6 +413899,12 @@
         "term": "CRC16",
         "meaning": "CRC16：Redis Cluster 用来把 key 算到 0..16383 号槽位的哈希函数基础。",
         "meaningEn": "CRC16 is the hash function basis Redis Cluster uses to map keys into slots 0 through 16383."
+      },
+      {
+        "term": "为什么是 16384",
+        "fullName": "",
+        "meaning": "16384=2^14,两个原因:①节点间 gossip 心跳里要带「自己拥有哪些槽」的位图,16384 位=2KB,够小能频繁发(若用 65536 位就是 8KB、太占带宽);②Redis Cluster 上限约 1000 个 master,16384/1000≈每节点 16 槽,够细能均匀分。跟吞吐(ops/sec)无关——那是「为什么要分片」,槽数是「怎么分」",
+        "meaningEn": "16384 = 2^14, for two reasons: (1) gossip heartbeats carry each node owned-slots bitmap; 16384 bits = 2 KB, small enough to send often (65536 bits would be 8 KB, too much bandwidth); (2) Redis Cluster tops out around 1000 masters, so 16384/1000 ≈ 16 slots per node — fine enough to spread evenly. It has nothing to do with throughput (ops/sec): that is WHY you shard, the slot count is HOW you shard."
       }
     ],
     "q_en": "Which conclusion does the fixed slot count during cluster operation best support?",
@@ -414547,6 +414597,20 @@
       "Wrong: sharding by default before hitting a real bottleneck adds cross-slot routing, hash tags, and ops overhead for nothing.",
       "Wrong: this throughput is squarely within what a single in-memory Redis node can handle — no need for async batch processing.",
       "Wrong: Redis is in-memory while disk-based databases are bound by random I/O — not the same order of magnitude at all."
+    ],
+    "termDefinitions": [
+      {
+        "term": "集群总吞吐≈节点数×单节点",
+        "fullName": "",
+        "meaning": "Redis Cluster 水平扩:16384 个槽分给 N 个节点,每节点管 ~1/N 的 key/流量,所以总吞吐≈N×单节点(~10~20万/秒);1000 节点≈1~2 亿/秒。前提是负载均匀——单个 hot key 拆不开(只住一个节点),那一个 key 的量上不去",
+        "meaningEn": "Redis Cluster scales horizontally: 16384 slots split across N nodes, each handling ~1/N of keys/traffic, so aggregate throughput ≈ N × single-node (~100k-200k/s); 1000 nodes ≈ 100M-200M/s. This assumes even load — a single hot key cannot be split (lives on one node) and does not scale."
+      },
+      {
+        "term": "哈希槽到底是什么",
+        "fullName": "",
+        "meaning": "槽=key 的「桶」。Redis 预先把 key 空间切成 16384 个固定桶:key→CRC16(key)%16384→落进某一个槽→该槽归某个节点。所以是 key→槽→节点。好处:加减节点只搬「槽(连同里面的 key)」,不用给所有 key 重新哈希。16384=2^14(14 是指数,不是 14 个槽);每个节点用一个「16384 位的位图」报自己拥有哪些槽,一位一个槽,16384÷8=2048 字节=2KB",
+        "meaningEn": "A slot is a bucket for keys. Redis pre-splits the keyspace into 16384 fixed buckets: key→CRC16(key)%16384→one slot→owned by a node (key→slot→node). Adding/removing nodes just moves slots (with their keys), no rehash. 16384=2^14 (14 is the exponent); each node reports owned slots as a 16384-bit bitmap, one bit per slot, 16384/8=2048 bytes=2KB."
+      }
     ],
     "track": "classic-sd",
     "category": "Redis",
@@ -419012,6 +419076,93 @@
       "contrast",
       "consistency",
       "track:classic-sd"
+    ],
+    "track": "classic-sd",
+    "category": "Redis",
+    "numberAnchors": [
+      {
+        "system": "Redis",
+        "unit": "instance / shard",
+        "estimate": "100k-200k+ simple ops/s",
+        "risk": "大 value、Lua、ZSET、网络带宽"
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-redis-080",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cluster-failover",
+    "scenario": "Redis Cluster 里某个分片的 master 节点挂了,它有几个 replica。",
+    "scenario_en": "In a Redis Cluster, a shard's master node dies; it has a few replicas.",
+    "q": "怎么选出这个分片的新 master?",
+    "q_en": "How is a new master chosen for this shard?",
+    "options": [
+      "挂掉 master 的 replica 发起选举、向其他 master 拉票,得多数票者自升为 master 接管槽(集群内置)",
+      "由客户端投票,得票最多的那个 replica 被选为新的 master 节点",
+      "必须运维人工登录、手动把某个 replica 提升成 master 才行",
+      "由外部的 ZooKeeper / 协调服务来指定哪个 replica 当新 master"
+    ],
+    "options_en": [
+      "The dead master's replicas hold an election, requesting votes from the other masters; the one with a majority promotes itself and takes over the slots (built into the cluster)",
+      "Clients vote, and the replica with the most votes becomes the new master",
+      "An operator must manually SSH in and promote a replica by hand",
+      "An external ZooKeeper / coordination service designates which replica becomes master"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对:Redis Cluster 内置故障转移——replica 向其他 master 拉票,拿多数 master 票就自升、接管哈希槽,gossip 广播。",
+      "错:投票的是「其他 master 节点」,不是客户端。",
+      "错:集群自动做,不需要人工手动提升(那是没做自动化才被迫的)。",
+      "错:Redis Cluster 不依赖外部协调服务;master 之间自己投票选。"
+    ],
+    "optionExplanations_en": [
+      "Right: built-in failover — a replica requests votes from the other masters, a majority makes it promote itself and take over the slots, then gossip broadcasts it.",
+      "Wrong: the voters are the other master nodes, not clients.",
+      "Wrong: the cluster does it automatically; manual promotion is only a fallback when automation is missing.",
+      "Wrong: Redis Cluster needs no external coordinator; the masters vote among themselves."
+    ],
+    "why": "Redis Cluster 内置自动故障转移:master 失联被「多数 master」标 FAIL 后,它的 replica 发起选举、向其他 master 拉票(不是客户端、不是外部服务);数据最新的 replica 等待最短、通常先赢;拿到多数 master 票就自升为 master、接管哈希槽,gossip 广播新路由。非分片的主从则用 Sentinel(随 Redis 发布的独立进程)。",
+    "why_en": "Redis Cluster has built-in failover: after a majority of masters mark a dead master FAIL, its replicas hold an election, requesting votes from the other masters (not clients, not an external service); the most up-to-date replica waits the least and usually wins; with a majority of master votes it promotes itself, takes over the hash slots, and gossips the new routing. A non-sharded master-replica setup uses Sentinel (a separate process shipped with Redis).",
+    "tradeoff": "Sentinel(非分片主从·独立哨兵进程) vs Cluster 内置(分片·master 互相投票)",
+    "codeSample": "# Redis Cluster 自动故障转移(分片·内置·无需 Sentinel)\n# 1) 检测:节点间 gossip 心跳;master A 失联\n#    某 master 标 A=PFAIL;多数 master 认同 → FAIL(确认挂)\n# 2) A 的 replica 发起选举(数据越新等待越短 → 最新的先发)\nfor r in A.replicas:\n    wait(rank_by_repl_offset(r) * DELAY)   # 数据最新的 replica 先启动\n    r.epoch += 1\n    send FAILOVER_AUTH_REQUEST(epoch) -> 所有其他 master   # 向 master 拉票\n# 3) 其他 master 投票(每个 epoch 只投一次)\non master recv REQUEST(epoch, r):\n    if epoch > lastVoted and r.master == FAIL:\n        vote ACK; lastVoted = epoch\n# 4) 拿到「多数 master 票」的 replica 胜出\nif r.votes >= majority(masters):\n    r.promote_to_master(); take_over(A.slots)   # 自升 + 接管哈希槽\n    gossip(new_config)                          # 广播新路由",
+    "lang": "text",
+    "tags": [
+      "redis",
+      "cluster",
+      "failover",
+      "election",
+      "fit",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis Cluster 故障转移",
+        "fullName": "",
+        "meaning": "分片集群内置的自动故障转移:master 挂了,它的 replica 向「其他 master」拉票,拿多数 master 票者自升为 master、接管哈希槽、gossip 广播。投票的是 master 不是 Sentinel,所以 master 数要奇数≥3 防脑裂",
+        "meaningEn": "Redis Cluster built-in failover: when a master dies, its replicas request votes from the other masters; a majority makes one self-promote, take over the slots, and gossip it. Masters vote (not Sentinels), so you want an odd number ≥3 to avoid split-brain."
+      },
+      {
+        "term": "Sentinel vs Cluster",
+        "fullName": "",
+        "meaning": "两套故障转移:Sentinel=给「非分片的主从」用,是单独跑的哨兵进程、哨兵们投票提升一个 replica;Cluster=给「分片」用、内置在节点里,由其他 master 投票提升。分片场景用 Cluster(自带)",
+        "meaningEn": "Two failover systems: Sentinel is for a non-sharded master-replica group — separate sentinel processes vote to promote a replica; Cluster is for sharding — built into the nodes, the other masters vote. For sharding, Cluster is built in."
+      },
+      {
+        "term": "config epoch",
+        "fullName": "",
+        "meaning": "每次故障转移递增的版本号:保证每个 epoch、每个 master 只投一票,防止双主/脑裂(和 Raft term、fencing token 一个思路)",
+        "meaningEn": "A version number bumped each failover so each master votes only once per epoch, preventing split-brain — the same idea as a Raft term or a fencing token."
+      },
+      {
+        "term": "gossip",
+        "fullName": "",
+        "meaning": "集群节点之间定期互相交换心跳和路由信息的协议;靠它发现节点挂、传播新的槽归属",
+        "meaningEn": "A protocol where cluster nodes periodically exchange heartbeats and routing info; used to detect failures and spread new slot ownership."
+      }
     ],
     "track": "classic-sd",
     "category": "Redis",
@@ -492334,6 +492485,28 @@
       "cardinality",
       "track:classic-sd"
     ],
+    "table": {
+      "headers": [
+        "方案",
+        "主计量",
+        "强项",
+        "压力点"
+      ],
+      "rows": [
+        [
+          "OLAP",
+          "维度组合",
+          "多维切分",
+          "写入建模"
+        ],
+        [
+          "TSDB",
+          "series数",
+          "时间范围",
+          "高基数"
+        ]
+      ]
+    },
     "options_en": [
       "OLAP handles high-cardinality, multi-dimensional slicing better; TSDBs are sweetest for low-cardinality single-metric time queries.",
       "TSDBs are purpose-built for time series, so in theory they never handle high-cardinality dimensions worse than OLAP.",
@@ -493482,6 +493655,25 @@
       "parallelism",
       "track:classic-sd"
     ],
+    "table": {
+      "headers": [
+        "计量",
+        "扩展动作",
+        "二级成本"
+      ],
+      "rows": [
+        [
+          "流分片",
+          "加Flink任务",
+          "调度开销"
+        ],
+        [
+          "单任务",
+          "垂直扩容",
+          "吞吐封顶"
+        ]
+      ]
+    },
     "optionExplanations": [
       "单任务串行读全部分片会让吞吐被单线程封顶，违背了分片独立并行的设计初衷。",
       "数据库锁不是流处理框架的扩展手段，锁本身反而会成为新的瓶颈。",
@@ -494582,6 +494774,25 @@
       "consequence",
       "track:classic-sd"
     ],
+    "table": {
+      "headers": [
+        "去重键",
+        "计量单位",
+        "主要风险"
+      ],
+      "rows": [
+        [
+          "userId+adId",
+          "用户广告",
+          "漏再营销"
+        ],
+        [
+          "impressionId",
+          "单次展示",
+          "需签名"
+        ]
+      ]
+    },
     "termDefinitions": [
       {
         "term": "再营销 (retargeting)",
@@ -498376,8 +498587,8 @@
       {
         "term": "search_result_token",
         "fullName": "",
-        "meaning": "代表「已经算好的那批搜索结果」的令牌，避免把几千个 message id 直接塞进请求",
-        "meaningEn": "A token representing the already-computed search result set, so you avoid putting thousands of message ids in the request."
+        "meaning": "代表「那批搜索结果」的引用/句柄（不是加密串）：请求只带这个短 token，服务端拿它去查出对应的几千个 message id（从结果表/缓存/重跑查询）。作用是「少传一堆 id + 引用服务端的集合」，不是保密；服务端是「查找」不是「解密」",
+        "meaningEn": "A reference/handle to the search result set (not an encrypted blob): the request carries this short token and the server looks up the thousands of message ids it points to (from a store/cache/re-run). It is about indirection (avoid sending many ids), not secrecy; the server dereferences it, not decrypts it."
       },
       {
         "term": "202 Accepted",
@@ -498390,6 +498601,12 @@
         "fullName": "",
         "meaning": "两码事：「谁在操作」由请求头里的鉴权 token(session/JWT)决定、不放 body(放 body 客户端能伪造)；search_result_token 只回答「移哪些邮件」(那批搜索结果)。别拿 user id 当 body token",
         "meaningEn": "Two separate things: WHO is acting comes from the auth token in the header (session/JWT), never the body (spoofable); search_result_token only says WHICH emails to move. Do not put a user id as a body token."
+      },
+      {
+        "term": "processed vs success count",
+        "fullName": "",
+        "meaning": "processed_count=已处理(试过)的条数 = success + fail；success_count=其中成功的；fail_count=失败的。processed 看「进度」(和 total 比判完成)，success/fail 看「结果」",
+        "meaningEn": "processed_count = tasks attempted (= success + fail); success_count = those that succeeded; fail_count = those that failed. processed tracks progress (vs total for completion); success/fail track the outcome."
       }
     ],
     "track": "classic-sd",
@@ -498457,36 +498674,36 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "architecture",
-    "scenario": "把批量移动的服务端架构画出来。",
-    "scenario_en": "Sketch the server architecture for bulk move.",
+    "scenario": "邮箱几十万封邮件，搜索匹配到数千封要批量移到某文件夹；画出支撑这个异步批量移动的服务端架构。",
+    "scenario_en": "A mailbox has hundreds of thousands of emails; a search matches several thousand to bulk-move into a folder — sketch the server architecture for this async bulk move.",
     "q": "哪条链路是这题的合理架构？",
     "q_en": "Which is a reasonable architecture for this problem?",
     "options": [
-      "client→API GW→bulk-move 服务(写 job 库 + 入队)→队列→worker 池逐条移动",
-      "client 直接连数据库，自己发 SQL 移动",
-      "API 服务在请求里同步移完所有邮件，不用队列",
-      "所有移动都在 API 网关这一层完成"
+      "API 网关→bulk-move 服务(建 job+入队)→队列→worker 池并行移动、逐条回写状态",
+      "API 网关→bulk-move 服务→在这一次请求里同步循环把几千封全部移完再返回",
+      "API 网关→服务→把几千封打包成一条巨型队列消息→交给单个 worker 全做完",
+      "客户端直连数据库、逐条发 SQL 修改→绕过网关和服务层、也不用队列"
     ],
     "options_en": [
-      "client → API GW → bulk-move service (writes job DB + enqueues) → queue → worker pool moving one by one",
-      "The client connects directly to the DB and issues SQL to move",
-      "The API service moves all emails synchronously in the request, no queue",
-      "All moving happens at the API gateway layer"
+      "API gateway → bulk-move service (create job + enqueue) → queue → worker pool moving in parallel, writing status back",
+      "API gateway → bulk-move service → synchronously loop and move all several-thousand within this one request",
+      "API gateway → service → pack all several-thousand into one giant queue message handled by a single worker",
+      "The client issues SQL row-by-row directly to the DB, bypassing the gateway/service and using no queue"
     ],
     "answer": [
       0
     ],
     "optionExplanations": [
-      "对：网关转发→服务建 job 并把每封的任务入队→worker 池并行消费移动，异步、可扩、可重试。",
-      "错：客户端直连库是安全和耦合灾难。",
-      "错：同步移完就没有异步作业和 worker 池了。",
-      "错：网关只做路由/鉴权，不干重活。"
+      "对:网关→服务(建 job+入队)→队列→worker 池并行、逐条回写——异步、可水平扩、失败可重试。",
+      "错:同步循环几千封会长时间阻塞、请求超时,退回阻塞设计。",
+      "错:巨型单消息+单 worker=单点、无并行、失败全丢。",
+      "错:客户端直连库、绕过服务层是安全与耦合灾难。"
     ],
     "optionExplanations_en": [
-      "Right: gateway forwards → service creates the job and enqueues a task per email → a worker pool consumes and moves in parallel; async, scalable, retryable.",
-      "Wrong: a client connecting directly to the DB is a security and coupling disaster.",
-      "Wrong: moving synchronously drops the async job and worker pool.",
-      "Wrong: the gateway only routes/authorizes, not heavy work."
+      "Right: gateway → service (create job + enqueue) → queue → worker pool in parallel, writing status back — async, scalable, retryable.",
+      "Wrong: a synchronous loop over thousands blocks and times out — the blocking design again.",
+      "Wrong: one giant message + a single worker is a single point, no parallelism, all-or-nothing failure.",
+      "Wrong: a client connecting directly to the DB and bypassing the service is a security and coupling disaster."
     ],
     "diagram": "flowchart LR\n  C[\"client\"] --> G[\"API Gateway\"] --> S[\"bulk-move 服务\"]\n  S -->|建作业| DB[(\"job DB\\njobs / message / task\")]\n  S -->|每封一个任务入队| Q[\"队列\"]\n  Q --> W[\"worker 池\"]\n  W -->|移动 + 更新状态| DB",
     "why": "标准异步批处理架构：client→API 网关→bulk-move 服务，服务把 job 写进库、并把每封邮件的移动任务丢进队列；下游 worker 池并行消费、逐条移动并回写状态。异步、可水平扩、失败可重试。",
@@ -498604,6 +498821,24 @@
         "fullName": "audit / history table",
         "meaning": "只记录「发生过什么」的追加表；主表存当前状态，审计表存变更历史，用于回溯与合规",
         "meaningEn": "An append-only table recording what happened; the main table holds current state while the audit table holds change history for traceability and compliance."
+      },
+      {
+        "term": "job 表 vs task 表",
+        "fullName": "",
+        "meaning": "两张表、两种粒度：job 表=1 行汇总(total/processed/success/fail + 总状态)；task 表=N 行、每封一条执行记录(状态、源/目标、job_id)。job 的计数是 task 状态的「汇总缓存」，查进度不用扫全 task 表。这跟 job scheduler 的 job / run(execution) 两表是同一套",
+        "meaningEn": "Two tables, two granularities: the job table is one summary row (total/processed/success/fail + overall status); the task table is N rows, one per-email execution (status, source/dest, job_id). The job counts are a denormalized cache of task statuses, so progress needs no full task scan — the same job/run(execution) split as a job scheduler."
+      },
+      {
+        "term": "断点续跑",
+        "fullName": "",
+        "meaning": "移了 300/1000 中途停了 → 不新建 job、沿用原 job；task 表里每封的状态区分「已完成/未完成」，只重跑 status≠done 的 700 封。配合幂等 worker(已 done 就跳过)，重投也不会重复移动。这也是为什么必须有 task 表：没有每封状态就没法精确续跑",
+        "meaningEn": "Resume: if 300 of 1000 moved and it stopped, reuse the same job — the task table's per-email status separates done from not-done, so only the 700 not-done are re-run; idempotent workers skip already-done ones. This is why the task table is essential: without per-item status you cannot resume precisely."
+      },
+      {
+        "term": "message 表 vs task 表",
+        "fullName": "",
+        "meaning": "message 表=邮件的「户口本」:一封邮件一行,存它「现在」在哪个文件夹(状态,移动时原地改)。task 表=移动的「流水账」:每移动一次记一行(从哪→到哪、状态、哪个 job),同一封邮件可能有多行(移过几次)。前者=当前状态,后者=操作历史",
+        "meaningEn": "The message table is the email ID card: one row per email holding its current folder (state, updated in place on a move). The task table is the move ledger: one row per move (source→dest, status, job), and one email can have many rows over time. State vs history of operations."
       }
     ],
     "track": "classic-sd",
@@ -499229,6 +499464,122 @@
       "track:classic-sd"
     ],
     "termDefinitions": [],
+    "track": "classic-sd",
+    "category": "Bulk Email Move"
+  },
+  {
+    "id": "sd-problem-breakdowns-bulk-email-move-018",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "http-status-codes",
+    "scenario": "面试里被追问「这个接口该返回什么状态码」，要答得准。",
+    "scenario_en": "In an interview you are asked what status code an endpoint should return, and you need it right.",
+    "q": "关于 HTTP 状态码，下面哪个说法正确？",
+    "q_en": "Which statement about HTTP status codes is correct?",
+    "options": [
+      "401=未认证、403=有身份但无权限、202=异步已受理、429=被限流",
+      "2xx 表示客户端出错，4xx 表示请求成功，正好这样对应",
+      "404 表示服务器内部错误，500 表示请求的资源不存在",
+      "301 表示请求成功，500 表示重定向到新地址"
+    ],
+    "options_en": [
+      "401 = unauthenticated, 403 = authenticated but not allowed, 202 = accepted (async), 429 = rate limited",
+      "2xx means the client erred and 4xx means success — exactly that mapping",
+      "404 means an internal server error and 500 means the resource does not exist",
+      "301 means the request succeeded and 500 means redirect to a new address"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：401 是没认证/没登录，403 是登录了但无权限；202 是异步已受理；429 是限流。",
+      "错：反了——2xx 是成功，4xx 才是客户端错误。",
+      "错：反了——404 是找不到资源，500 才是服务器内部错误。",
+      "错：301 是永久重定向、500 是服务器错误，都不是成功。"
+    ],
+    "optionExplanations_en": [
+      "Right: 401 is unauthenticated, 403 is authenticated-but-forbidden; 202 is accepted async; 429 is rate limited.",
+      "Wrong: reversed — 2xx is success, 4xx is the client error.",
+      "Wrong: reversed — 404 is not found, 500 is the internal server error.",
+      "Wrong: 301 is a permanent redirect and 500 is a server error; neither is success."
+    ],
+    "why": "四大组记牢：2xx 成功、3xx 重定向、4xx 客户端错、5xx 服务端错。面试高频区分：401(未认证)vs 403(无权限)、202(异步已受理)、429(限流)、502/503/504(网关坏响应/不可用/超时)。",
+    "why_en": "Memorize four families: 2xx success, 3xx redirect, 4xx client error, 5xx server error. High-frequency distinctions: 401 (unauthenticated) vs 403 (forbidden), 202 (accepted async), 429 (rate limited), 502/503/504 (bad gateway / unavailable / timeout).",
+    "table": {
+      "headers": [
+        "组",
+        "含义",
+        "常见码"
+      ],
+      "rows": [
+        [
+          "2xx",
+          "成功",
+          "200 OK · 201 Created · 202 Accepted(异步) · 204 No Content"
+        ],
+        [
+          "3xx",
+          "重定向",
+          "301 永久 · 302 临时 · 304 未改(用缓存)"
+        ],
+        [
+          "4xx",
+          "客户端错",
+          "400 请求错 · 401 未认证 · 403 无权限 · 404 找不到 · 409 冲突 · 429 限流"
+        ],
+        [
+          "5xx",
+          "服务端错",
+          "500 内部错 · 502 网关坏响应 · 503 不可用 · 504 网关超时"
+        ]
+      ]
+    },
+    "tags": [
+      "http",
+      "status-code",
+      "api",
+      "reference",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "401 vs 403",
+        "fullName": "",
+        "meaning": "401 Unauthorized=没认证(你没登录/身份没验证)；403 Forbidden=认证过了但没权限。口诀：401 不知道你是谁，403 知道你是谁但不让",
+        "meaningEn": "401 Unauthorized = not authenticated (not logged in); 403 Forbidden = authenticated but not allowed. Mnemonic: 401 = who are you, 403 = I know you but no."
+      },
+      {
+        "term": "4xx vs 5xx",
+        "fullName": "",
+        "meaning": "4xx=客户端的错(请求有问题，重发同样的还会错)；5xx=服务端的错(请求没问题，是服务器崩了，可重试)",
+        "meaningEn": "4xx = the client's fault (the request is bad; retrying the same fails); 5xx = the server's fault (the request was fine; the server broke, retry may help)."
+      },
+      {
+        "term": "301/302/304 场景",
+        "fullName": "",
+        "meaning": "301 永久移动(改域名、永久换 URL——浏览器/搜索引擎会缓存并更新链接)；302 临时(维护页、登录跳转、短链——短链用 302 是为了每次点都回服务端计数、且目标可改)；304 未改(条件请求 If-None-Match/If-Modified-Since，没变就用本地缓存、不回 body 省流量)",
+        "meaningEn": "301 permanent (domain change / permanent URL move — browsers cache and update links); 302 temporary (maintenance, login redirect, URL shorteners — 302 so each click hits the server for counting and the target stays editable); 304 Not Modified (conditional GET; unchanged → use local cache, no body)."
+      },
+      {
+        "term": "409 Conflict",
+        "fullName": "",
+        "meaning": "请求与资源当前状态冲突：①重复创建(注册一个已被占用的邮箱)②乐观并发版本不匹配(你要改，但别人先改了)③非法状态转换(取消一个已发货的订单)。请求本身合法，只是跟现状打架",
+        "meaningEn": "409 Conflict: the request clashes with current state — duplicate create (registering a taken email), optimistic-concurrency version mismatch (someone updated it first), or an invalid state transition (cancelling an already-shipped order). The request is valid but conflicts with reality."
+      },
+      {
+        "term": "500/502/503/504 区分",
+        "fullName": "",
+        "meaning": "500=应用自己崩了(代码 bug/未捕获异常)；502=网关从上游拿到「坏响应」(上游崩了/返回垃圾)；503=服务暂时不可用(过载/维护，可 Retry-After)；504=网关等上游「超时」(上游太慢没回)。502 是上游答了但答坏了，504 是上游根本没按时答",
+        "meaningEn": "500 = the app itself errored (bug/unhandled exception); 502 = a gateway got a bad response from upstream (upstream crashed/garbage); 503 = temporarily unavailable (overload/maintenance); 504 = a gateway timed out waiting for upstream. 502 = upstream answered badly; 504 = upstream did not answer in time."
+      },
+      {
+        "term": "状态码给谁看",
+        "fullName": "",
+        "meaning": "状态码是给「客户端软件」按程序反应用的(5xx/429→退避重试、401→跳登录)、也给开发/运维 debug 定位哪层挂了；终端用户只看到 app 翻译后的友好提示(「稍后再试」)，不看原始码。500 vs 502 vs 504 的细分主要给运维排障",
+        "meaningEn": "Status codes are for client software to react programmatically (5xx/429 → back off & retry, 401 → re-auth) and for devs/ops to debug which layer failed; the end user sees a friendly translation. The fine 500/502/504 split is mainly for ops diagnosis."
+      }
+    ],
     "track": "classic-sd",
     "category": "Bulk Email Move"
   },
@@ -509879,8 +510230,32 @@
     "termDefinitions": [
       {
         "term": "MULTI/EXEC",
-        "meaning": "Redis 把多条命令打包成一个原子事务执行的机制。",
-        "meaningEn": "MULTI/EXEC groups several Redis commands into one atomic transaction."
+        "meaning": "Redis 事务:MULTI 开始、把命令排队、EXEC 一次性原子执行,中间不被别的命令插入。但它「只让这批写原子」——不能在事务里读一个值再据此分支,所以救不了「读完再判再写」的竞态",
+        "meaningEn": "A Redis transaction: MULTI queues commands and EXEC runs them atomically with no interleaving. But it only makes that batch of writes atomic — you cannot read a value and branch on it inside it, so it does not fix a read-then-decide-then-write race."
+      },
+      {
+        "term": "WATCH",
+        "fullName": "",
+        "meaning": "Redis 乐观锁:WATCH 一个 key 后,若它在 EXEC 前被别人改过,整个 MULTI/EXEC 作废(EXEC 返 nil),你重试。用来补上「读到的值可能已过期」这个洞",
+        "meaningEn": "Redis optimistic locking: after WATCH a key, if it changes before EXEC the whole MULTI/EXEC aborts (EXEC returns nil) and you retry — plugging the \"the value you read may be stale\" hole."
+      },
+      {
+        "term": "EVAL / EVALSHA",
+        "fullName": "",
+        "meaning": "在 Redis 内部原子跑一段 Lua 脚本(Redis 单线程→脚本跑完中间无插入)。EVAL 传脚本文本;EVALSHA 传 SCRIPT LOAD 后的 SHA(省带宽)。限流就把「读+判+写」整段锁进一个脚本",
+        "meaningEn": "Run a Lua script atomically inside Redis (single-threaded → runs to completion with no interleaving). EVAL sends the script text; EVALSHA sends the SHA of a SCRIPT LOAD-ed script (saves bandwidth). Rate limiting locks read+decide+write into one script."
+      },
+      {
+        "term": "HGET / HSET / HMGET",
+        "fullName": "",
+        "meaning": "读/写 Redis hash 的字段。bucket 状态(tokens、last_refill)存成一个 hash;HMGET 一次读多个字段、HSET 写一个字段",
+        "meaningEn": "Read/write fields of a Redis hash. Bucket state (tokens, last_refill) is stored as a hash; HMGET reads several fields at once, HSET writes one."
+      },
+      {
+        "term": "INCR + EXPIRE",
+        "fullName": "",
+        "meaning": "固定窗口计数最简做法:INCR key 原子 +1、EXPIRE 设窗口 TTL。坑:两条命令,崩在中间就没 TTL → 用 Lua 或 SET key 1 EX n NX 一步搞定",
+        "meaningEn": "The simplest fixed-window counter: INCR key (atomic +1) and EXPIRE for the window TTL. Pitfall: two commands — a crash between leaves no TTL; use Lua or SET key 1 EX n NX to do it in one step."
       }
     ],
     "optionExplanations": [
@@ -509895,6 +510270,36 @@
       "A Redis hash stores a timestamp just fine — that's unrelated to the atomicity problem here.",
       "EXPIRE only clears the one key it's applied to, not every user's data — this overstates its blast radius."
     ],
+    "codeSample": "# ❌ 有竞态:「读→判断→写」是分开三步,MULTI 只保证「写」原子\ncount = HMGET rl:u1 tokens            # 两个 gateway 都读到 tokens=1\nif count > 0:                         # 都判「可放行」\n    MULTI; HSET rl:u1 tokens 0; EXEC  # 都写 0 → 两个都放行 = 超发!\n\n# ✅ 修法1 WATCH(乐观锁):key 在 EXEC 前被改就整体作废、重试\nWATCH rl:u1\ncount = HGET rl:u1 tokens\nMULTI; HSET rl:u1 tokens count-1; EXEC   # 期间 key 变了 → EXEC 返 nil → 重试\n\n# ✅ 修法2 EVAL Lua(最常用):读+判+写在一个脚本里原子跑\nEVAL \"local c=tonumber(redis.call('HGET',KEYS[1],'tokens'))\n      if c>0 then redis.call('HSET',KEYS[1],'tokens',c-1); return 1\n      else return 0 end\" 1 rl:u1",
+    "lang": "text",
+    "table": {
+      "headers": [
+        "做法",
+        "原子?",
+        "怎么保证",
+        "代价"
+      ],
+      "rows": [
+        [
+          "HMGET→判断→HSET",
+          "❌",
+          "读/判/写分离",
+          "check-then-set 竞态、超发"
+        ],
+        [
+          "WATCH+MULTI/EXEC",
+          "✅乐观",
+          "key 变了就作废重试",
+          "多轮往返 + 重试循环"
+        ],
+        [
+          "EVAL (Lua)",
+          "✅最佳",
+          "读+判+写整段原子",
+          "要写 Lua"
+        ]
+      ]
+    },
     "track": "classic-sd",
     "category": "Distributed Rate Limiter"
   },
@@ -510973,6 +511378,14 @@
       "A hot key is about traffic distribution, unrelated to whether a database table's schema is well designed.",
       "If every user's traffic were perfectly even, there'd be no hot-key problem overloading a single shard in the first place."
     ],
+    "termDefinitions": [
+      {
+        "term": "hot key",
+        "fullName": "热点键",
+        "meaning": "一个 key 承受了不成比例的巨量请求。限流里=某个 client(状态按其 key 分片)请求量极大,所有计数都砸向它所在的那一个 shard、把该 shard 压垮(别的 shard 却闲着)。成因:合法大客户 / 攻击滥用 / NAT 把很多人聚成一个 IP。缓解:各 gateway 本地预计数+周期同步,或把热 key 拆成 key+随机后缀分散到多 shard 再求和",
+        "meaningEn": "A hot key takes a disproportionate share of traffic. In rate limiting it means one client (sharded by its key) sends huge volume, so all its counter ops hit the single shard owning it and overload it while others idle. Causes: a big legit customer, an attacker, or NAT aggregating many users into one IP. Mitigate with local pre-counting + periodic sync, or splitting the hot key into key+random-suffix sub-keys across shards and summing."
+      }
+    ],
     "track": "classic-sd",
     "category": "Distributed Rate Limiter",
     "numberAnchors": [
@@ -511174,6 +511587,20 @@
       "Hard-coding rules into client code means a limit change only takes effect once every client has been upgraded — the opposite of a quick, temporary adjustment.",
       "Changing memory by hand over SSH updates one gateway at a time, which doesn't scale to keeping every gateway in sync.",
       "Storing rules in a config store that gateways poll and cache locally is simple to build, and propagating within tens of seconds is exactly what this scenario can tolerate."
+    ],
+    "termDefinitions": [
+      {
+        "term": "配置分发:poll vs push",
+        "fullName": "",
+        "meaning": "把配置(限流规则)发到各 gateway 的两种方式:poll=每台定期去配置库拉+本地缓存(简单,生效延迟=拉取间隔,如30秒);push=配置变了主动推给各台(实时,但要推送/订阅设施,更复杂)。容忍几十秒→选 poll(更简单),这题正是",
+        "meaningEn": "Two ways to distribute config (rate-limit rules) to gateways: poll = each gateway periodically fetches from a config store and caches (simple; propagation delay = poll interval, e.g. 30s); push = the store pushes changes (real-time but needs pub/sub infra). If tens of seconds is acceptable, poll is simpler."
+      },
+      {
+        "term": "SSH",
+        "fullName": "Secure Shell",
+        "meaning": "安全地远程登录到另一台服务器命令行的协议/工具。你在自己电脑上敲 ssh user@服务器IP,连接被加密,然后就像坐在那台服务器前一样敲命令(看日志、改配置、重启服务)。服务器在机房/云里没接键盘,运维就靠 SSH 进去操作。「人工 SSH 改内存」=工程师手动登进每台机器改 → 不 scale",
+        "meaningEn": "SSH (Secure Shell) securely logs you into a remote server command line. You run ssh user@host from your laptop; the connection is encrypted and you get a shell on that server (view logs, edit config, restart). Servers sit in data centers with no keyboard, so ops use SSH to operate them. Manually SSH-ing to edit memory means logging into each machine by hand, which does not scale."
+      }
     ],
     "track": "classic-sd",
     "category": "Distributed Rate Limiter"
@@ -511412,6 +511839,12 @@
         "term": "故障模式 / failure mode",
         "meaning": "Redis 慢、超时或 shard 挂掉时系统如何反应：fail-open 是放行保可用性但可能打爆后端，fail-closed 是拒绝保护后端但会挡住正常用户。",
         "meaningEn": "A failure mode is how the system behaves when Redis is slow or down, such as fail-open for availability or fail-closed for backend protection."
+      },
+      {
+        "term": "降级",
+        "fullName": "graceful degradation",
+        "meaning": "当限流依赖(Redis)故障/超时、判不了限额时,系统「优雅退化」到一个后备行为而不是崩溃。两个主选:fail-open(放行,保可用、失保护)、fail-closed(拒绝,保后端、牺牲可用);更软的还有:退回本地内存近似计数、用上次缓存的规则、临时上一个粗粒度全局限流。所以「降级」=故障时怎么优雅后备,fail-open/close 是它最主要的两个选项",
+        "meaningEn": "Graceful degradation: when the rate-limit dependency (Redis) fails/times out and you cannot check limits, the system falls back to a safe behavior instead of crashing. Two main choices: fail-open (allow — keep availability, lose protection) and fail-closed (reject — protect backend, lose availability); softer options include local approximate counting, using last cached rules, or a coarse global cap."
       }
     ],
     "table": {
@@ -535736,6 +536169,18 @@
       "numbers",
       "track:classic-sd"
     ],
+    "optionExplanations": [
+      "<100ms 是极低目标，通常只适合本地缓存命中，不适合作为首版端到端 SLA。",
+      "<500ms 是给定 SLA，足够倒逼预计算 feed，而不是读时逐个聚合。",
+      "<2 秒会让首页刷新明显卡顿，掩盖了读时聚合的延迟问题。",
+      "<5 秒已经像后台任务，不符合用户打开 feed 的即时体验。"
+    ],
+    "optionExplanations_en": [
+      "Under 100ms is an extremely tight target, usually realistic only for local cache hits, not a first-pass end-to-end SLA.",
+      "Under 500ms is the stated SLA, and it is tight enough to force a precomputed feed instead of read-time aggregation.",
+      "Under 2 seconds would make home-feed refresh feel visibly slow and hide the read-time aggregation problem.",
+      "Under 5 seconds feels more like a background job than an instant feed load."
+    ],
     "track": "classic-sd",
     "category": "Instagram"
   },
@@ -537115,6 +537560,30 @@
       "feed-cache",
       "track:classic-sd"
     ],
+    "table": {
+      "headers": [
+        "维度",
+        "取值",
+        "作用"
+      ],
+      "rows": [
+        [
+          "主维度",
+          "user_id",
+          "隔离用户 feed"
+        ],
+        [
+          "页维度",
+          "cursor",
+          "定位当前页"
+        ],
+        [
+          "缓存值",
+          "postId 列表",
+          "轻量再水合"
+        ]
+      ]
+    },
     "optionExplanations": [
       "按帖子 ID 缓存没有隔离不同用户，谁的 feed 都会互相串。",
       "key 里同时带用户和游标两个维度，同一用户翻到第几页都能被精确命中或按需回填，不会互相覆盖。",
@@ -538310,6 +538779,18 @@
       "media-upload",
       "numbers",
       "track:classic-sd"
+    ],
+    "optionExplanations": [
+      "2MB 照片和 100MB 视频低估了真实视频上传需求，会让后面的分块设计看不必要。",
+      "100MB 照片和 10GB 视频把上限放得过大，成本和滥用控制都会被放大。",
+      "不设上限无法做容量规划，也给滥用和超大请求留下缺口。",
+      "8MB 照片、4GB 视频是本题目标上限；4GB 直接要求分块上传。"
+    ],
+    "optionExplanations_en": [
+      "A 2MB photo and 100MB video limit underestimates real video uploads and would make chunking look unnecessary.",
+      "A 100MB photo and 10GB video limit is oversized, amplifying cost and abuse-control problems.",
+      "No upper limit makes capacity planning impossible and leaves the upload API open to abusive huge requests.",
+      "Eight megabytes for photos and four gigabytes for videos is the target here; the 4GB video limit directly forces chunked upload."
     ],
     "track": "classic-sd",
     "category": "Instagram"

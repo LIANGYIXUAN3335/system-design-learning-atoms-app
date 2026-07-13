@@ -10005,8 +10005,8 @@
     "sub": "failover",
     "q": "自动 failover 的关键步骤怎么排？",
     "q_en": "What are the key steps in automatic failover?",
-    "why": "failover 不只是选新主，还要让所有参与者同意新主，并防止旧主回来继续接写。",
-    "why_en": "Failover is not just choosing a new primary; everyone must agree on it and the old primary must stop accepting writes.",
+    "why": "failover 的状态链是：心跳超时怀疑 leader→提升日志最新的 follower→客户端切到新 leader→旧 leader 回来先降级或隔离。代价是超时太短会误判，异步复制还可能留下少量丢写窗口。",
+    "why_en": "Failover means detect timeout, promote the freshest follower, reroute clients, and fence the old leader to avoid split brain.",
     "tags": [
       "ddia",
       "ch05",
@@ -10026,17 +10026,37 @@
       2,
       3
     ],
-    "diagram": "flowchart LR\n  D[detect failure] --> E[elect/promote]\n  E --> R[reroute clients]\n  R --> F[fence old leader]",
+    "diagram": "flowchart LR\n  D[timeout or missed heartbeat] --> E[promote freshest follower]\n  E --> R[reroute clients]\n  R --> F[fence/demote old leader]\n  F --> S[avoid split brain]",
     "termDefinitions": [
       {
         "term": "failover",
-        "meaning": "Failover 是主节点故障后把备用节点提升为新主节点的过程。",
-        "meaningEn": "Failover promotes a standby node to become the new primary after a failure."
+        "meaning": "Failover 是检测主节点失效后，把合适副本提升为新主并恢复写入的流程。",
+        "meaningEn": "Failover detects a failed primary, promotes a replica, and restores writes."
+      },
+      {
+        "term": "leader",
+        "meaning": "Leader 是单主复制中接收写入并决定复制日志顺序的主节点。",
+        "meaningEn": "A leader is the primary node that accepts writes and orders the replication log."
+      },
+      {
+        "term": "follower",
+        "meaning": "Follower 是从 leader 拉取并重放复制日志的副本，故障时可能被提升。",
+        "meaningEn": "A follower replays the leader's replication log and may be promoted during failover."
+      },
+      {
+        "term": "heartbeat",
+        "meaning": "心跳是节点定期发送的健康信号，超时只能说明可能失效。",
+        "meaningEn": "A heartbeat is a periodic health signal; a timeout only suggests a possible failure."
       },
       {
         "term": "fencing",
-        "meaning": "Fencing 是隔离旧主节点的保护动作，防止它继续接收写入。",
-        "meaningEn": "Fencing isolates an old primary so it cannot keep accepting writes."
+        "meaning": "Fencing 是撤销或隔离旧主写入权，防止它恢复后继续接写。",
+        "meaningEn": "Fencing revokes or isolates the old primary's write authority after recovery."
+      },
+      {
+        "term": "split brain",
+        "meaning": "Split brain 是两个节点同时认为自己是主节点并接收冲突写入。",
+        "meaningEn": "Split brain means two nodes both believe they are primary and accept conflicting writes."
       }
     ]
   },
@@ -29732,9 +29752,10 @@
     "answer": [
       0
     ],
-    "why": "当查询集合相对固定、文档流动时，可以把查询当索引来匹配新文档。代价是新增或修改大量查询也需要维护匹配结构。",
-    "why_en": "When queries are stable and documents stream in, the system can index queries and match each new document against them.",
-    "tradeoff": "固定查询集合 vs 固定文档集合",
+    "why": "这里不是“没有索引”，而是索引对象反过来：固定查询被维护成匹配结构，新文档流过它。代价是查询集合大幅变化时，更新这套结构会变贵。",
+    "why_en": "The direction flips: index the stable queries, stream each new document through them, and pay extra when many queries change.",
+    "tradeoff": "固定查询索引 vs 固定文档索引",
+    "whenOtherWins": "如果用户查询临时多变、文档集合相对稳定，传统搜索的文档倒排索引更合适。",
     "tags": [
       "ddia",
       "ch11",
@@ -29743,44 +29764,54 @@
     ],
     "table": {
       "headers": [
-        "方案",
-        "适合",
-        "代价"
+        "模式",
+        "固定侧",
+        "流动侧",
+        "维护成本"
       ],
       "rows": [
         [
-          "新文档流过固定查询集",
-          "前提换成它擅长的问题形状时才合适",
-          "新文档流过固定查询集成本"
+          "Stream search",
+          "查询集合",
+          "新文档",
+          "维护查询结构"
         ],
         [
-          "stream search 不需要…",
-          "前提换成它擅长的问题形状时才合适",
-          "stream sear…成本"
-        ],
-        [
-          "传统搜索只能处理实时新闻",
-          "前提换成它擅长的问题形状时才合适",
-          "传统搜索只能处理实时新闻成本"
-        ],
-        [
-          "两者都要每秒重建全量索引",
-          "数据小、低频或离线修复时才合适",
-          "搬运/扫描贵"
+          "传统搜索",
+          "文档集合",
+          "临时查询",
+          "维护文档索引"
         ]
       ]
     },
     "optionExplanations": [
-      "客户的查询集合相对固定，新闻文章才是源源不断进来的那一方；把这些固定查询当作索引，让每篇新流过来的文档去匹配它们，正是流搜索方向反过来的地方。",
-      "stream search 同样需要维护针对查询建的索引状态，用来快速匹配大量新文档，不是不需要任何索引结构。",
-      "传统搜索同样能通过持续索引新内容来处理实时新闻，说它只能处理实时新闻是把两种方向搞反了。",
-      "stream search 通常在查询集合变化时才更新匹配结构，不需要每秒都重建全量索引，这个说法夸大了它的开销。"
+      "客户查询长期固定，文章才不断进来；把查询维护成匹配结构，让每篇新文档流过它们，就是 stream search 的反向索引思路。",
+      "错误在“无状态”：stream search 仍要保存查询匹配结构，只是索引对象从文档换成查询。",
+      "传统搜索也能处理新闻实时入库；它的典型方向是先维护文档索引，再让临时查询去查这个索引。",
+      "每秒全量重建是误解；通常只在文档或查询变化时增量更新对应索引。"
     ],
     "optionExplanations_en": [
-      "With the customer's set of queries relatively fixed and news articles being the side that keeps flowing in, treating those fixed queries as the index and matching each new document against them is exactly the reversed direction of stream search.",
-      "Stream search still needs to maintain index state built from the queries, used to quickly match against the flood of new documents — it isn't index-free.",
-      "Traditional search can likewise handle live news by continuously indexing new content, so claiming it can only handle live news gets the two directions backwards.",
-      "Stream search typically only updates its matching structure when the query set changes, not rebuilding a full index every second — this option overstates its cost."
+      "Customer queries stay fixed while articles arrive, so stream search keeps a query-matching structure and runs each new document through it.",
+      "The mistake is 'stateless': stream search still stores query state; the indexed side has changed from documents to queries.",
+      "Traditional search can index live news too; its usual direction is document index first, then ad-hoc queries over it.",
+      "Full rebuild every second is the false part; systems normally update the relevant index incrementally as documents or queries change."
+    ],
+    "termDefinitions": [
+      {
+        "term": "stream search",
+        "meaning": "Stream search 是把长期查询编译成匹配结构，让新文档到来时逐条匹配这些查询。",
+        "meaningEn": "Stream search compiles long-lived queries into a matching structure and tests each arriving document against them."
+      },
+      {
+        "term": "index state",
+        "meaning": "索引状态是为了加速匹配而维护的数据结构，可以索引文档，也可以索引查询。",
+        "meaningEn": "Index state is the maintained data structure that speeds matching, whether it indexes documents or queries."
+      },
+      {
+        "term": "ad-hoc query",
+        "meaning": "临时查询是用户当下提交、事先不固定的查询。",
+        "meaningEn": "An ad-hoc query is submitted on demand rather than being known in advance."
+      }
     ]
   },
   {
