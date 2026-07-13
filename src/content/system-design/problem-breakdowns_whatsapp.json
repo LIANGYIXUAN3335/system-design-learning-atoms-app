@@ -795,9 +795,9 @@
     "answer": [
       1
     ],
-    "why": "很多现代 L7 LB 也支持 WebSocket，但这里用不上 L7 的路径/Header 路由或按请求分摊能力，所以 L4 足够且一般更快。",
-    "why_en": "An L4 load balancer is sufficient and generally faster here because none of the L7 capabilities like path-based routing are actually needed.",
-    "whenOtherWins": "需要按路径 / Header 把流量分发到不同服务、或想把同一客户端连接后的多个 HTTP 请求摊到多台服务器时，L7 才有价值。",
+    "why": "L4 只看 IP+端口，建连时选一次后端就当哑管道转发字节，天然适配 WebSocket 长连接(连接一直钉在同一台，socket 活在其内存里)。L7 要终止 TLS、逐请求解析 path/header——本题没有按 path/header 分流的需求，L7 全是白干，更慢更耗 CPU。",
+    "why_en": "L4 sees only IP+port, picks a backend once at connect time, then forwards bytes like a dumb pipe — a natural fit for long-lived WebSockets (the connection stays pinned to one host where the socket lives). L7 must terminate TLS and parse path/headers per request; with no path/header routing need here, that work is wasted and slower.",
+    "whenOtherWins": "需要按 path/Header 把流量分到不同服务、改写 header、按 cookie 做会话粘性、或加 WAF 时，L7 才有价值。纯 WebSocket 长连接下 L7 在握手后也只是透传，几乎不比 L4 多做事却更贵。",
     "tradeoff": "L4 更高性能的直连转发 vs L7 按路径/Header 路由的灵活性",
     "tags": [
       "whatsapp",
@@ -821,6 +821,18 @@
         "term": "WebSocket",
         "meaning": "基于 TCP 的全双工长连接协议，一次握手后客户端与服务器可以随时双向收发消息。",
         "meaningEn": "A WebSocket is a persistent, full-duplex connection over TCP that lets client and server send messages to each other at any time after one handshake."
+      },
+      {
+        "term": "TLS 终止",
+        "fullName": "TLS termination",
+        "meaning": "LB 在自己这里把加密的 HTTPS/WSS 解密成明文，才能读到 HTTP 的 path/header 做路由(L7 必做)。代价是解密要花 CPU；L4 不解密、直接透传密文，所以更快但也看不到内容。",
+        "meaningEn": "TLS termination: the LB decrypts encrypted HTTPS/WSS into plaintext so it can read the HTTP path/headers for routing (required for L7). It costs CPU to decrypt; L4 does not decrypt and passes the ciphertext straight through, so it is faster but blind to content."
+      },
+      {
+        "term": "按连接 vs 按请求",
+        "fullName": "per-connection vs per-request routing",
+        "meaning": "L4 在「建立连接」时选一次后端，整条连接的字节都发去那台(长连接一直钉住)；L7 能在「每个 HTTP 请求」上重新选后端。长连接场景要的是前者——钉住同一台，因为 socket 只存在那台机器内存里。",
+        "meaningEn": "L4 picks a backend once when the connection is established and all bytes go there (a long connection stays pinned); L7 can re-pick a backend for each HTTP request. Long-lived connections want the former — pinned to one host, because the socket lives only in that host memory."
       }
     ],
     "optionExplanations": [
@@ -834,7 +846,10 @@
       "Right: there's no path/header routing need here, so L4 is enough and its direct forwarding is usually faster.",
       "DNS round robin does no health checking or connection awareness, which isn't enough resilience for long-lived connections.",
       "Letting the client pick its own server pushes service discovery and health state onto the client, the wrong place for that responsibility."
-    ]
+    ],
+    "whenOtherWins_en": "L7 pays off when you need path/header-based routing to different services, header rewriting, cookie-based session stickiness, or a WAF. For pure WebSocket connections L7 just passes through after the handshake — barely more than L4 but costlier.",
+    "codeSample": "# ===== L4 (AWS NLB / haproxy mode tcp) =====\nlistener:\n  protocol: TCP            # 只认 TCP，不懂 HTTP、不解密 TLS\n  port: 443\n  backend_pool: chat_servers\n  algorithm: least_connections   # 或 round_robin / hash(client_ip)\n  health_check: { type: TCP, port: 443 }   # 只探端口通不通\n# 没有 path/header 规则——L4 根本读不到应用层内容\n#\n# 行为：on new_tcp_conn -> backend = pool.pick(); pipe(client<->backend)\n#       建连时选一次，之后纯转发字节，连接一直钉在同一后端(适配 WebSocket)\n\n# ===== L7 (AWS ALB / nginx / haproxy mode http) =====\nlistener:\n  protocol: HTTPS          # 终止 TLS：解密后才能读 HTTP\n  port: 443\n  tls_cert: chat.pem\n  rules:                   # 按 HTTP 内容路由 = L7 唯一卖点\n    - if path startsWith /chat  -> chat_servers\n    - if path startsWith /media -> media_servers\n    - default                   -> chat_servers\n  sticky_session: { by: cookie }\n  health_check: { type: HTTP, path: /healthz, expect: 200 }\n#\n# 行为：tls_decrypt(); for each http_request: parse; match_rule(path,header)\n#       每个请求都可能路由到不同后端 —— 本题用不上，纯属多花 CPU/延迟",
+    "lang": "yaml"
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-015",
@@ -1129,15 +1144,15 @@
     "answer": [
       0
     ],
-    "why": "chatId 分区 + participantId 排序，Query 单个分区就拿到该会话全部成员，这是 DynamoDB 一查多行的标准建模。",
-    "why_en": "With chat id as the partition key and participant id as the sort key, one query on the partition returns every member of the chat.",
+    "why": "chatId 分区 + participantId 排序，Query 单个分区就拿到该会话全部成员，这是 DynamoDB 一查多行的标准建模。ChatParticipant 不只是两个外键：它挂着 per(user,chat) 的专属状态(role、lastReadSeq、muted、pinned)——这些既不能放 Chat(全员共享)也不能放 Message(每条一份)，只能落在这一行。",
+    "why_en": "Partition by chatId + sort by participantId means one Query on a single partition returns all members — the standard DynamoDB one-query-many-rows model. ChatParticipant is not just two foreign keys: it carries per-(user,chat) state (role, lastReadSeq, muted, pinned) that fits neither Chat (shared) nor Message (per-message), so it lives on this row.",
     "tags": [
       "whatsapp",
       "data-model",
       "dynamodb"
     ],
-    "codeSample": "Table: ChatParticipant\nPK (partition key): chatId\nSK (sort key):      participantId\n\n# Query(chatId = \"chat_123\") -> all rows for that chat",
-    "lang": "dynamodb",
+    "codeSample": "from dataclasses import dataclass\nfrom enum import Enum\nclass Role(Enum):   OWNER=\"owner\"; ADMIN=\"admin\"; MEMBER=\"member\"\nclass Status(Enum): ACTIVE=\"active\"; LEFT=\"left\"; REMOVED=\"removed\"; BANNED=\"banned\"\n\n@dataclass\nclass ChatParticipant:\n    chat_id: str            # PK/分区键：属于哪个会话\n    user_id: str            # SK/排序键：哪个用户\n    role: Role              # 群权限\n    status: Status          # 成员状态（软删留历史）\n    joined_at: int          # 何时加入 → 可见消息范围\n    invited_by: str | None  # 谁拉进来的（审计）\n    # —— per(user,chat) 专属状态：只能放这张表 ——\n    last_read_seq: int      # 读到第几条 → 未读数 / 已读回执\n    muted: bool             # 该用户静音此会话\n    pinned: bool            # 用户置顶\n    archived: bool          # 用户归档\n    last_activity_at: int   # GSI 排序键：会话最近活跃时间\n\n# 基表 : PK=chat_id, SK=user_id          → 「查某会话全部成员」一次 Query (本卡)\n# GSI  : PK=user_id, SK=last_activity_at → 「查我的会话列表」并按最近排序 (卡019)",
+    "lang": "python",
     "termDefinitions": [
       {
         "term": "DynamoDB",
@@ -1153,6 +1168,18 @@
         "term": "sort key（排序键）",
         "meaning": "同一分区键内用来排序和做范围查询的第二个键。",
         "meaningEn": "The sort key orders rows that share the same partition key and supports range queries within it."
+      },
+      {
+        "term": "join 表 / 边表",
+        "fullName": "join / edge table",
+        "meaning": "连接两个实体、表达多对多关系的表(这里 User×Chat)。但它常常不只是两个外键——边上还挂着「这段关系的专属属性」。ChatParticipant 上的 role/lastReadSeq/muted 就是「这个用户在这个会话里」独有的状态,没有别的表能放。",
+        "meaningEn": "A join/edge table connects two entities to express a many-to-many relation (here User×Chat). But it is often more than two foreign keys — it carries attributes of the relationship itself. ChatParticipant's role/lastReadSeq/muted are state unique to \"this user in this chat\" with no other home."
+      },
+      {
+        "term": "已读位点",
+        "fullName": "last-read pointer (lastReadSeq)",
+        "meaning": "每个成员各自「读到第几条」的游标,是 per(user,chat) 的事实,只能存 ChatParticipant 行。未读数 = 会话最新 seq − lastReadSeq;已读回执/蓝勾也靠比较各成员的 lastReadSeq。放不进 Chat(全员共享一份)或 Message(每条一份)。",
+        "meaningEn": "The last-read pointer is each member's cursor of \"how far I have read\", a per-(user,chat) fact that lives only on the ChatParticipant row. Unread = latest seq − lastReadSeq; read receipts/blue ticks compare members' lastReadSeq. It cannot live on Chat (shared) or Message (per-message)."
       }
     ],
     "optionExplanations": [
@@ -1166,7 +1193,66 @@
       "A Scan reads the whole table before filtering — cost grows with table size, the wrong path for \"members of this chat.\"",
       "Partitioning by participantId scatters members of the same chat across partitions, then needs a second filter anyway.",
       "A big redundant field gets rewritten on every membership change, risks item-size limits, and can't be queried per member."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "字段",
+        "类型",
+        "作用"
+      ],
+      "rows": [
+        [
+          "chatId",
+          "string",
+          "PK/分区键 — 属于哪个会话"
+        ],
+        [
+          "userId(participantId)",
+          "string",
+          "SK/排序键 — 哪个用户;(chatId,userId) 唯一一行"
+        ],
+        [
+          "role",
+          "enum",
+          "群权限:owner/admin/member"
+        ],
+        [
+          "status",
+          "enum",
+          "成员状态:active/left/removed/banned(软删留历史)"
+        ],
+        [
+          "joinedAt",
+          "timestamp",
+          "何时加入 → 决定可见的历史消息范围"
+        ],
+        [
+          "invitedBy",
+          "userId?",
+          "谁拉进来的(审计,可选)"
+        ],
+        [
+          "lastReadSeq",
+          "number",
+          "读到第几条 → 未读数=最新seq−lastReadSeq、已读回执"
+        ],
+        [
+          "muted/mutedUntil",
+          "bool/ts",
+          "该用户静音此会话(通知设置,per-user)"
+        ],
+        [
+          "pinned / archived",
+          "bool",
+          "用户置顶 / 归档此会话"
+        ],
+        [
+          "lastActivityAt",
+          "timestamp",
+          "GSI 排序键 — 会话最近活跃时间,给\"我的会话列表\"排序"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-019",
@@ -1302,8 +1388,8 @@
     "answer": [
       2
     ],
-    "why": "单机要保存真正的 WebSocket 连接对象，它只存在于接住连接的进程内存里，不能序列化进 Redis。Redis 能存 userId→serverId 之类的元信息，下发仍靠本机内存表。",
-    "why_en": "On one host, the actual WebSocket lives inside the process that accepted it, so Redis can store routing metadata but the owning Chat Server still needs an in-memory map.",
+    "why": "要 push 消息就得握着那条活的 WebSocket——它是进程内存里的句柄，绑死在接住它的进程里，无法序列化进 Redis。单机时一个 userId→socket 的内存表就够；多台 Chat Server 时每台仍各自握本地表，只是再加一层 Redis presence(userId→serverId)做跨机路由。",
+    "why_en": "Pushing a message requires the live WebSocket — an in-process handle bound to the process that accepted it, not serializable into Redis. One host needs only a userId→socket map; with many Chat Servers each still holds its own local map, plus a Redis presence layer (userId→serverId) for cross-host routing.",
     "codeSample": "const connections = new Map(); // userId -> WebSocket object\n\nfunction onConnect(userId, ws) {\n  connections.set(userId, ws); // actual socket handle stays in this process\n}\n\nfunction sendToLocalUser(userId, msg) {\n  const ws = connections.get(userId);\n  if (ws) ws.send(JSON.stringify(msg));\n}\n\n// Redis can help other servers find or notify this server:\n// presence.set(userId, serverId) or publish(`user:${userId}`, msg)\n// but Redis cannot store the ws object itself.",
     "lang": "javascript",
     "tags": [
@@ -1354,16 +1440,19 @@
     },
     "optionExplanations": [
       "每次发消息都查库，既慢又没必要——连接状态是高频读的内存态数据。",
-      "全局在线集合能告诉你「谁在线」，但装不下真正的 socket 对象本身。",
+      "全局在线集合能告诉你「谁在线」，但装不下真正的 socket 对象；多服务器时它的正确角色是 presence 路由(userId→serverId)，仍不替代本地内存表。",
       "对：内存哈希表把 userId 映射到本地 socket 对象，这是唯一能持有真实连接的地方。",
       "写文件日志再解析拿不到实时可用的连接对象，只能做事后分析。"
     ],
     "optionExplanations_en": [
       "Querying the database on every send is slow and unnecessary — connection state is hot, in-memory data.",
-      "A global online set says who's online but can't hold the actual socket object itself.",
+      "A global online set tells you who is online but cannot hold the real socket object; with multiple servers its proper role is presence routing (userId→serverId), still not a replacement for the local map.",
       "Right: an in-memory hash map from userId to the local socket object is the only place that can hold a real connection.",
       "Writing a log file and parsing it never yields a live, usable connection object — only after-the-fact analysis."
-    ]
+    ],
+    "whenOtherWins": "横向扩到多台 Chat Server 时才加 Redis：它当 presence index(userId→哪台服务器)用于跨机路由，不替代本地内存表——真 socket 永远只在本机内存里。触发点是「多台服务器」而非「多台设备」，单台服务器可在一个内存表里握住海量设备连接。",
+    "whenOtherWins_en": "Redis enters only when scaling to multiple Chat Servers: it acts as a presence index (userId→which server) for cross-host routing, never replacing the local map — the real socket always lives only in that host's memory. The trigger is many servers, not many devices; one server holds a huge number of device connections in a single map.",
+    "diagram": "flowchart LR\n  A[\"用户A 连在 server1\"] -->|\"发消息给 B\"| S1[\"server1 本地表: 握着 A 的 socket\"]\n  S1 -->|\"查 B 在哪台\"| R[(\"Redis presence<br/>userId → serverId\")]\n  R -->|\"B 在 server3\"| S1\n  S1 -->|\"路由 pub/sub\"| S3[\"server3 本地表: 握着 B 的 socket\"]\n  S3 -->|\"ws.send 推送\"| B[\"用户B 连在 server3\"]"
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-022",
@@ -1900,37 +1989,32 @@
     "answer": [
       1
     ],
-    "why": "messages/s = 2 亿活跃 × 20 条/天 ÷ 86,400 ≈ 46k，面试可按 4-5 万/秒说。它是原始发送速率，只说明单机数据库不够；存储写入还要再乘 Message、Inbox 和群聊 fan-out。",
-    "why_en": "The raw send rate is 200M users times 20 messages per day divided by 86,400, about 46k messages/s, which rules out one database host but still needs later write amplification.",
+    "why": "messages/s = 2 亿 × 20/天 ÷ 86,400 ≈ 46k，面试按 4-5 万/秒说。判「超单机」的锚点:单库持久化写入约 1 万/秒(量级 10⁴)——4-5 万是它的 5~10 倍，故要水平分区。这只是原始发送速率，存储写入还要再乘 Message+Inbox 双写与群聊 fan-out(见卡029)。",
+    "why_en": "messages/s = 200M × 20/day ÷ 86,400 ≈ 46k, quoted as ~40-50k/s. The peg for \"exceeds one machine\": a single DB does ~10k durable writes/s (order 10^4) — 46k is 5-10× that, so partition horizontally. This is only the raw send rate; storage writes further multiply by Message+Inbox double-write and group fan-out (card 029).",
     "diagram": "flowchart LR\n    A[200M active users] --> C[4B messages/day]\n    B[20 messages/user/day] --> C\n    C --> D[Divide by 86,400 sec/day]\n    D --> E[~46k messages/s<br/>round to ~40k-50k]",
     "codeSample": "active_users = 200_000_000\nmessages_per_user_per_day = 20\nseconds_per_day = 24 * 60 * 60  # 86,400\n\nmessages_per_day = active_users * messages_per_user_per_day\n# 200M * 20 = 4B messages/day\n\nmessages_per_sec = messages_per_day / seconds_per_day\n# 4B / 86,400 ~= 46k messages/s\n# interview answer: about 40k-50k messages/s",
     "lang": "python",
     "table": {
       "headers": [
-        "步骤",
-        "公式",
-        "结果"
+        "操作",
+        "单机量级(经验值)"
       ],
       "rows": [
         [
-          "每日消息数",
-          "200M × 20 msg/day",
-          "4B messages/day"
+          "单库持久化写入(fsync/事务)",
+          "~几千 ~ 1 万/秒 (10⁴) ← 本题对比的锚点"
         ],
         [
-          "一天秒数",
-          "24 * 60 * 60",
-          "86,400 sec/day"
+          "单库缓存读",
+          "~10 万+/秒 (10⁵)"
         ],
         [
-          "平均发送速率",
-          "4B / 86,400",
-          "~46k messages/s"
+          "单 Redis QPS",
+          "~10 万/秒 (10⁵)"
         ],
         [
-          "面试数量级",
-          "四舍五入",
-          "~40k-50k messages/s"
+          "单 WebSocket 服务器连接数",
+          "~10 万 ~ 百万连接(内存/fd 限)"
         ]
       ]
     },
@@ -1954,6 +2038,18 @@
         "term": "peak factor",
         "meaning": "峰值流量相对平均流量的倍数。面试第一步常先算平均量级，再说明生产容量要按峰值冗余规划。",
         "meaningEn": "A peak factor is the multiplier between peak traffic and average traffic. In interviews, first estimate the average order of magnitude, then mention that production capacity needs peak headroom."
+      },
+      {
+        "term": "单机数据库写入上限",
+        "fullName": "",
+        "meaning": "经验锚点:单个关系库节点的可靠(带 fsync/事务)写入约几千~1 万/秒(量级 10⁴)。因为每条写要 WAL 刷盘(受磁盘 IOPS 限)+更新索引+常等副本 ack，再叠单写入者锁竞争。读便宜得多(靠缓存可达 10⁵+)，所以瓶颈几乎总是写。数字随硬件/配置浮动，面试用「单节点~1 万写/秒」当锚点最稳。",
+        "meaningEn": "Rule-of-thumb peg: a single relational DB node sustains ~a few thousand to ~10k durable (fsync/transactional) writes/s (order 10^4), because each write needs a WAL fsync (disk-IOPS bound) + index updates + often a replica ack, plus single-writer lock contention. Reads are far cheaper (10^5+ via cache), so writes are almost always the bottleneck. It varies with hardware/config; \"~10k writes/s per node\" is the safest interview anchor."
+      },
+      {
+        "term": "量级估算",
+        "fullName": "order-of-magnitude estimation",
+        "meaning": "容量估算只需算对「10 的几次方」，不必精确。判断「是否超单机」就是比量级:发送 4-5 万/秒(10⁴·几倍) vs 单库写 ~1 万/秒(10⁴) → 超了要分片。考官看的是你能不能用锚点(单机写~10⁴、缓存读~10⁵)迅速定位瓶颈，而非小数点。",
+        "meaningEn": "Capacity estimation only needs the right power of ten, not precision. Deciding \"exceeds one machine\" is a magnitude comparison: 46k/s send (a few × 10^4) vs ~10k/s single-node writes (10^4) → exceeds, so shard. Interviewers watch whether you locate the bottleneck fast using anchors (single-node writes ~10^4, cached reads ~10^5), not the decimals."
       }
     ],
     "optionExplanations": [
@@ -2890,8 +2986,8 @@
       1,
       2
     ],
-    "why": "直连低延迟，但你要自管路由编排。代价是全网状连接近似 N²、扩缩容会让一批 user 换 owner 形成重连惊群，迁移窗口还要双发或桥接，避免事件打到旧 owner。",
-    "why_en": "Direct routing saves a hop, but it creates near-N-squared server links, migration herds during scaling, and old/new owner races that need draining, backoff, and bridging.",
+    "why": "一致性哈希把「哪台服务器管哪个用户」变成人人可算的确定映射，服务器直连投递省掉 Redis 那一跳、延迟更低——但你要亲自运营有状态的路由控制面。代价:①全网状连接近 N²，逼服务器少而肥;②扩缩容让一段用户换主，处理不好成重连惊群;③迁移窗口要向新旧两台双发防丢消息。",
+    "why_en": "Consistent hashing makes \"which server owns which user\" a deterministic map everyone can compute; direct server-to-server delivery skips the Redis hop for lower latency — but you must operate a stateful routing control plane. Costs: (1) near-N² full mesh forcing few/large servers; (2) scaling reshuffles a slice of users, risking a reconnect thundering herd; (3) the migration window must dual-send to old+new owner to avoid dropping messages.",
     "tradeoff": "直连低延迟、少一跳 vs 自己维护全网连接、哈希环迁移和过渡期双发",
     "codeSample": "# Before scaling:\nowner(user123) = Server A\n\n# Add Server B; hash ring changes:\noldOwner = Server A\nnewOwner = Server B\n\n# Transition window:\nroute(user123) -> [oldOwner, newOwner]  # dual-send or bridge\noldOwner.drainConnections(batch_size=small)\nclient reconnects with jitter/backoff\n\n# After client is stable on B:\nroute(user123) -> Server B only",
     "lang": "python",
@@ -2926,34 +3022,51 @@
         "term": "old owner / new owner",
         "meaning": "一致性哈希变更前负责某个 userId 的服务器叫 old owner，变更后负责它的服务器叫 new owner。迁移窗口里两者要协调。",
         "meaningEn": "The old owner is the server responsible for a userId before a consistent-hash change, and the new owner is responsible after the change. They must coordinate during the migration window."
+      },
+      {
+        "term": "一致性哈希",
+        "fullName": "consistent hashing",
+        "meaning": "把服务器和 key(这里 userId)都哈希到一个环上，key 归顺时针方向第一台服务器管。相比 hash(key)%N「加减一台就几乎全体重映射」，它加减一台只挪约 1/N 的 key，极大减少伸缩时的数据/连接迁移。常配「虚拟节点」(每台在环上多个点)让分布更均匀。",
+        "meaningEn": "Consistent hashing places both servers and keys (here userId) on a ring; a key is owned by the first server clockwise. Versus hash(key)%N, which remaps almost every key when N changes, it moves only ~1/N of keys when a server is added/removed, greatly cutting reshuffle on scaling. Virtual nodes (many ring points per server) even out distribution."
+      },
+      {
+        "term": "直连投递",
+        "fullName": "direct delivery",
+        "meaning": "每台服务器用共享的哈希环自己算出目标用户归哪台管，直接开连接把消息递过去，不经 Redis 等中间件。好处是省一跳、延迟低;代价是全网状互连(≈N²)+ 自己管路由控制面(环、归属、故障接管、连接迁移)。",
+        "meaningEn": "Direct delivery: each server uses the shared hash ring to compute which server owns the target user and connects directly to hand off the message, with no Redis in between. Pro: one fewer hop, lower latency; con: full-mesh interconnect (≈N²) plus self-managing the routing control plane (ring, ownership, failover, connection migration)."
       }
     ],
     "table": {
       "headers": [
-        "代价",
-        "为什么出现",
-        "怎么处理"
+        "维度",
+        "一致性哈希直连",
+        "Redis Pub/Sub(推荐)"
       ],
       "rows": [
         [
-          "全网状连接",
-          "任意 server 可能直发任意 owner",
-          "减少台数/用大机器/中转层"
+          "延迟",
+          "低 — 服务器直连，不过中间件",
+          "多一跳(经 Redis)，ms 级"
         ],
         [
-          "扩缩容惊群",
-          "哈希环变动换 owner",
-          "drain、分批迁移、backoff"
+          "连接拓扑",
+          "全网状 ≈ N²，逼服务器少而肥",
+          "只连 Redis，拓扑简单"
         ],
         [
-          "过渡期双发",
-          "old/new owner 都可能收事件",
-          "双发或转发桥接、去重"
+          "扩缩容",
+          "一段用户换主→要编排迁移、防惊群",
+          "Redis 扛路由，服务器基本无感"
         ],
         [
-          "DB 分区键",
-          "路由哈希和存储分区两回事",
-          "userId 仍可作分区键"
+          "控制面",
+          "要 ZooKeeper/etcd 管环/归属/接管",
+          "几乎不用自管"
+        ],
+        [
+          "你负责什么",
+          "自运营有状态路由控制面",
+          "把路由外包给 Redis"
         ]
       ]
     },
@@ -2968,7 +3081,9 @@
       "When scale-out/in reassigns owners, users can reconnect en masse and cause a thundering herd unless migration is carefully orchestrated.",
       "During the migration window either the old or new value can be the current owner, so without dual-write or bridging some events land on nobody.",
       "userId can still serve as the database partition key — routing hashing and storage partitioning are two independent mechanisms that don't conflict."
-    ]
+    ],
+    "scenario": "用一致性哈希把 userId 确定映射到某台 Chat Server，服务器之间直连投递(不经 Redis)。",
+    "scenario_en": "Use consistent hashing to deterministically map userId to a Chat Server; servers deliver by connecting directly (no Redis)."
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-041",
@@ -2995,9 +3110,9 @@
     "answer": [
       2
     ],
-    "why": "Redis Pub/Sub 用极轻的 socket 映射在服务器之间摆渡消息：订阅该用户频道的服务器收到发布后转发进 WebSocket，专器专用。",
-    "why_en": "Redis Pub/Sub is purpose-built for bouncing messages between servers, using lightweight per-user channels that subscribing chat servers forward into their sockets.",
-    "whenOtherWins": "不愿新增 Redis 依赖、且团队能驾驭连接编排时，一致性哈希直连也可行，还省掉经 Redis 的一跳延迟。",
+    "why": "Redis Pub/Sub 用极轻的 socket 映射在服务器之间摆渡消息:持有 B 的服务器订阅 user:B 频道，A 只管发布，Redis 转给当前订阅者——A 不需要知道 B 在哪台，所以免掉一致性哈希那套「算归属」的映射与控制面。代价是经 Redis 多一跳(ms 级)。",
+    "why_en": "Redis Pub/Sub ferries messages between servers via light socket maps: the server holding B subscribes to channel user:B, A just publishes, Redis routes to the current subscriber — A never needs to know where B is, so it drops the consistent-hashing ownership map and control plane. Cost: one extra hop through Redis (ms-scale).",
+    "whenOtherWins": "不愿新增 Redis 依赖、且团队能驾驭连接编排时，一致性哈希直连也可行，省掉经 Redis 的一跳延迟(卡039/040)。",
     "tradeoff": "专用轻量转发（Pub/Sub）vs 自建一致性哈希直连路由的运维成本",
     "tags": [
       "whatsapp",
@@ -3033,30 +3148,51 @@
         "meaning": "把 key 和节点都映射到同一个哈希环上，节点增减时只影响环上相邻的一小段映射关系。",
         "meaningEn": "Consistent hashing places both keys and nodes on the same hash ring so adding or removing a node only reshuffles a small neighboring slice of the mapping.",
         "fullName": "Consistent Hashing"
+      },
+      {
+        "term": "订阅式路由 vs 计算式路由",
+        "fullName": "",
+        "meaning": "Pub/Sub 是订阅式:持有 B 的服务器「自报」——订阅 user:B 频道，发送方只发布、不关心 B 在哪，所以 userId 和服务器无固定绑定、免一致性哈希。直连是计算式:发送方必须算出 B 的归属服务器才能直连，故需确定映射(环)+控制面。",
+        "meaningEn": "Pub/Sub is subscription-based routing: the server holding B announces itself by subscribing to user:B; the sender only publishes and never needs to know where B is, so userId is not bound to a server and no consistent hashing is needed. Direct-connect is computation-based: the sender must compute B's owning server, requiring a deterministic map (ring) + control plane."
+      },
+      {
+        "term": "Sharded Pub/Sub",
+        "fullName": "Redis 7 sharded pub/sub",
+        "meaning": "经典 Redis Pub/Sub 在集群里一次 PUBLISH 会广播到所有节点、扩不动;Redis 7 的 SPUBLISH/SSUBSCRIBE 按频道 hash slot 只投给管该频道的分片，让消息总线可横向扩。这里也「哈希」，但哈的是频道→Redis 分片、由 Redis 集群托管，不是你手搓用户归属的控制面。",
+        "meaningEn": "Classic Redis Pub/Sub broadcasts each PUBLISH to all cluster nodes and does not scale; Redis 7 SPUBLISH/SSUBSCRIBE routes by the channel hash slot to only the owning shard, letting the message bus scale out. This also \"hashes\", but channel→shard is Redis-cluster-managed, not a user-ownership control plane you operate yourself."
       }
     ],
     "table": {
       "headers": [
-        "方案",
-        "定位",
-        "一致性",
-        "扩展",
-        "何时选"
+        "问题",
+        "Pub/Sub 怎么解",
+        "对比一致性哈希直连"
       ],
       "rows": [
         [
-          "Redis",
-          "内存 KV",
-          "单主强",
-          "集群可扩",
-          "热点低延迟"
+          "B 在哪台",
+          "不用知道:持有 B 的服务器订阅 user:B，发布即达",
+          "要算:需 userId→server 确定映射(环)"
         ],
         [
-          "Kafka",
-          "事件日志",
-          "分区有序",
-          "很强",
-          "流/削峰"
+          "LB 放连接",
+          "可放任意健康服务器",
+          "必须落到管该 hash 段的那台(hash-aware)"
+        ],
+        [
+          "加 Chat Server",
+          "新连接摊到新机器，存量连接不迁移",
+          "改环→一段存量用户换主、重连惊群"
+        ],
+        [
+          "某台热了",
+          "可主动 drain:断开重连到别处即可",
+          "搬不动:用户被钉在其 hash-owner 上"
+        ],
+        [
+          "扩到极限",
+          "分片 Redis 总线(Redis 7 Sharded Pub/Sub)",
+          "你自管环/归属/接管/双发"
         ]
       ]
     },
@@ -4015,8 +4151,8 @@
     "answer": [
       1
     ],
-    "why": "按群大小自适应切换分区策略：小群走用户频道、大群走群频道；切换期给服务器留出订阅时间、双发防丢——边缘情况要单独讲清。",
-    "why_en": "Adaptively partition by chat for groups above a size threshold, having users subscribe to those chat channels, and publish to both channels briefly when a group crosses the threshold.",
+    "why": "按群大小自适应切换分区:小群走 user 频道、大群改走群频道(99 次发布→1 次)。切换的危险在于「服务器订阅群频道要时间」——有的订上了、有的还没;若太早只发群频道，没订上的那批成员就漏。所以切换期两边都发(老 user 频道 + 新群频道)防丢，确认全订上再停老路;重复由 messageId 去重。",
+    "why_en": "Adaptive partitioning by group size: small groups use user channels, large groups switch to a group channel (99 publishes → 1). The switch is risky because servers take time to subscribe to the group channel — some have, some have not; publishing only on the group channel too early makes members on not-yet-subscribed servers miss it. So during the window you dual-send (old user channels + new group channel) to prevent loss, stopping the old path only once all have subscribed; duplicates are deduped by messageId.",
     "whenOtherWins": "若群规模上限低且分布均匀，固定按 user 分区就够了——不值得为不存在的边缘情况引入自适应切换的复杂度。",
     "tradeoff": "固定分区的实现简单 vs 自适应切换覆盖大群长尾的额外复杂度",
     "tags": [
@@ -4030,6 +4166,18 @@
         "meaning": "发布-订阅消息模式：发布者把消息发到一个频道，所有订阅该频道的连接都会收到；Redis 的实现不持久化消息，无人订阅就丢。",
         "meaningEn": "Pub/Sub is publish-subscribe messaging where a publisher sends to a channel and every current subscriber receives it; Redis does not persist these messages, so one with no subscriber is simply lost.",
         "fullName": "Publish/Subscribe"
+      },
+      {
+        "term": "切换期双发防丢",
+        "fullName": "dual-send during migration",
+        "meaning": "在线迁移路由方案(旧→新)时有个窗口:你不知道某接收者此刻在听旧路还是新路(如服务器还没订上新群频道)。于是窗口内两边都发，谁都不漏(防丢)，等确认新路完全就绪再停老路。重复用 messageId 去重——宁可临时重复(可去重)也不丢消息(at-least-once + dedup)。卡040 的「旧主/新主双发」是同一个模式。",
+        "meaningEn": "Dual-send during migration: when switching a routing scheme live (old→new) there is a window where you do not know whether a given receiver is listening on the old or new path (e.g. a server has not yet subscribed to the new group channel). So you send on both during the window so nobody is missed (loss prevention), stopping the old path only once the new one is confirmed ready. Duplicates are removed by messageId — prefer temporary (dedupable) duplicates over loss (at-least-once + dedup). Card 040's old/new-owner dual-send is the same pattern."
+      },
+      {
+        "term": "自适应分区",
+        "fullName": "adaptive partitioning",
+        "meaning": "不固定一种分区策略，按数据/负载特征动态选:这里小群按 user 频道分区(1:1 主导时最省)、大群按 chat 频道分区(把一次群发从 99 次发布降到 1 次)，跨阈值时在线切换。只有边缘情况(接近上限的大群)真实存在且代价显著时才值得引入这层复杂度。",
+        "meaningEn": "Adaptive partitioning: instead of one fixed scheme, pick dynamically by data/load shape — here small groups use user-channel partitioning (cheapest when 1:1 dominates), large groups use chat-channel partitioning (99 publishes → 1), switching live across a threshold. Worth the added complexity only when the edge case (near-max groups) truly exists and its cost is significant."
       }
     ],
     "optionExplanations": [
@@ -4043,7 +4191,31 @@
       "Right: adaptively switch partitioning by group size — small groups use user channels, large groups use chat channels, dual-publish during the switch to avoid drops — covers the edge case without hurting normal performance.",
       "Downgrading to polling sacrifices real-time delivery, which conflicts with the low-latency goal of this design.",
       "Splitting into smaller groups changes product semantics (users still expect one group) — not an architecture-level fix."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "阶段",
+        "发布到哪",
+        "为什么"
+      ],
+      "rows": [
+        [
+          "切换前",
+          "只发 99 个 user 频道",
+          "默认按 user 分区"
+        ],
+        [
+          "切换期(服务器正在订群频道)",
+          "user 频道 + 群频道，两边都发",
+          "有的服务器订上了、有的还没;两边都发才没人漏(防丢)"
+        ],
+        [
+          "切换后(确认全订上)",
+          "只发 1 次群频道",
+          "99→1，效率兑现"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-055",
@@ -4789,8 +4961,8 @@
     "q": "补全心跳检测上界的算式：",
     "q_en": "Fill in the formula for the heartbeat detection upper bound:",
     "text": "心跳间隔 {{10}} 秒、pong 超时 {{5}} 秒时，任何死连接最迟 {{15}} 秒内被发现——心跳给出的是检测时间的保证上界。",
-    "why": "上界 = 间隔 + 超时。这句「10 + 5 = 15 秒内必被发现」是面试里量化心跳价值的标准表述。",
-    "why_en": "With a ten-second heartbeat interval and a five-second timeout, any dead connection is detected within fifteen seconds.",
+    "why": "上界 = 间隔 + 超时(最坏是连接刚回完 pong 就死，要等近一个间隔才发下次 ping、再等满超时)。两个旋钮管不同的事：间隔换「检测速度↔ping 流量」，超时换「容忍网络抖动不误杀↔检测延迟」，所以超时通常明显小于间隔。10/5/15 是可调示例，不是圣旨。",
+    "why_en": "Upper bound = interval + timeout (worst case: the connection dies right after a pong, so you wait nearly a full interval before the next ping, then the full timeout). Two knobs tune different things: interval trades detection speed vs ping traffic; timeout trades tolerating jitter (no false kills) vs detection delay — so timeout is usually well below the interval. 10/5/15 are tunable examples, not sacred.",
     "tags": [
       "whatsapp",
       "heartbeat",
@@ -4798,25 +4970,23 @@
     ],
     "table": {
       "headers": [
-        "Parameter",
-        "Effect"
+        "旋钮",
+        "调小的代价",
+        "调大的代价",
+        "由什么决定"
       ],
       "rows": [
         [
-          "Heartbeat interval",
-          "Ping frequency"
+          "心跳间隔(10s)",
+          "ping 流量暴涨(1s→2亿次/s)",
+          "死连接赖着占内存、presence 不新鲜",
+          "流量预算 + presence 新鲜度"
         ],
         [
-          "Miss threshold",
-          "Detection bound"
-        ],
-        [
-          "Mobile backgrounding",
-          "May relax interval"
-        ],
-        [
-          "Server load",
-          "Conns x heartbeat rate"
+          "pong 超时(5s)",
+          "误杀只是暂时慢的健康连接→重连风暴",
+          "确认死亡被拖慢",
+          "最坏 RTT + 网络抖动(≈几倍 RTT)"
         ]
       ]
     },
@@ -4825,8 +4995,21 @@
         "term": "心跳 / heartbeat",
         "meaning": "连接双方按固定间隔互相发送的小探测包，用来确认对方仍然存活。",
         "meaningEn": "A heartbeat is a small probe message sent at a fixed interval to confirm the other side of a connection is still alive."
+      },
+      {
+        "term": "RTT / 抖动",
+        "fullName": "round-trip time / jitter",
+        "meaning": "RTT=一个包往返一趟的时间;抖动=RTT 的忽大忽小。pong 超时必须吃得下最坏 RTT+抖动,否则会把「活着但暂时慢」的连接误判为死。移动网 RTT 可从几十 ms 抖到 1s+,所以 5s 超时是留了余量的。",
+        "meaningEn": "RTT is the time for one packet to make a round trip; jitter is the variance in RTT. The pong timeout must absorb worst-case RTT+jitter, or it will misjudge a \"live but slow\" connection as dead. Mobile RTT can swing from tens of ms to 1s+, so a 5s timeout leaves headroom."
+      },
+      {
+        "term": "误报 / 误杀",
+        "fullName": "false positive",
+        "meaning": "把一条其实还活着的连接判成死的、强行关掉。代价:客户端被迫重连 + 重新 sync Inbox,大量同时误杀会造成重连风暴/负载尖峰。所以 pong 超时宁可设宽一点也别贪快。",
+        "meaningEn": "A false positive: declaring a still-alive connection dead and closing it. Cost: the client must reconnect and re-sync its Inbox; many simultaneous false kills cause a reconnect storm / load spike. So the pong timeout is set generously rather than aggressively short."
       }
-    ]
+    ],
+    "tradeoff": "间隔:小=检测快但 ping 流量大 / 大=省流量但死连接赖着; 超时:小=检测快但误杀慢连接 / 大=不误杀但确认死亡慢"
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-064",
@@ -5405,8 +5588,8 @@
     "answer": [
       2
     ],
-    "why": "三种机制针对三类故障，缺一角就留一个盲区：连接死了靠心跳、消息漏了靠序号、以上都失灵还有轮询。",
-    "why_en": "Production systems combine heartbeats to catch dead connections, sequence numbers to catch missed messages, and periodic polling as the final backstop.",
+    "why": "三种机制对应三类故障：连接死了靠心跳、消息漏了靠序号、以上都失灵还有轮询。关键盲区：序号只有「后面还有下一条」才暴露缺口，若最后一条丢了、又没有新消息，序号和心跳都发现不了——轮询定时主动问一遍 Inbox 兜住它。",
+    "why_en": "Three mechanisms cover three failure modes: heartbeat for dead connections, sequence numbers for lost messages, polling as the last resort. Key blind spot: a sequence gap only shows when a later message arrives, so if the last message is lost and none follows, neither sequence nor heartbeat notices — periodic polling of the Inbox catches it.",
     "tags": [
       "whatsapp",
       "reliability",
@@ -5427,6 +5610,18 @@
         "term": "WebSocket",
         "meaning": "基于 TCP 的全双工长连接协议，一次握手后客户端与服务器可以随时双向收发消息。",
         "meaningEn": "A WebSocket is a persistent, full-duplex connection over TCP that lets client and server send messages to each other at any time after one handshake."
+      },
+      {
+        "term": "轮询",
+        "fullName": "polling",
+        "meaning": "客户端不等服务器推，而是自己按固定间隔(如每 30s)主动去问服务器「有没有我没收到的消息」，服务器翻 Inbox 把未 ack 的行补推。是 pull 模型，与 push(服务器有事主动推)相对。可靠但贵又慢，所以在此当兜底而非主力。",
+        "meaningEn": "Polling: instead of waiting for a server push, the client asks the server on a fixed interval (e.g. every 30s) \"any messages I have not received?\", and the server re-pushes un-acked Inbox rows. It is a pull model, opposite of push. Reliable but expensive and slow, so used here as a fallback, not the primary path."
+      },
+      {
+        "term": "push vs pull",
+        "fullName": "",
+        "meaning": "push=服务器一有事件就主动发给客户端(实时、省无谓请求，靠长连接)；pull/轮询=客户端定时主动来问(实现简单、不依赖连接状态，但有延迟且请求量大)。可靠投递里 push 做主力、pull 做兜底。",
+        "meaningEn": "Push = the server sends to the client the moment an event happens (real-time, no wasted requests, needs a persistent connection). Pull/polling = the client asks on a timer (simple, connection-agnostic, but adds latency and heavy request volume). For reliable delivery, push is primary and pull is the fallback."
       }
     ],
     "optionExplanations": [
@@ -5440,7 +5635,31 @@
       "A heartbeat alone tells you if the connection is alive, but not whether a message itself went missing — it doesn't cover delivery failures.",
       "Right: the three complement each other — heartbeat checks the connection is alive, sequence numbers catch missed messages, and polling backstops whatever the other two might miss.",
       "Sequence numbers alone catch message gaps but can't tell you when the connection itself died — they don't cover connection-layer failures."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "机制",
+        "兜哪类故障",
+        "局限"
+      ],
+      "rows": [
+        [
+          "心跳",
+          "连接死了但你不知道",
+          "只知连接死活，不知消息漏没漏"
+        ],
+        [
+          "序号",
+          "消息漏了、且后面还有消息能暴露缺口",
+          "最后一条丢了、后面没新消息就发现不了"
+        ],
+        [
+          "轮询",
+          "连接活、无缺口、但消息就是没到",
+          "贵(约700万QPS)且慢(最多等一个间隔)，只能兜底"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-072",
@@ -5508,8 +5727,8 @@
     "q": "补全消息排序的实际做法：",
     "q_en": "Fill in the actual approach to message ordering:",
     "text": "所有 Chat Server 经 {{NTP}} 同步时钟；消息到达时盖上{{服务器接收}}时间戳，客户端一律按此时间戳排序展示，从而让所有客户端看到{{一致}}的顺序。",
-    "why": "NTP 不保证完美时钟但足够好；用「服务器收到时间」作为统一排序键，各端展示顺序一致，即使到达顺序不同。",
-    "why_en": "Chat servers sync clocks over NTP and stamp each message on arrival, and clients display messages sorted by that server timestamp for a consistent order everywhere.",
+    "why": "NTP 把各 Chat Server 的钟拉齐到几毫秒内，「服务器接收时间」才成为跨服务器可比的全局排序键。不信客户端时间(可能错/被改)。排序键要用 (server_ts, server_id, message_id) 这种全序且确定的组合，相同戳也能被所有客户端排出逐字节相同的顺序——这才是「可复现」。NTP 够好但不完美，残留偏差导致偶发 pop-in(卡074)。",
+    "why_en": "NTP aligns all Chat Server clocks to within a few ms, so \"server-received time\" becomes a cross-server-comparable global sort key. Client time is not trusted (may be wrong/spoofed). The sort key must be a total, deterministic tuple like (server_ts, server_id, message_id) so even equal timestamps order identically on every client — that is what makes it reproducible. NTP is good-enough but imperfect; residual skew causes occasional pop-in (card 074).",
     "tags": [
       "whatsapp",
       "ntp",
@@ -5518,11 +5737,19 @@
     "termDefinitions": [
       {
         "term": "NTP",
-        "meaning": "让多台服务器把时钟对齐到同一参考时间的协议。",
-        "meaningEn": "NTP synchronizes server clocks to a shared reference time.",
+        "meaning": "让一堆机器的时钟通过网络对齐到同一参考时间的协议(源头是原子钟/GPS，经 stratum 分层下发，还会扣掉网络往返延迟)。作用:把各 Chat Server 的钟拉齐到几毫秒内，使「服务器接收时间」成为跨服务器可比的排序键。它够好但不完美——残留几 ms~几十 ms 偏差，所以排序偶有 pop-in。",
+        "meaningEn": "NTP (Network Time Protocol) synchronizes machine clocks over a network to a common reference (rooted at atomic/GPS clocks, distributed through strata, accounting for round-trip delay). Here it aligns Chat Server clocks to within a few ms so \"server-received time\" is a cross-server-comparable sort key. Good-enough but imperfect — residual ms-to-tens-of-ms skew causes occasional pop-in.",
         "fullName": "Network Time Protocol"
+      },
+      {
+        "term": "全序排序键",
+        "fullName": "total-order sort key",
+        "meaning": "一个「对任意两条消息都能分出先后、且在所有客户端上判定完全一致」的排序键。单用 server_ts 不够(可能相等)，要补确定性 tie-breaker：(server_ts, server_id, message_id)。这样相同时间戳也被所有端排出逐字节相同的顺序 = 可复现。",
+        "meaningEn": "A total-order sort key can order any two messages and does so identically on all clients. server_ts alone is insufficient (values can tie); add a deterministic tie-breaker: (server_ts, server_id, message_id). Then even equal timestamps sort byte-identically everywhere = reproducible."
       }
-    ]
+    ],
+    "codeSample": "# —— 服务器端：收到即盖戳 ——\ndef on_message_received(msg, sender):\n    msg.server_ts = now()       # NTP 同步过的本机时钟；各 server 差几 ms 内\n    msg.server_id = SERVER_ID   # 平局时的 tie-breaker\n    persist(msg)                # 写 Message 表，server_ts 当排序键\n    fan_out(msg)                # 推给各接收者（到达顺序不保证）\n\n# —— 客户端：展示时一律按戳排序 ——\ndef render(inbox):\n    # 关键：排序键要\"全序且确定\"，所有客户端才排出完全相同的顺序\n    msgs = sorted(inbox.all(),\n                  key=lambda m: (m.server_ts, m.server_id, m.message_id))\n    display(msgs)               # 新消息可能插到已显示消息上方 = pop-in（卡074）",
+    "lang": "python"
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-074",
