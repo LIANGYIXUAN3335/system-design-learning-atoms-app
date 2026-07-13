@@ -32,7 +32,7 @@ const ENGINE = [
 'var list = DECK.slice(); var idx = 0;',
 'function esc(s){return String(s==null?"":s).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}',
 'function speak(t){ if(!("speechSynthesis" in window)){alert("用 Chrome/Safari 打开可朗读");return;} try{speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(t);u.lang="en-US";u.rate=.95;speechSynthesis.speak(u);}catch(e){} }',
-'function optsHtml(c){ if(!c.options||!c.answer) return ""; var mono=c.format==="code"; var h="<div class=opts>"; for(var k=0;k<c.options.length;k++){ var ok=c.answer.indexOf(k)>=0; var label=ok?"<b>\\u2713</b> ":("<span class=k>"+"ABCD"[k]+"</span> "); var txt=mono?("<code>"+esc(c.options[k])+"</code>"):esc(c.options[k]); h+="<div class=\\"opt"+(ok?" ok":"")+"\\">"+label+txt+"</div>"; } return h+"</div>"; }',
+'function optsHtml(c){ if(!c.options||!c.answer) return ""; var mono=c.format==="code"; var h="<div class=opts>"; for(var k=0;k<c.options.length;k++){ var ok=c.answer.indexOf(k)>=0; var label=ok?"<b>\\u2713</b> ":("<span class=k>"+"ABCD"[k]+"</span> "); var txt=mono?("<code>"+esc(c.options[k])+"</code>"):esc(c.options[k]); var en=(c.options_en&&c.options_en[k])?"<div class=enline>"+esc(c.options_en[k])+"</div>":""; h+="<div class=\\"opt"+(ok?" ok":"")+"\\">"+label+txt+en+"</div>"; } return h+"</div>"; }',
 'function clozeHtml(c){ var f=function(t){return "<div class=cloze>"+esc(t).replace(/\\{\\{(.+?)\\}\\}/g,function(_,a){return "<b class=blank>"+esc(a)+"</b>";})+"</div>";}; return (c.text?f(c.text):"")+(c.text_en?f(c.text_en):""); }',
 'function chainHtml(c){ if(!c.steps||!c.answerOrder) return ""; var h="<ol class=chain>"; for(var i=0;i<c.answerOrder.length;i++){h+="<li>"+esc(c.steps[c.answerOrder[i]])+"</li>";} return h+"</ol>"; }',
 'function tableHtml(c){ if(!c.table) return ""; if(typeof c.table==="object"&&c.table.headers){ var t=c.table,h="<table class=cmp><thead><tr>"; t.headers.forEach(function(x){h+="<th>"+esc(x)+"</th>";}); h+="</tr></thead><tbody>"; (t.rows||[]).forEach(function(r){h+="<tr>";r.forEach(function(cell){h+="<td>"+esc(cell)+"</td>";});h+="</tr>";}); return h+"</tbody></table>"; } return "<pre class=mdtable>"+esc(c.table)+"</pre>"; }',
@@ -42,8 +42,8 @@ const ENGINE = [
 'function termsHtml(c){ if(!c.termDefinitions||!c.termDefinitions.length) return ""; var h="<div class=terms><div class=dialabel>术语 terms</div>"; c.termDefinitions.forEach(function(t){ var fn=t.fullName?(" ("+esc(t.fullName)+")"):""; h+="<div class=term><b>"+esc(t.term)+"</b>"+fn+" — "+esc(t.meaning||"")+(t.meaningEn?" <span class=oen>"+esc(t.meaningEn)+"</span>":"")+"</div>"; }); return h+"</div>"; }',
 'function render(){ var c=list[idx]; document.getElementById("pos").textContent=(idx+1)+" / "+list.length; if(!c){document.getElementById("card").innerHTML="";return;}',
 '  var tags="<div class=tags><span class=\\"tag t\\">"+esc(c.atomType||"")+"</span><span class=tag>"+esc(c.topic||"")+"</span><span class=tag>"+esc(c.sub||"")+"</span><span class=tag>"+esc(c.format)+"</span><span class=tag>"+esc(c.id)+"</span></div>";',
-'  var scen=c.scenario?("<div class=scenario><b>Scenario \\u573a\\u666f</b>"+esc(c.scenario)+"</div>"):"";',
-'  var q="<div class=q>"+esc(c.q||"")+"</div>";',
+'  var scen=c.scenario?("<div class=scenario><b>Scenario \\u573a\\u666f</b>"+esc(c.scenario)+(c.scenario_en?"<div class=enline>"+esc(c.scenario_en)+"</div>":"")+"</div>"):"";',
+'  var q="<div class=q>"+esc(c.q||"")+(c.q_en?"<div class=enline>"+esc(c.q_en)+"</div>":"")+"</div>";',
 '  var body=optsHtml(c)+clozeHtml(c)+chainHtml(c);',
 '  var en=c.why_en?("<div class=en><button class=spk onclick=\\"speak("+JSON.stringify(c.why_en).replace(/"/g,"&quot;")+")\\">\\ud83d\\udd0a</button><div>"+esc(c.why_en)+"</div></div>"):"";',
 '  var other=c.whenOtherWins?("<div class=other><b>\\u4ec0\\u4e48\\u65f6\\u5019\\u9009\\u522b\\u7684\\uff1a</b> "+esc(c.whenOtherWins)+"</div>"):"";',
@@ -88,6 +88,8 @@ const HTML = `<!DOCTYPE html>
  .onotes{margin:0 0 12px;} .onote{border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:7px;} .onote.ok{border-color:var(--ok);background:var(--okbg);}
  .oh{font-weight:600;font-size:14px;margin-bottom:4px;} .oh .k{color:var(--muted);font-weight:700;}
  .ol{font-size:13px;margin:2px 0;} .ol b{color:var(--muted);font-weight:600;font-size:11px;margin-right:5px;} .oen{color:var(--muted);font-style:italic;}
+ .enline{color:var(--muted);font-size:12px;margin-top:3px;line-height:1.45;}
+ .q .enline{font-weight:400;font-size:12.5px;margin-top:4px;}
  .terms{margin:0 0 12px;} .term{font-size:13px;margin:3px 0;padding:7px 10px;background:var(--chip);border-radius:8px;} .term b{color:var(--accent);}
  footer{text-align:center;color:var(--muted);font-size:12px;margin-top:20px;}
 </style></head>
