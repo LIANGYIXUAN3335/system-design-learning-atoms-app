@@ -387067,6 +387067,24 @@
         "meaningEn": "A MAC address is a network card's hardware identifier; UUID v1 embeds it in the id, leaking information.",
         "fullName": "Media Access Control address",
         "term": "MAC address"
+      },
+      {
+        "term": "UUID v7",
+        "fullName": "",
+        "meaning": "新版 UUID(RFC 9562):开头 48 位是「大端 Unix 毫秒时间戳」、后面随机。所以①按字符串/字节排序=按生成时间排序②不含 MAC 地址。是数据库主键的现代推荐",
+        "meaningEn": "UUID v7 (RFC 9562): the first 48 bits are a big-endian Unix-millisecond timestamp, the rest random — so it sorts by creation time as a string/bytes and contains no MAC address. The modern recommendation for DB keys."
+      },
+      {
+        "term": "UUID v1",
+        "fullName": "",
+        "meaning": "时间戳 + MAC 地址 + 时钟序。两个毛病:①时间戳被拆成低/中/高段、顺序错乱 → 字符串排序≠时间序;②嵌了机器的 MAC 地址 → 泄露是哪台机器生成的(隐私/安全)",
+        "meaningEn": "UUID v1: timestamp + MAC address + clock sequence. Two flaws: the timestamp is split into low/mid/high fields out of order, so string sort ≠ time order; and it embeds the machine MAC address, leaking which machine generated it."
+      },
+      {
+        "term": "为什么可排序重要",
+        "fullName": "",
+        "meaning": "ID 按时间排序 → 顺序插入都落在索引「末尾」→ 索引/B树局部性好、少页分裂和碎片、插入快;还能按时间范围查询。随机 ID(如 v4)到处散 → 局部性差、碎片多。这正是 v7 相比全随机 v4 的价值",
+        "meaningEn": "When IDs sort by time, sequential inserts land at the end of the index → good B-tree locality, fewer page splits/fragmentation, faster inserts, plus time-range queries. Random IDs (v4) scatter inserts → poor locality. This is v7 value over fully random v4."
       }
     ],
     "tradeoff": "v7 的排序性与隐私优势 vs v1 的历史兼容性",
@@ -389218,6 +389236,12 @@
         "meaning": "分两阶段（准备+提交）让多个参与方达成一致的协议，常用于跨库事务。",
         "meaningEn": "Two-phase commit coordinates multiple participants to agree via a prepare phase and a commit phase, often used for cross-database transactions.",
         "term": "two-phase commit"
+      },
+      {
+        "term": "分区复制组",
+        "fullName": "",
+        "meaning": "DynamoDB 每个分区的数据复制在 3 个节点(跨 3 AZ)上,组成一个「leader 复制组」:1 leader + 2 follower。写→leader 写 WAL→发给 follower→多数(2/3)持久化即 ack(quorum);强一致读走 leader、最终一致读走任意副本。底层是 Multi-Paxos 类共识,但 DynamoDB 闭源,面试稳妥说法=「leader 复制组 + quorum 持久化」,别把某个协议名当死语义",
+        "meaningEn": "Each DynamoDB partition is replicated on 3 nodes across 3 AZs as a leader-based replication group: 1 leader + 2 followers. Write → leader writes WAL → sends to followers → acked once a quorum (2/3) persist; strong reads go to the leader, eventual reads to any replica. It uses Multi-Paxos-style consensus, but DynamoDB is closed-source, so the safe interview phrasing is a leader-based replication group with quorum durability."
       }
     ],
     "scenario": "被追问 DynamoDB 分区内部到底靠什么协议做复制。",
@@ -390287,24 +390311,30 @@
     ],
     "termDefinitions": [
       {
-        "meaning": "把流数据自动批量加载进 S3/Redshift/OpenSearch 的托管服务，不能直接读 DynamoDB Streams。",
-        "meaningEn": "Kinesis Data Firehose loads streaming data into S3, Redshift, or OpenSearch, but cannot read DynamoDB Streams directly.",
+        "meaning": "全托管的「投递」服务:把流式数据批量缓冲后载入 S3/Redshift/ES,不用写代码、不用管消费者——「把流倒进存储」的管子。它的数据源是 Kinesis Data Streams(或直接 PUT),不能直连 DynamoDB Streams",
+        "meaningEn": "Kinesis Data Firehose is a fully-managed delivery service that buffers and loads streaming data into S3/Redshift/ES with no code and no consumers to manage. Its source is a Kinesis Data Stream (or direct PUT); it cannot read DynamoDB Streams directly.",
         "term": "Kinesis Data Firehose"
       },
       {
-        "meaning": "DynamoDB 内置的 CDC 功能，把表变更记录成可消费的 stream record。",
-        "meaningEn": "DynamoDB Streams is the built-in CDC feature that records table changes as consumable stream records.",
+        "meaning": "DynamoDB 自己的变更流(CDC):捕获 item 增/改/删,由 Lambda/KCL 消费,保留 24 小时。注意它不能被 Firehose 直接读",
+        "meaningEn": "DynamoDB Streams is DynamoDB's own change feed (CDC), capturing item inserts/updates/deletes, consumed by Lambda/KCL, retained 24h. Firehose cannot read it directly.",
         "term": "DynamoDB Streams"
       },
       {
-        "meaning": "AWS 的实时数据流服务，常作为 DynamoDB Streams 与 Firehose 之间的中间层。",
-        "meaningEn": "Kinesis Data Streams is AWS's real-time streaming service, often bridging DynamoDB Streams and Firehose.",
+        "meaning": "AWS 通用的实时流服务(类似 Kafka):可分片、可多消费者、可回放。DynamoDB 能把变更直接推到它(表上开启「Kinesis Data Streams for DynamoDB」),再由 Firehose 读它载入 S3",
+        "meaningEn": "Kinesis Data Streams is AWS's general real-time streaming service (Kafka-like): shardable, multi-consumer, replayable. DynamoDB can push changes to it (enable \"Kinesis Data Streams for DynamoDB\"), then Firehose reads it into S3.",
         "term": "Kinesis Data Streams"
       },
       {
-        "meaning": "AWS 的无服务器函数计算服务，常被 Streams 事件触发执行。",
-        "meaningEn": "Lambda is AWS's serverless compute service, often triggered by DynamoDB Streams events.",
+        "meaning": "AWS serverless 函数,可作为「胶水」消费 DynamoDB Streams、再把记录塞进 Firehose——Firehose 不能直连 DynamoDB Streams 时的另一种中转",
+        "meaningEn": "AWS Lambda (serverless function) can act as glue: consume DynamoDB Streams and push records into Firehose — the other way to bridge when Firehose cannot read DynamoDB Streams directly.",
         "term": "Lambda"
+      },
+      {
+        "term": "DynamoDB→S3 分析管道",
+        "fullName": "",
+        "meaning": "DynamoDB Streams 不能直连 Firehose。两种接法:①表上开 Kinesis Data Streams for DynamoDB → Firehose → S3(原生、无代码);②Lambda 读 DynamoDB Streams → 塞进 Firehose → S3(写胶水)。都是要「中转」",
+        "meaningEn": "DynamoDB Streams cannot connect to Firehose directly. Two bridges: (1) enable Kinesis Data Streams for DynamoDB → Firehose → S3 (native, no code); (2) Lambda reads DynamoDB Streams → pushes to Firehose → S3 (glue code)."
       }
     ],
     "scenario": "打算把 DynamoDB 的变更实时同步进数据仓库做分析。",
