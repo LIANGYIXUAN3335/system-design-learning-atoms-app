@@ -59780,6 +59780,25 @@
       "partitioning",
       "track:classic-sd"
     ],
+    "table": {
+      "headers": [
+        "计量单位",
+        "作用",
+        "风险"
+      ],
+      "rows": [
+        [
+          "队列服务器",
+          "分摊负载",
+          "跨队列乱序"
+        ],
+        [
+          "比赛 ID",
+          "保住实体顺序",
+          "热点比赛偏斜"
+        ]
+      ]
+    },
     "options_en": [
       "Events go out of order: goals show up before kickoff, cards before the foul.",
       "Overall throughput actually drops, because more partitions need re-coordinating.",
@@ -59986,13 +60005,13 @@
     ],
     "optionExplanations": [
       "防火墙管的是网络访问权限，不管消息该归到足球还是篮球这种逻辑分类。",
-      "topic 就是发布订阅的分类单位：足球消费者订阅足球 topic，篮球消费者订阅篮球 topic，天然隔离。",
+      "用 topic 表达运动分类，消费者订阅对应分类；这样篮球事件不会进入足球消费者的拉取路径。",
       "按项目建独立集群能隔离，但运维成本随项目数线性增长，topic 内部机制已经够用，杀鸡用牛刀。",
       "全塞一个 topic 靠消费端过滤，意味着无关消息还是要先传输、拉取一遍，白白浪费带宽。"
     ],
     "optionExplanations_en": [
       "Firewalls control network access, not which logical category a message belongs to.",
-      "A topic is the pub/sub unit: soccer consumers subscribe to the soccer topic, basketball consumers subscribe to the basketball topic — isolation happens naturally.",
+      "Use topics to model sports categories, and consumers subscribe to the category they need, so basketball never enters the soccer fetch path.",
       "A cluster per sport would isolate too, but ops cost scales linearly with sport count; the topic mechanism already does the job.",
       "Dumping everything into one topic means irrelevant messages still get transferred and fetched before being thrown away, wasting bandwidth."
     ],
@@ -60466,14 +60485,14 @@
       }
     ],
     "optionExplanations": [
-      "timestamp 只是记录创建或摄入时间的元数据，可能重复或被生产者手动设置，不能当顺序依据。",
-      "offset 是分区内严格递增的写入位置，天然给出确定顺序，这才是真正的顺序来源。",
+      "timestamp 可能相同、回填或由 producer 设置，所以它适合审计时间，不适合定序。",
+      "offset 是 broker 追加时分配的递增位置，消费者也靠它恢复进度。",
       "Kafka 不对 key 做排序，key 只用来决定路由到哪个分区。",
       "多个消费者可能并发处理，处理顺序不等于分区内的存储顺序。"
     ],
     "optionExplanations_en": [
-      "Timestamp is just metadata about creation or ingestion time — it can repeat or be set manually by the producer, so it can't be trusted as the order.",
-      "Offset is the strictly increasing write position within a partition — that's the real source of order, not timestamp.",
+      "Timestamp can tie, be backfilled, or be set by the producer, so it is useful for audit time but not ordering.",
+      "The broker assigns offsets as increasing append positions, and consumers also use them to resume progress.",
       "Kafka never sorts by key; key only decides which partition a message routes to.",
       "Multiple consumers may work in parallel, and processing order isn't the same thing as storage order within the partition."
     ],
@@ -60640,16 +60659,16 @@
       }
     ],
     "optionExplanations": [
-      "多一跳转发会引入不必要的延迟，Kafka 设计上要求生产者直连目标 broker，不走中转。",
+      "把任意 broker 当代理会多一次网络跳转，Kafka 客户端本来就能找到 leader。",
       "广播给所有 broker 会白白浪费网络和处理资源，不是实际做法。",
-      "Kafka 不依赖外部 DNS 做分区路由，用的是自己的集群元数据。",
-      "生产者缓存一份分区到 broker 的映射（由 controller 维护），算出分区后直接按映射发给目标 broker。"
+      "DNS 只解析主机名，不能告诉某个 partition 当前 leader 是谁。",
+      "客户端刷新并缓存 metadata；算出 partition 后，请求直接打到该 partition 的 leader。"
     ],
     "optionExplanations_en": [
-      "An extra hop through another broker adds needless latency; Kafka's design has the producer connect directly to the target broker instead.",
+      "Treating any broker as a proxy would add an extra network hop; the Kafka client can already find the leader.",
       "Broadcasting to every broker would waste network and processing resources for no reason.",
-      "Kafka doesn't rely on external DNS for partition routing — it uses its own cluster metadata.",
-      "The producer keeps a cached partition-to-broker lookup that the controller keeps fresh, and sends the request directly to whichever broker owns that partition."
+      "DNS resolves hostnames; it does not know which broker currently leads a specific partition.",
+      "The client refreshes and caches metadata; after choosing the partition, it sends the request to that partition's leader."
     ],
     "track": "classic-sd",
     "category": "Kafka",
@@ -61193,16 +61212,16 @@
       }
     ],
     "optionExplanations": [
-      "客户端默认读写都打到 leader，follower 只是待命备份，这是 leader 真实承担的职责。",
+      "leader 是该分区的请求入口；follower 追日志，只有特殊 follower-fetch 配置才分担读。",
       "被动备份恰恰是 follower 的角色，leader 反而要主动处理请求，这个说法把两者角色说反了。",
       "leader 本来就要处理写请求，这是它和 follower 最本质的区别。",
-      "均衡整个集群负载是 controller 统一安排各分区 leader 的职责，不是单个 leader 该管的事。"
+      "controller 做的是跨分区摆放与选主，单个 leader 不决定全局均衡。"
     ],
     "optionExplanations_en": [
-      "Clients default to reading and writing straight to the leader, with followers just standing by — that's the real read/write duty the leader carries.",
+      "The leader is the request entry point for that partition; followers tail the log unless follower-fetch is specially configured.",
       "Passive backup is exactly the follower's role; the leader is the one actively serving requests — this statement swaps the two.",
       "Handling writes is precisely what the leader does — that's its core distinction from a follower.",
-      "Balancing load across the whole cluster is the controller's job, spreading leaders across partitions — not something a single leader decides."
+      "The controller places partitions and runs elections across the cluster; a single leader does not decide global balance."
     ],
     "track": "classic-sd",
     "category": "Kafka",
@@ -61408,16 +61427,16 @@
       }
     ],
     "optionExplanations": [
-      "controller 是集群里某个 broker 兼任的角色，负责维护元数据、监控健康、管理 leader 分配。",
+      "它由某个 broker 承担，手里握着 metadata 和选主流程，崩溃后会再选出新 controller。",
       "这样会多出一个单独运维的组件，Kafka 并没有这样设计。",
       "客户端库负责发消息拉消息，不负责集群元数据管理。",
-      "ZooKeeper（或新版 KRaft）是外部协调机制，controller 是运行在 broker 上的角色，二者不是一回事。"
+      "ZooKeeper/KRaft 提供协调存储；controller 是使用这层协调信息的 Kafka 角色。"
     ],
     "optionExplanations_en": [
-      "The controller is a role one of the cluster's own brokers takes on — maintaining metadata, watching broker health, managing leader assignment.",
+      "One broker holds the controller role, owns metadata and leader-election flow, and a new controller is elected if it dies.",
       "That would mean an extra component to operate separately — Kafka isn't designed that way.",
       "Client libraries handle sending and fetching messages, not cluster metadata management.",
-      "ZooKeeper (or the newer KRaft) is the external coordination layer; the controller is a role running on a broker — they're not the same thing."
+      "ZooKeeper or KRaft provides coordination storage; the controller is the Kafka role using that coordination information."
     ],
     "track": "classic-sd",
     "category": "Kafka",
@@ -62075,7 +62094,31 @@
         "term": "broker",
         "meaning": "Kafka 集群里的一台服务器，负责存数据、服务客户端请求。",
         "meaningEn": "A broker is a single Kafka server that stores data and serves client requests."
+      },
+      {
+        "term": "TB",
+        "fullName": "Terabyte",
+        "meaning": "TB 是太字节，常用来粗估磁盘存储容量。",
+        "meaningEn": "A terabyte is a storage unit used for rough disk-capacity estimates."
+      },
+      {
+        "term": "PB",
+        "fullName": "Petabyte",
+        "meaning": "PB 是拍字节，比 TB 大三个数量级。",
+        "meaningEn": "A petabyte is a storage unit three orders of magnitude larger than a terabyte."
       }
+    ],
+    "optionExplanations": [
+      "这是经验锚点，用来判断单 broker 是否已经接近必须扩分区或扩机器的量级。",
+      "这个量级把 Kafka 低估成轻量队列，会让你过早设计复杂扩容。",
+      "这个量级高估太多，会掩盖磁盘、网络和热点分区这些真实瓶颈。",
+      "这个量级几乎不是 broker 级系统，会严重误导容量判断。"
+    ],
+    "optionExplanations_en": [
+      "This is the useful interview anchor for deciding whether one broker is near the point of needing more partitions or machines.",
+      "This underrates Kafka as a lightweight queue and would make you over-design scaling too early.",
+      "This overrates Kafka by far and hides real bottlenecks like disk, network, and hot partitions.",
+      "This is not a broker-level number at all, so it badly misleads capacity planning."
     ],
     "track": "classic-sd",
     "category": "Kafka",
@@ -62845,13 +62888,13 @@
     "optionExplanations": [
       "花大量时间设计一个概率极低的场景，会挤占更值得讨论的消费者故障话题。",
       "『必然瘫痪』是过于绝对的断言，Kafka 的复制设计正是为了避免这种单点前提。",
-      "点出『Kafka 永远可用、偶尔一致』这句行话，把讨论引向更现实、更有价值的消费者故障处理。",
+      "用这句话快速承认边界，再把讨论拉回 offset 提交、rebalance 这些常见故障链条。",
       "轮询数据库拿不到 Kafka 的分区并行和保序能力，是不对等的降级替代。"
     ],
     "optionExplanations_en": [
       "Spending a lot of time designing a near-zero-probability scenario would crowd out the more useful discussion of consumer failure.",
       "'Inevitable total failure' is too absolute a claim — Kafka's replication design exists specifically to avoid that single point of failure.",
-      "Naming the line 'Kafka is always available, occasionally consistent' steers the conversation toward the more realistic topic of consumer failure handling.",
+      "Use that line to acknowledge the boundary quickly, then move back to common failure chains like offset commits and rebalances.",
       "Polling a database can't match Kafka's partition parallelism and ordering guarantees — not an equivalent substitute."
     ],
     "track": "classic-sd",
@@ -63620,6 +63663,18 @@
         "meaningEn": "retention.ms is the config that controls how long messages are kept, measured in time."
       }
     ],
+    "optionExplanations": [
+      "1 小时会逼你马上调大 retention；它说明了设计含义，但不是 Kafka 的默认值。",
+      "24 小时仍盖不住 3 天重放窗口，把默认保留时间低估了。",
+      "7 天默认值已经覆盖 3 天需求，所以本题不用先改 retention.ms。",
+      "默认不是永久保留；想留更久也要给上限，不然磁盘成本会失控。"
+    ],
+    "optionExplanations_en": [
+      "One hour would force you to raise retention immediately; that design implication is right, but it is not Kafka's default.",
+      "Twenty-four hours still misses the three-day replay window and underestimates the default retention.",
+      "The seven-day default already covers a three-day replay need, so this case needs no retention.ms change first.",
+      "The default is not infinite retention; longer replay windows still need an explicit cap to control disk cost."
+    ],
     "track": "classic-sd",
     "category": "Kafka"
   },
@@ -63698,8 +63753,32 @@
         "term": "Avro",
         "meaning": "一种二进制消息序列化格式，常配合 Schema Registry 管理消息结构。",
         "meaningEn": "Avro is a binary serialization format often paired with a Schema Registry to manage message structure."
+      },
+      {
+        "term": "Schema Registry",
+        "meaning": "外部 schema 管理服务，负责保存消息格式版本并让生产者、消费者按约定校验。",
+        "meaningEn": "A Schema Registry is an external service that stores schema versions and lets producers and consumers validate against them."
       }
     ],
+    "table": {
+      "headers": [
+        "责任方",
+        "负责",
+        "不负责"
+      ],
+      "rows": [
+        [
+          "Kafka",
+          "存取字节",
+          "校验 schema"
+        ],
+        [
+          "应用/Registry",
+          "格式约定",
+          "broker 执行"
+        ]
+      ]
+    },
     "optionExplanations": [
       "Kafka 消息体是不透明的字节数组，协议层不强制任何 JSON schema。",
       "broker 不解析 value 的内容，自然也不会做字段级别的类型校验。",
@@ -72956,6 +73035,18 @@
         "term": "commit-is-on-disk",
         "meaning": "提交即落盘：事务返回成功时数据已经写入磁盘。",
         "meaningEn": "Commit-is-on-disk means the data is already on disk by the time the transaction reports success."
+      },
+      {
+        "term": "RDB",
+        "fullName": "Redis Database snapshot",
+        "meaning": "RDB 是 Redis 的周期性二进制快照，恢复快，但会丢掉上次快照后的写。",
+        "meaningEn": "RDB is Redis's periodic binary snapshot; it restores quickly but can lose writes since the last snapshot."
+      },
+      {
+        "term": "AOF",
+        "fullName": "Append-Only File",
+        "meaning": "AOF 是顺序追加写命令的日志，默认每秒刷盘，所以仍有短暂丢失窗口。",
+        "meaningEn": "AOF is an append-only write log; by default it fsyncs once per second, so a short loss window remains."
       }
     ],
     "q_en": "Compared to a relational database's default commit-is-on-disk guarantee, what stance does Redis's default persistence take?",
@@ -76065,8 +76156,8 @@
     "answer": [
       3
     ],
-    "why": "ZADD 的语义是「设置分数」：成员已存在就替换 score，帖子名次自动跟着新的点赞数走。",
-    "why_en": "ZADD sets the member's score, replacing it if the member exists, so its rank simply moves.",
+    "why": "ZADD 是设置 member 的 score，不是追加一条记录；member 已存在时覆盖旧分数，有序集合会按新分数重新排位。",
+    "why_en": "ZADD sets a member's score rather than appending a row, so an existing member's score is replaced and its rank moves.",
     "tags": [
       "redis",
       "sorted-set",
@@ -76081,6 +76172,18 @@
     ],
     "codeSample": "ZADD tiger_posts 500 postA   # 首次写入，score=500\nZADD tiger_posts 800 postA   # 已存在，score 更新为 800",
     "lang": "redis",
+    "termDefinitions": [
+      {
+        "term": "ZADD",
+        "meaning": "ZADD 是 Redis Sorted Set 的写命令：给 member 设置 score，并按 score 维护排序。",
+        "meaningEn": "ZADD is the Redis Sorted Set command that assigns a score to a member and keeps the set ordered by score."
+      },
+      {
+        "term": "Sorted Set",
+        "meaning": "有序集合：member 唯一，每个 member 带一个 score，Redis 按 score 做排名和范围查询。",
+        "meaningEn": "A sorted set stores unique members with scores, letting Redis rank them and query score ranges."
+      }
+    ],
     "q_en": "What happens when you ZADD a member that already exists in a sorted set?",
     "optionExplanations": [
       "错：对已存在成员再 ZADD 不会报错，这是有序集合支持的正常更新操作。",
@@ -78398,7 +78501,7 @@
       0
     ],
     "why": "RDB = 周期性全量二进制快照，恢复快但会丢上次快照后的写；AOF = 顺序追加每条写命令、重放恢复，就是 Redis 的 WAL，最多丢约 1 秒。二者可同时开：AOF 保命 + RDB 快恢复。",
-    "why_en": "RDB is a periodic full snapshot: fast restore but loses writes since the last one. AOF appends every write and replays on restart — Redis's WAL, losing ~1s. You can run both.",
+    "why_en": "RDB is a periodic full snapshot that restores fast but loses recent writes, while AOF appends writes for replay and usually shrinks the loss window to about one second.",
     "tradeoff": "RDB（恢复快 / 可能丢更多） vs AOF（丢得少 / 文件大、恢复慢）",
     "tags": [
       "redis",
@@ -78461,6 +78564,18 @@
         "fullName": "Write-Ahead Log",
         "meaning": "先把写顺序追加到日志再应用，崩溃后靠重放日志恢复",
         "meaningEn": "A write-ahead log records each write sequentially before applying it, so a crash recovers by replay."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "SSTable 是 LSM 存储常见的不可变有序文件格式，不是 Redis RDB 或 AOF 的压缩机制。",
+        "meaningEn": "An SSTable is an immutable sorted-file format used in LSM storage, not how Redis RDB or AOF is compacted."
+      },
+      {
+        "term": "LSM",
+        "fullName": "Log-Structured Merge-tree",
+        "meaning": "LSM 是把写先落日志和内存表，再逐层合并磁盘文件的存储结构。",
+        "meaningEn": "An LSM tree writes to a log and memory table first, then compacts sorted disk files in levels."
       }
     ],
     "optionExplanations": [
@@ -78515,8 +78630,8 @@
       "Right: this is the trade-off — both can fan out; the only real difference is how durable each is.",
       "Wrong: XACK and committing an offset mean the same thing — \"mark done\"; skip it and the message is redelivered (at-least-once), so they are analogous."
     ],
-    "why": "两者都用消费组把消息分给不同 worker（Redis XREADGROUP / Kafka partition）。选谁看耐久：Kafka 磁盘+副本可回放、最抗丢单；Redis Streams 内存快、不丢在途(PEL)，但保留受限。",
-    "why_en": "Both fan out to workers via consumer groups (Redis XREADGROUP / Kafka partition assignment). Pick by durability: Kafka's disk + replicas + long retention + replay make it strongest for 'never drop a request'; Redis Streams is low-latency and doesn't lose in-flight work (PEL) but retention is memory-bound.",
+    "why": "两者都能用消费组把请求分给多个 worker；真正的分水岭是耐久和回放。Kafka 的磁盘副本日志更适合不能丢单，Redis Streams 更低延迟但受 Redis 持久化和保留策略约束。",
+    "why_en": "Both can fan out with consumer groups; for no-drop queues, Kafka's replicated disk log is safer, while Redis Streams is faster but bounded by Redis persistence and retention.",
     "tradeoff": "Redis Streams（内存·低延迟·保留有限） vs Kafka（磁盘+副本·高耐久·可回放·大吞吐）",
     "table": {
       "headers": [
@@ -78557,7 +78672,7 @@
         ]
       ]
     },
-    "codeSample": "# Kafka —— at-least-once：处理完再提交 offset\nwhile True:\n  for msg in consumer.poll():\n    if match_ride(msg):          # 匹配成功\n      consumer.commit(msg)       # 提交 offset = 标记已完成\n    # 失败就不提交 → 重启/rebalance 后同一 offset 重投（=重试）\n\n# Redis Streams —— at-least-once：处理完再 XACK\nwhile True:\n  msgs = XREADGROUP GROUP matchers w1 COUNT 10 BLOCK 2000 STREAMS rides >\n  for id, req in msgs:\n    if match_ride(req):          # 匹配成功\n      XACK rides matchers id     # XACK = 标记已完成（≈ 提交 offset）\n    # 失败就不 XACK → 留在 PEL；XAUTOCLAIM 让别的 worker 接管重做",
+    "codeSample": "# Kafka：处理完再提交 offset，失败会从旧 offset 重投\nmsg = consumer.poll()\nprocess(msg)\nconsumer.commit(msg.offset)\n\n# Redis Streams：处理完再 XACK，失败留在 PEL 等接管\nid, req = XREADGROUP GROUP matchers w1 STREAMS rides >\nprocess(req)\nXACK rides matchers id\nXAUTOCLAIM rides matchers w2 60000 0-0  # 接管超时未确认消息",
     "lang": "text",
     "termDefinitions": [
       {
@@ -78568,13 +78683,11 @@
       },
       {
         "term": "offset",
-        "fullName": "",
         "meaning": "Kafka 消费者在某个 partition 里的读取位置；提交 offset = 记下「读到这了」，重启从这继续",
         "meaningEn": "An offset is a Kafka consumer's read position in a partition; committing it records progress so restarts resume there."
       },
       {
         "term": "XACK",
-        "fullName": "",
         "meaning": "Redis Streams 里标记一条消息「已处理完」，从 PEL 移除；作用等价于 Kafka 提交 offset",
         "meaningEn": "XACK marks a Redis Streams message as processed and removes it from the PEL — analogous to committing a Kafka offset."
       },
@@ -78586,19 +78699,16 @@
       },
       {
         "term": "partition",
-        "fullName": "",
         "meaning": "Kafka topic 的分区，组内每个分区被一个消费者独占，是并行度与保序的单位（按 key 分区）",
         "meaningEn": "A partition is a slice of a Kafka topic; each is consumed by one consumer in a group — the unit of parallelism and per-key ordering."
       },
       {
         "term": "topic/stream 建模",
-        "fullName": "",
         "meaning": "一个逻辑事件类型一个 topic/stream（如 ride-requests 一个）；并行/保序靠 Kafka 的 partition 或 Redis 的多 stream/消费组——不是一个事件一条 stream",
         "meaningEn": "Model one topic/stream per logical event type (e.g. one ride-requests); parallelism/ordering comes from Kafka partitions or multiple Redis streams — not one stream per event."
       },
       {
         "term": "at-least-once",
-        "fullName": "",
         "meaning": "至少一次投递：处理完才确认(ack/commit)，没确认就重投——保证不丢，但可能重复，业务要幂等",
         "meaningEn": "At-least-once delivery: a message is redelivered until acknowledged, so nothing is lost but handlers must be idempotent."
       }
@@ -78666,27 +78776,38 @@
       "Wrong: last-write-wins is exactly what lets the stale holder overwrite the new result — the thing to prevent.",
       "Wrong: sleeping just staggers by luck; under concurrency they still collide — not a guarantee."
     ],
-    "why": "锁可能在你干活时提前过期 → 两个 worker 都以为自己持锁。真正保正确的是下游：①原子 CAS（仅当状态没变才写，两人也只一个赢）②fencing token（下游只认更大编号，拒绝旧持有者的迟到写）。锁只是减竞争的优化。",
-    "why_en": "A lock can expire while you are still working, so two workers may both think they hold it. Correctness comes from the downstream store: (1) an atomic CAS (write only if the state is unchanged, so only one wins) or (2) a fencing token (accept only a higher token, rejecting a stale holder late write). The lock is just a contention optimization.",
+    "why": "Redis 锁只是在减少并发竞争；真正的正确性要放到下游条件写里。锁过期后旧 worker 醒来时，CAS/版本检查或 fencing token 会拒绝它的迟到写。",
+    "why_en": "A Redis lock only reduces contention; the downstream store must use CAS, version checks, or a fencing token to reject a stale holder's late write.",
     "tradeoff": "CAS（简单·针对某个状态） vs fencing token（更通用·拒绝一切旧持有者写）",
-    "codeSample": "# ① 原子条件写(CAS)：仅当 ride 仍是 pending 才改 → 两个 worker 也只有一个赢\nwon = EVAL \"if redis.call(GET,KEYS[1])==pending then\n             redis.call(SET,KEYS[1],ARGV[1]); return 1 else return 0 end\"\n         1 ride:42:status assigned:driverB\nif won == 1: notify(driverB)   # 赢了才真正派单\nelse:        skip()            # 已被别人派/接受 → 不做(幂等)\n\n# ② fencing token：加锁发一个单调递增编号，下游只认更大的\ntoken = INCR ride:42:fence     # …33, 34, 35 永远递增\nwrite_status(ride 42, token)   # 下游: 若 token <= 已见过的最大值 → 拒绝(旧持有者的迟到写)",
-    "lang": "text",
+    "codeSample": "-- CAS / 条件写：只有 pending ride 能被派单\nUPDATE rides\nSET status = 'assigned', driver_id = 'driverB'\nWHERE id = 42 AND status = 'pending';\n\n-- fencing：下游只接受更大的 token\nUPDATE rides\nSET status = 'assigned', fence_token = 35\nWHERE id = 42 AND fence_token < 35;",
+    "lang": "sql",
     "termDefinitions": [
       {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "TTL 是 key 的存活时间，到点后 Redis 自动删除；锁靠它避免持有者崩溃后永远不释放。",
+        "meaningEn": "TTL means Time To Live, the time before Redis expires a key; locks use it so a crashed holder does not block forever."
+      },
+      {
+        "term": "GC",
+        "fullName": "Garbage Collection",
+        "meaning": "GC 是运行时回收内存的过程，暂停过久时持锁进程可能错过锁的过期时间。",
+        "meaningEn": "Garbage collection reclaims memory, and a long pause can make a lock holder outlive its lease."
+      },
+      {
         "term": "CAS",
-        "fullName": "compare-and-set",
+        "fullName": "Compare-And-Set",
         "meaning": "原子的条件写：仅当当前值等于预期(如仍是 pending)才更新，否则失败——并发下只有一个赢家",
         "meaningEn": "Compare-and-set: an atomic conditional write that updates only if the value still equals the expected one, so only one racer wins."
       },
       {
         "term": "fencing token",
-        "fullName": "",
         "meaning": "加锁时发的单调递增编号；下游记住见过的最大值，拒绝编号更小的写，从而挡住锁已过期的旧持有者",
         "meaningEn": "A fencing token is a monotonically increasing number issued at lock time; the store remembers the max seen and rejects smaller-token writes, blocking a stale holder."
       },
       {
         "term": "last-write-wins",
-        "fullName": "LWW",
+        "fullName": "Last Write Wins",
         "meaning": "冲突时让最后写入的覆盖之前的；对锁场景是错的，因为迟到的旧持有者会盖掉新结果",
         "meaningEn": "Last-write-wins lets the latest write overwrite earlier ones — wrong for locking, since a late stale holder can clobber the new result."
       }
@@ -78740,8 +78861,8 @@
       "Wrong: they differ a lot — Redis is fast but best-effort, a DB lock is strongly consistent within its transaction.",
       "Wrong: a Redis lock and the DB write are two systems, not one transaction — which is exactly why it needs fencing."
     ],
-    "why": "Redis 锁：快、尽力而为，会 TTL 过期 → 靠下游 CAS/fencing 保正确；DB 锁（SELECT FOR UPDATE）：事务内持有、随提交释放、和业务写同事务原子、无过期问题，但吞吐低、给 DB 加负载。高频选 Redis+兜底，强一致/锁写同事务选 DB。",
-    "why_en": "A Redis lock is fast and best-effort — it can expire, so correctness relies on downstream CAS/fencing. A DB lock (SELECT FOR UPDATE) is held inside the transaction, released on commit, atomic with the business write, and never expires — but lower throughput and more DB load. Pick Redis+guard for high volume, DB when the lock and write must be one transaction.",
+    "why": "Redis 锁快但会过期，所以高频路径要配 CAS/fencing；数据库锁慢些但和业务写在同一事务，适合强一致的「锁+写原子」场景。",
+    "why_en": "Use Redis locks for high-throughput coordination only with downstream CAS or fencing; use DB locks when the lock and business write must be one transaction.",
     "tradeoff": "Redis 锁（快·尽力而为·需下游兜底） vs 数据库锁（慢·锁写同事务·强一致）",
     "table": {
       "headers": [
@@ -78782,24 +78903,27 @@
         ]
       ]
     },
-    "codeSample": "# Redis 锁：快、尽力而为（会 TTL 过期，需下游 fencing 兜底）\nSET lock:ride:42 token NX EX 10     # 抢锁；持有者崩了靠 TTL 自动释放\n...临界区...  再用 Lua 校验 token 后 DEL   # 只删自己的锁\n\n# 数据库锁：在事务里，锁+写同提交，无过期问题\nBEGIN;\nSELECT * FROM rides WHERE id=42 FOR UPDATE;  # 行锁，持到事务结束\nUPDATE rides SET driver=B WHERE id=42;       # 锁和写在同一事务，原子\nCOMMIT;                                       # 提交即释放锁",
+    "codeSample": "# Redis 锁：快，但锁与业务写不在一个事务\nSET lock:ride:42 token NX EX 10\n# release 时用 Lua 校验 value == token 后再 DEL\n\n# 数据库锁：锁和写在同一事务里\nBEGIN;\nSELECT * FROM rides WHERE id = 42 FOR UPDATE;\nUPDATE rides SET driver_id = 'driverB' WHERE id = 42;\nCOMMIT;",
     "lang": "text",
     "termDefinitions": [
       {
         "term": "SELECT FOR UPDATE",
-        "fullName": "",
         "meaning": "数据库行级锁：在事务里锁住选中的行，直到 COMMIT/ROLLBACK 才释放，无 TTL 过期问题",
         "meaningEn": "SELECT ... FOR UPDATE takes a row lock held until the transaction commits or rolls back — no TTL expiry."
       },
       {
         "term": "advisory lock",
-        "fullName": "",
         "meaning": "Postgres 应用级咨询锁(pg_advisory_lock)，由应用自己约定用途、不锁具体行，可当分布式锁用",
         "meaningEn": "A Postgres advisory lock (pg_advisory_lock) is an app-defined lock not tied to a row, usable as a distributed lock."
       },
       {
+        "term": "CAS",
+        "fullName": "Compare-And-Set",
+        "meaning": "原子条件写：只有当前状态仍等于预期时才更新，用来拒绝并发竞争里的迟到写。",
+        "meaningEn": "Compare-and-set is an atomic conditional write that updates only when the current state still matches the expected one."
+      },
+      {
         "term": "fencing token",
-        "fullName": "",
         "meaning": "加锁发的单调递增编号，下游只认更大的、拒绝旧持有者的迟到写——Redis 锁的正确性兜底",
         "meaningEn": "A fencing token is a monotonically increasing number; the store rejects smaller-token writes, backstopping a Redis lock."
       }
@@ -78849,22 +78973,50 @@
       0
     ],
     "optionExplanations": [
-      "对:Redis Cluster 内置故障转移——replica 向其他 master 拉票,拿多数 master 票就自升、接管哈希槽,gossip 广播。",
-      "错:投票的是「其他 master 节点」,不是客户端。",
-      "错:集群自动做,不需要人工手动提升(那是没做自动化才被迫的)。",
-      "错:Redis Cluster 不依赖外部协调服务;master 之间自己投票选。"
+      "对:这是节点内部协议;客户端只在选主结束后刷新槽位路由。",
+      "错:客户端不参与选主,只接收 MOVED/槽位表变化后改连新的 master。",
+      "错:自动故障转移正常会提升 replica;人工提升只是自动化失效时的运维兜底。",
+      "错:ZooKeeper 适合自研协调;这张卡问的是 Redis 自带分片集群。"
     ],
     "optionExplanations_en": [
-      "Right: built-in failover — a replica requests votes from the other masters, a majority makes it promote itself and take over the slots, then gossip broadcasts it.",
-      "Wrong: the voters are the other master nodes, not clients.",
-      "Wrong: the cluster does it automatically; manual promotion is only a fallback when automation is missing.",
-      "Wrong: Redis Cluster needs no external coordinator; the masters vote among themselves."
+      "Right: this is Cluster's built-in shard failover; clients only refresh slot routing after the promotion.",
+      "Wrong: clients do not vote; they follow MOVED replies or refreshed slot maps and connect to the new master.",
+      "Wrong: normal automatic failover promotes a replica; manual promotion is only an operations fallback.",
+      "Wrong: ZooKeeper is useful for custom coordination, but Redis Cluster uses votes from its own masters."
     ],
-    "why": "Redis Cluster 内置自动故障转移:master 失联被「多数 master」标 FAIL 后,它的 replica 发起选举、向其他 master 拉票(不是客户端、不是外部服务);数据最新的 replica 等待最短、通常先赢;拿到多数 master 票就自升为 master、接管哈希槽,gossip 广播新路由。非分片的主从则用 Sentinel(随 Redis 发布的独立进程)。",
-    "why_en": "Redis Cluster has built-in failover: after a majority of masters mark a dead master FAIL, its replicas hold an election, requesting votes from the other masters (not clients, not an external service); the most up-to-date replica waits the least and usually wins; with a majority of master votes it promotes itself, takes over the hash slots, and gossips the new routing. A non-sharded master-replica setup uses Sentinel (a separate process shipped with Redis).",
+    "why": "多数主节点先判定旧主 FAIL；它的副本随后竞选，拿到多数主节点授权就接管哈希槽。Sentinel 只用于非分片主从，不参与这里。",
+    "why_en": "After most masters mark the old master FAIL, one replica wins majority authorization, promotes, and takes the hash slots; Sentinel is for non-sharded setups.",
     "tradeoff": "Sentinel(非分片主从·独立哨兵进程) vs Cluster 内置(分片·master 互相投票)",
-    "codeSample": "# Redis Cluster 自动故障转移(分片·内置·无需 Sentinel)\n# 1) 检测:节点间 gossip 心跳;master A 失联\n#    某 master 标 A=PFAIL;多数 master 认同 → FAIL(确认挂)\n# 2) A 的 replica 发起选举(数据越新等待越短 → 最新的先发)\nfor r in A.replicas:\n    wait(rank_by_repl_offset(r) * DELAY)   # 数据最新的 replica 先启动\n    r.epoch += 1\n    send FAILOVER_AUTH_REQUEST(epoch) -> 所有其他 master   # 向 master 拉票\n# 3) 其他 master 投票(每个 epoch 只投一次)\non master recv REQUEST(epoch, r):\n    if epoch > lastVoted and r.master == FAIL:\n        vote ACK; lastVoted = epoch\n# 4) 拿到「多数 master 票」的 replica 胜出\nif r.votes >= majority(masters):\n    r.promote_to_master(); take_over(A.slots)   # 自升 + 接管哈希槽\n    gossip(new_config)                          # 广播新路由",
-    "lang": "text",
+    "whenOtherWins": "如果是非分片的单主多副本 Redis,用 Sentinel 监控并提升 replica;如果是自研服务选主,才考虑 ZooKeeper/etcd 这类外部协调。",
+    "table": {
+      "headers": [
+        "方案",
+        "适用",
+        "投票者",
+        "状态来源"
+      ],
+      "rows": [
+        [
+          "Cluster",
+          "分片 Redis",
+          "其他 master",
+          "槽位表+epoch"
+        ],
+        [
+          "Sentinel",
+          "非分片主从",
+          "哨兵进程",
+          "主从监控"
+        ],
+        [
+          "ZooKeeper/etcd",
+          "自研协调",
+          "仲裁服务",
+          "外部租约"
+        ]
+      ]
+    },
+    "diagram": "sequenceDiagram\n  participant M as Other masters\n  participant R as Replica\n  participant C as Cluster clients\n  M->>M: mark old master FAIL by majority\n  R->>M: FAILOVER_AUTH_REQUEST(epoch)\n  M-->>R: vote once per epoch\n  R->>R: promote and take hash slots\n  R-->>C: gossip / MOVED updates new route",
     "tags": [
       "redis",
       "cluster",
@@ -78876,27 +79028,33 @@
     "termDefinitions": [
       {
         "term": "Redis Cluster 故障转移",
-        "fullName": "",
-        "meaning": "分片集群内置的自动故障转移:master 挂了,它的 replica 向「其他 master」拉票,拿多数 master 票者自升为 master、接管哈希槽、gossip 广播。投票的是 master 不是 Sentinel,所以 master 数要奇数≥3 防脑裂",
-        "meaningEn": "Redis Cluster built-in failover: when a master dies, its replicas request votes from the other masters; a majority makes one self-promote, take over the slots, and gossip it. Masters vote (not Sentinels), so you want an odd number ≥3 to avoid split-brain."
+        "meaning": "分片集群内置的自动故障转移:旧 master 被多数 master 标 FAIL 后,它的 replica 竞选并接管哈希槽。",
+        "meaningEn": "Redis Cluster failover is built into the sharded cluster: after most masters mark the old master FAIL, one replica is elected and takes the hash slots."
       },
       {
-        "term": "Sentinel vs Cluster",
-        "fullName": "",
-        "meaning": "两套故障转移:Sentinel=给「非分片的主从」用,是单独跑的哨兵进程、哨兵们投票提升一个 replica;Cluster=给「分片」用、内置在节点里,由其他 master 投票提升。分片场景用 Cluster(自带)",
-        "meaningEn": "Two failover systems: Sentinel is for a non-sharded master-replica group — separate sentinel processes vote to promote a replica; Cluster is for sharding — built into the nodes, the other masters vote. For sharding, Cluster is built in."
+        "term": "Sentinel",
+        "meaning": "Sentinel 是 Redis 随附的独立哨兵进程,用于非分片主从部署的监控、通知和自动提升。",
+        "meaningEn": "Sentinel is a separate Redis process for monitoring, notification, and failover in a non-sharded master-replica deployment."
       },
       {
         "term": "config epoch",
-        "fullName": "",
         "meaning": "每次故障转移递增的版本号:保证每个 epoch、每个 master 只投一票,防止双主/脑裂(和 Raft term、fencing token 一个思路)",
         "meaningEn": "A version number bumped each failover so each master votes only once per epoch, preventing split-brain — the same idea as a Raft term or a fencing token."
       },
       {
         "term": "gossip",
-        "fullName": "",
         "meaning": "集群节点之间定期互相交换心跳和路由信息的协议;靠它发现节点挂、传播新的槽归属",
         "meaningEn": "A protocol where cluster nodes periodically exchange heartbeats and routing info; used to detect failures and spread new slot ownership."
+      },
+      {
+        "term": "hash slot",
+        "meaning": "Redis Cluster 把 key 映射到 16384 个哈希槽,每个槽归某个 master;新 master 接管的就是这些槽。",
+        "meaningEn": "Redis Cluster maps keys to 16,384 hash slots owned by masters; failover moves the dead master's slots to the new master."
+      },
+      {
+        "term": "ZooKeeper",
+        "meaning": "ZooKeeper 是外部协调服务,常用于自研选主、配置和租约,但 Redis Cluster 分片选主不依赖它。",
+        "meaningEn": "ZooKeeper is an external coordination service for custom leader election, configuration, and leases, but Redis Cluster failover does not depend on it."
       }
     ],
     "track": "classic-sd",
