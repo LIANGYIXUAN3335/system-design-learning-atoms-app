@@ -36,8 +36,10 @@
       "Wrong: thousands of serial frontend calls are slow and fragile; one drop leaves it half-done.",
       "Wrong: moving is a server-side data operation; the browser cannot and should not do it."
     ],
-    "why": "数千封的批量操作要异步：POST 立刻入队并返回 job_id + status=queued，真正的移动在后台 worker 里做。同步会长时间阻塞、请求超时。",
-    "why_en": "A several-thousand-item bulk op must be async: the POST enqueues and returns a job_id + status=queued instantly, while the real moving happens in background workers. Synchronous would block and time out.",
+    "why": "数千封批量移动要异步：POST 只入队并返回 job_id + queued，真正移动交给后台 worker。同步会占住请求线程，几千封一慢就超时。",
+    "why_en": "Make a several-thousand-email move async: POST returns job_id + queued, and workers do the real moves in the background.",
+    "tradeoff": "同步阻塞请求 vs 异步作业可查进度",
+    "whenOtherWins": "只有数量很小、能在一次请求超时预算内完成且失败影响可接受时，同步才值得考虑。",
     "tags": [
       "bulk-move",
       "async",
@@ -90,10 +92,10 @@
       "Wrong: GET should be side-effect-free, and a URL cannot hold thousands of ids.",
       "Wrong: one endpoint per email defeats the point of a bulk op."
     ],
-    "codeSample": "# ① 发起批量移动\nPOST /v1/mailboxes/{mailboxId}/bulk-move       # mailboxId = 哪个邮箱\nAuthorization: Bearer <token>                  # 身份「谁在操作」从请求头来，不放进 body\nBody {\n  search_result_token: \"sr_123\",               # 移「哪些」邮件（那批搜索结果）\n  destination_folder_id: \"newsletter\"          # 移「到哪个」文件夹\n}\n→ 202 Accepted { job_id: \"job_9\", status: \"queued\" }   # 已受理，给作业号\n\n# ② 查进度\nGET /v1/bulk-move-jobs/{job_id}\n→ { status:\"running\", total_count, processed_count, success_count, fail_count }\n\n# ③ 分页拉每封的明细\nGET /v1/bulk-move-jobs/{job_id}/items?page_size=50&cursor=...\n→ { items:[ {message_id, status} ], next_cursor }",
+    "codeSample": "# 发起：返回 202 + job_id\nPOST /v1/mailboxes/{mailboxId}/bulk-move\nAuthorization: Bearer <token>\n{ \"search_result_token\":\"sr_123\", \"destination_folder_id\":\"newsletter\" }\n-> 202 { \"job_id\":\"job_9\", \"status\":\"queued\" }\n\n# 查进度 / 拉明细\nGET /v1/bulk-move-jobs/{job_id}\nGET /v1/bulk-move-jobs/{job_id}/items?page_size=50&cursor=...",
     "lang": "text",
-    "why": "异步 API 三件套：POST 发起→立刻回 job_id+queued；GET job 查进度(total/processed/success/fail)；GET job/items 分页拉每封的结果。发起用 POST(有副作用)，查询用 GET。",
-    "why_en": "The async trio: POST to start → job_id + queued instantly; GET job for progress (total/processed/success/fail); GET job/items paginated for per-message results. Start with POST (side effects), read with GET.",
+    "why": "异步 API 三件套：POST 发起并回 job_id+queued，GET job 查进度，GET job/items 分页拉每封结果。发起有副作用用 POST，查询只读用 GET。",
+    "why_en": "Use the async trio: POST starts and returns job_id, GET reads progress, and GET job/items pages through per-message results.",
     "tags": [
       "bulk-move",
       "api-design",
@@ -163,8 +165,10 @@
       "Wrong: a confirmation email is not part of the move flow.",
       "Wrong: search is given; no need to rebuild the index before moving."
     ],
-    "why": "第一步是鉴权(authentication + authorization)：确认用户身份，并检查他有权移动这些邮件、写入目标文件夹。跳过这步就是越权/数据泄漏漏洞。这也是面试官特意问的点。",
-    "why_en": "The first step is auth (authentication + authorization): confirm the user and check they may move these emails and write to the destination folder. Skipping it is a privilege-escalation hole — a point the interviewer specifically probed.",
+    "why": "第一步是鉴权(authentication + authorization)：确认用户是谁，并检查他能移动这些邮件、写入目标文件夹。跳过这步就是越权和数据泄漏。",
+    "why_en": "Authorize first: confirm the user and verify they may move these emails into the destination folder.",
+    "tradeoff": "先鉴权再建作业 vs 未授权先动数据",
+    "whenOtherWins": "只有纯公开、无用户归属的数据才可能弱化授权；邮箱邮件是私有数据，不能这样做。",
     "tags": [
       "bulk-move",
       "authz",
@@ -311,8 +315,8 @@
       "Wrong: the task table is unrelated to search speed.",
       "Wrong: the queue does not require this table."
     ],
-    "why": "message 表只有「当前在哪个文件夹」的快照，看不出历史。task 表每次移动记一条(message_id、源文件夹、目标文件夹、job_id、status、时间)，用于审计——事后能回答「这封邮件为什么在这个文件夹」。",
-    "why_en": "The message table holds only a current-folder snapshot with no history. The task table records each move (message_id, source folder, destination folder, job_id, status, time) for audit — so you can later answer \"why is this email in this folder\".",
+    "why": "message 表只回答「现在在哪」；task 表每次移动追加一行，记录源/目标、job、状态和时间，所以能审计和续跑。一次移动仍用事务同时改 message.folder 并标 task done。",
+    "why_en": "The message table says where the email is now; the task table logs each move, so you can audit and resume safely.",
     "tags": [
       "bulk-move",
       "data-model",
@@ -343,8 +347,66 @@
         "fullName": "",
         "meaning": "message 表=邮件的「户口本」:一封邮件一行,存它「现在」在哪个文件夹(状态,移动时原地改)。task 表=移动的「流水账」:每移动一次记一行(从哪→到哪、状态、哪个 job),同一封邮件可能有多行(移过几次)。前者=当前状态,后者=操作历史",
         "meaningEn": "The message table is the email ID card: one row per email holding its current folder (state, updated in place on a move). The task table is the move ledger: one row per move (source→dest, status, job), and one email can have many rows over time. State vs history of operations."
+      },
+      {
+        "term": "message(本题)",
+        "fullName": "",
+        "meaning": "这道题里 message = 一封邮件(email)。邮件系统里 email 的标准叫法就是 message(RFC 822、IMAP)。实体含主题/正文/发件人/current_folder_id;「移动」=改 current_folder_id。注意别和 WhatsApp deck 的 Message(聊天消息)混——同词不同领域。",
+        "meaningEn": "In this problem message = an email. \"Message\" is the standard term for an email (RFC 822, IMAP). The entity holds subject/body/sender/current_folder_id; a \"move\" changes current_folder_id. Do not confuse it with the WhatsApp deck's Message (a chat message) — same word, different domain."
+      },
+      {
+        "term": "快照实体 vs 操作记录",
+        "fullName": "snapshot entity vs operation log",
+        "meaning": "message 是「快照实体」:只保存当前状态(在哪个文件夹)，改一次覆盖一次，答不出历史。task 是「操作记录/日志」:每次操作追加一行，保留历史，能回答「怎么变成现在这样」。二者是互补的两类表——一个记 what-is，一个记 what-happened，不能互相替代。",
+        "meaningEn": "message is a snapshot entity: it stores only current state (which folder), overwritten each change, unable to answer history. task is an operation log: append one row per operation, retaining history, able to answer \"how did it become this\". They are complementary tables — one records what-is, the other what-happened; neither replaces the other."
+      },
+      {
+        "term": "job vs task(1:N)",
+        "fullName": "",
+        "meaning": "job=整批操作(一次「移动全部」一行:查询条件、源/目标、total、processed/success/fail、status);task=批里的一个工作单元(一封邮件一条)。一个匹配 1 万封的 job 派生 1 万个 task。job 只存「聚合」(意图+计数+总状态),装不下 1 万个逐封状态;逐封的追踪/重试/续跑/审计全靠 task。",
+        "meaningEn": "job = the whole batch operation (one row per \"move all\": query, source/dest, total, processed/success/fail, status); task = one unit of work within it (one row per email). A job matching 10k emails spawns 10k tasks. The job holds only the aggregate (intent + counters + overall status) and cannot hold 10k per-email statuses; per-email tracking/retry/resume/audit all live on tasks."
+      },
+      {
+        "term": "原子粒度=task，job 可续跑",
+        "fullName": "",
+        "meaning": "task(移一封)是原子:改 message.folder + 标 task.done 同事务,全成或全滚。job(整批)不原子、故意做成可续跑:由 N 个原子 task 增量拼成,永不「1 万封一个大事务」。每完成一个 task 就原子递增 job 的 processed/success/fail 计数(幂等守护防重投重复加),服务端在 processed==total 时标 job completed(见卡010)。所以是 task 往上汇总进 job。",
+        "meaningEn": "The atomic unit is a task (moving one email): change message.folder + mark task.done in one transaction, all-or-nothing. The job (whole batch) is non-atomic and deliberately resumable: built incrementally from N atomic tasks, never \"10k in one transaction\". Each completed task atomically increments the job's processed/success/fail counter (idempotency-guarded against redelivery double-count), and the server marks the job completed when processed==total (see card 010). So tasks roll up into the job."
       }
-    ]
+    ],
+    "table": {
+      "headers": [
+        "",
+        "message",
+        "task",
+        "job"
+      ],
+      "rows": [
+        [
+          "定义",
+          "邮件实体",
+          "执行单元",
+          "批操作"
+        ],
+        [
+          "粒度",
+          "一封一行",
+          "一封一条",
+          "一批一行"
+        ],
+        [
+          "保存",
+          "当前文件夹",
+          "源/目标/状态",
+          "意图+计数"
+        ],
+        [
+          "原子",
+          "被 task 改",
+          "folder+done",
+          "可续跑"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-bulk-email-move-007",
@@ -383,8 +445,8 @@
       "Wrong: encoding the type into column names is unscalable hard-coding.",
       "Wrong: audit/execution state must live server-side, not in the frontend."
     ],
-    "why": "原 task 表有 source_folder_id/destination_folder_id，跟「移动」死绑。泛化：加 task_type(操作类型) + task_payload(该操作的参数)，移动就把源/目标放进 payload。这样批删除、批归档等复用同一张表和同一套 worker 框架。这是这题的 OOD 关键泛化点。",
-    "why_en": "The original task table has source/destination folder ids, tightly bound to \"move\". Generalize by adding task_type (what op) + task_payload (that op's params); a move puts source/destination in the payload. Then bulk delete, archive, etc. reuse the same table and worker framework — the key OOD generalization here.",
+    "why": "task_type 说明 move/delete/archive/label，task_payload 放各自参数。一张 task 表、一套队列和 worker 可服务多种批操作；新增类型只注册 handler，不改老表。",
+    "why_en": "Use task_type for the operation and task_payload for its arguments, so one task table and worker framework can support many batch actions.",
     "tradeoff": "移动专属字段(简单·不通用) vs task_type+payload(通用·多一层解释)",
     "tags": [
       "bulk-move",
@@ -398,8 +460,16 @@
         "fullName": "",
         "meaning": "通用任务建模：一列存「操作类型」，一列(JSON)存该类型的具体参数——一张表/一套 worker 支持多种操作，加新操作只加 type 不改表",
         "meaningEn": "Generic task modeling: one column for the operation type and one (JSON) for that type's params — one table/worker set supports many ops; a new op just adds a type, no schema change."
+      },
+      {
+        "term": "task_type + payload（命令模式）",
+        "fullName": "type-tagged task = Command pattern",
+        "meaning": "把「要做的操作」数据化:task_type 标明操作种类、payload 装该操作的参数。worker 用 type 查 handler 表分派、从 payload 取参执行——正是命令/策略模式(操作被封装成可入队、可重试、可撤销的对象)。好处:一套队列/worker/重试/续跑框架服务所有操作类型;加操作=注册新 handler,不改框架(OCP)。对比:为每种操作各建表/队列/worker = 重复造轮子。",
+        "meaningEn": "Turn \"the operation to perform\" into data: task_type names the operation kind, payload carries its params. The worker looks up a handler by type and executes with the payload — the Command/Strategy pattern (an operation encapsulated as a queueable, retryable object). Benefit: one queue/worker/retry/resume framework serves all operation types; adding one = registering a handler, not editing the framework (OCP). Contrast: a table/queue/worker per operation = reinventing the wheel."
       }
-    ]
+    ],
+    "codeSample": "HANDLERS = {\"move\": move, \"delete\": delete,\n            \"archive\": archive, \"label\": label}\n\ndef run(task):\n    if task.status == \"done\": return\n    handler = HANDLERS[task.task_type]\n    with txn:\n        handler(task.message, task.payload)\n        task.status = \"done\"\n# 新操作 = 新 task_type + handler",
+    "lang": "python"
   },
   {
     "id": "sd-problem-breakdowns-bulk-email-move-008",
@@ -438,8 +508,10 @@
       "Wrong: scanning the whole table each is slow and workers fight over the same email.",
       "Wrong: a synchronous 10k loop returns to the blocking design."
     ],
-    "why": "生产者把每封邮件的移动做成一个任务入队(1 万封→1 万任务)；worker 池是消费者，每个 worker 拉一条、执行移动、更新该任务状态。粒度到单封→天然并行、单条失败可单独重试，互不影响。",
-    "why_en": "The producer enqueues one move task per email (10k emails → 10k tasks); the worker pool are consumers, each pulling one, doing the move, and updating that task's status. Per-email granularity gives natural parallelism and lets a single failure retry alone without affecting others.",
+    "why": "生产者把 1 万封拆成 1 万个单封任务入队，worker 池各拉一条、移动、回写状态。粒度到单封才有并行度，失败也只重试那一封。",
+    "why_en": "Enqueue one task per email, then let workers move and mark them independently; per-email granularity gives parallelism and isolated retries.",
+    "tradeoff": "单封任务可并行重试 vs 巨型任务简单但脆",
+    "whenOtherWins": "只有数量很小、单 worker 能很快完成且失败可整体重试时，才可能接受一条批任务。",
     "tags": [
       "bulk-move",
       "queue",
@@ -492,8 +564,8 @@
       "Wrong: not actually moving is pointless.",
       "Wrong: locking the whole table serializes everything and kills throughput."
     ],
-    "why": "移动一封 = 改它的 current_folder_id + 把这条 task 标 finished，两件事放在同一个数据库事务里一起提交：要么都成、要么都回滚，杜绝「改了文件夹但任务没记」的半完成。配合任务重试要幂等(已完成的重投就跳过)。",
-    "why_en": "Moving one email = change its current_folder_id + mark the task finished, committed in one DB transaction: both succeed or both roll back, preventing a half-done \"folder changed but task not recorded\". Pair with idempotent retries (a redelivered already-done task is skipped).",
+    "why": "单封移动的原子边界是：改 current_folder_id 和标 task finished 同事务提交，崩溃时一起回滚。整批 job 不做大事务，而是靠可信的单封 checkpoint 续跑；否则会重复移或漏掉邮件。",
+    "why_en": "Make one email the atomic unit: update its folder and mark the task finished in the same transaction, then resume the batch from trusted per-email checkpoints.",
     "tags": [
       "bulk-move",
       "transaction",
@@ -506,8 +578,42 @@
         "fullName": "idempotent",
         "meaning": "同一任务执行一次或多次结果相同；这里靠「先查任务状态、已 finished 就跳过」保证重投无害",
         "meaningEn": "Idempotent means running a task once or many times has the same effect; here, checking task status and skipping if already finished makes redelivery harmless."
+      },
+      {
+        "term": "原子性的粒度",
+        "fullName": "granularity of atomicity",
+        "meaning": "要原子的是「一个工作单元」(移一封邮件),不是「整个作业」(移 1 万封)。作业级别故意不原子、而是可续跑:拆成一堆单元原子+幂等的小任务，每完成一单元就落一个可信 checkpoint(task.finished)，崩溃后从未完成处接着做。单元原子是续跑安全的地基，二者不冲突。",
+        "meaningEn": "What must be atomic is a work unit (move one email), not the whole job (move 10k). The job is intentionally non-atomic but resumable: split into many atomic+idempotent unit tasks, each committing a trustworthy checkpoint (task.finished), so a crash resumes from where it stopped. Per-unit atomicity is the foundation of safe resume — the two do not conflict."
+      },
+      {
+        "term": "断点续跑",
+        "fullName": "resume from checkpoint",
+        "meaning": "长作业崩溃/重启后，不从头再来，而是「扫出还没完成的单元、接着做」。前提是每个单元的完成标记(finished)可信——由单元级原子提交保证。再加移动幂等，重投/重试同一单元不会重复生效。",
+        "meaningEn": "After a crash/restart, a long job does not start over but scans for unfinished units and continues. It requires each unit's finished flag to be trustworthy — guaranteed by per-unit atomic commit. With an idempotent move, redelivering/retrying the same unit has no duplicate effect."
       }
-    ]
+    ],
+    "whenOtherWins": "别把整个作业(1 万封)包进一个大事务:会锁全表、长事务、第 1 万封失败就回滚前 9999 封成功、还无法增量前进。正确是「单封原子 + 作业可续跑」:一堆单元原子+幂等的小任务，每单元 checkpoint，从 checkpoint 续跑。",
+    "whenOtherWins_en": "Do not wrap the whole job (10k emails) in one big transaction: it locks broadly, runs long, and one failure at #10,000 rolls back 9,999 successes with no incremental progress. The right shape is \"per-email atomic + job resumable\": many atomic+idempotent unit tasks, a checkpoint per unit, resume from the checkpoint.",
+    "table": {
+      "headers": [
+        "状态",
+        "续跑结果"
+      ],
+      "rows": [
+        [
+          "folder+done同提交",
+          "跳过已完成"
+        ],
+        [
+          "folder已改,done未标",
+          "重做这封"
+        ],
+        [
+          "done已标,folder未改",
+          "误跳过"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-bulk-email-move-010",
@@ -535,20 +641,21 @@
       0
     ],
     "optionExplanations": [
-      "对：worker 递增 processed/success/fail 计数，服务端在 processed==total 时判定并标 completed，再用 SSE/WebSocket 主动推 UI。",
-      "错：靠 UI 轮询来标状态，UI 不轮询就永远不完成——逻辑放错地方。",
-      "错：每个 worker 各改 job 终态会互相打架、判不准。",
-      "错：纯轮询浪费且延迟，push 更好。"
+      "对：计数更新后由服务端判定完成，再把结果通知 UI。",
+      "错：UI 不轮询时 job 就永远不完成，状态机放错层。",
+      "错：多个 worker 抢改最终状态，容易竞态和重复收尾。",
+      "错：前端可以读状态，但不能自己判定并写完成。"
     ],
     "optionExplanations_en": [
-      "Right: workers increment processed/success/fail counts, the server decides completion when processed==total and marks it, then pushes to the UI via SSE/WebSocket.",
-      "Wrong: relying on the UI to flip status means it never completes if the UI stops polling — logic in the wrong place.",
-      "Wrong: every worker setting the final job status fights and mis-decides.",
-      "Wrong: pure polling wastes work and adds latency; push is better."
+      "Right: after counters update, the server decides completion and notifies the UI.",
+      "Wrong: if the UI stops polling, the job would never complete; the state machine is in the wrong layer.",
+      "Wrong: many workers racing to set final status creates races and duplicate finalization.",
+      "Wrong: the frontend may read status, but it must not decide and write completion."
     ],
-    "why": "worker 每完成一条就原子递增 job 的 processed/success/fail；服务端(而不是 UI)在 processed==total 时判定完成、把 status 标 completed，再通过 SSE/WebSocket 主动通知 UI。别把「标完成」的责任放在前端轮询上。",
-    "why_en": "Each finished task atomically increments the job's processed/success/fail counts; the server (not the UI) decides completion when processed==total, marks the status completed, and pushes it to the UI via SSE/WebSocket. Do not put the \"mark complete\" responsibility on frontend polling.",
-    "whenOtherWins": "若量很小、无实时性要求，简单轮询也能接受；但要「服务端权威判定完成」这点不变。",
+    "why": "完成判定必须在服务端：worker 每完成一条原子 processed++，processed==total 时标 completed。UI 只读这个状态；短命作业可轮询，低延迟单向通知用 SSE，需要双向再用 WebSocket。",
+    "why_en": "Completion belongs on the server: workers increment processed atomically, and the server marks completed when processed equals total.",
+    "tradeoff": "服务端权威状态机 vs 前端猜测完成",
+    "whenOtherWins": "若量很小、无实时性要求，UI 用短轮询读取服务端状态即可；但完成判定仍不能交给前端。",
     "tags": [
       "bulk-move",
       "job-status",
@@ -561,8 +668,44 @@
         "fullName": "Server-Sent Events",
         "meaning": "服务端经一条长连接单向推送给客户端；作业完成时推一条通知，比前端反复轮询省且实时",
         "meaningEn": "Server-Sent Events push updates server→client over one long-lived connection; pushing a completion event beats repeated frontend polling."
+      },
+      {
+        "term": "SSE vs WebSocket",
+        "fullName": "",
+        "meaning": "SSE(Server-Sent Events)=服务器→客户端的单向推送，走纯 HTTP、自带断线重连、轻。WebSocket=全双工双向、需 upgrade 握手、更重。进度/通知这种单向场景 SSE 更贴;只有还需要 client→server 走同一通道(如同连接取消 job)或高频双向时，WebSocket 才有价值。",
+        "meaningEn": "SSE (Server-Sent Events) is one-way server→client push over plain HTTP with built-in auto-reconnect, lightweight. WebSocket is full-duplex bidirectional, needs an upgrade handshake, heavier. For one-way progress/notifications SSE fits better; WebSocket only pays off when you also need client→server on the same channel (e.g. cancel over the same connection) or high-frequency two-way."
+      },
+      {
+        "term": "轮询的隐藏优势",
+        "fullName": "",
+        "meaning": "对短命作业，轮询(GET /jobs/{id} 每 1-2s)常是更好默认:无持久连接、无状态、任意服务器都能答。而 push(SSE/WS)有隐藏成本——持连接的那台必须正好知道该 job 进度，否则要加 pub/sub 把完成事件路由过去(即多机路由问题)。轮询绕开这一切;缺点(空轮询浪费+一个间隔延迟)对盯进度条的人可忽略。",
+        "meaningEn": "For short-lived jobs, polling (GET /jobs/{id} every 1-2s) is often the better default: no persistent connection, stateless, any server can answer. Push (SSE/WS) has a hidden cost — the server holding the connection must know that job's progress, else you need pub/sub to route the completion event there (the multi-server routing problem). Polling avoids all of it; its downsides (empty polls, one-interval latency) are negligible for someone watching a progress bar."
       }
-    ]
+    ],
+    "table": {
+      "headers": [
+        "交付机制",
+        "何时用"
+      ],
+      "rows": [
+        [
+          "polling",
+          "短作业,容忍1-2s"
+        ],
+        [
+          "long-poll",
+          "低延迟,少改造"
+        ],
+        [
+          "SSE",
+          "单向实时通知"
+        ],
+        [
+          "WebSocket",
+          "双向高频交互"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-bulk-email-move-011",
@@ -601,8 +744,10 @@
       "Wrong: recomputing on every request wastes work.",
       "Wrong: a big report does not belong in a status field."
     ],
-    "why": "三层：①逐条明细用分页 GET(page_size+cursor)从 task 表拉；②要 CSV/PDF 就走异步导出作业→生成文件存 S3→返回下载 URI；③关键：报告在 job 完成时作为收尾阶段生成一次，UI 多次 GET 直接取现成的，不重复现算。",
-    "why_en": "Three layers: (1) paginate per-message details via GET (page_size + cursor) from the task table; (2) for CSV/PDF, run an async export job → generate the file to S3 → return a download URI; (3) key: generate the report once as the job's final stage, so repeated UI GETs read the ready file instead of recomputing.",
+    "why": "明细用 cursor 分页从 task 表拉；大 CSV/PDF 走后台导出到 S3 并返回下载链接。报告在 job 完成时生成一次，UI 之后只取现成文件，不每次重算。",
+    "why_en": "Page details from the task table, export big CSV/PDF files asynchronously to S3, and generate the report once when the job completes.",
+    "tradeoff": "分页/异步导出可扩展 vs 一次性大响应或反复现算",
+    "whenOtherWins": "只有结果很小、只在当前页面展示时，状态接口里带少量摘要才合理；大明细和文件仍要分页或导出。",
     "tags": [
       "bulk-move",
       "report",
@@ -662,8 +807,10 @@
       "Wrong: nothing is actually moved, only marked done.",
       "Wrong: moving means changing the folder, not deleting the email."
     ],
-    "why": "移动 = 改 message 的 folder + 把 task 标 done，放在同一个数据库事务里；两步要么都成、要么都回滚，杜绝「移了但没记 / 记了但没移」。",
-    "why_en": "A move = change the message folder + mark the task done, in one DB transaction; both commit or both roll back, avoiding \"moved but not recorded / recorded but not moved\".",
+    "why": "移动 = 改 message.folder + 标 task done，必须放在同一个数据库事务里。两步要么都提交、要么都回滚，才不会「移了没记」或「记了没移」。",
+    "why_en": "Change the folder and mark the task done in one transaction, so both writes commit or both roll back.",
+    "tradeoff": "单事务一致性 vs 分开提交留下半完成",
+    "whenOtherWins": "如果只是最终一致的统计或日志，可以异步补写；但这里 task.done 会驱动续跑，不能和移动分开提交。",
     "lang": "sql",
     "tags": [
       "bulk-move",
@@ -716,8 +863,10 @@
       "Wrong: moving three times is deliberately worse.",
       "Wrong: marking done without moving does no real work."
     ],
-    "why": "队列 at-least-once → 任务会重投。worker 要幂等：先查任务状态，已 done 就直接返回；否则在事务里移动并标完成。这样重复投递不会重复移动。",
-    "why_en": "An at-least-once queue redelivers tasks, so the worker must be idempotent: check the task status, return if already done; otherwise move and mark done in a transaction. Then duplicate delivery does not double-move.",
+    "why": "at-least-once 队列可能重投同一 task，所以 worker 先查状态：done 就返回，否则事务里移动并标 done。这样重复投递只会变成 no-op。",
+    "why_en": "With at-least-once delivery, check task status first; done tasks return, and unfinished tasks move and mark done in one transaction.",
+    "tradeoff": "幂等消费可重投 vs 假设队列只投一次",
+    "whenOtherWins": "只有队列和存储都能严格 exactly-once 且成本可接受时，才可能少做幂等检查；常规队列不要赌这一点。",
     "lang": "python",
     "tags": [
       "bulk-move",
@@ -760,19 +909,20 @@
       0
     ],
     "optionExplanations": [
-      "对：在数据库里原地 +1（或 Redis INCR）是原子的，并发也不漏计。",
-      "错：读→加→写有窗口，两个 worker 同时读到同值就丢一次自增（lost update）。",
+      "对：数据库自己执行 +1（或 Redis INCR），多个 worker 同时来也是原子写。",
+      "错：读改写窗口会让后提交覆盖先提交，少算一次。",
       "错：局部计数永不合并，job 永远数不全。",
       "错：前端重数是聚合压力，且不是权威计数。"
     ],
     "optionExplanations_en": [
-      "Right: an in-place +1 in the DB (or Redis INCR) is atomic and loses no increments under concurrency.",
-      "Wrong: read→add→write has a window; two workers reading the same value lose one increment (lost update).",
+      "Right: the DB does the +1 (or Redis INCR), so concurrent workers still get atomic writes.",
+      "Wrong: read-modify-write lets a later commit overwrite an earlier one, losing one increment.",
       "Wrong: local counts never merged means the job is never fully counted.",
       "Wrong: re-counting in the frontend is aggregation load and not authoritative."
     ],
-    "why": "并发自增要原子：用 `SET x = x + 1` 这种数据库原地更新或 Redis `INCR`，一步完成。若「读出来→加一→写回去」，两个 worker 同时读到旧值就会覆盖彼此、漏计（lost update）。",
-    "why_en": "Concurrent increments must be atomic: use an in-place `SET x = x + 1` DB update or Redis `INCR`, done in one step. A read→add→write instead lets two workers read the same old value and overwrite each other, losing an increment (lost update).",
+    "why": "并发自增要让存储层原子执行：`processed_count = processed_count + 1` 或 Redis `INCR` 都是一条写。读出来再加再写会让并发 worker 覆盖彼此，造成 lost update。",
+    "why_en": "Concurrent counters need an atomic storage-side increment; read-modify-write can overwrite another worker and lose an update.",
+    "codeSample": "BEGIN;\nUPDATE jobs\nSET processed_count = processed_count + 1\nWHERE job_id = $1;\nCOMMIT;\n\n-- Redis counter alternative:\nINCR job:{job_id}:processed_count",
     "lang": "sql",
     "tags": [
       "bulk-move",
@@ -828,8 +978,9 @@
       "Mistake: the report should be generated once at completion and re-served, not recomputed.",
       "This is correct: a GET progress endpoint is right, not a mistake."
     ],
-    "why": "设计层三个坑：①同步移几千封(阻塞/超时)②靠前端轮询标完成(判定放错层)③每次请求现算报告(重复生成)。正解：异步作业 + 服务端判定完成 + 报告完成时生成一次。查进度的 GET 接口是对的。",
-    "why_en": "Three design pitfalls: (1) moving thousands synchronously (blocks/times out); (2) relying on frontend polling to mark complete (wrong layer); (3) recomputing the report per request. Fix: async job + server-decided completion + report generated once. A GET progress endpoint is correct.",
+    "why": "设计层三个坑是同步阻塞、前端判完成、报告反复现算。正解是异步作业、服务端判定完成、报告完成时生成一次；GET 查进度本身没错。",
+    "why_en": "The design fixes are async jobs, server-owned completion, and one-time report generation; a GET progress endpoint is fine.",
+    "tradeoff": "服务端异步流程 vs 前端/同步请求硬扛",
     "tags": [
       "bulk-move",
       "mistakes",
@@ -877,8 +1028,9 @@
       "Mistake: a client connecting directly to the DB is a security and coupling disaster.",
       "This is correct: a queue + worker pool consuming in parallel is the right answer."
     ],
-    "why": "架构层三个坑：①无队列同步循环(阻塞)②巨型单消息(单点/无并行/失败全丢)③客户端直连数据库(安全+耦合灾难)。正解：网关→服务→队列→worker 池并行消费、单条可重试。",
-    "why_en": "Three architecture pitfalls: (1) synchronous loop with no queue (blocking); (2) one giant message (single point, no parallelism, all-or-nothing); (3) client connecting directly to the DB (security + coupling disaster). Fix: gateway → service → queue → worker pool consuming in parallel with per-item retry.",
+    "why": "架构层三个坑是无队列同步循环、巨型单消息、客户端直连数据库。正解是网关→服务→队列→worker 池，单条消费、单条重试。",
+    "why_en": "The architecture fix is gateway to service to queue to worker pool, with per-item processing and per-item retry.",
+    "tradeoff": "队列+worker 池可扩展 vs 同步/单点/直连库",
     "tags": [
       "bulk-move",
       "mistakes",
@@ -926,8 +1078,9 @@
       "Mistake: no total_count means you cannot check processed==total to detect completion.",
       "This is correct: task_type + payload is exactly what makes it generic."
     ],
-    "why": "数据模型层三个坑：①没 task 表(无历史/无法审计)②task 表死绑源/目标文件夹(不能泛化)③job 表缺 total_count(判不了完成)。正解：task 表做审计 + task_type/payload 泛化 + job 存 total_count。",
-    "why_en": "Three data-model pitfalls: (1) no task table (no history/audit); (2) task table hard-bound to source/destination folder (not generalizable); (3) job table missing total_count (cannot detect completion). Fix: a task table for audit + task_type/payload for generality + total_count on the job.",
+    "why": "数据模型的核心是两层：task 记录逐封历史和执行状态，job 存 total_count 等聚合。task_type/payload 让同一套执行框架继续扩到删除、归档、打标签。",
+    "why_en": "Model it in two layers: tasks keep per-message execution history, jobs keep aggregate counts, and task_type/payload generalizes the worker framework.",
+    "tradeoff": "可审计通用模型 vs 只存当前状态的短路设计",
     "tags": [
       "bulk-move",
       "mistakes",
@@ -985,22 +1138,22 @@
         [
           "2xx",
           "成功",
-          "200 OK · 201 Created · 202 Accepted(异步) · 204 No Content"
+          "200/201/202/204"
         ],
         [
           "3xx",
           "重定向",
-          "301 永久 · 302 临时 · 304 未改(用缓存)"
+          "301/302/304"
         ],
         [
           "4xx",
           "客户端错",
-          "400 请求错 · 401 未认证 · 403 无权限 · 404 找不到 · 409 冲突 · 429 限流"
+          "401/403/404/429"
         ],
         [
           "5xx",
           "服务端错",
-          "500 内部错 · 502 网关坏响应 · 503 不可用 · 504 网关超时"
+          "500/502/503/504"
         ]
       ]
     },
