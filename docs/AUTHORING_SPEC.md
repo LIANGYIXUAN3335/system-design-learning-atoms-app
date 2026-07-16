@@ -155,6 +155,7 @@ This guarantees no collisions with other agents.
 
 > **写新卡和重写旧卡的验收标准是同一份，没有"先生成、以后重写再达标"这回事。**
 > 判据 = `docs/card-quality-rubric.md`（唯一裁判）；机检 = audit error 必须为 0；judge 抽查同 `docs/REGEN_FLOW.md` Step 4。
+> **2026-10-15 起加 Gate 3 技术严谨性**（rubric 同名小节；细则 `docs/RIGOR_AUDIT_SPEC.md`）：前提进题面、答案唯一、禁无依据绝对词、数字带 workload 假设、分清协议保证与常见实现、中英同约束。新 track 生成 prompt 必须带上 Gate 3 那张表。
 > schema 通过（validate-deck）只是入场券，不是验收。历史教训：只跑 validate-deck 生成的 deck，
 > 曾留下上百条 rubric 违规（最长选项泄漏答案、fit 卡缺 tradeoff、术语无解释），全靠事后 REGEN 补课。
 

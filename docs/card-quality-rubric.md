@@ -123,6 +123,30 @@ version: 2026-07-08.2
 | 形容词悬空（"更简单"没落点） | judge（1.4-S6） | 指到具体接口参数/操作/资源数字 |
 | 清单题名词罗列 | judge（1.3-S5） | 每项一句"挡什么风险/减哪里压力" |
 
+## Gate 3 — 技术严谨性（2026-10-15 加，生成 / 重写 / 新 track 一律必过）
+
+> 来源：她 10/15 给的审计规范 `docs/RIGOR_AUDIT_SPEC.md`（7 项 0–2 分 rubric + Hard Fail + 七个已知问题模式）。
+> 试跑 126 张：PASS 59% / MINOR 33% / MAJOR 8%；阶段 06 前 700 张 PASS 只有约 55%。**这些毛病是生成器犯的，不是个别卡的事**，
+> 所以写在这里当生成时的硬门，不只当事后审计。细则和判分以 RIGOR_AUDIT_SPEC 为准，这里是浓缩转述。
+
+核心原则：**题库给的答案只是待验证的假设。** 读者只看 scenario + 选项、不看解释，必须能推出唯一最佳答案；解释区不得补题面缺的前提。
+
+| # | 硬规矩（违反 = error，不许出卡） | 最常见的犯法（审计实抓） |
+|---|---|---|
+| G3-1 | **前提写进 scenario**：决定答案的每个条件（第一次请求成功没有、任务还在跑没有、数字、范围内外）都在题面里 | PUT 重试 409 却没说第一次已落库；要求题「个性化不在范围」只在解释里说 |
+| G3-2 | **答案唯一**：其他选项在合理解释下不成立；多选题正确集合唯一；填空题填法唯一 | 「单实例」没说是不是单节点，A 和 C 都对 |
+| G3-3 | **禁无依据的绝对词**：`必须 / 一定 / 永远 / always / never / must / 必备` 要么有标准（RFC、官方文档）或题面约束撑着，要么改成「通常 / 在这个场景下」 | 「所有列表 API 必备分页」「缺一个条件就该降级」 |
+| G3-4 | **经验数字带 workload 假设**：QPS / TPS / 延迟 / 容量必须写明依赖（payload、索引、durability 配置、并发、缓存命中率、机器规格），不写成固定常数 | 「PostgreSQL 单实例 5k–20k 连接」「Redis 单节点 10 万 QPS」「SSD 快 100 倍」 |
+| G3-5 | **分清四层**：protocol guarantee / common implementation / design recommendation / problem-specific decision，不把后三者写成第一者 | 「Kafka 消息没有硬限制」（有，message.max.bytes）；「1MB 是推荐值」（是 ZooKeeper 默认硬限） |
+| G3-6 | **术语层次准确**：REST 是风格、RESTful 是遵循它；safe ≠ idempotent；幂等 = 重复不产生额外状态变化，**不要求响应相同**；业务超时 / 执行超时 / 网络超时 / 等待超时分开说；authoritative state / user-visible state / attempt history / audit log 分开说 | 「REST 是宽松集合、RESTful 是严格子集」；「PUT 幂等所以重试响应一定一样」 |
+| G3-7 | **中英同约束**：`scenario_en / q_en / options_en / why_en` 不得多一个前提、少一个条件、换一个数字 | why_en 多了「10x throughput」；中文「实现了 11 个 9」英文「宣称」 |
+| G3-8 | **数字自洽**：scenario、选项、解释、table、numberAnchors 里的数字互相对得上，算术要对 | 5GB→1GB 写成「砍了四分之三」；8640/288 = 30 倍写成「两个数量级」；采样误差数列不符合自己给的 1/√m |
+| G3-9 | **干扰项真错**：错在工程上站不住，不是「不如标准答案常见」；不靠绝对化措辞制造错 | D 选项只因写了「永远」才错 |
+| G3-10 | **不靠外物**：答案不能只因「参考架构这样画」或「某篇文章这么说」成立；diagram 里的条件要同时出现在 scenario | 「第一次 200、version 变 4」只画在图里 |
+
+写新 track / 新 deck 时的用法：生成 prompt 里把本表原样带上；写完先过 `audit-card-quality` 机检，再按 `RIGOR_AUDIT_SPEC.md`「独立审核流程」抽 20% 做遮答案独立作答，MAJOR 率 > 10% 整批打回。
+存量审计与修订的流水线见 `scripts/rigor-audit/`（make-batches → 审计员 → plan-patch → 改卡员）。
+
 ## 3. 讲解十二律（写 scenario/why/解析时的风格约束，源自 Hello Interview 逆向）
 
 1. 先痛点后术语（"DB 在 10k QPS 顶不住了"→ 再说 cache）；2. 数字锚定成对给（"内存 1ms vs 磁盘 50ms"）；3. 有 naive 方案先摆后破；4. 点名取舍轴 + 每选项一条 "use this when…"；5. 推荐方案同口气说代价；6. 术语首现即释；7. 一个具名例子扛抽象（Taylor Swift 热 key）；8. 收尾给可带走的一句（经验法则/自检问句）；9. 取舍压成 yes/no 自检（"每次读都必须读到最新写吗？"）；10. 第二人称短句；11. 陌生机制先类比（"hash slot 像电话簿"）；12. 结构匹配内容（流程用步骤、并列用词条、代码只放可跑命令）。
