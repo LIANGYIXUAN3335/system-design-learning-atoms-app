@@ -134,13 +134,13 @@
       "Letting rate-limit state be eventually consistent across nodes"
     ],
     "optionExplanations": [
-      "1M rps 这个量级下，无论是单机内存计数还是单个 Redis 实例，吞吐和内存都撑不住，这正是被排除的实现方式。",
+      "这个做法把全部 client 的状态压到一个点上，吞吐、内存和故障隔离都会成为瓶颈。",
       "把限流放在网关是部署位置的选择，跟这道题问的「单点状态撑不住」没有直接关系。",
       "选哪种算法是另一个维度的决定，规模大小本身不排斥 Token Bucket。",
       "允许状态最终一致恰恰是应对这个规模常用的手段，不是被这个规模排除掉的东西。"
     ],
     "optionExplanations_en": [
-      "At roughly 1M rps, neither an in-process counter nor a single Redis instance has the throughput or memory to hold all the state — that's precisely what gets ruled out.",
+      "This puts every client bucket behind one state holder, making throughput, memory, and failure isolation the bottlenecks.",
       "Where the limiter sits is a placement decision, not directly what this question about a single point of state being unable to keep up is asking.",
       "Which algorithm to use is a separate axis of the design; scale alone doesn't rule out Token Bucket.",
       "Accepting eventually consistent state is actually a common tool for handling this scale, not something the scale rules out."
@@ -155,8 +155,8 @@
     "q": "补全限流器的三个核心实体：",
     "q_en": "Fill in the rate limiter's three core entities:",
     "text": "核心实体是 {{Rules}}（限流策略）、{{Clients}}（被限制的用户/IP/API key）、{{Requests}}（携带 endpoint、身份、timestamp 的待判断请求）。",
-    "why": "三实体协作做一次 allow/deny：Request 带 endpoint(选哪条 Rule)、身份(找哪个 Client 的计数)、timestamp(定位哪个时间窗)。判断=这个 Client 在这个窗口内对这个 endpoint 的请求数 < Rule 上限就放行、否则拒。缺任一字段都判不了。",
-    "why_en": "The three entities cooperate for one allow/deny decision: a Request carries endpoint (which Rule applies), identity (which Client's counter), and timestamp (which time window). Decision = if this Client's count for this endpoint in this window is below the Rule's limit, allow, else deny. Miss any field and you cannot decide.",
+    "why": "Request 带 endpoint、身份和 timestamp，才能选规则、找计数器并定位时间窗。判断就是这个 Client 在该窗口内是否低于 Rule 上限，缺一个字段都判不了。",
+    "why_en": "Endpoint, identity, and timestamp tell the limiter which rule, counter, and time window to use for one allow-or-deny decision.",
     "tags": [
       "rate-limiter",
       "entities",
@@ -233,8 +233,8 @@
     ],
     "codeSample": "isRequestAllowed(clientId, ruleId) -> {\n  passes: boolean,\n  remaining: number,\n  resetTime: timestamp\n}",
     "lang": "typescript",
-    "why": "接口按「调用方拿它干嘛」设计：网关既要判放行、又要生成限流响应头。所以返回 3 个——passes(放行否)、remaining(剩余额度→X-RateLimit-Remaining 头)、resetTime(窗口重置→X-RateLimit-Reset/Retry-After 头)。其余选项是别的领域的函数，跟限流判断无关。",
-    "why_en": "Design the interface around what the caller does with it: a gateway must both decide pass/block and emit rate-limit headers. So it returns three things — passes (allow?), remaining (quota left → X-RateLimit-Remaining), and resetTime (window reset → X-RateLimit-Reset/Retry-After). The other options are functions from unrelated domains.",
+    "why": "网关调用限流器后要做两件事：判放行，并填 X-RateLimit-Remaining / Reset 或 Retry-After。passes、remaining、resetTime 正好覆盖这三项，其他接口不在在线限流路径上。",
+    "why_en": "Return passes, remaining, and resetTime because the gateway must both decide allow-or-block and build the rate-limit response headers.",
     "whenOtherWins": "只有离线分析系统才需要批量日志查询接口；在线限流路径必须保持极简低延迟。",
     "tradeoff": "极简判断接口 vs 支持复杂查询/分析",
     "tags": [
@@ -510,13 +510,13 @@
       }
     ],
     "optionExplanations": [
-      "网关能在请求碰到任何业务代码之前就直接拒绝，是保护后端最早的一道关口；代价是只能看到 HTTP 请求本身能提供的信息。",
+      "入口层掌握路径、header、IP 和 token claim，足够先做大多数规则，并且能在业务服务耗资源前拦下请求。",
       "把判断散落到每个业务 handler 里，意味着请求已经真正进了应用、消耗了资源之后才被拒绝，保护不到后端。",
       "限流逻辑放在用户自己的客户端，用户可以随时绕过或篡改，起不到真正的强制作用。",
       "数据仓库是事后分析用的，等结果算出来时超限请求早就打进后端了，来不及拦。"
     ],
     "optionExplanations_en": [
-      "The gateway rejects a request before it ever touches business code, the earliest possible protection point; the tradeoff is it only sees what's visible in the HTTP request itself.",
+      "The edge sees the path, headers, IP, and token claims, which is enough for most rules and blocks bad traffic before app code runs.",
       "Scattering the check across every business handler means a request has already entered the app and consumed resources before getting rejected — too late to protect the backend.",
       "Putting the logic in the user's own client leaves it free to bypass or tamper with it — no real enforcement.",
       "A data warehouse is for after-the-fact analysis; by the time it computes anything, the over-limit request has already hit the backend."
@@ -772,13 +772,13 @@
     "optionExplanations": [
       "固定窗口恰恰不需要单独存每个请求的 timestamp，一个计数器就够了，这个说法说反了。",
       "固定窗口本身就是靠计数实现的，说它完全不能计数是自相矛盾。",
-      "窗口切换那一刻没有平滑处理，client 可以在旧窗口尾部和新窗口头部各打满一次，短时间内拿到两倍配额。",
+      "问题出在边界：计数器一重置，上一秒刚打满的 client 马上又拿到一整个新窗口。",
       "窗口边界本身就是确定的时间点，固定窗口反而很容易算出 reset time。"
     ],
     "optionExplanations_en": [
       "Fixed window actually doesn't need a per-request timestamp at all — one counter is enough, so this has it backwards.",
       "Fixed window is literally built around counting requests, so saying it can't count at all is self-contradictory.",
-      "The window switch itself isn't smoothed, so a client can max out the tail of the old window and the head of the new one, getting double its quota in a short burst.",
+      "The flaw is the boundary reset: a client that just maxed out the last second immediately receives a full new window.",
       "Window boundaries are fixed, known points in time, so fixed window is actually one of the easier algorithms to compute a reset time from."
     ],
     "diagram": "flowchart LR\n  A[\"窗口1 末尾 10:00:59<br/>打满 5 个 ✅ count=5\"] --> B[\"边界 10:01:00<br/>count 重置为 0\"]\n  B --> C[\"窗口2 开头 10:01:01<br/>再打满 5 个 ✅ count=5\"]\n  C --> D[\"⚠️ 边界前后 ~2 秒内共 10 个<br/>= 2× 突发\"]"
@@ -852,13 +852,13 @@
       "只用两个整数是 Sliding Window Counter 的做法，Sliding Window Log 反而要为每个请求单独存 timestamp。",
       "它对每个滑动窗口内的请求数是精确统计的，长期速率同样被这个窗口卡住，这个说法不成立。",
       "它恰恰需要为每个 client 存一长串 timestamp，是这四个算法里状态最重的一个。",
-      "记录每次请求的精确时间，回答过去 N 分钟发生了多少次不会有偏差，代价是热点 client 要存和清理大量 timestamp。"
+      "每个请求都留下时间点，所以判断不会被窗口边界骗过；热点 client 的代价是列表变长和清理变重。"
     ],
     "optionExplanations_en": [
       "Keeping just two integers is the Sliding Window Counter's trick — Sliding Window Log instead stores a separate timestamp for every single request.",
       "It counts requests inside a sliding window exactly, and that same window caps the sustained rate too, so this claim doesn't hold.",
       "It actually needs a long list of stored timestamps per client — the heaviest state footprint of the four algorithms.",
-      "Recording every request's exact timestamp answers how many happened in the last N minutes with no bias, at the cost of storing and cleaning a lot of timestamps for a hot client."
+      "Every request leaves a timestamp, so boundary tricks do not fool the count; hot clients pay with longer lists and cleanup work."
     ]
   },
   {
@@ -927,13 +927,13 @@
       ]
     },
     "optionExplanations": [
-      "只维护当前和上一窗口两个计数器，按当前窗口已过去的比例加权估算，比日志省内存、比固定窗口准。",
+      "它只保留两个窗口的计数，再按当前窗口走过多少来折算上一窗口贡献，状态小但不是完全精确。",
       "存精确 timestamp 是 Sliding Window Log 的做法，跟这里只用两个计数器的思路正好相反。",
       "完全不看上一窗口就退化成了 Fixed Window，滑动窗口计数器的关键恰恰是要用上一窗口做加权。",
       "每秒清空状态等于每次都从零开始算，跟「维护两个计数器估算滑动值」这个思路完全不是一回事。"
     ],
     "optionExplanations_en": [
-      "Keeping just the current and previous window counters, weighted by how far the current window has progressed, is cheaper than a full log and more accurate than a fixed window.",
+      "It keeps two window counters and discounts the previous one by elapsed time, keeping state small while accepting approximation.",
       "Storing exact timestamps for every request is what Sliding Window Log does — the opposite of using just two counters here.",
       "Ignoring the previous window entirely collapses this back into Fixed Window; the whole point of the sliding counter is weighting in that previous window.",
       "Wiping state every second just restarts the count from zero each time, which isn't the same idea as weighting two counters to estimate a sliding value."
@@ -1009,13 +1009,13 @@
     },
     "optionExplanations": [
       "完整日志能精确统计滑动窗口内的请求数，但要为每个热点 client 存大量 timestamp，跟这里要求的小状态相冲突。",
-      "bucket capacity 管住突发上限，refill rate 管住长期平均速率，每个 client 只要两个字段，同时满足突发容忍和小状态。",
+      "capacity 允许一小段流量先借用桶里的 token，refill 再把平均速率拉回规则线内，状态也很轻。",
       "全局锁会让所有 client 的请求排成一队等同一把锁，直接杀死并发，跟高吞吐目标背道而驰。",
       "fixed window 只有一个计数器确实省内存，但窗口边界处会出现双倍突发，没法真正卡住长期速率。"
     ],
     "optionExplanations_en": [
       "A full log counts a sliding window exactly, but storing every timestamp for a hot client fights the small-per-client-state requirement here.",
-      "Bucket capacity caps the burst and refill rate caps the sustained average, needing only two fields per client — burst tolerance and small state together.",
+      "Capacity lets a short burst spend stored tokens, while refill pulls the average rate back to the rule with very small state.",
       "A global mutex lock forces every client's requests to queue behind one lock, killing concurrency and working against the high-throughput target.",
       "Fixed window is cheap with a single counter, but it can double-burst right across a window boundary, so it doesn't actually cap the sustained rate."
     ]
@@ -1176,13 +1176,13 @@
       "KEYS 会扫描整个 keyspace，生产环境用它做单次读取既慢又危险。",
       "BLPOP 是阻塞式弹出队列元素的命令，这里没有队列要处理。",
       "PUBLISH 是发消息给订阅者，跟读取一个 hash 里的字段是两回事。",
-      "bucket 状态就是一个小 hash，HMGET 能一次调用读出 tokens 和 last_refill 两个字段。"
+      "HMGET 是按字段读取 hash 的命令，适合 bucket 这种少量字段状态；它不会扫描 keyspace，也不会进入队列/发布订阅路径。"
     ],
     "optionExplanations_en": [
       "KEYS scans the entire keyspace — using it for a single read is slow and risky in production.",
       "BLPOP blocks waiting to pop from a queue; there's no queue involved here.",
       "PUBLISH sends a message to subscribers, which has nothing to do with reading fields off a hash.",
-      "The bucket state is just a small hash, and HMGET reads both the tokens and last_refill fields in one call."
+      "HMGET reads named fields from a hash, which fits a small bucket record; it does not scan keys or enter a queue/pub-sub path."
     ]
   },
   {
@@ -1335,13 +1335,13 @@
     ],
     "optionExplanations": [
       "让客户端自己 sleep 10ms 完全不影响 Redis 里那几步读改写会不会被别的请求插进来，解决不了真正的竞态。",
-      "Lua 脚本在 Redis 内部一次性跑完读取、算 refill、扣 token、写回，中间不会被其他请求插队。",
+      "脚本在 Redis 服务端跑完这一段逻辑，其他 gateway 的命令只能等它结束，竞态窗口被关掉。",
       "拆成两次独立 HTTP 请求，中间还是留了个窗口，两个 gateway 完全可能在这个窗口里都读到旧值。",
       "EXPIRE 只负责清理长时间不用的 key，管不住同一时刻多个请求并发读改写同一个 bucket。"
     ],
     "optionExplanations_en": [
       "Having the client sleep 10ms does nothing to stop another request from interleaving with the read-modify-write inside Redis — it doesn't close the race.",
-      "A Lua script runs the read, refill calculation, decrement, and write back inside Redis in one shot, with no other request able to interleave.",
+      "The script finishes this logic on the Redis server while other gateways wait, closing the race window.",
       "Splitting it into two separate HTTP requests still leaves a gap in between, and two gateways can easily both read the old value inside that gap.",
       "EXPIRE only cleans up a key after it sits unused for a while — it does nothing about several requests concurrently reading and writing the same bucket at once."
     ]
@@ -1390,6 +1390,26 @@
       "EXPIRE lets an inactive client's bucket clean itself up automatically, no separate cleanup job needed.",
       "Replication and automatic failover mean a single Redis node dying doesn't take the whole rate-limit layer down with it.",
       "A Lua script locks the read, refill, and write into one atomic call, which closes the race window when multiple gateways update the same bucket concurrently."
+    ],
+    "codeSample": "HSET rl:alice tokens 9 last_refill 1721000000\nEXPIRE rl:alice 3600\nEVAL \"-- read, refill, decrement, write atomically\" 1 rl:alice\nREPLICAOF redis-primary 6379  # HA replica",
+    "lang": "redis",
+    "termDefinitions": [
+      {
+        "term": "EXPIRE",
+        "meaning": "Redis 命令，给 key 设置 TTL；过期后不活跃 bucket 会自动删除。",
+        "meaningEn": "EXPIRE is the Redis command that sets a TTL on a key so inactive buckets can disappear automatically."
+      },
+      {
+        "term": "HA",
+        "fullName": "High Availability",
+        "meaning": "高可用，指主节点故障时系统仍能通过副本或切换继续服务。",
+        "meaningEn": "High availability means the system can keep serving after a primary node fails, usually through replicas or failover."
+      },
+      {
+        "term": "Lua script",
+        "meaning": "Redis 服务端原子执行的小脚本，可把读、计算、写合成一次不可插队的操作。",
+        "meaningEn": "A Lua script runs on the Redis server and can combine read, compute, and write into one non-interleavable operation."
+      }
     ]
   },
   {
@@ -1498,14 +1518,14 @@
     },
     "optionExplanations": [
       "X-RateLimit-Limit 告诉客户端这条规则总配额是多少，方便它自己算节奏。",
-      "X-RateLimit-Remaining 是这次请求后还剩多少次，客户端能据此判断要不要放慢。",
-      "X-RateLimit-Reset 给出配额什么时候刷新，客户端可以掐着这个时间点再试。",
+      "Remaining 是剩余次数，客户端看到很低时就能主动减速，避免下一次马上撞到 429。",
+      "Reset 是窗口刷新的绝对时间点，适合展示或调度下一轮请求。",
       "Retry-After 直接给出建议等待秒数，是最省心的退避依据。"
     ],
     "optionExplanations_en": [
       "X-RateLimit-Limit tells the client the total quota for this rule, so it can pace itself.",
-      "X-RateLimit-Remaining shows how many calls are left after this one, letting the client decide whether to slow down.",
-      "X-RateLimit-Reset gives the moment the quota refreshes, so the client can time its next attempt.",
+      "Remaining is the quota left, so a client can slow down before the next call immediately hits a 429.",
+      "Reset is the absolute window-refresh time, useful for display or scheduling the next attempt.",
       "Retry-After gives a straight suggested wait in seconds — the simplest signal to back off by."
     ]
   },
@@ -1549,13 +1569,13 @@
       "把限流拒绝包装成 HTTP 200，客户端的正常成功逻辑会直接把这次拒绝当成功处理，完全错判。",
       "500 意味着服务器出错，但限流拒绝其实是预期行为，用错误码还不给 header，客户端连该等多久都不知道。",
       "完全不响应会让客户端的连接一直悬着，最后大概率触发超时重试，比直接告诉它被拒还差。",
-      "429 是标准的 Too Many Requests 状态码，配合 X-RateLimit-* 和 Retry-After，客户端能照着退避重试。"
+      "标准状态码告诉客户端这是限流，不是业务成功或服务器崩溃；配套 headers 给出退避依据。"
     ],
     "optionExplanations_en": [
       "Wrapping a rate-limit rejection in an HTTP 200 makes the client's normal success path treat a rejection as a success — completely misread.",
       "500 signals a server error, but a rate-limit rejection is expected behavior; using the wrong code with no headers also leaves the client with no idea how long to wait.",
       "Sending no response at all just leaves the client's connection hanging, likely triggering a timeout retry — worse than telling it plainly that it was rejected.",
-      "429 is the standard Too Many Requests status, and pairing it with X-RateLimit-* and Retry-After gives the client exactly what it needs to back off correctly."
+      "The standard status tells the client this is throttling, not success or a server crash, and the headers provide backoff guidance."
     ]
   },
   {
@@ -1591,13 +1611,13 @@
       "Set the refill rate to zero to reduce load"
     ],
     "optionExplanations": [
-      "一次检查至少 1 读 1 写，单实例约 100k-200k ops/sec 换算成检查次数大概只有几万到十万级，离 1M 差了一个数量级，必须分片。",
+      "把 raw ops 换成 check 数要除以读写成本；单点最多只到十万级检查，1M 目标要横向摊开。",
       "把单实例的 ops/sec 直接当成检查次数用，忽略了一次检查要占两次操作，这个换算是错的。",
       "主数据库的单次读写延迟通常比 Redis 高一个数量级，换成它只会让瓶颈更严重。",
       "把 refill rate 设成 0 意味着所有请求都会一直被拒绝，这是把限流器变成了断路器，没有解决吞吐问题。"
     ],
     "optionExplanations_en": [
-      "Each check needs at least one read and one write, so a single instance's roughly 100k-200k ops/sec only covers tens of thousands of checks per second — an order of magnitude short of 1M, so sharding is required.",
+      "Converting raw ops into checks requires charging the read and write cost; one node tops out far below 1M, so the target needs horizontal spread.",
       "Treating a single instance's raw ops/sec as its check throughput ignores that each check costs two operations — that conversion is wrong.",
       "A primary database's per-operation latency is usually an order of magnitude worse than Redis, so switching to it would make the bottleneck worse, not better.",
       "Setting the refill rate to zero means every request gets rejected forever — that turns the limiter into a circuit breaker, not a fix for throughput."
@@ -1646,13 +1666,13 @@
     ],
     "optionExplanations": [
       "每次随机挑一个实例写状态，同一个 client 的请求可能这次落在 shard A、下次落在 shard B，计数根本对不上。",
-      "按 client identifier 一致性哈希，保证同一个 client 永远落在同一个 shard，同时把不同 client 的负载摊开到多个实例。",
+      "固定映射让某个 client 的 bucket 只有一个权威位置，同时不同 client 能分散到不同机器。",
       "把同一份 bucket 复制到所有 shard 后随便读写，等于放弃了单一权威副本，写冲突谁也说不清。",
       "每个请求都广播给全部实例，等于把总请求量乘上实例数，反而制造出新的瓶颈。"
     ],
     "optionExplanations_en": [
       "Writing to a randomly chosen instance each time means the same client's requests can land on shard A once and shard B next time — the count never adds up.",
-      "Consistent-hashing the client identifier keeps a given client permanently on one shard while spreading different clients' load across many instances.",
+      "A fixed mapping gives one client bucket one authoritative home while different clients spread across different machines.",
       "Copying the same bucket to every shard and letting any of them write it abandons a single source of truth — write conflicts become unresolvable.",
       "Broadcasting every request to all instances multiplies total traffic by the instance count, creating a brand-new bottleneck instead of fixing one."
     ]
@@ -1666,8 +1686,8 @@
     "q": "补全 Redis Cluster 的分片机制：",
     "q_en": "Fill in how Redis Cluster shards data:",
     "text": "Redis Cluster 把 keyspace 切成 {{16384}} 个 hash slots，并把这些 slots 分配到多个 Redis nodes。",
-    "why": "使用 Redis Cluster 时，gateway 不必自己维护一致性哈希细节，客户端/集群会根据 key 的 slot 自动路由到正确的节点。",
-    "why_en": "Redis Cluster shards keys across 16,384 hash slots distributed over multiple nodes.",
+    "why": "Redis Cluster 用 16384 个 hash slots 表示 key 的归属，客户端按 key 算 slot 后路由到持有该 slot 的节点。这样 gateway 不必自己维护分片表。",
+    "why_en": "Redis Cluster maps each key to one of 16,384 hash slots, then routes that slot to the Redis node that owns it.",
     "tags": [
       "rate-limiter",
       "redis-cluster",
@@ -1675,11 +1695,41 @@
     ],
     "termDefinitions": [
       {
+        "term": "Redis Cluster",
+        "meaning": "Redis 的原生分片和高可用模式，把 keyspace 切成 slots 并分配给多个节点。",
+        "meaningEn": "Redis Cluster is Redis's native sharding and high-availability mode, splitting the keyspace into slots assigned to nodes."
+      },
+      {
         "term": "hash slot",
-        "meaning": "Redis Cluster 用来分配 key 归属节点的一个编号区间。",
-        "meaningEn": "A hash slot is a numbered bucket Redis Cluster uses to decide which node owns a key."
+        "meaning": "Redis Cluster 用来分配 key 归属节点的编号桶；key 算出 slot 后就能找到负责节点。",
+        "meaningEn": "A hash slot is the numbered bucket Redis Cluster uses to decide which node owns a key."
       }
-    ]
+    ],
+    "table": {
+      "headers": [
+        "对象",
+        "谁维护",
+        "故障时"
+      ],
+      "rows": [
+        [
+          "hash slot",
+          "Redis Cluster",
+          "迁到副本/新节点"
+        ],
+        [
+          "路由缓存",
+          "客户端",
+          "MOVED 后刷新"
+        ],
+        [
+          "bucket key",
+          "slot owner",
+          "随 slot 迁移"
+        ]
+      ]
+    },
+    "diagram": "flowchart LR\nKey[rl:client42] --> Slot[CRC16 -> hash slot]\nSlot --> Node[Owning Redis node]\nNode --> Bucket[Token bucket hash]"
   },
   {
     "id": "sd-problem-breakdowns-distributed-rate-limiter-029",
@@ -1716,13 +1766,13 @@
     "optionExplanations": [
       "硬件升级能小幅提升单实例的吞吐上限，但离 10 倍差距还差得远，量级上解决不了问题。",
       "关掉规则等于放弃限流本身要保护的东西，不是解决吞吐瓶颈的办法。",
-      "1M / 100k ≈ 10，量级上大概需要十个左右的 shard，而不是继续加大单个实例。",
+      "用目标吞吐除以单 shard 能力，先得到约 10 个 shard 的量级，再另加副本和余量。",
       "把所有数据复制到每个节点，写入要同步到所有副本，反而会把单点的写入压力放大成全网压力。"
     ],
     "optionExplanations_en": [
       "Upgrading hardware can nudge a single instance's ceiling up a bit, but it's nowhere close to a 10x gap — it doesn't fix the order-of-magnitude problem.",
       "Turning off rules gives up the very protection rate limiting exists for — it doesn't address the throughput bottleneck.",
-      "One million divided by roughly 100k per shard is about ten shards — the fix is spreading out, not growing one instance further.",
+      "Divide target throughput by per-shard capacity to get roughly ten shards first, then add replicas and headroom.",
       "Copying all data to every node means each write has to sync to every replica, turning what was one instance's write pressure into pressure across the whole cluster."
     ]
   },
@@ -2235,13 +2285,13 @@
     ],
     "optionExplanations": [
       "很多人读同一篇帖子是缓存场景里的热点 key，跟这里按 client 分片的限流状态是两回事。",
-      "限流状态按 client key 分片，hot key 就是某一个 client 自己的请求量极大，压垮了它所在的那个 shard。",
+      "因为分片键就是 client identifier，这个 identifier 的全部计数都会打到同一个 owner shard。",
       "hot key 是流量分布的问题，跟数据库表结构设计得好不好没有关系。",
       "如果所有用户请求量都完全均匀，压根就不会出现某个 shard 被压垮的 hot key 问题。"
     ],
     "optionExplanations_en": [
       "Many people reading the same post is the hot-key pattern in a caching scenario, a different thing from rate-limit state sharded by client.",
-      "Rate-limit state is sharded by client key, so a hot key here means one client sending extreme traffic and overloading the single shard that owns it.",
+      "Because the shard key is the client identifier, all counter operations for that identifier hit the one owner shard.",
       "A hot key is about traffic distribution, unrelated to whether a database table's schema is well designed.",
       "If every user's traffic were perfectly even, there'd be no hot-key problem overloading a single shard in the first place."
     ],

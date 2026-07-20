@@ -2214,7 +2214,7 @@
     "topic": "system-design",
     "sub": "media-attachments",
     "q": "把附件二进制直接存进数据库（经 WebSocket 上传）有哪两个核心问题？",
-    "q_en": "What are the two core problems with storing attachment bytes directly in the database over the WebSocket upload?",
+    "q_en": "What are the two core problems with uploading attachment bytes through WebSocket and storing them directly in the database?",
     "options": [
       "成本太低不划算，其实存储成本不是这里的瓶颈",
       "事务冲突太多，其实这不是并发写入的问题",
@@ -2222,51 +2222,58 @@
       "无法给附件设 TTL 到期删除，其实 TTL 这类过期机制一直可以设置"
     ],
     "options_en": [
-      "Not cost-effective because storage is too cheap, but cost is not the real bottleneck here",
+      "Storage cost is too low to matter, but storage cost is not the real bottleneck here",
       "Too many transaction conflicts, but this is not actually a concurrent-write problem",
-      "Databases are not built for large binary blobs, and it drags down the Chat Server's bandwidth",
-      "Claims a TTL cannot be set on attachments to auto-clean them up, but that kind of lapse mechanism has always been available"
+      "The database is a poor fit for large blobs, and the path consumes Chat Server bandwidth",
+      "Attachments cannot get a TTL for automatic cleanup, but expiration can still be configured"
     ],
     "answer": [
       2
     ],
-    "why": "这是明确的反面教材：数据库不为大 blob 优化，聊天服务器也不该被「傻存傻取」拖垮带宽——媒体要交给专用设施。",
-    "why_en": "Databases are not built for large binary blobs, and ferrying media through the chat servers cripples the bandwidth they need for messaging.",
+    "why": "大 blob 会放大数据库 I/O、备份和查询开销；媒体字节经 Chat Server/WebSocket 转发，还会抢走实时消息带宽。附件应该进专用 blob 存储，数据库只留元数据。",
+    "why_en": "Large blobs inflate database I/O and backups, and routing media through Chat Server burns bandwidth that should stay reserved for realtime messages.",
+    "diagram": "flowchart LR\n    C[Client] -->|media bytes over WebSocket| CS[Chat Server]\n    CS -->|large blob bytes| DB[(Database)]\n    C -. preferred bytes .-> BS[(Blob storage)]\n    CS -. metadata only .-> DB",
     "tags": [
       "whatsapp",
       "attachments",
+      "blob-storage",
       "anti-pattern"
     ],
     "termDefinitions": [
       {
-        "term": "DynamoDB",
-        "meaning": "AWS 提供的托管 NoSQL 键值/文档数据库，按分区键把数据水平分布到多个节点。",
-        "meaningEn": "DynamoDB is a managed NoSQL key-value database that distributes data across nodes by partition key."
+        "term": "WebSocket",
+        "meaning": "客户端和服务器之间保持的一条双向长连接，适合聊天事件和小消息，不适合搬运大媒体字节。",
+        "meaningEn": "A WebSocket is a long-lived bidirectional connection between client and server; it fits chat events and small messages, not large media bytes."
+      },
+      {
+        "term": "Chat Server",
+        "meaning": "维护用户长连接并收发聊天事件的服务；让它转发媒体会挤占消息投递的 CPU 和网络预算。",
+        "meaningEn": "A Chat Server holds user connections and chat events; making it relay media consumes CPU and network budget needed for message delivery."
+      },
+      {
+        "term": "blob",
+        "meaning": "大二进制对象，例如图片、语音或视频附件；通常放进对象/blob 存储，而不是主业务数据库。",
+        "meaningEn": "A blob is a large binary object such as an image, voice note, or video attachment; it usually belongs in object/blob storage, not the main database.",
+        "fullName": "Binary Large Object"
       },
       {
         "term": "TTL",
         "meaning": "给存储条目设置的存活期限，到期后由存储层自动删除。",
         "meaningEn": "A TTL is an expiration time after which the storage layer automatically deletes the item.",
         "fullName": "Time To Live"
-      },
-      {
-        "term": "blob 存储",
-        "meaning": "专为大二进制对象（图片、视频、附件）设计的存储服务。",
-        "meaningEn": "Blob storage is an object store purpose-built for large binary files such as images, video, and attachments.",
-        "fullName": "Binary Large Object storage"
       }
     ],
     "optionExplanations": [
-      "成本不是这里的核心问题，真正的瓶颈是数据库和网络的适配性。",
-      "事务冲突也不是这里的问题，这不是并发写入争抢同一行的场景。",
-      "对：这类数据不是关系型引擎擅长的形态，硬塞进去还会把传输压力转嫁给聊天服务本身。",
-      "TTL 一直可以设置，「无法设 TTL」不是把 blob 存进数据库的真正问题。"
+      "成本方向容易误导；这张卡关心的是大对象压垮数据库 I/O 和传输路径，而不是便宜存不存。",
+      "只有多写同一状态才会先看事务冲突；附件上传主要是大字节对象和网络搬运，不是抢同一行。",
+      "对：数据库适合索引小元数据，不适合反复写读大媒体；Chat Server 也不该变成文件中转站。",
+      "TTL 可以用在数据库行或对象存储对象上；它解决清理周期，不解决主路径里谁扛媒体流量。"
     ],
     "optionExplanations_en": [
-      "Cost isn't the core issue here; the real bottleneck is that databases and networking aren't built for this.",
-      "Transaction contention isn't the issue either — this isn't concurrent writers racing on the same row.",
-      "Right: databases aren't optimized for large blobs, and forcing Chat Server to relay the bytes also drains its own bandwidth.",
-      "TTL can still be set on such rows, so \"can't set a TTL\" was never the real problem with storing blobs in the database."
+      "Cost would matter in an archive-cost discussion; this card is about database I/O and the upload path, not cheap storage.",
+      "Transaction contention matters when writers fight over the same state; attachment uploads are mainly large bytes and network transfer.",
+      "Right: keep metadata in the database, put media bytes in object storage, and keep Chat Server out of the file path.",
+      "TTL can expire rows or objects; cleanup does not fix which service has to carry the media bytes."
     ]
   },
   {

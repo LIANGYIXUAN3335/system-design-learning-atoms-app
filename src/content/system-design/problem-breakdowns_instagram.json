@@ -1701,7 +1701,7 @@
     "why": "ZSET 以时间戳为 score，天然按时间排序、成员去重，取 top N 是一次 O(logN) 范围操作——正是 feed 需要的读写形态。",
     "why_en": "A Redis sorted set with timestamps as scores keeps each feed chronologically ordered and lets the top posts be read in one fast operation.",
     "whenOtherWins": "只需要严格插入序、不需要去重和范围查时，List 更省内存。",
-    "codeSample": "ZADD feed:u123 1718000000 post:987   # score = 时间戳\nZREVRANGE feed:u123 0 19             # 按时间倒序取最新 20 条\nZREMRANGEBYRANK feed:u123 0 -801     # 截断，只保留最新 800 条",
+    "codeSample": "ZADD feed:u123 1718000000 post:987   # 加成员 post:987，score=时间戳；已存在则更新\nZREVRANGE feed:u123 0 19             # 按 score 降序(REV)取排名[0,19]=最新 20 条\nZREMRANGEBYRANK feed:u123 0 -801     # 按排名删：留最新 800 条(-801=倒数第801，其余删)\n# 对比：ZRANGE=升序(最旧在前)，ZREVRANGE=降序(最新在前)；feed 用 REV",
     "lang": "redis",
     "tradeoff": "ZSET 原生排序去重 vs List 更省内存",
     "tags": [
@@ -1721,6 +1721,38 @@
       "A List preserves insertion order but has no sort or de-dup semantics — the score field would go unused.",
       "Serializing the whole feed into one giant JSON string loses the ability to add/remove single entries or range-query.",
       "Pub/Sub only does message notification — it cannot persist feed data at all."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Sorted Set (ZSET)",
+        "fullName": "Redis 有序集合",
+        "meaning": "Redis 的一种类型:每个 member(唯一字符串)绑一个 score(浮点)，Redis 自动按 score 排序。=集合(成员唯一去重)+排序分。feed 用法:member=postId、score=时间戳，帖子就自动按时间排好。插入/取范围都是 O(logN)。",
+        "meaningEn": "A Redis type where each member (unique string) has a score (float) and Redis keeps members sorted by score. = a set (unique members) + an ordering score. Feed usage: member=postId, score=timestamp, so posts stay time-ordered. Insert/range are O(logN)."
+      },
+      {
+        "term": "ZADD",
+        "fullName": "",
+        "meaning": "ZADD key score member：往有序集合加一个成员并给它 score;成员已存在就更新 score。发帖=ZADD feed:uX <时间戳> postId，新帖时间戳大、落在高分端。",
+        "meaningEn": "ZADD key score member: add a member with a score to a sorted set; if it already exists, update its score. Posting = ZADD feed:uX <timestamp> postId; newer posts get bigger timestamps at the high-score end."
+      },
+      {
+        "term": "ZREVRANGE vs ZRANGE",
+        "fullName": "",
+        "meaning": "ZRANGE key start stop=按 score 升序(最旧在前)取排名区间;ZREVRANGE=降序(REV=reverse，最新在前)。排名 0 基、含两端，所以 0..N-1 = top N。feed 要最新在前→用 ZREVRANGE feed:uX 0 19 取最新 20 条。",
+        "meaningEn": "ZRANGE key start stop returns a rank range in ascending score order (oldest first); ZREVRANGE is descending (REV=reverse, newest first). Ranks are 0-based inclusive, so 0..N-1 = top N. A feed wants newest-first → ZREVRANGE feed:uX 0 19 for the newest 20."
+      },
+      {
+        "term": "ZREMRANGEBYRANK（截断+负下标）",
+        "fullName": "",
+        "meaning": "按「排名」删成员来截断 feed。排名升序(0=最低分=最旧)，负下标从末尾数(-1=最高排名=最新)。ZREMRANGEBYRANK feed:uX 0 -801 = 删排名[0,倒数第801]、只留最新 800 条。这样每次插帖后截一刀，feed 长度可控。",
+        "meaningEn": "ZREMRANGEBYRANK trims a feed by removing members in a rank range. Ranks ascend (0=lowest score=oldest); negative indices count from the end (-1=highest rank=newest). ZREMRANGEBYRANK feed:uX 0 -801 removes ranks [0, 801st-from-end], keeping the newest 800. Trimming after each insert bounds the feed length."
+      },
+      {
+        "term": "List 为何不如 ZSET",
+        "fullName": "",
+        "meaning": "List(LPUSH/LRANGE)按插入顺序、可重复;ZSET 成员唯一(去重)、按 score(时间)排、O(logN) 取 top-N 与按 rank 截断。feed 要「去重+按时间+取最新N+截断」，ZSET 全中，所以选它不选 List。",
+        "meaningEn": "A List (LPUSH/LRANGE) orders by insertion and allows duplicates; a ZSET has unique members (dedup), orders by score (time), and does O(logN) top-N and rank-trim. A feed needs dedup + time order + newest-N + trim, all of which ZSET provides — hence ZSET over List."
+      }
     ]
   },
   {

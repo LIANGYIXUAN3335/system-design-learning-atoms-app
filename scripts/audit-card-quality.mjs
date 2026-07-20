@@ -218,6 +218,14 @@ function auditCard(card, rel) {
   if (!scenario && CONTEXTLESS_RE.test(q)) {
     add(issues, 'missing_context', 3, 'question depends on article/page context but has no scenario');
   }
+  // rubric 1.1-S1 / Gate G4: a decision card's scenario carries the constraint that decides the
+  // answer, so a choice card without one can only test recall. CONTEXTLESS_RE above is anchored at
+  // the start of `q` and so misses both mid-sentence deixis ("怎么回答这个 follow-up") and questions
+  // that read fine in isolation but name no system ("actor/user 信号常采用哪种生产组合？").
+  if (!scenario && choiceCard(card) && !isBareNumberChoiceCard(card)) {
+    add(issues, 'missing.scenario', 3,
+      'decision card has no scenario; without a constraint that decides the answer it tests recall, not judgment');
+  }
   if (!compact(card.q_en)) {
     add(issues, 'missing.q_en', 1, 'question has no English helper line (q_en); bilingual drill should show it under Chinese');
   }
