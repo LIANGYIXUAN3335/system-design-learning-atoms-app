@@ -53731,8 +53731,8 @@
       "Still just X",
       "X squared"
     ],
-    "why": "1 个 primary + Y 个 replica 共有 Y+1 份可服务查询的分片拷贝，读吞吐近似按 X*(Y+1) 扩展；写入不受此加成。",
-    "why_en": "With one primary shard and Y replica shards, there are Y+1 shard copies that can serve reads, so read throughput scales to roughly X times Y plus one.",
+    "why": "TPS 是每秒查询数；1 个 primary shard + Y 个 replica shard 共有 Y+1 份可服务读的拷贝，所以搜索读容量近似 X*(Y+1)。这个数只用来估算查询吞吐，写入和复制开销不享受这层加成。",
+    "why_en": "TPS means requests per second; one primary plus Y replicas gives Y+1 read-serving copies, so read capacity is roughly X times Y+1.",
     "tags": [
       "elasticsearch",
       "replication",
@@ -53749,21 +53749,32 @@
         "term": "shard（分片）",
         "meaning": "索引水平拆分出的一份数据与索引结构，1:1 对应一个 Lucene 索引。",
         "meaningEn": "A shard is a horizontal slice of an index's data and index structures, mapping one-to-one to a Lucene index."
+      },
+      {
+        "term": "primary shard（主分片）",
+        "meaning": "每份分片的主拷贝，写入先落到它，再复制到副本。",
+        "meaningEn": "A primary shard is the main copy of a shard; writes go there first and are then replicated."
+      },
+      {
+        "term": "TPS",
+        "fullName": "Transactions Per Second",
+        "meaning": "TPS 指每秒事务数；这里把一次搜索查询请求当作一个事务来估算吞吐。",
+        "meaningEn": "TPS means transactions per second; here it approximates how many search requests the cluster can serve each second."
       }
     ],
     "q_en": "Roughly how much query TPS can this setup handle?",
     "scenario_en": "One primary shard can independently serve X query TPS, and operations configures Y replicas for this index.",
     "optionExplanations": [
-      "把 replica 当成简单加法项，漏算了每个副本其实是一份完整可服务的拷贝。",
-      "1 个主分片加 Y 个副本，一共 Y+1 份可服务查询的拷贝，读吞吐按这个倍数扩展。",
-      "只算主分片吞吐，等于当副本完全不分担查询流量，忽视了它的读扩展作用。",
-      "吞吐不会因为多几个副本就变成平方增长，这里把线性关系算错了。"
+      "把 TPS 和副本数直接相加，单位都对不上，也漏掉了每个副本是一份完整可读拷贝。",
+      "这把 primary 本身和 Y 个 replica 都算进读副本池；前提是查询能大致均匀分散。",
+      "只算主分片吞吐，等于假设副本完全不接查询流量，忽视了 replica 的读扩展作用。",
+      "副本只增加可服务读的拷贝数，不会让吞吐变成平方增长；这里把线性关系算错了。"
     ],
     "optionExplanations_en": [
-      "Treating replicas as a simple add-on undercounts them — each replica is actually a full, independently servable copy.",
-      "One primary plus Y replicas means Y+1 servable copies total, so read throughput scales by roughly that multiple.",
-      "Counting only the primary's throughput assumes replicas carry zero query traffic, which ignores their read-scaling role.",
-      "Throughput doesn't square just because you add replicas — this mistakes a linear relationship for a quadratic one."
+      "Adding TPS to a replica count mixes units and misses that each replica is a full readable copy.",
+      "This counts the primary plus Y replicas in the read pool, assuming queries spread roughly evenly.",
+      "Counting only the primary assumes replicas serve no query traffic, which ignores their read-scaling role.",
+      "Replicas add readable copies; they do not make throughput grow quadratically."
     ],
     "track": "classic-sd",
     "category": "Elasticsearch",
@@ -54627,8 +54638,8 @@
       "Elasticsearch simply has no way to store JSON-formatted data",
       "The main issue is that its storage cost would be too high"
     ],
-    "why": "Elasticsearch 首先是搜索引擎；早期版本的持久性/一致性问题（类似 CouchDB 踩过的坑）说明：需要保证不丢的数据别只放 Elasticsearch。",
-    "why_en": "Elasticsearch is a search engine first, with a history of consistency and durability issues, so data that must persist belongs in a real database.",
+    "why": "Elasticsearch 是搜索引擎，不是唯一 source of truth；它为搜索/分析优化，历史上也踩过一致性和持久性坑。不能丢的数据放 Postgres/DynamoDB 这类主库，再同步进它。",
+    "why_en": "Use Elasticsearch as a search index, not the only source of truth, because it is optimized for search rather than transactional durability.",
     "tags": [
       "elasticsearch",
       "limitations",
@@ -54637,6 +54648,22 @@
     ],
     "termDefinitions": [
       {
+        "term": "Elasticsearch",
+        "meaning": "基于 Lucene 的分布式搜索与分析引擎，常作为主库之外的搜索索引层。",
+        "meaningEn": "Elasticsearch is a distributed search and analytics engine built on Lucene, often used as a search index beside a primary database."
+      },
+      {
+        "term": "source of truth",
+        "meaning": "系统里被当作权威事实的存储；其他索引或缓存都应能从它重建。",
+        "meaningEn": "A source of truth is the authoritative store that other indexes or caches can be rebuilt from."
+      },
+      {
+        "term": "JSON",
+        "fullName": "JavaScript Object Notation",
+        "meaning": "一种键值结构的数据格式，Elasticsearch 文档通常就是 JSON 对象。",
+        "meaningEn": "JSON means JavaScript Object Notation, a key-value data format commonly used for Elasticsearch documents."
+      },
+      {
         "term": "CouchDB",
         "meaning": "另一个历史上曾有持久性与一致性争议的文档数据库。",
         "meaningEn": "CouchDB is another document database with a historical reputation for consistency and durability issues."
@@ -54644,19 +54671,39 @@
     ],
     "q_en": "What is wrong with using Elasticsearch as the only primary database?",
     "optionExplanations": [
-      "查询速度不是把它当主库的主要风险，一致性和持久性才是。",
-      "它首先是搜索引擎不是数据库，历史上有一致性和持久性问题，需要保证不丢的数据不该只放这里。",
-      "ES 的文档本身就是 JSON，这个说法本身就不成立。",
-      "存储成本不是核心问题，数据安全性才是真正的风险点。"
+      "查询速度通常是它的强项；把它当唯一主库的风险在持久性和一致性。",
+      "这条是在划清角色边界：权威存储要承诺事务和持久化，搜索层可以从主库重建。",
+      "它的文档本来就是 JSON；问题不是能不能存，而是能不能做唯一权威存储。",
+      "存储成本可能要算，但它不是这里的主风险；更要紧的是数据丢失或不一致。"
     ],
     "optionExplanations_en": [
-      "Query speed isn't the main risk of using it as the primary store — consistency and durability are.",
-      "It's a search engine first, not a database — it has a history of consistency and durability gaps, so data you can't afford to lose shouldn't live only here.",
-      "Elasticsearch documents are JSON by nature, so that claim doesn't hold.",
-      "Storage cost isn't the core issue — data safety is the real risk."
+      "Query speed is usually Elasticsearch's strength; the risk of making it the only primary store is durability and consistency.",
+      "This draws the role boundary: Elasticsearch serves search, while authoritative data stays in a real primary database.",
+      "Elasticsearch documents are already JSON; the issue is authority, not whether JSON can be stored.",
+      "Storage cost can matter, but it is not the main risk here; data loss or inconsistency is."
     ],
     "track": "classic-sd",
-    "category": "Elasticsearch"
+    "category": "Elasticsearch",
+    "numberAnchors": [
+      {
+        "system": "Postgres/MySQL",
+        "unit": "primary / replica / shard",
+        "estimate": "读 10k-50k TPS；写 10k-20k TPS",
+        "risk": "单主写瓶颈、索引/事务变重"
+      },
+      {
+        "system": "DynamoDB",
+        "unit": "physical partition",
+        "estimate": "3k RCU / 1k WCU 每物理分区",
+        "risk": "AWS 管扩展，但 hot key 仍会限流"
+      },
+      {
+        "system": "Elasticsearch/OpenSearch",
+        "unit": "primary shard / replica / node",
+        "estimate": "先按 10-50GB/shard，不背单 shard QPS",
+        "risk": "oversharding、复杂查询 fan-out"
+      }
+    ]
   },
   {
     "id": "sd-deep-dives-elasticsearch-058",
