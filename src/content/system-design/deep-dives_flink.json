@@ -4070,5 +4070,294 @@
       "Broadcasting the entire account table to every node means any account update forces a resync across the whole cluster, a costly approach.",
       "Skipping enrichment leaves downstream transactions missing the account dimension, cutting fraud detection off from key context."
     ]
+  },
+  {
+    "id": "sd-deep-dives-flink-059",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "windows",
+    "scenario": "风控要按「同一账户 30 分钟内多次大额交易」判定盗刷，但交易事件因网络延迟会乱序、迟到抵达。",
+    "scenario_en": "Fraud detection flags accounts with several large transactions within 30 minutes, but transaction events arrive out of order and late due to network delays.",
+    "q": "该给这个速度检测选哪种窗口？",
+    "q_en": "Which window type should this velocity-detection job use?",
+    "options": [
+      "处理时间滑动窗口——按机器的处理时钟分窗，迟到交易算进被处理它的那一刻",
+      "事件时间窗口 + watermark——按发生时刻分窗、兜住迟到乱序",
+      "全局窗口不设时间边界，等作业停机时才一次性判定全部交易",
+      "完全不开窗，每来一条交易就地独立判定、不看时间维度"
+    ],
+    "options_en": [
+      "A processing-time sliding window — bucket by the machine's clock, so late events count in the moment they happen to be processed.",
+      "An event-time window with a watermark — bucket by when it occurred and absorb late, out-of-order events.",
+      "A global window with no time bound — decide on all transactions in one shot when the job shuts down.",
+      "No window at all — judge each transaction on the spot, ignoring the time dimension entirely."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "盗刷判定要看交易真实发生时刻，乱序/迟到必须落回原窗口才算得准；这只有事件时间窗口配 watermark 做得到。代价：watermark 要等迟到事件，结果比处理时间晚一点出。",
+    "why_en": "Correct velocity detection needs each transaction attributed to when it truly happened, and only event-time windows with a watermark can pull late, out-of-order events back into the right bucket.",
+    "whenOtherWins": "若只是给个大盘看实时近似值、不要求精确归窗，处理时间窗口更简单、延迟更低——这正是 dashboard 示例用 TumblingProcessingTimeWindows 的原因。",
+    "tradeoff": "处理时间的低延迟简单 vs 事件时间的业务正确性",
+    "tags": [
+      "flink",
+      "windows",
+      "event-time"
+    ],
+    "termDefinitions": [
+      {
+        "term": "事件时间（event time）",
+        "meaning": "事件真正发生的时刻，取自事件自带的时间戳字段。",
+        "meaningEn": "Event time is the moment an event actually occurred, taken from a timestamp carried inside the event."
+      },
+      {
+        "term": "处理时间（processing time）",
+        "meaning": "Flink 算子处理到这条事件时的机器时钟。",
+        "meaningEn": "Processing time is the machine clock at the moment a Flink operator handles the event."
+      },
+      {
+        "term": "watermark",
+        "meaning": "随流动的时间戳，宣告「此时间点之前的事件都已到齐」，用来决定何时触发窗口。",
+        "meaningEn": "A watermark is a timestamp flowing with the data that declares all events before it have arrived, used to decide when to trigger a window."
+      },
+      {
+        "term": "全局窗口（Global Window）",
+        "meaning": "把所有元素放进一个永不自动结束的窗口，需自定义触发逻辑。",
+        "meaningEn": "A global window puts all elements into one window that never closes on its own and needs custom trigger logic."
+      }
+    ],
+    "optionExplanations": [
+      "处理时间按机器时钟分窗，迟到交易被算进处理它的那一刻；做实时大盘够用，但盗刷会因乱序归错窗而漏判。",
+      "事件时间按交易真实时刻分窗、watermark 兜住迟到乱序，才能准确判定 30 分钟内的多次大额交易，正是本题所需。",
+      "全局窗口要等作业停机才出结果，实时盗刷根本等不起，不适合持续判定。",
+      "逐条独立判定看不到「30 分钟内累计多次」这个跨事件条件，等于没做速度检测。"
+    ],
+    "optionExplanations_en": [
+      "Processing-time windows bucket by the machine clock, counting late events in the minute they are processed; fine for a live dashboard but it misfiles out-of-order transactions and misses fraud.",
+      "Event-time windows plus a watermark bucket by the real transaction moment and absorb late, out-of-order events, which is exactly what judging 30-minute velocity requires.",
+      "A global window only emits when the job stops, and real-time fraud can't wait that long, so it can't do continuous detection.",
+      "Judging each transaction alone can't see the cross-event condition of 'several within 30 minutes,' so it isn't velocity detection at all."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-flink-060",
+    "format": "code",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "watermarks",
+    "scenario": "风控管道要按事件时间开窗，在 source 处写了下面这段：\nassignTimestampsAndWatermarks(WatermarkStrategy.forBoundedOutOfOrderness(Duration.ofSeconds(10)).withTimestampAssigner((event, ts) -> event.getTimestamp()))",
+    "scenario_en": "A fraud pipeline needs event-time windows, so at the source it configures assignTimestampsAndWatermarks with forBoundedOutOfOrderness plus a withTimestampAssigner.",
+    "q": "withTimestampAssigner 这一段的作用是？",
+    "q_en": "What is the role of the withTimestampAssigner part here?",
+    "options": [
+      "告诉 Flink 用事件的哪个字段当 event time（取 event.getTimestamp()）",
+      "设定系统为迟到事件愿意等待的最长时长——那其实是 forBoundedOutOfOrderness 那一段的活",
+      "给每条事件生成唯一 id，供下游窗口去重使用",
+      "用机器处理时钟覆盖事件自带的时间戳字段"
+    ],
+    "options_en": [
+      "Tell Flink which field of the event to use as event time — it reads event.getTimestamp().",
+      "Set how long the system waits for late events — that is actually the forBoundedOutOfOrderness part.",
+      "Generate a unique id per event for downstream window deduplication.",
+      "Overwrite the event's own timestamp field with the machine's processing clock."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "事件时间处理得知道时间在事件的哪个字段里；withTimestampAssigner 就是把该字段（event.getTimestamp()）指给 Flink，否则它无从推进 watermark、触发窗口。",
+    "why_en": "Event-time processing has to know which field carries the time, and withTimestampAssigner points Flink at that field so it can advance the watermark and fire windows.",
+    "codeSample": ".assignTimestampsAndWatermarks(\n    WatermarkStrategy.<Transaction>forBoundedOutOfOrderness(Duration.ofSeconds(10))\n        .withTimestampAssigner((event, timestamp) -> event.getTimestamp())\n)",
+    "lang": "java",
+    "tags": [
+      "flink",
+      "watermarks",
+      "event-time"
+    ],
+    "termDefinitions": [
+      {
+        "term": "withTimestampAssigner",
+        "meaning": "在 watermark 策略上指定用事件的哪个字段作为 event time 的方法。",
+        "meaningEn": "withTimestampAssigner is the method that specifies which field of an event to use as its event time."
+      },
+      {
+        "term": "assignTimestampsAndWatermarks",
+        "meaning": "在 source 上挂载 watermark 策略与时间戳提取逻辑的算子。",
+        "meaningEn": "assignTimestampsAndWatermarks attaches a watermark strategy and timestamp extraction to a source."
+      },
+      {
+        "term": "Bounded Out-of-Orderness",
+        "meaning": "一种 watermark 策略：允许事件比时间戳最多晚到某个固定时长。",
+        "meaningEn": "Bounded out-of-orderness is a watermark strategy that tolerates events arriving up to a fixed duration after their timestamp."
+      },
+      {
+        "term": "watermark",
+        "meaning": "随流动的时间戳，宣告「此时间点之前的事件都已到齐」。",
+        "meaningEn": "A watermark is a timestamp flowing with the data that declares all earlier events have arrived."
+      },
+      {
+        "term": "事件时间（event time）",
+        "meaning": "事件真正发生的时刻，取自事件自带的时间戳字段。",
+        "meaningEn": "Event time is when an event actually occurred, taken from a timestamp inside the event."
+      }
+    ],
+    "optionExplanations": [
+      "正是它的活：点名事件里的那个字段作为事件时间来源，Flink 有了它才能对乱序流做事件时间开窗。",
+      "「等多久」由 forBoundedOutOfOrderness(Duration.ofSeconds(10)) 设定；这一段只管选字段，别把两者混在一起。",
+      "去重是后续 keyBy + 窗口做的事，这一段既不生成 id，也不参与去重。",
+      "它读取事件已有的时间戳、并不覆盖；若改用机器时钟那就是处理时间、根本用不着 assigner。"
+    ],
+    "optionExplanations_en": [
+      "Exactly its job: it names the event's field as the source of event time, letting Flink do event-time windowing over an out-of-order stream.",
+      "How long to wait comes from forBoundedOutOfOrderness(Duration.ofSeconds(10)); this part only picks the field, so don't conflate them.",
+      "Deduplication happens later via keyBy plus a window; this line neither generates an id nor deduplicates.",
+      "It reads the event's existing timestamp rather than overwriting it; using the machine clock would be processing time and need no assigner."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-flink-061",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "sample-jobs",
+    "scenario": "风控里 velocity detector 和 pattern detector 是两个独立算子，同一笔盗刷可能同时触发两条告警（相同 alertId），下游只想收到一条。",
+    "scenario_en": "In the fraud job a velocity detector and a pattern detector are separate operators; one fraud event may trigger both, producing two alerts with the same alertId, but downstream wants only one.",
+    "q": "怎么在流内把重复告警去掉？",
+    "q_en": "How do you deduplicate the alerts within the stream?",
+    "options": [
+      "在两个 detector 内部各自加锁，强制保证同一 alertId 全程只产生一次告警",
+      "union 两条告警流，再 keyBy(alertId)、开窗 aggregate 去重",
+      "给 Kafka sink 打开 exactly-once，让它自动丢掉重复的告警",
+      "两个 detector 各写各自的 topic，把去重推给下游消费者做"
+    ],
+    "options_en": [
+      "Add a lock inside each detector to guarantee an alertId is ever emitted only once.",
+      "Union the two alert streams, then keyBy(alertId) and window-aggregate to dedup.",
+      "Turn on exactly-once on the Kafka sink and let it drop the duplicate alerts.",
+      "Have each detector write its own topic and push dedup onto downstream consumers."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "同一盗刷会被两个独立 detector 各报一条；union 并流 + keyBy(alertId) 把重复项归一组 + 开窗 aggregate 塌缩成一条，就在流内去了重。代价：多一个窗口算子及其状态。",
+    "why_en": "One fraud event gets reported by two independent detectors, so you union the streams, keyBy(alertId) to group the duplicates, and window-aggregate them into a single alert right inside the pipeline.",
+    "whenOtherWins": "若两个 detector 天然不会对同一 alertId 重复触发（告警空间不相交），就没必要加 union + 去重这一步，直接双写即可。",
+    "tradeoff": "流内去重的额外窗口状态 vs 下游收到重复告警",
+    "tags": [
+      "flink",
+      "sample-jobs",
+      "dedup"
+    ],
+    "termDefinitions": [
+      {
+        "term": "union",
+        "meaning": "把多条同类型的流合并成一条流的算子。",
+        "meaningEn": "Union merges several streams of the same type into one stream."
+      },
+      {
+        "term": "keyBy",
+        "meaning": "按给定键把流分区成 KeyedStream，之后状态和窗口按 key 独立维护。",
+        "meaningEn": "KeyBy partitions a stream by a key so state and windows are maintained independently per key."
+      },
+      {
+        "term": "aggregate",
+        "meaning": "在窗口内用累加器把多条元素合并成一个结果的算子。",
+        "meaningEn": "Aggregate combines the elements in a window into one result via an accumulator."
+      },
+      {
+        "term": "exactly-once",
+        "meaning": "对内部状态每条消息恰好处理一次的保证，但不自动延伸到外部系统。",
+        "meaningEn": "Exactly-once guarantees each message affects internal state exactly once, but it does not automatically extend to external systems."
+      }
+    ],
+    "optionExplanations": [
+      "两个 detector 并行跑在不同 slot 上、彼此独立，根本没有共享锁可加；这条从机制上就行不通。",
+      "同一 alertId 的多份告警被并到一条流、分进同一个 key，窗口里一聚合就只剩一份，重复彻底消失。",
+      "它保证的是内部状态每条处理一次，不是跨两条流做去重；对外部 sink 也不自动生效。",
+      "分写两个 topic 只是把重复甩给下游，问题没解决、只是换了个地方发生。"
+    ],
+    "optionExplanations_en": [
+      "The two detectors run in parallel on different slots and are independent, so there is no shared lock to add; this can't work mechanically.",
+      "The several alerts sharing an alertId land on one stream under the same key, and a single windowed fold leaves just one, so duplicates vanish.",
+      "It guarantees each record hits internal state once, not cross-stream dedup, and it doesn't apply to an external sink automatically.",
+      "Writing to two topics just hands duplicates to downstream; the problem is unsolved, only relocated."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-flink-062",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "state-types",
+    "scenario": "要算「每个用户的累计消费额」，有人用 ListState 把每笔交易都 append 进去、读时再遍历求和；流会一直跑下去、用户量很大。",
+    "scenario_en": "To compute each user's running spend, someone uses ListState to append every transaction and sums the list on read; the stream runs forever with a large user base.",
+    "q": "随着流一直跑，这个状态会怎么坏掉？",
+    "q_en": "As the stream keeps running, how does this state break down?",
+    "options": [
+      "不会坏——Flink 自动只保留每个 user 最近一条交易，旧的记录会被丢弃掉",
+      "每个 user 的 list 只增不减，状态随交易量线性膨胀，最终撑爆内存 backend",
+      "ListState 不能挂在 keyBy 之后的 KeyedStream 上，这段代码作业编译期就报错",
+      "只有窗口触发那一瞬间才占内存，平时每个 user 的状态都是 0"
+    ],
+    "options_en": [
+      "It won't break — Flink automatically keeps only each user's most recent transaction and discards the old records.",
+      "Each user's list only grows, so state balloons linearly with volume and eventually overflows the memory backend.",
+      "ListState can't be attached to a KeyedStream after keyBy, so this code fails at job compile time.",
+      "State is only held at the instant a window fires; otherwise each user's state is zero."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "根因是存全量：ListState 每笔都留，状态随事件量线性膨胀，顶到内存 backend 的 RAM 上限、拖大 checkpoint。累计求和应换 AggregatingState/ReducingState，只存一个累加值。",
+    "why_en": "The root problem is keeping everything: ListState retains every transaction, so state grows linearly, hits the memory backend's RAM ceiling and bloats checkpoints — a running sum should use AggregatingState or ReducingState, which keep just one accumulator.",
+    "tags": [
+      "flink",
+      "state-types",
+      "state-growth"
+    ],
+    "termDefinitions": [
+      {
+        "term": "ListState",
+        "meaning": "按 key 存一个值列表的状态类型，追加元素会让列表持续变长。",
+        "meaningEn": "ListState stores a list of values per key, and appending elements makes that list keep growing."
+      },
+      {
+        "term": "AggregatingState",
+        "meaning": "为增量聚合设计的状态类型，每个 key 只保留一个累加器结果。",
+        "meaningEn": "AggregatingState is designed for incremental aggregation, keeping only one accumulator per key."
+      },
+      {
+        "term": "ReducingState",
+        "meaning": "为增量归约设计的状态类型，每个 key 只保留一个归约后的值。",
+        "meaningEn": "ReducingState is designed for incremental reduction, keeping only one reduced value per key."
+      },
+      {
+        "term": "KeyedStream",
+        "meaning": "经 keyBy 分区后的流，状态和窗口按 key 独立维护。",
+        "meaningEn": "A KeyedStream is a stream partitioned by keyBy, with state and windows maintained per key."
+      },
+      {
+        "term": "state backend",
+        "meaning": "存储与检索算子状态的组件，内存 backend 快但受 RAM 限制，RocksDB 可存到磁盘。",
+        "meaningEn": "A state backend stores and retrieves operator state; the memory backend is fast but bounded by RAM, while RocksDB can spill to disk."
+      },
+      {
+        "term": "checkpoint",
+        "meaning": "对全体算子状态做的周期性快照，用于故障后恢复；状态越大快照越慢。",
+        "meaningEn": "A checkpoint is a periodic snapshot of all operator state used for recovery; bigger state means slower snapshots."
+      }
+    ],
+    "optionExplanations": [
+      "Flink 不会替你裁剪 ListState——你 append 什么它就存什么，「只留最近一条」是想当然的误解。",
+      "list 只增不减，每个活跃 user 的记录越堆越多，很快压垮 RAM、把快照撑大撑慢，恢复也跟着变慢。",
+      "ListState 本就是按 key 用的托管状态，在 KeyedStream 上完全合法，不会有编译错误。",
+      "keyed 状态是常驻的，只要 key 还活着就一直占内存，并非只在窗口触发那一刻存在。"
+    ],
+    "optionExplanations_en": [
+      "Flink won't prune ListState for you — it stores whatever you append, so 'keeps only the latest' is wishful thinking.",
+      "The list only grows and each active user's records pile up, soon crushing RAM, bloating and slowing snapshots, and dragging recovery down too.",
+      "ListState is keyed managed state meant for exactly this and is perfectly legal on a KeyedStream, so there is no compile error.",
+      "Keyed state is resident and stays in memory as long as the key is alive, not only at the instant a window fires."
+    ]
   }
 ]

@@ -1312,5 +1312,198 @@
       "Wrong: a chess match involves no payments, so reconciliation is off-topic here.",
       "Right: moves must appear almost instantly and the client cannot be trusted, so it needs low-latency sync plus server-side validation."
     ]
+  },
+  {
+    "id": "sd-in-a-hurry-problem-breakdowns-031",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "leaderboard-domain",
+    "scenario": "游戏排行榜要实时显示 top-N 和某个玩家的名次，百万级玩家分数频繁更新，读榜和查名次都要快。",
+    "scenario_en": "A game leaderboard must show the top-N and any player's rank in real time; scores change constantly across millions of players, and both listing and rank lookups must be fast.",
+    "q": "Game Leaderboard 的核心技术判断是什么？",
+    "q_en": "What is the core technical judgment in a Game Leaderboard?",
+    "options": [
+      "用按分数排序的结构（ZSET）增量维护名次和 top-N",
+      "每次读榜都对关系表按 score 做 ORDER BY 全表排序再分页",
+      "给每个玩家分数存独立缓存 key，读时全取回内存里排序",
+      "定期离线批量跑全量排序生成静态榜单供查询"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "排行榜要按分数实时取名次和 top-N，需要一个始终有序、可增量更新的结构（ZSET），取名次是 O(log n)；代价是热点要靠分片加定期快照扛住写入。",
+    "why_en": "A leaderboard needs live rank and top-N by score, so it uses an always-sorted sorted set with O(log n) rank lookups; hot writes cost you sharding plus periodic snapshots.",
+    "tags": [
+      "problem-breakdowns",
+      "leaderboard",
+      "ranking"
+    ],
+    "options_en": [
+      "Maintain rank and top-N incrementally in a score-sorted structure (a sorted set / ZSET).",
+      "Re-sort the whole relational table with ORDER BY on score on every read, then paginate.",
+      "Store each player's score under its own cache key and sort them all in memory at read time.",
+      "Run a periodic offline batch full-sort that produces a static board for reads."
+    ],
+    "termDefinitions": [
+      {
+        "term": "ZSET / Sorted Set",
+        "fullName": "Redis Sorted Set",
+        "meaning": "Redis 的有序集合，成员按 score 排序，支持 O(log n) 取名次和范围查询。",
+        "meaningEn": "A sorted set is a Redis structure that keeps members ordered by score and supports O(log n) rank and range queries."
+      },
+      {
+        "term": "ORDER BY",
+        "meaning": "SQL 里按某列排序返回结果的子句，全表排序在大表上很昂贵。",
+        "meaningEn": "ORDER BY is the SQL clause that sorts result rows by a column; sorting a whole large table is expensive."
+      }
+    ],
+    "optionExplanations": [
+      "对：排行榜按分数排序，ZSET 让取名次和 top-N 都是 O(log n)，还能增量更新。",
+      "错：每次读都全表 ORDER BY 排序，百万玩家下 CPU 顶不住，做不到实时。",
+      "错：分数拆成独立 key，读榜要全取回再排序，等于根本没有排序结构。",
+      "错：离线批量排序出的榜单是过期快照，显示不了实时名次。"
+    ],
+    "optionExplanations_en": [
+      "Right: a leaderboard sorts by score, and a sorted set gives O(log n) rank and top-N with incremental updates.",
+      "Wrong: full-table ORDER BY on every read melts the CPU at millions of players and can't be real time.",
+      "Wrong: splitting scores into separate keys forces you to fetch all and sort at read time — no sorted structure at all.",
+      "Wrong: an offline batch-sorted board is a stale snapshot and can't show live rank."
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-problem-breakdowns-032",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "notification-domain",
+    "scenario": "通知系统要把一条事件经 push、邮件、短信多渠道发给用户，要尊重免打扰和渠道偏好，且不能重复轰炸。",
+    "scenario_en": "A notification system must deliver one event to users across push, email, and SMS, respecting do-not-disturb and channel preferences, without spamming duplicates.",
+    "q": "Notification System 的核心技术判断是什么？",
+    "q_en": "What is the core technical judgment in a Notification System?",
+    "options": [
+      "统一异步扇出管线依用户偏好选渠道，配去重和重试",
+      "事件发生时同步串行调用每个渠道 provider，任一失败就整体报错",
+      "所有通知只走 push 单一渠道以简化投递逻辑",
+      "用分布式强一致事务保证每条通知恰好投递一次"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "一条事件要扇到多渠道并依用户偏好过滤，provider 抖动时要重试，所以核心是异步扇出管线加去重；代价是只能做到至少一次投递，靠幂等键兜住重复。",
+    "why_en": "One event fans out to several channels by preference and retries on failure, so the core is an async fan-out pipeline with dedup; the cost is at-least-once delivery, deduped by idempotency keys.",
+    "tags": [
+      "problem-breakdowns",
+      "notification",
+      "fan-out"
+    ],
+    "options_en": [
+      "A unified async fan-out pipeline that picks channels by user preference, with dedup and retries.",
+      "Synchronously call each channel provider in series when the event fires; any failure fails the whole thing.",
+      "Send every notification over a single push channel to simplify delivery.",
+      "Use a distributed strongly-consistent transaction to guarantee exactly-once delivery of each notification."
+    ],
+    "termDefinitions": [
+      {
+        "term": "扇出 / fan-out",
+        "meaning": "把一条消息复制分发到多个下游（渠道或订阅者）。",
+        "meaningEn": "Fan-out means duplicating one message out to many downstream targets such as channels or subscribers."
+      },
+      {
+        "term": "去重 / dedup",
+        "meaning": "用幂等键识别并丢弃重复投递，避免同一通知发多次。",
+        "meaningEn": "Deduplication uses an idempotency key to detect and drop duplicate deliveries so the same notification isn't sent twice."
+      },
+      {
+        "term": "at-least-once",
+        "meaning": "至少一次投递：保证不丢，但可能重复，需要下游幂等。",
+        "meaningEn": "At-least-once delivery guarantees a message is never lost but may arrive more than once, so consumers must be idempotent."
+      },
+      {
+        "term": "provider（渠道服务商）",
+        "meaning": "实际负责投递的第三方服务，如 APNs、SMTP、短信网关。",
+        "meaningEn": "A provider is the third-party service that actually delivers a message, such as APNs, SMTP, or an SMS gateway."
+      }
+    ],
+    "optionExplanations": [
+      "对：多渠道要依用户偏好扇出，还要在 provider 失败时重试，所以要异步管线加去重。",
+      "错：同步串行调每个 provider，一个渠道慢或挂就拖垮整条投递。",
+      "错：只走 push 会漏掉没开推送的用户，也违背多渠道和偏好需求。",
+      "错：跨外部 provider 做不到恰好一次，强上事务只会牺牲可用性。"
+    ],
+    "optionExplanations_en": [
+      "Right: multi-channel delivery must fan out by user preference and retry on provider failure, so it needs an async pipeline with dedup.",
+      "Wrong: calling each provider synchronously in series lets one slow or failing channel stall the whole delivery.",
+      "Wrong: push-only misses users who disabled push and ignores the multi-channel and preference requirements.",
+      "Wrong: exactly-once across external providers is unattainable; forcing a transaction just sacrifices availability."
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-problem-breakdowns-033",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "ci-domain",
+    "scenario": "GitHub Actions 每次 push 都要跑用户提供的 CI 脚本（不可信代码），从一个 runner 池调度执行，并限制每个账号的并发。",
+    "scenario_en": "On every push, GitHub Actions must run user-supplied CI scripts (untrusted code), dispatching them across a pool of runners while capping each account's concurrency.",
+    "q": "GitHub Actions 的核心技术判断是什么？",
+    "q_en": "What is the core technical judgment in GitHub Actions?",
+    "options": [
+      "每个 job 调度到一次性隔离 runner，按账号限并发配额",
+      "所有 job 复用同一批长期运行的共享主机以省去每次冷启动开销",
+      "把用户 CI 脚本直接内联在调度器进程里执行",
+      "用一个全局队列串行跑完所有账号提交的 job"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "CI 跑的是不可信用户代码，一个 job 绝不能污染下一个，所以每个 job 要在一次性隔离 runner（沙箱）里跑；并发配额防止单账号占满 runner 池，代价是每 job 都有冷启动开销。",
+    "why_en": "CI runs untrusted user code, so each job runs in a single-use isolated runner so it can't poison the next; concurrency quotas stop any account hogging the pool, at the cost of per-job cold start.",
+    "tags": [
+      "problem-breakdowns",
+      "ci-cd",
+      "isolation"
+    ],
+    "options_en": [
+      "Schedule each job onto a single-use isolated runner and cap concurrency per account.",
+      "Reuse one pool of long-lived shared hosts for all jobs to avoid paying cold-start each time.",
+      "Inline the user's CI script directly inside the scheduler process and run it there.",
+      "Run all accounts' submitted jobs serially through one global queue."
+    ],
+    "termDefinitions": [
+      {
+        "term": "runner",
+        "meaning": "实际执行 CI job 的机器或进程（VM 或容器）。",
+        "meaningEn": "A runner is the machine or process (a VM or container) that actually executes a CI job."
+      },
+      {
+        "term": "沙箱 / sandbox",
+        "meaning": "资源受限、与主机及其他 job 隔离的执行环境。",
+        "meaningEn": "A sandbox is a resource-limited execution environment isolated from the host and from other jobs."
+      },
+      {
+        "term": "CI",
+        "fullName": "Continuous Integration",
+        "meaning": "持续集成：每次代码变更自动构建和测试。",
+        "meaningEn": "Continuous Integration (CI) automatically builds and tests the codebase on every change."
+      },
+      {
+        "term": "并发配额 / concurrency quota",
+        "meaning": "限制单个账号可同时占用的 runner 数量。",
+        "meaningEn": "A concurrency quota caps how many runners a single account can occupy at once."
+      }
+    ],
+    "optionExplanations": [
+      "对：CI 跑不可信代码，一次性隔离 runner 防止 job 间互相污染，配额防占满。",
+      "错：复用长期共享主机，前一个 job 的残留和密钥会泄漏给下一个。",
+      "错：把用户脚本内联进调度器进程，等于让不可信代码跑在核心组件里。",
+      "错：全局串行跑所有 job，吞吐塌掉，一个慢 job 阻塞所有人。"
+    ],
+    "optionExplanations_en": [
+      "Right: CI runs untrusted code, so single-use isolated runners stop jobs from poisoning each other, and quotas prevent pool starvation.",
+      "Wrong: reusing long-lived shared hosts leaks a prior job's leftover state and secrets into the next one.",
+      "Wrong: inlining user scripts into the scheduler process runs untrusted code inside a core component.",
+      "Wrong: running all jobs serially in one global queue collapses throughput — one slow job blocks everyone."
+    ]
   }
 ]

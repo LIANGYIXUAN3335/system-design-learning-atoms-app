@@ -3364,5 +3364,223 @@
       "Video processing is exactly the area this problem expects candidates to go deep on; avoiding it hides the depth that should be there.",
       "Just naming S3, CDN, and Cassandra explains none of the reasoning behind any actual tradeoff."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-youtube-053",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "adaptive-bitrate-cost",
+    "scenario": "播放方案最终选了 adaptive bitrate streaming（ABR）：客户端读 manifest，按实时带宽在不同清晰度的 segment 之间切换。",
+    "q": "相比简单的顺序 segment 下载，选 ABR 的主要代价是什么？",
+    "options": [
+      "服务端必须在用户播放时对每个片段实时转码切清晰度",
+      "manifest 文件必须存进关系型数据库并开启强一致事务",
+      "客户端由被动下载变主动决策，且依赖上游三项上传期决策",
+      "为省存储每个视频只能保留一种清晰度的单一版本"
+    ],
+    "options_en": [
+      "The server must transcode each segment on the fly at play time.",
+      "Manifests must live in a relational database under strong-consistency transactions.",
+      "The client turns from passive downloader into an active decision-maker and depends on three upstream upload-time choices.",
+      "To save storage each video can keep only a single quality version."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "ABR 用弱网不卡换来最高的客户端复杂度：带宽探测和清晰度切换全压在客户端，而且它只有在上传期已完成分段、多格式转码和 manifest 生成时才成立。",
+    "why_en": "ABR trades weak-network smoothness for the heaviest client complexity — bandwidth probing and quality switching all live on the client — and it only works if segmentation, multi-format transcoding, and manifests were already produced at upload time.",
+    "tags": [
+      "youtube",
+      "consequence",
+      "adaptive-bitrate"
+    ],
+    "termDefinitions": [
+      {
+        "term": "adaptive bitrate streaming (ABR)",
+        "meaning": "播放器按实时带宽在不同清晰度片段间动态切换的技术。",
+        "meaningEn": "Adaptive bitrate streaming lets the player switch segment quality levels based on live bandwidth.",
+        "fullName": "Adaptive Bitrate Streaming"
+      },
+      {
+        "term": "manifest",
+        "meaning": "列出各版本与片段地址的索引文件，播放器靠它决定下载什么。",
+        "meaningEn": "A manifest is an index file listing renditions and segment URLs that the player follows."
+      },
+      {
+        "term": "segment",
+        "meaning": "几秒长、可独立播放的视频片段，是流式播放的最小下载单元。",
+        "meaningEn": "A segment is a short, independently playable piece of video, the smallest unit fetched while streaming."
+      },
+      {
+        "term": "transcode",
+        "meaning": "把视频从一种编码转成另一种编码，是后处理里最耗 CPU 的步骤。",
+        "meaningEn": "Transcoding converts video from one encoding to another and is the most CPU-heavy post-processing step."
+      }
+    ],
+    "q_en": "Compared with plain sequential segment download, what is the main cost of choosing ABR?",
+    "scenario_en": "The playback approach chosen is adaptive bitrate streaming (ABR): the client reads a manifest and switches between segment quality levels based on live bandwidth.",
+    "optionExplanations": [
+      "转码是在上传期一次性做好的，不是播放时实时做；这是对处理时机的误解。",
+      "manifest 只是 S3 里的索引文本，用不到关系型库和强一致事务。",
+      "带宽探测、选格式、切清晰度都在客户端做，而这套逻辑必须依赖上传期已生成的分段、多格式和 manifest。",
+      "ABR 恰恰要多清晰度版本才能切换，保留单一版本会让它无从工作。"
+    ],
+    "optionExplanations_en": [
+      "Transcoding is done once at upload time, not live at play time — this misreads when processing happens.",
+      "A manifest is just index text in S3; no relational database or strong-consistency transaction is involved.",
+      "Bandwidth probing, format selection, and quality switching all run on the client, and that logic depends on segmentation, multi-format output, and manifests created at upload time.",
+      "ABR needs multiple quality versions to switch between; keeping a single version defeats it."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-youtube-054",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "metadata-cache-shape",
+    "scenario": "要给热门视频的元数据读挡在 Cassandra 前面加一层缓存；元数据永远按 videoId 点查，只有一小撮热视频反复被读。",
+    "q": "这层元数据缓存该用什么形态？",
+    "options": [
+      "分布式缓存，LRU 淘汰，同样按 videoId 分区",
+      "单机本地缓存，永不淘汰，把全部视频元数据都常驻在内存里",
+      "按上传时间范围分区，方便定期批量扫描最新上传的视频",
+      "写穿缓存，每次写都强一致地同步复制到所有缓存副本节点"
+    ],
+    "options_en": [
+      "A distributed cache with LRU eviction, partitioned by videoId too.",
+      "A single-node local cache that never evicts and holds all metadata.",
+      "Partition by upload-time range so newest videos can be bulk-scanned.",
+      "A write-through cache that synchronously replicates every write to all replicas."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "访问只是按 videoId 点查、且只有一小撮热视频，所以缓存分区键跟 DB 对齐(videoId)、用 LRU 只留热点最省内存；代价是缓存只做最终一致，冷数据 miss 后仍要回源 Cassandra。",
+    "why_en": "Access is a videoId point lookup and only a hot subset is popular, so aligning the cache partition key with the DB (videoId) and evicting with LRU keeps just the hot set — the cost is eventual consistency, and a cold miss still falls back to Cassandra.",
+    "whenOtherWins": "如果读的是按时间的批量最新列表而不是单点查，videoId 分区就不再匹配，得换范围友好的组织方式。",
+    "tradeoff": "命中热点省 DB 压力 vs 缓存最终一致、miss 要回源",
+    "tags": [
+      "youtube",
+      "fit",
+      "caching"
+    ],
+    "termDefinitions": [
+      {
+        "term": "LRU",
+        "meaning": "最近最少使用淘汰：内存满时先踢掉最久没被访问的条目，天然只留热点。",
+        "meaningEn": "Least Recently Used eviction drops the entries untouched the longest when memory fills, naturally keeping the hot set.",
+        "fullName": "Least Recently Used"
+      },
+      {
+        "term": "write-through",
+        "meaning": "写穿缓存：每次写同时更新缓存和后端，读到的总是最新，但写更慢。",
+        "meaningEn": "A write-through cache updates cache and backing store on every write, so reads are always fresh but writes are slower."
+      },
+      {
+        "term": "Cassandra",
+        "meaning": "无主复制的分布式 NoSQL 数据库，按分区键把数据水平分布到多个节点。",
+        "meaningEn": "Cassandra is a leaderless distributed NoSQL database that spreads data across nodes by partition key."
+      },
+      {
+        "term": "partition key",
+        "meaning": "决定一条数据落到哪个节点的键；这里选 videoId 让点查只命中一个节点。",
+        "meaningEn": "A partition key decides which node a row lands on; here videoId makes a point lookup hit a single node."
+      },
+      {
+        "term": "videoId",
+        "meaning": "单个视频的唯一标识，本系统所有元数据查询都按它点查。",
+        "meaningEn": "videoId is the unique identifier of a single video, the key every metadata query looks up by."
+      }
+    ],
+    "q_en": "What shape should this video-metadata cache take?",
+    "scenario_en": "You add a cache in front of Cassandra for hot video metadata; metadata is always point-looked-up by videoId, and only a small hot subset is read repeatedly.",
+    "optionExplanations": [
+      "缓存按 videoId 分区让点查直接命中单节点，LRU 天然保留反复访问的少数视频，分布式把读分摊到多节点，正好贴合访问模式。",
+      "365M 条元数据装不进单机，且永不淘汰会撑爆内存，也没有横向扩展。",
+      "按时间范围分区是为批量扫描准备的，本系统只做单点查，用不上还会打散热点。",
+      "写穿加强一致复制是为写路径的强一致准备的，这里读远多于写，白白拖慢写又占资源。"
+    ],
+    "optionExplanations_en": [
+      "Aligning the partition key with the DB (videoId) keeps point lookups simple, LRU keeps only the repeatedly-read hot set, and distributing it spreads reads — matching the access pattern.",
+      "365M metadata rows do not fit on one node, never evicting would blow up memory, and there is no horizontal scaling.",
+      "Time-range partitioning is for bulk scans; this system only point-queries, so it is unused and scatters the hot set.",
+      "Write-through with strong-consistency replication targets write-path consistency, but here reads vastly outnumber writes, so it only slows writes and wastes resources."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-youtube-055",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "codec-tradeoff-axes",
+    "scenario": "后处理要把每个 segment 转成多个 codec（编解码方案）；选 codec 时要在几个维度上权衡，因为没有哪个 codec 全都最优。",
+    "q": "选择视频 codec 时，需要权衡哪些取舍维度？（多选）",
+    "options": [
+      "压缩耗时（转码要花多久）",
+      "跨平台/设备支持程度",
+      "压缩效率（体积能缩多小）",
+      "是否有损（画质是否保真）",
+      "数据库该选哪个分区键"
+    ],
+    "options_en": [
+      "Compression time (how long transcoding takes).",
+      "Cross-platform/device support.",
+      "Compression efficiency (how small it shrinks).",
+      "Lossy or not (whether quality is preserved).",
+      "Which partition key the database should use."
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "codec 在压缩耗时、跨平台支持、压缩效率、有损与否四个维度上取舍；没有全能 codec，所以系统要为每个 segment 存多种格式来覆盖不同设备与网络。",
+    "why_en": "Codecs trade off on compression time, cross-platform support, compression efficiency, and lossy-vs-lossless — no codec wins on all, which is why the system stores multiple formats per segment to cover different devices and networks.",
+    "tags": [
+      "youtube",
+      "fact",
+      "codec"
+    ],
+    "termDefinitions": [
+      {
+        "term": "codec",
+        "meaning": "编解码器：压缩和解压视频的方案，如 H.264、AV1；决定体积与画质。",
+        "meaningEn": "A codec (encoder/decoder) compresses and decompresses video, like H.264 or AV1, trading size against quality.",
+        "fullName": "encoder/decoder"
+      },
+      {
+        "term": "transcode",
+        "meaning": "把视频从一种编码转成另一种，是后处理 DAG 里最耗 CPU 的步骤。",
+        "meaningEn": "Transcoding converts video from one encoding to another, the most CPU-heavy step in the post-processing DAG."
+      },
+      {
+        "term": "bitrate",
+        "meaning": "单位时间传输的比特数；压缩效率越高，同画质所需 bitrate 越低。",
+        "meaningEn": "Bitrate is the bits transferred per unit time; higher compression efficiency lets the same quality use a lower bitrate."
+      },
+      {
+        "term": "segment",
+        "meaning": "几秒长、可独立播放的视频片段，后处理会把它转成多种 codec。",
+        "meaningEn": "A segment is a short, independently playable piece of video that post-processing transcodes into several codecs."
+      }
+    ],
+    "q_en": "Which axes do you trade off when choosing a video codec? (multiple)",
+    "scenario_en": "Post-processing transcodes each segment into several codecs; choosing a codec means weighing a few axes, because no single codec is best on all of them.",
+    "optionExplanations": [
+      "转码是后处理 DAG 里最贵的 CPU-bound 步骤，压缩越慢，转码集群成本越高。",
+      "决定这个格式能覆盖哪些设备，正是我们要为一个视频存多种格式的原因。",
+      "缩得越小，S3 存储和播放时的 bitrate/带宽就越省。",
+      "有损换更小体积，无损保画质但文件更大，直接影响用户看到的质量。",
+      "分区键是数据库设计问题，跟 codec 的编解码取舍无关，是混入的干扰项。"
+    ],
+    "optionExplanations_en": [
+      "Transcoding is the most expensive CPU-bound step in the post-processing DAG, so slower compression means a costlier transcode fleet.",
+      "It decides which devices a format can reach — exactly why we store multiple formats for one video.",
+      "The smaller it shrinks, the less S3 storage and playback bitrate/bandwidth it uses.",
+      "Lossy buys smaller files, lossless keeps quality but grows files, directly affecting the quality users see.",
+      "A partition key is a database-design question unrelated to codec encode/decode tradeoffs — a mixed-in distractor."
+    ]
   }
 ]

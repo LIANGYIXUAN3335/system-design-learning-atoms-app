@@ -2876,5 +2876,545 @@
       "Lua keeps a single bucket update's read-modify-write from being split apart, which is what keeps it correct under concurrency.",
       "Writing every request to an analytics database before deciding whether to allow it bolts an offline system's latency onto the online decision path, working against the low-latency goal."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-051",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "token-bucket",
+    "scenario": "Token Bucket 里一个 client 好几天没发请求;bucket 按流逝时间持续 refill,早已加满到 capacity 上限。",
+    "scenario_en": "In Token Bucket a client hasn't sent a request for days; the bucket kept refilling with elapsed time and is now full at capacity.",
+    "q": "这个满桶的 idle client 一上线会发生什么失效?",
+    "q_en": "What goes wrong when this idle, full-bucket client comes back online?",
+    "options": [
+      "他被立刻拒绝,因为长期闲置会先扣掉一整窗配额",
+      "他能一次放行整桶(capacity)请求,形成不受控的突发",
+      "refill rate 自动清零,他只能发出一个请求就被限",
+      "bucket 会一直拒绝,直到下一个整分钟窗口对齐才放行"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "bucket 随时间 refill 并封顶在 capacity;闲置很久的 client 一上线就是满桶,能一次放行整桶突发。代价:capacity 要按可容忍的最大突发来定,定大了冷启动就冲击后端。",
+    "why_en": "An idle client's bucket refills to full capacity, so its first request can release a whole bucket as one uncontrolled burst; size capacity to the largest burst you can tolerate.",
+    "tags": [
+      "rate-limiter",
+      "token-bucket",
+      "cold-start"
+    ],
+    "options_en": [
+      "It is rejected immediately, since long idleness first deducts a full window of quota",
+      "It can release a whole bucket (capacity) of requests at once as an uncontrolled burst",
+      "The refill rate resets to zero, so it gets throttled after a single request",
+      "The bucket keeps rejecting until the next whole-minute window aligns"
+    ],
+    "optionExplanations": [
+      "Token Bucket 不惩罚闲置;闲置只会让桶累积到满,不会先扣配额。",
+      "elapsed 越久桶补得越满、封顶在 capacity,冷启动时满桶被瞬间放光=一整桶突发。",
+      "refill 只做加法且封顶,不会清零;这是把机制方向搞反了。",
+      "整点对齐是 Fixed Window 的行为,Token Bucket 靠 refill 连续补,不看整分钟。"
+    ],
+    "optionExplanations_en": [
+      "Token Bucket doesn't penalize idleness; idling only lets the bucket fill up, it never pre-deducts quota.",
+      "The longer the elapsed time, the fuller the bucket up to capacity; a full bucket drained at once is one whole burst.",
+      "Refill only adds and caps out — it never zeroes; this reverses the mechanism.",
+      "Boundary alignment is Fixed Window behavior; Token Bucket refills continuously and ignores minute marks."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Token Bucket",
+        "fullName": "",
+        "meaning": "每个 client 一个桶,按 refill rate 匀速加 token、封顶 capacity;每请求扣 1,没 token 就拒。只存 (tokens, last_refill) 两个字段",
+        "meaningEn": "Each client has a bucket that gains tokens at a steady refill rate up to capacity; each request spends one, and an empty bucket rejects. It stores just (tokens, last_refill)."
+      },
+      {
+        "term": "capacity",
+        "fullName": "",
+        "meaning": "桶能容纳的最大 token 数,等于允许的最大瞬时突发量;冷启动时满桶=这么多突发",
+        "meaningEn": "The maximum tokens a bucket holds, i.e. the largest instantaneous burst allowed; a full bucket at cold start equals exactly that burst."
+      },
+      {
+        "term": "refill rate",
+        "fullName": "",
+        "meaning": "每单位时间往桶里加多少 token,决定长期允许的平均速率",
+        "meaningEn": "How many tokens are added per unit time; it sets the long-run average rate allowed."
+      },
+      {
+        "term": "cold start",
+        "fullName": "",
+        "meaning": "长期闲置的 client 突然上线,bucket 早已补满,第一波请求可放行整桶突发的问题",
+        "meaningEn": "A long-idle client returning with an already-full bucket, so its first wave can release a whole bucket burst."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-052",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "scenario": "Fixed Window 每分钟限 100 次;某 client 在 12:00:03 就把 100 次打满,离窗口结束还有 57 秒。",
+    "scenario_en": "A fixed window allows 100/min; a client burns all 100 by 12:00:03, with 57 seconds left in the window.",
+    "q": "打满后剩余的 57 秒里这个 client 会怎样?",
+    "q_en": "What happens to this client for the remaining 57 seconds of the window?",
+    "options": [
+      "整个剩余窗口都会被拒绝,即使流量已回落正常",
+      "计数器立即重置归零,他可以继续按正常速率发请求",
+      "系统按已流逝的时间比例,退还一部分配额给他",
+      "多余请求进入队列,等窗口一到就自动重放出去"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "固定窗口只在整点重置计数、不平滑;client 在窗口早期打满后,整个剩余窗口都被一刀切拒绝,哪怕后面流量很低。代价:体验是「用完即全停」,平滑要靠滑动窗口或 Token Bucket。",
+    "why_en": "A fixed window resets only on the boundary, so a client that burns its quota early is starved for the rest of the window even after traffic calms; token bucket smooths this out.",
+    "tags": [
+      "rate-limiter",
+      "algorithms",
+      "fixed-window"
+    ],
+    "options_en": [
+      "The whole rest of the window is rejected, even once traffic returns to normal",
+      "The counter immediately resets to 0, so it can keep sending at a normal rate",
+      "The system refunds part of its quota in proportion to elapsed time",
+      "Excess requests are queued and automatically replayed when the window ticks over"
+    ],
+    "optionExplanations": [
+      "计数只在整点归零,窗口内一旦达上限就全拒到底=对早期爆量用户的饿死。",
+      "窗口中途不会重置,这正是 Fixed Window 不平滑的根源。",
+      "固定窗口没有按比例退还机制;那更像 Sliding Window Counter 的加权,机制不同。",
+      "Fixed Window 直接丢弃超限请求,不排队重放;排队是另一种被否决的方案。"
+    ],
+    "optionExplanations_en": [
+      "The count only zeroes on the boundary, so hitting the cap mid-window rejects everything after — starving an early spender.",
+      "The window never resets mid-way; that is exactly why Fixed Window isn't smooth.",
+      "Fixed Window has no proportional refund; that resembles Sliding Window Counter's weighting, a different mechanism.",
+      "Fixed Window simply drops over-limit requests rather than queuing them; queuing is a separate, rejected approach."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Fixed Window Counter",
+        "fullName": "",
+        "meaning": "把时间切成固定窗口(如每分钟),每 client 一个计数器,窗口切换时归零;超限即拒。简单但边界不平滑",
+        "meaningEn": "Slices time into fixed windows (e.g. per minute) with one counter per client that zeroes at the window switch; over-limit requests are rejected. Simple but not smooth at boundaries."
+      },
+      {
+        "term": "starvation",
+        "fullName": "",
+        "meaning": "用户在窗口早期就打满配额,导致整个剩余窗口的请求都被拒绝,即使实际流量已很低",
+        "meaningEn": "A user exhausts its quota early in the window, so all its requests for the rest of the window are rejected even when actual traffic is low."
+      },
+      {
+        "term": "Sliding Window Counter",
+        "fullName": "",
+        "meaning": "用当前窗口和上一窗口两个计数器,按已过去比例加权估算真实滑动速率,比固定窗口平滑",
+        "meaningEn": "Uses the current and previous window counters, weighting by how far into the window you are, to approximate a true sliding rate more smoothly than fixed windows."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-053",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "algorithms",
+    "scenario": "Sliding Window Counter 用「当前窗口已过去比例」加权上一窗口计数来估速率;某 client 的请求全挤在上一窗口最后几秒。",
+    "scenario_en": "Sliding Window Counter weights the previous window by how far into the current window you are; a client's requests all cluster in the last few seconds of the previous window.",
+    "q": "这种边缘集中的流量下,加权估算会怎样出错?",
+    "q_en": "With traffic clustered at the edge, how does the weighted estimate go wrong?",
+    "options": [
+      "它假设窗口内流量均匀,请求挤在边缘时估算失真、会漏放本该拒的请求",
+      "它总是高估速率,导致系统性地误拒大量本该放行的合法请求",
+      "加权数学一旦写错就退化成精确的 Sliding Window Log,内存暴涨",
+      "两个窗口的计数器会互相覆盖,最终导致 client 的状态直接丢失"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "加权公式(上一窗×剩余比例 + 当前窗)默认流量在窗口内均匀分布;请求集中在某一端时,真实速率被系统性错估,近似失真。代价:换来的是每 client 只存两个计数器的省内存,要精确得用 Log。",
+    "why_en": "The weighted estimate assumes even traffic across the window; when requests cluster at one edge it misjudges the true rate and can let through requests it should block.",
+    "tags": [
+      "rate-limiter",
+      "algorithms",
+      "sliding-window"
+    ],
+    "options_en": [
+      "It assumes even traffic in the window, so edge-clustered requests distort the estimate and slip past",
+      "It always overestimates the rate, systematically rejecting many legitimate requests it should pass",
+      "One wrong line of weighting math degrades it into an exact Sliding Window Log with huge memory",
+      "The two window counters overwrite each other and eventually lose the client's state entirely"
+    ],
+    "optionExplanations": [
+      "加权按均匀分布折算上一窗;流量集中在边缘时折算值偏离真实,漏放或误拒都可能。",
+      "它不是单向高估;取决于请求落在窗口哪端,可能高估也可能低估。",
+      "写错数学得到的是错误近似,不会变成 Log;Log 是逐条存 timestamp 的另一算法。",
+      "两个计数器各自独立累加,不会互相覆盖;状态丢失是无中生有的说法。"
+    ],
+    "optionExplanations_en": [
+      "The weighting prorates the previous window as if traffic were even; edge-clustered traffic makes that proration miss.",
+      "It is not one-directional overestimation; depending on which edge requests land, it can over- or under-count.",
+      "Bad math gives a wrong approximation, not a Log; the Log is a separate algorithm storing each timestamp.",
+      "The two counters accumulate independently and don't overwrite each other; lost state is fabricated here."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Sliding Window Counter",
+        "fullName": "",
+        "meaning": "用当前+上一窗口两个计数器,按当前窗已过去比例加权上一窗,近似真实滑动窗口;只存两个计数器很省内存",
+        "meaningEn": "Uses current plus previous window counters, weighting the previous by how far into the current window you are, to approximate a true sliding window using just two counters."
+      },
+      {
+        "term": "Sliding Window Log",
+        "fullName": "",
+        "meaning": "逐条记录每次请求的 timestamp,精确统计过去 N 分钟的请求数;精确但热点 client 内存开销大",
+        "meaningEn": "Stores every request's timestamp to count exactly how many happened in the last N minutes; perfectly accurate but memory-heavy for hot clients."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-054",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "scenario": "Redis 挂了,gateway 选 fail-closed 给所有请求回 429/503;而大多数客户端没实现退避,一看到失败就立刻重试。",
+    "scenario_en": "Redis is down; the gateway fail-closes and returns 429/503 to every request, but most clients have no backoff and retry the instant they see a failure.",
+    "q": "fail-closed 在这种客户端行为下会引发什么连锁副作用?",
+    "q_en": "With clients like this, what knock-on side effect does fail-closed trigger?",
+    "options": [
+      "客户端激进重试,失败的请求反而把入站负载推得更高",
+      "重试请求会自动绕过限流器,直接打到后端服务上",
+      "收到 429 后客户端会永久停止发请求,负载归零",
+      "Redis 会因为承接这些重试流量而自动恢复上线"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "fail-closed 拒掉请求,但不做退避的客户端看到 429/503 会立刻重试;失败请求本身变成新负载,在故障期把入站流量推得更高。代价:必须靠 Retry-After 头引导退避才缓解。",
+    "why_en": "Fail-closed rejects requests, but clients without backoff retry immediately on a 429/503, so the rejections become fresh load exactly when the system is already struggling.",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "fail-closed"
+    ],
+    "options_en": [
+      "Clients retry aggressively, so the rejected requests themselves push inbound load even higher",
+      "Retried requests automatically bypass the rate limiter and hit backend services directly",
+      "After a 429 the client permanently stops sending, dropping load to zero",
+      "Redis automatically recovers because it absorbs the retry traffic"
+    ],
+    "optionExplanations": [
+      "拒绝不等于减负;无退避客户端把每次拒绝立刻变成一次新请求,叠成重试风暴。",
+      "重试仍走同一条 gateway 路径、仍被 fail-closed 拦,不会绕过限流器。",
+      "429 只是一次拒绝,不会让客户端永久停发;真实客户端多半会重试。",
+      "重试只会加重 Redis 负载,不会让它自愈;恢复要靠 failover/扩容。"
+    ],
+    "optionExplanations_en": [
+      "Rejecting isn't shedding load; a no-backoff client turns each rejection into a fresh request, stacking into a retry storm.",
+      "Retries still take the same gateway path and are still fail-closed; they don't bypass the limiter.",
+      "A 429 is one rejection, not a permanent stop; real clients mostly retry.",
+      "Retries only add load to Redis, they don't heal it; recovery needs failover or scaling."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fail-closed",
+        "fullName": "",
+        "meaning": "限流器拿不到状态时默认拒绝请求;保护后端但牺牲可用性,健康请求也会被挡",
+        "meaningEn": "When the limiter can't read state it defaults to rejecting requests; this protects the backend but sacrifices availability, blocking even healthy requests."
+      },
+      {
+        "term": "429 Too Many Requests",
+        "fullName": "",
+        "meaning": "超出限额时返回的 HTTP 状态码,通常带 Retry-After 告诉客户端多久后可重试",
+        "meaningEn": "The HTTP status returned when a limit is exceeded, usually with a Retry-After telling the client when to retry."
+      },
+      {
+        "term": "503 Service Unavailable",
+        "fullName": "",
+        "meaning": "服务端暂时不可用时返回的 HTTP 状态码,fail-closed 时表示限流器本身故障",
+        "meaningEn": "The HTTP status returned when the server is temporarily unavailable; under fail-closed it signals the limiter itself is down."
+      },
+      {
+        "term": "Retry-After",
+        "fullName": "",
+        "meaning": "随 429/503 一起发的响应头,告诉客户端等多少秒再重试,用来引导退避、避免重试风暴",
+        "meaningEn": "A response header sent with 429/503 telling the client how many seconds to wait before retrying, used to guide backoff and prevent retry storms."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-055",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "scenario": "一个支付/金融 API,限流器(Redis)故障时要在 fail-open 和 fail-closed 之间选;这里「无限流地放行」比「短暂拒绝」后果严重得多。",
+    "scenario_en": "A payments/financial API must pick fail-open vs fail-closed when the limiter (Redis) fails; here letting requests through unlimited is far worse than briefly rejecting them.",
+    "q": "这种系统在限流器故障时该选哪种失败模式?",
+    "q_en": "Which failure mode should this system pick when the limiter fails?",
+    "options": [
+      "fail-open,优先保住可用性,让所有交易照常通过",
+      "fail-closed,宁可拒绝也不放行无法核验限额的交易",
+      "关闭服务端限流,改完全依赖客户端自己限流",
+      "把交易全部排队,等 Redis 恢复后再统一处理"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "支付/高安全系统里「无限流放行」比停机更糟:放行可能带来欺诈、超额扣款等不可逆损失。fail-closed 用短暂拒绝换掉这个风险。",
+    "why_en": "In payments or high-security systems, unlimited pass-through is worse than downtime because unchecked access risks irreversible harm, so fail-closed trades brief rejection for safety.",
+    "whenOtherWins": "若是内容展示类 API、放行的最坏后果只是后端多扛点读压力,fail-open 更好,避免把限流器故障放大成全站不可用。",
+    "tradeoff": "可用性(fail-open) vs 不可逆损失防护(fail-closed)",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "fail-closed"
+    ],
+    "options_en": [
+      "Fail-open, prioritize availability and let all transactions go through as usual",
+      "Fail-closed, reject rather than pass transactions whose limits can't be verified",
+      "Turn off server-side limiting and rely entirely on client-side rate limiting",
+      "Queue all transactions and process them together once Redis recovers"
+    ],
+    "optionExplanations": [
+      "对普通读服务可以,但支付里放行一笔无法核验的交易可能造成不可逆资金损失。",
+      "无核验的交易被拦下,用短暂拒绝换掉欺诈/超额扣款等不可逆风险,契合金融语义。",
+      "客户端不可信,安全场景恰恰不能把限流交给客户端;这等于放弃防护。",
+      "排队让交易延迟不可预测、还占内存,金融路径通常要求快速确定的失败。"
+    ],
+    "optionExplanations_en": [
+      "Fine for ordinary reads, but in payments letting an unverifiable transaction through can cause irreversible money loss.",
+      "Unverifiable transactions are blocked, trading brief rejection for irreversible fraud/overcharge risk — the right fit for finance.",
+      "Clients aren't trustworthy; security cases must not delegate limiting to the client, which abandons protection.",
+      "Queuing makes transaction latency unpredictable and eats memory; financial paths usually want fast, definite failure."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fail-closed",
+        "fullName": "",
+        "meaning": "限流器不可用时默认拒绝请求;牺牲可用性换安全,金融/高安全场景常用",
+        "meaningEn": "When the limiter is unavailable it defaults to rejecting requests, trading availability for safety — common in financial or high-security settings."
+      },
+      {
+        "term": "fail-open",
+        "fullName": "",
+        "meaning": "限流器不可用时默认放行所有请求;保住可用性但暂时失去限流保护,可能被打爆",
+        "meaningEn": "When the limiter is unavailable it defaults to allowing all requests, keeping availability but temporarily losing protection and risking overload."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-056",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "failure-mode",
+    "scenario": "Redis 挂了、限流器无法核验任何配额,gateway 决定 fail-closed 拒绝请求;现在要选回 429 还是 503。",
+    "scenario_en": "Redis is down and the limiter can't verify any quota; the gateway fail-closes and now must choose between returning 429 or 503.",
+    "q": "限流器自身故障导致的拒绝,更贴切的状态码是哪个?",
+    "q_en": "For a rejection caused by the limiter's own outage, which status code fits better?",
+    "options": [
+      "429 Too Many Requests,暗示是客户端自己请求太多、超出了配额上限",
+      "503 Service Unavailable,是限流器故障而非客户端超限",
+      "200 OK 附带一个警告头,把放行与否交给客户端自己决定",
+      "403 Forbidden,表示这个客户端根本无权访问该接口"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "429 的语义是「你超配额了」,但限流器故障时客户端并没超限、是服务端问题;503 更诚实地表达「限流器暂时不可用」,并可配 Retry-After。代价:客户端要能区分对待 503。",
+    "why_en": "429 says the client exceeded its quota, but in a limiter outage the client hasn't — the fault is server-side, so 503 more honestly signals the limiter is temporarily down.",
+    "whenOtherWins": "若你希望客户端对两种情况用同一套退避逻辑、不想在客户端多加分支,统一回 429 + Retry-After 也可接受,只是语义不够精确。",
+    "tradeoff": "语义诚实(503=服务端故障) vs 复用已有退避码(429)",
+    "tags": [
+      "rate-limiter",
+      "failure-mode",
+      "status-code"
+    ],
+    "options_en": [
+      "429 Too Many Requests, implying the client itself exceeded its quota ceiling",
+      "503 Service Unavailable, since the rejection stems from a limiter outage, not the client over-limit",
+      "200 OK with a warning header, leaving the allow/deny decision to the client itself",
+      "403 Forbidden, meaning this client has no permission to access the endpoint at all"
+    ],
+    "optionExplanations": [
+      "429 把责任归到客户端超限,但这次是限流器坏了、客户端没超,语义误导。",
+      "拒绝的真实原因是服务端(限流器)不可用,503 正好表达这层、并可带 Retry-After。",
+      "200 表示成功放行,把限流决定推给不可信客户端,既不安全也误导。",
+      "403 表示鉴权/权限问题,和限流器临时故障是两回事,语义不符。"
+    ],
+    "optionExplanations_en": [
+      "429 blames the client for over-limit, but here the limiter broke and the client didn't exceed — misleading.",
+      "The real cause is a server-side (limiter) outage, which 503 expresses exactly and can carry Retry-After.",
+      "200 means success; pushing the limit decision to an untrusted client is both unsafe and misleading.",
+      "403 signals an auth/permission problem, not a transient limiter outage — the semantics don't match."
+    ],
+    "termDefinitions": [
+      {
+        "term": "429 Too Many Requests",
+        "fullName": "",
+        "meaning": "客户端超出限额时返回的 HTTP 状态码,语义是「是你请求太多了」",
+        "meaningEn": "The HTTP status returned when a client exceeds its limit; it means \"you sent too many requests\"."
+      },
+      {
+        "term": "503 Service Unavailable",
+        "fullName": "",
+        "meaning": "服务端暂时不可用时返回的 HTTP 状态码,把责任归到服务端而非客户端",
+        "meaningEn": "The HTTP status returned when the server is temporarily unavailable; it attributes the fault to the server, not the client."
+      },
+      {
+        "term": "403 Forbidden",
+        "fullName": "",
+        "meaning": "客户端已被识别但无权访问该资源时返回的 HTTP 状态码,属于鉴权/权限问题",
+        "meaningEn": "The HTTP status returned when a client is identified but not allowed to access the resource; an auth/permission problem."
+      },
+      {
+        "term": "Retry-After",
+        "fullName": "",
+        "meaning": "随 429/503 一起发的响应头,告诉客户端等多少秒再重试",
+        "meaningEn": "A response header sent with 429/503 telling the client how many seconds to wait before retrying."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-057",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "latency",
+    "scenario": "app server 调用独立限流服务,但限流器响应变慢、甚至和 app server 之间出现网络分区;每个请求只有 <10ms 延迟预算。",
+    "scenario_en": "App servers call a dedicated limiter, but it responds slowly or a network partition appears between them; each request has a sub-10ms latency budget.",
+    "q": "限流器迟迟不回时,更稳妥的处理策略是什么?",
+    "q_en": "When the limiter is slow to answer, what's the safer handling strategy?",
+    "options": [
+      "一直同步等它回,保证每次限流判断都精确无误",
+      "设超时,到点就按预设失败模式猜一个决定",
+      "让请求线程原地自旋重试,直到最终拿到限流答案",
+      "直接丢弃该请求,并且不给客户端返回任何响应"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "每请求只有 <10ms 预算,无限等会把限流器的慢叠加到用户延迟、甚至耗尽 app server 线程;设超时后按 fail-open/closed 预案猜一个决定,把可用性与精确性的取舍显式化。代价:超时期间判断不精确。",
+    "why_en": "With a sub-10ms per-request budget, blocking on a slow limiter adds its latency to every request and can exhaust app-server threads — set a timeout and fall back to your fail-open/closed policy.",
+    "whenOtherWins": "只有能容忍高延迟的离线/批处理路径才值得多等一会儿换精确判断;交互式 API 必须超时后快速降级。",
+    "tradeoff": "等待换判断精确 vs 超时换低延迟与可用性",
+    "tags": [
+      "rate-limiter",
+      "latency",
+      "timeout"
+    ],
+    "options_en": [
+      "Block synchronously until it answers, guaranteeing every limit decision is exact",
+      "Set a timeout and, when it fires, guess a decision per the preset failure-mode policy",
+      "Have the request thread spin-retry in place until it finally gets the limiter's answer",
+      "Just drop the request and return no response at all to the client"
+    ],
+    "optionExplanations": [
+      "无限等把限流器的慢直接叠到每个请求延迟上,还可能耗尽线程池,拖垮 app server。",
+      "超时上限先护住延迟预算,拿不到答案就走预设降级策略,取舍显式可控。",
+      "自旋重试和无限等一样占着线程、烧 CPU,只是换了个卡住的方式。",
+      "不给响应会让客户端一直挂起、超时重试,体验和负载都更糟。"
+    ],
+    "optionExplanations_en": [
+      "Unbounded waiting stacks the limiter's slowness onto every request and can exhaust the thread pool, dragging the app server down.",
+      "A timeout ceiling first protects the latency budget, then a preset degradation policy backstops it — explicit and controlled.",
+      "Spin-retry holds threads and burns CPU just like unbounded waiting, only in a different stuck form.",
+      "Returning nothing leaves clients hanging until they time out and retry, worsening both experience and load."
+    ],
+    "termDefinitions": [
+      {
+        "term": "network partition",
+        "fullName": "",
+        "meaning": "网络分区:两个组件之间的网络断开或不可达,谁也收不到对方的消息,请求会一直等到超时",
+        "meaningEn": "A network partition is when the network between two components breaks or becomes unreachable, so neither hears the other and requests hang until they time out."
+      },
+      {
+        "term": "fail-open",
+        "fullName": "",
+        "meaning": "限流器不可用时默认放行所有请求,保可用性但暂失保护",
+        "meaningEn": "When the limiter is unavailable it defaults to allowing all requests, keeping availability but temporarily losing protection."
+      },
+      {
+        "term": "fail-closed",
+        "fullName": "",
+        "meaning": "限流器不可用时默认拒绝请求,保护后端但牺牲可用性",
+        "meaningEn": "When the limiter is unavailable it defaults to rejecting requests, protecting the backend but sacrificing availability."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-058",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "requirements",
+    "scenario": "面试官澄清这是个 startup 的 API,每天只有几千请求(不是 1M/sec);你要据此定限流器的架构。",
+    "scenario_en": "The interviewer clarifies this is a startup API doing a few thousand requests per day (not 1M/sec); you must size the limiter's architecture to that.",
+    "q": "这个量级下,相比百万级设计可以砍掉哪些东西?",
+    "q_en": "At this scale, what can you cut compared with the millions-per-second design?",
+    "options": [
+      "单机 in-process 计数即可,不必上 Redis 分片和一致性哈希",
+      "仍必须部署多个 Redis 分片,以防未来流量增长",
+      "必须引入 Redis Cluster 的自动 failover 来保高可用",
+      "需要跨区域多活部署来把限流延迟压到最低"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每天几千请求下单机就装得下全部状态,in-process 计数的近似误差也无所谓;Redis 分片、一致性哈希、跨区都是为百万级吞吐准备的,提前上就是过度设计。代价:一旦增长要迁到共享状态。",
+    "why_en": "At a few thousand requests a day, one box holds all state and in-process counting is fine; sharding, consistent hashing, and multi-region are for millions per second, so adding them now over-engineers it.",
+    "whenOtherWins": "一旦流量涨到单机吞吐上限或需要多实例部署,in-process 的近似误差和协调问题就绷不住,必须迁到 Redis 共享状态。",
+    "tradeoff": "小规模的单机简单 vs 大规模的分布式分片",
+    "tags": [
+      "rate-limiter",
+      "requirements",
+      "scale"
+    ],
+    "options_en": [
+      "In-process counting on one box is enough; skip Redis sharding and consistent hashing",
+      "You still must deploy multiple Redis shards to guard against future growth",
+      "You must bring in Redis Cluster automatic failover for high availability",
+      "You need multi-region active-active deployment to minimize limiter latency"
+    ],
+    "optionExplanations": [
+      "几千/天全落在一台机器上,in-process 的跨节点误差根本不存在,不需要共享状态。",
+      "为「未来可能增长」现在就分片是过度设计;等真的接近单机上限再迁不迟。",
+      "Redis Cluster failover 是给分片后每个 shard 保命用的,这个量级还没有分片。",
+      "跨区多活解决的是全球用户的延迟与容量,几千/天的 startup 用不上。"
+    ],
+    "optionExplanations_en": [
+      "A few thousand a day all land on one machine, so cross-node error vanishes and no shared state is needed.",
+      "Sharding now for possible future growth is over-engineering; migrate when you actually near one box's limit.",
+      "Redis Cluster failover exists to keep each shard alive after sharding, and there's no sharding at this scale.",
+      "Multi-region active-active solves latency and capacity for global users, which a few-thousand/day startup doesn't have."
+    ],
+    "termDefinitions": [
+      {
+        "term": "in-process",
+        "fullName": "",
+        "meaning": "限流计数直接放在应用/网关进程的本地内存里,无网络调用、最快;但每个实例只看到自己那部分流量",
+        "meaningEn": "Rate-limit counters kept in the app/gateway process's local memory — fastest, no network call — but each instance only sees its own slice of traffic."
+      },
+      {
+        "term": "consistent hashing",
+        "fullName": "",
+        "meaning": "一致性哈希:把 key 映射到一圈哈希槽上,增删节点时只搬动少量 key,用来把某 client 稳定路由到同一 Redis shard",
+        "meaningEn": "Consistent hashing maps keys onto a hash ring so adding/removing nodes moves few keys; used to route a client consistently to the same Redis shard."
+      },
+      {
+        "term": "Redis Cluster",
+        "fullName": "",
+        "meaning": "Redis 官方分片方案,把 key 分到 16384 个 hash slot、自动路由并内建 failover",
+        "meaningEn": "Redis's built-in sharding: it spreads keys across 16384 hash slots, routes automatically, and has built-in failover."
+      },
+      {
+        "term": "failover",
+        "fullName": "",
+        "meaning": "故障转移:master 挂掉后自动把某个 replica 提升为新 master,恢复写能力",
+        "meaningEn": "Failover automatically promotes a replica to new master when the master dies, restoring write capability."
+      }
+    ]
   }
 ]

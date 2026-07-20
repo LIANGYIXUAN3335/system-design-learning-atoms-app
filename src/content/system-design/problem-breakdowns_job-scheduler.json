@@ -3403,5 +3403,274 @@
       "backoff"
     ],
     "diagram": "flowchart LR\n    F[\"Job fails visibly\"] --> U[\"mark failed attempt\"]\n    U --> B[\"compute backoff\"]\n    B --> R{\"retry left?\"}\n    R -->|yes| Q[\"requeue with delay\"]\n    R -->|no| D[\"DLQ or terminal failed\"]"
+  },
+  {
+    "id": "sd-problem-breakdowns-job-scheduler-071",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "delayed-queue-choice",
+    "scenario": "面试官明确公司不允许用 SQS 这类托管队列，延迟投递必须自己实现，问你怎么退而求其次。",
+    "scenario_en": "The interviewer says managed queues like SQS are off-limits and delayed delivery must be self-hosted; how do you fall back?",
+    "q": "延迟投递该怎么退而求其次？",
+    "q_en": "What's your fallback for delayed delivery?",
+    "options": [
+      "坚持采用 SQS 不变，转而向面试官解释托管队列运维成本最低，请他为此破例",
+      "先确认技术栈边界，再用 Redis ZSET 自建优先队列并自扛重试与容错",
+      "干脆放弃延迟投递能力，退回到每 2 秒查询一次数据库来勉强逼近精度",
+      "直接用 Kafka 投递，依赖分区内的先后顺序来保证按执行时间出队"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "托管服务被禁时，可用 Redis 有序集合（ZSET）以执行时间为 score 自建优先队列；但重试、故障转移、复制都得自己扛。动手前先跟面试官敲定技术栈边界。",
+    "why_en": "When managed queues are off-limits, a Redis sorted set keyed by execution time gives a priority queue — but you own retries, failover, and replication. Confirm the stack boundary first.",
+    "whenOtherWins": "如果面试官不禁止托管服务，SQS 内建延迟投递加可见性超时加死信队列几乎零运维，仍是首选。",
+    "tags": [
+      "delayed-queue-choice",
+      "redis",
+      "managed-service"
+    ],
+    "tradeoff": "自建 Redis 队列（性能好但要自扛容错） vs 托管 SQS（省运维但依赖云）",
+    "options_en": [
+      "Stick with SQS and try to convince the interviewer to make an exception for its low ops cost.",
+      "Confirm the stack boundary, then build a Redis ZSET priority queue and own retries and fault tolerance.",
+      "Drop delayed delivery and go back to polling the database every 2 seconds to approximate precision.",
+      "Publish straight to Kafka and rely on per-partition ordering to dequeue by execution time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis ZSET / 有序集合",
+        "meaning": "Redis 的有序集合，每个成员带一个 score，按 score 排序，可当优先队列。",
+        "meaningEn": "A Redis sorted set (ZSET) stores members each with a score and keeps them ordered by score, usable as a priority queue."
+      },
+      {
+        "term": "SQS",
+        "fullName": "Simple Queue Service",
+        "meaning": "AWS 托管消息队列，内建延迟投递、可见性超时和死信队列。",
+        "meaningEn": "SQS is AWS's managed message queue with built-in delayed delivery, visibility timeouts, and dead-letter queues."
+      },
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志型消息系统，分区内严格按写入顺序消费。",
+        "meaningEn": "Kafka is a distributed log-based messaging system that consumes strictly in write order within a partition."
+      },
+      {
+        "term": "可见性超时 / visibility timeout",
+        "meaning": "消息被取走后暂时对其他消费者隐藏的时长，超时未确认则重新可见。",
+        "meaningEn": "A visibility timeout hides a taken message from other consumers for a while; if not acknowledged in time it becomes visible again."
+      }
+    ],
+    "optionExplanations": [
+      "SQS 被明确禁用是硬约束，试图说服面试官破例是在跟前提对着干，不是设计。",
+      "对，ZSET 用执行时间当 score 排序即可当优先队列；代价是重试与复制都要自己实现。",
+      "每 2 秒轮询库正是深潜里被否掉的方案：查询大、DB 压力高、精度还是够呛。",
+      "Kafka 分区内严格按写入顺序出队，晚到但更早执行的 Job 会排在队尾，破坏精度。"
+    ],
+    "optionExplanations_en": [
+      "The SQS ban is a hard constraint; arguing for an exception fights the premise instead of designing.",
+      "Right: a ZSET scored by execution time acts as the priority queue — at the cost of hand-rolling retries and replication.",
+      "Polling every 2s is exactly the approach the deep dive rejected: huge queries, DB load, and still-poor precision.",
+      "Kafka dequeues in partition write order, so a late-arriving but sooner-due job sits at the tail and misses its slot."
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "延迟投递",
+        "重试",
+        "容错"
+      ],
+      "rows": [
+        [
+          "SQS",
+          "内建 delay",
+          "可见性超时",
+          "跨 AZ 托管"
+        ],
+        [
+          "Redis ZSET",
+          "score 排序",
+          "自己写",
+          "自配复制"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-problem-breakdowns-job-scheduler-072",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "queue-capacity",
+    "scenario": "改用自建 Redis 优先队列扛 10k Job/秒，面试官问在这条路线上真正要担心的是什么。",
+    "scenario_en": "You switch to a self-hosted Redis priority queue at 10k jobs/s; the interviewer asks what you really need to worry about on this path.",
+    "q": "Redis 优先队列这条路，真正的风险点是？",
+    "q_en": "What's the real risk on the Redis priority-queue path?",
+    "options": [
+      "内存根本放不下这么多待执行的 Job，必须频繁淘汰或落盘才能勉强撑住",
+      "内存完全够用，真正要担心的是 Redis 宕机后的容错",
+      "有序集合的排序会随 Job 数增长退化成线性扫描，拖垮延迟",
+      "Job 数据太大导致单条消息超过队列容量上限，需要拆分"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "容量估算：10k Job/秒 × 300 秒（5 分钟窗口）= 300 万 Job，每条约 200 字节 ≈ 600MB，内存轻松装下。所以瓶颈不是容量，而是 Redis 宕机后的复制与故障转移。",
+    "why_en": "Capacity: 10k jobs/s × 300s (the 5-min window) = 3M jobs at ~200 bytes ≈ 600MB — memory holds that easily. The real concern is replication and failover if Redis dies.",
+    "whenOtherWins": "如果单条 Job 负载很大（如内嵌大参数）或要保留数天历史，内存才会变成约束，那时该把状态落到持久存储。",
+    "tags": [
+      "queue-capacity",
+      "redis",
+      "fault-tolerance"
+    ],
+    "tradeoff": "内存容量（这里不是瓶颈） vs Redis 容错（真正的短板）",
+    "options_en": [
+      "Memory simply can't hold that many pending jobs, so you must evict or spill to disk constantly to survive.",
+      "Memory is plenty; the real worry is fault tolerance when Redis goes down.",
+      "The sorted set's ordering degrades to a linear scan as job count grows, dragging down latency.",
+      "Job payloads are so large that a single message exceeds the queue's size cap and must be split."
+    ],
+    "termDefinitions": [
+      {
+        "term": "有序集合 / ZSET",
+        "meaning": "Redis 的有序集合，底层跳表实现，按 score 取最值是对数级操作。",
+        "meaningEn": "A Redis sorted set (ZSET) is backed by a skip list, so pulling the min or max by score is a logarithmic operation."
+      },
+      {
+        "term": "故障转移 / failover",
+        "meaning": "主节点宕机后由副本接管继续服务的过程。",
+        "meaningEn": "Failover is when a replica takes over serving after the primary node goes down."
+      }
+    ],
+    "optionExplanations": [
+      "算一下就知道错：300 万 Job × 200 字节才 600MB，现代 Redis 单机内存绰绰有余。",
+      "对，容量不是问题，Redis 是有状态单点，宕机会丢队列，复制与故障转移才是重点。",
+      "ZSET 底层是跳表，按 score 取最小是对数级，不会退化成线性扫描。",
+      "队列里存的是 Job ID 和元数据，约 200 字节，远没到任何单条消息上限。"
+    ],
+    "optionExplanations_en": [
+      "Do the math: 3M jobs × 200 bytes is 600MB — a single modern Redis node holds that with room to spare.",
+      "Right: capacity is fine; Redis is a stateful single point, so a crash loses the queue — replication and failover are the concern.",
+      "A ZSET is backed by a skip list, so pulling the min by score is logarithmic, not a linear scan.",
+      "The queue stores a job ID plus metadata at ~200 bytes, nowhere near any per-message size cap."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-job-scheduler-073",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "job-creation-scaling",
+    "scenario": "面试官问：在 API 和 Job 创建服务之间放一个 Kafka 队列，到底买到了什么好处？",
+    "scenario_en": "The interviewer asks what you actually gain by putting a Kafka queue between the API and the Job Creation service.",
+    "q": "这个缓冲队列到底买到了什么？",
+    "q_en": "What does that buffer queue actually buy?",
+    "options": [
+      "削峰缓冲流量尖峰、消费者可水平扩容、请求持久化不丢",
+      "让 Job 创建的写入变成强一致，无需再依赖数据库事务",
+      "省掉 Jobs 数据库，队列本身就能长期存储所有 Job",
+      "保证 Job 创建精确一次，天然消除重复提交问题"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "队列在 API 与创建服务之间当缓冲：吸收流量尖峰、按消费者数水平扩容、请求落盘不丢。代价是多一跳延迟和一个组件——文章认为通常是过度设计。",
+    "why_en": "The queue buffers between API and the creation service: it absorbs spikes, scales consumers horizontally, and persists requests so none are lost. The cost is an extra hop and component — often overkill here.",
+    "whenOtherWins": "如果创建服务里有昂贵业务逻辑要隔离，或写入尖峰确实压垮了 DB，缓冲队列才值得；否则直接扩服务和 DB 更简单。",
+    "tags": [
+      "job-creation-scaling",
+      "message-queue",
+      "buffering"
+    ],
+    "tradeoff": "缓冲队列（削峰+持久+可扩） vs 直接扩服务与 DB（更简单）",
+    "options_en": [
+      "It buffers traffic spikes, lets consumers scale horizontally, and persists requests so none are lost.",
+      "It makes job-creation writes strongly consistent, removing the need for database transactions.",
+      "It eliminates the Jobs database — the queue itself can store all jobs long term.",
+      "It guarantees exactly-once job creation, naturally removing duplicate submissions."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Kafka",
+        "meaning": "分布式日志型消息队列，常用作削峰缓冲和解耦生产者与消费者。",
+        "meaningEn": "Kafka is a distributed log-based message queue often used as a buffer to smooth spikes and decouple producers from consumers."
+      },
+      {
+        "term": "强一致 / strong consistency",
+        "meaning": "所有读都能看到最新写入的结果。",
+        "meaningEn": "Strong consistency means every read sees the most recent write."
+      },
+      {
+        "term": "持久化 / durability",
+        "meaning": "数据写入后即使进程崩溃也不丢失。",
+        "meaningEn": "Durability means once data is written it survives even a process crash."
+      }
+    ],
+    "optionExplanations": [
+      "对，队列的正面收益就是削峰、可持久化、消费者可独立水平扩容三件事。",
+      "队列不提供跨写强一致，创建仍要落库；把它当一致性工具是误解。",
+      "队列是缓冲不是长期存储，Job 仍要写进 Jobs 表供查询，DB 省不掉。",
+      "队列本身不去重，精确一次要靠幂等键或去重表，不是加队列白送的。"
+    ],
+    "optionExplanations_en": [
+      "Right: the upside is exactly buffering spikes, durability, and independently scalable consumers.",
+      "A queue doesn't give cross-write strong consistency; creation still hits the DB — treating it as a consistency tool is a misread.",
+      "The queue is a buffer, not long-term storage — jobs still go to the Jobs table for queries, so the DB stays.",
+      "A queue doesn't dedupe; exactly-once needs an idempotency key or dedup table, not something the queue hands you free."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-job-scheduler-074",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "delivery-framework",
+    "scenario": "这是偏数据处理、非用户产品的题；作者在高层设计前特意先走一步 Data Flow（数据流，梳理请求从进入到产出的路径）。",
+    "scenario_en": "This is a data-processing, not user-facing problem; before the high-level design the author deliberately inserts a Data Flow step that traces the path from request in to output out.",
+    "q": "先做 Data Flow 这一步主要买到什么？",
+    "q_en": "What does inserting the Data Flow step first buy you?",
+    "options": [
+      "在锁定架构前先对齐核心流程、提前暴露瓶颈",
+      "直接用它取代整个高层设计，后面就不必再画任何组件图了",
+      "在这一步就把数据库表结构和字段全部定死",
+      "把非功能需求换算成具体的服务器数量与容量"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Data Flow 先把请求从进入到产出的路径走一遍：既和面试官对齐核心功能，又能在承诺具体架构前暴露瓶颈。数据处理题比用户产品题更吃这一步。",
+    "why_en": "Data Flow traces the path from request in to output out: it aligns on core functionality and surfaces bottlenecks before you commit to an architecture. Infra-heavy problems need it more than product ones.",
+    "whenOtherWins": "偏用户产品的题，核心实体和 API 已经讲清主流程，数据流步骤价值不大，可略过直接进高层设计。",
+    "tags": [
+      "delivery-framework",
+      "data-flow",
+      "planning"
+    ],
+    "tradeoff": "先做数据流（早对齐、早暴露瓶颈） vs 直接进高层设计（更快但易押错架构）",
+    "options_en": [
+      "It aligns on the core flow and surfaces bottlenecks before you lock the architecture.",
+      "It replaces the entire high-level design, so you never have to draw any component diagram afterward.",
+      "It nails down the full database table schema and every field at this step.",
+      "It converts the non-functional requirements into concrete server counts and capacity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Data Flow / 数据流",
+        "meaning": "交付框架里的一步：梳理请求从进入系统到产出结果的完整路径。",
+        "meaningEn": "Data Flow is a delivery-framework step that traces the full path from a request entering the system to the final output."
+      }
+    ],
+    "optionExplanations": [
+      "对，数据流的价值是早对齐主流程、在定架构前先看清瓶颈在哪。",
+      "数据流是高层设计的铺垫不是替代品，组件图仍要在下一步画出来。",
+      "定字段是后面数据模型的事，作者特意说实体阶段先只列清单不抠字段。",
+      "换算服务器数量是容量估算/深潜的活，数据流只理清路径不算数字。"
+    ],
+    "optionExplanations_en": [
+      "Right: Data Flow aligns on the main path and reveals where bottlenecks sit before you lock the architecture.",
+      "Data Flow sets up the high-level design, it doesn't replace it — the component diagram still comes next.",
+      "Nailing down fields is the later data-model step; the author explicitly keeps the entity stage a bare list.",
+      "Sizing servers is capacity/deep-dive work; Data Flow just traces the path, it doesn't crunch numbers."
+    ]
   }
 ]

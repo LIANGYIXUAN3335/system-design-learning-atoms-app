@@ -2482,5 +2482,332 @@
     "scenario_en": "short.ly's Redis counter design is going to production across three regions, where every INCR costs a network round trip.",
     "codeSample": "# 号段批量：一次拿 1000 个，Redis 网络往返减少到 1/1000\nINCRBY counter:us-east 1000   -> 1234000\n# 本实例在内存里发放 1233001..1234000，用完再申请\n# 多区域各持一段互斥范围，本地写不跨区协调\nINCRBY counter:eu-west 1000   -> 5001000\n# counter 服务本身不能是裸单点\nSENTINEL monitor counter-master 10.0.0.5 6379 2",
     "lang": "text"
+  },
+  {
+    "id": "sd-problem-breakdowns-bitly-051",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "high-availability",
+    "scenario": "short.ly 的短码到长 URL 映射存在单台 Postgres 上,可用性目标 99.99%。面试官追问:这台主库宕机了怎么办?",
+    "scenario_en": "short.ly keeps its code-to-URL mapping on a single Postgres instance with a 99.99% availability target, and the interviewer asks what happens when that primary goes down.",
+    "q": "哪种策略能让重定向在主库宕机时几乎不中断?",
+    "q_en": "Which strategy keeps redirects almost uninterrupted when the primary database goes down?",
+    "options": [
+      "定期把整库快照备份到另一位置,宕机后从最近一次快照恢复再重新对外服务",
+      "用 Postgres 副本复制,宕机时把流量切到某个副本继续服务",
+      "把映射表分片到多台机器,降低单机负载",
+      "给无状态的 Write Service 多加几个实例"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "99.99% 要求宕机时几乎不中断,只有随时同步的副本能立即接管;代价是主服务必须能对接任意副本,同步与故障切换的运维复杂度上升。",
+    "why_en": "A four-nines target means near-zero downtime on failure, and only a live replica can take over instantly — at the cost of the primary having to work against any replica plus the operational overhead of sync and failover.",
+    "tradeoff": "复制=热副本随时接管换运维复杂度 vs 备份=冷快照省心但恢复有丢数据窗口",
+    "whenOtherWins": "如果能容忍一段恢复时间和少量最新写丢失(数据非关键、重建成本低),定期快照备份更省运维,不必维护副本同步。",
+    "table": {
+      "headers": [
+        "策略",
+        "宕机时",
+        "代价"
+      ],
+      "rows": [
+        [
+          "复制副本",
+          "切到副本继续服务",
+          "主库要能对接任意副本"
+        ],
+        [
+          "快照备份",
+          "从快照恢复有窗口",
+          "恢复期丢最新写"
+        ]
+      ]
+    },
+    "tags": [
+      "bitly",
+      "high-availability",
+      "replication"
+    ],
+    "options_en": [
+      "Periodically snapshot the whole database to another location and, after a crash, restore from the latest snapshot before serving again",
+      "Use Postgres replication and, on failure, shift traffic to a replica to keep serving",
+      "Shard the mapping table across machines to cut per-node load",
+      "Add a few more instances of the stateless Write Service"
+    ],
+    "termDefinitions": [
+      {
+        "term": "replication",
+        "fullName": "database replication",
+        "meaning": "在多台服务器上维护数据库的多份实时同步副本,主库故障时切到副本。",
+        "meaningEn": "Database replication keeps multiple live synchronized copies of the database so traffic can fail over to a replica."
+      },
+      {
+        "term": "99.99%",
+        "meaning": "四个九的可用性目标,一年停机不超过约 52 分钟。",
+        "meaningEn": "A four-nines availability target allows roughly 52 minutes of downtime per year."
+      }
+    ],
+    "optionExplanations": [
+      "快照备份是冷恢复:宕机后要先从最近快照还原,期间服务中断且最新写会丢,达不到近乎不中断。",
+      "对,实时副本能在主库挂掉时立刻接管,是唯一满足 99.99% 近零中断的方案。",
+      "分片解决的是单机容量/负载,不是可用性;一个分片宕了那部分映射照样不可用。",
+      "Write Service 无状态,再多实例也读不到已宕机的库,可用性瓶颈根本不在这一层。"
+    ],
+    "optionExplanations_en": [
+      "Backup is cold recovery: after a crash you restore from the last snapshot, with an outage and lost recent writes in between — not near-uninterrupted.",
+      "Right — a live replica can take over the instant the primary dies, the only option meeting a 99.99% near-zero-downtime bar.",
+      "Sharding addresses per-node capacity, not availability; if one shard's node dies that slice of mappings is still down.",
+      "The Write Service is stateless; more instances still can't reach a dead database, so the availability bottleneck isn't at this layer."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-bitly-052",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "high-availability",
+    "scenario": "短码由中心 Redis 的 INCR 全局计数器生成,Redis 配了 Sentinel 自动故障转移。主节点在把最新计数值复制给副本前就崩了。",
+    "scenario_en": "Short codes come from a central Redis INCR counter with Sentinel handling failover, and the primary crashes before replicating its latest counter value to a replica.",
+    "q": "Redis 未复制最新值就崩溃、切到副本,后果和兜底是什么?",
+    "q_en": "If Redis crashes before replicating its latest value and fails over to a replica, what happens and what backstops it?",
+    "options": [
+      "副本可能重发已用过的计数值,但插入时 short_code 的 UNIQUE 约束会挡下重复",
+      "计数器会从 0 重新开始,之前生成的旧短码会与新号段逐个冲突并被覆盖",
+      "丢失的计数值会让已存在的短链查不到对应长 URL",
+      "面对可能的重号必须立即暂停所有写入,由运维手动把计数器对齐到崩溃前记录的最大计数值之后才能恢复接单"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "我们只要短码「唯一」不要「连续」,丢几个计数值无妨;若副本重发旧值,插入时撞 short_code 的 UNIQUE 约束被拒,Write Service 换下一个值重试即可。代价是极少数写入多一次重试。",
+    "why_en": "We only need short codes to be unique, not contiguous, so losing a few counter values is fine; if a replica reissues an old value the insert hits the short_code UNIQUE constraint and the write service just retries with the next value, at the cost of an occasional extra retry.",
+    "tags": [
+      "bitly",
+      "high-availability",
+      "redis-counter"
+    ],
+    "options_en": [
+      "The replica may reissue already-used counter values, but the short_code UNIQUE constraint rejects the duplicate on insert",
+      "The counter restarts from 0 and previously generated codes collide with and overwrite the new range one by one",
+      "The lost counter values make existing short links unable to find their long URL",
+      "Facing possible reuse you must immediately pause all writes and have an operator manually realign the counter to its pre-crash maximum before resuming"
+    ],
+    "termDefinitions": [
+      {
+        "term": "INCR",
+        "meaning": "Redis 的原子自增命令,单线程执行保证每次返回不同的新值。",
+        "meaningEn": "INCR is Redis's atomic increment command; single-threaded execution guarantees each call returns a distinct new value."
+      },
+      {
+        "term": "Sentinel",
+        "meaning": "Redis Sentinel:监控主节点并在其故障时自动把副本提升为主的高可用组件。",
+        "meaningEn": "Redis Sentinel monitors the primary and automatically promotes a replica to primary on failure."
+      },
+      {
+        "term": "UNIQUE 约束",
+        "fullName": "UNIQUE constraint",
+        "meaning": "数据库列级约束,插入重复值时直接报错,保证该列不重复。",
+        "meaningEn": "A UNIQUE constraint is a column-level database rule that rejects any insert of a duplicate value."
+      }
+    ],
+    "optionExplanations": [
+      "对,只需唯一不需连续,重发的旧值会在插入时被 UNIQUE 约束拦住,重试换个值即可,这就是最终兜底。",
+      "计数器只管发号,已落库的旧短码是独立的映射行,计数器归零不会动它们,更谈不上失效。",
+      "已存在的短链是数据库里一行行的映射,计数器丢值只影响「下一个发什么号」,读路径查的是现有行。",
+      "只需唯一而非连续,靠 UNIQUE 约束兜底就够了,为丢几个号停写是把可接受的损失当成灾难。"
+    ],
+    "optionExplanations_en": [
+      "Right — we need uniqueness not continuity; a reissued value is caught by the UNIQUE constraint on insert and a retry picks another, the ultimate backstop.",
+      "The counter only hands out numbers; already-stored codes are independent mapping rows and a reset counter never touches them.",
+      "Existing links are concrete mapping rows; losing counter values only affects what number gets issued next, not lookups of existing rows.",
+      "Since uniqueness suffices and the UNIQUE constraint backstops it, halting writes over a few lost numbers treats an acceptable loss as a disaster."
+    ],
+    "codeSample": "-- short_code 列的 UNIQUE 约束 = 重号时的最终兜底\nCREATE TABLE urls (short_code VARCHAR PRIMARY KEY, long_url TEXT);\n\nn    := INCR bitly:counter        -- 故障转移到滞后副本后, n 可能是已用过的旧值\ncode := base62(n)\nINSERT INTO urls VALUES (code, url);  -- 撞到重复 short_code -> UNIQUE 约束报错\n-- ON CONFLICT: 再 INCR 取下一个 n, 重新编码后重试, 唯一性始终有保证",
+    "lang": "sql"
+  },
+  {
+    "id": "sd-problem-breakdowns-bitly-053",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "custom-alias",
+    "scenario": "用户可为短链指定自定义别名(如 short.ly/my-sale)。生成码靠高熵或计数器趋于唯一,而别名是用户自己挑的词。",
+    "scenario_en": "Users can pick a custom alias like short.ly/my-sale; generated codes trend unique via high entropy or a counter, but an alias is a word the user chooses.",
+    "q": "为什么自定义别名比生成短码更需要「占用校验」?",
+    "q_en": "Why does a custom alias need an explicit availability check more than a generated code does?",
+    "options": [
+      "别名由用户自由指定,不同用户可能挑中同一个词,接受前必须查库确认未被占用",
+      "别名允许的字符集比 base62 更小,可用组合空间不足,天生比生成码更容易发生哈希碰撞",
+      "别名无法被 base62 编码,所以要走一条特殊存储路径",
+      "别名会绕过缓存,必须先落库才能校验"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "生成码靠高熵/计数器天然趋唯一,冲突概率极低;别名的冲突来自「两个用户挑了同一个词」,只有先查库确认未占用才能接受,否则第二个用户会撞车或覆盖。",
+    "why_en": "Generated codes trend unique on their own via entropy or a counter, but alias collisions come from two users picking the same word, so you must check the database for availability before accepting one or the second user clashes.",
+    "tags": [
+      "bitly",
+      "custom-alias",
+      "uniqueness"
+    ],
+    "options_en": [
+      "An alias is freely chosen, two users may pick the same word, so you must check the database that it's free before accepting it",
+      "An alias's allowed character set is smaller than base62 with too few combinations, so it is inherently more prone to hash collisions than a generated code",
+      "An alias can't be base62-encoded, so it needs a special storage path",
+      "An alias bypasses the cache, so it must be persisted before it can be checked"
+    ],
+    "termDefinitions": [
+      {
+        "term": "base62",
+        "meaning": "用 a-z、A-Z、0-9 共 62 个字符编码数字的方式,短码常用它压缩计数器值。",
+        "meaningEn": "Base62 encodes numbers with the 62 characters a-z, A-Z, 0-9, commonly used to compact counter values into short codes."
+      },
+      {
+        "term": "自定义别名",
+        "fullName": "custom alias",
+        "meaning": "用户自选的短码词(如 my-sale),取代系统生成的随机码。",
+        "meaningEn": "A custom alias is a user-chosen short code word, like my-sale, replacing a system-generated random code."
+      }
+    ],
+    "optionExplanations": [
+      "对,别名是人挑的词,冲突源于两个用户选了同一个,必须在接受前查库确认未被占用。",
+      "别名的冲突不是哈希碰撞而是「两人同选一词」,和字符集大小、熵无关。",
+      "别名本身就是最终短码,直接存即可,不需要也不会走 base62 编码。",
+      "校验别名是否占用是查库里有没有这行,和缓存、读路径没关系。"
+    ],
+    "optionExplanations_en": [
+      "Right — an alias is a human-chosen word, its collisions come from two users picking the same one, so you must check the DB for availability before accepting.",
+      "Alias collisions aren't hash collisions but two people choosing the same word, unrelated to character-set size or entropy.",
+      "The alias is itself the final short code and is stored directly; it neither needs nor uses base62 encoding.",
+      "Checking whether an alias is taken is a lookup for that row in the DB, nothing to do with the cache or read path."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-bitly-054",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "security",
+    "scenario": "团队打算直接对长 URL 做 SHA-256 再取 base62 前 8 位当短码,不掺任何密钥,想靠「同 URL 同码」实现去重。",
+    "scenario_en": "The team plans to SHA-256 the long URL, take the first 8 base62 characters as the short code, and add no secret, relying on same-URL-same-code for deduplication.",
+    "q": "「纯确定性哈希」这个选择的双刃剑效应是什么?",
+    "q_en": "What is the double-edged effect of choosing a pure deterministic hash?",
+    "options": [
+      "天然去重,但短码可被他人算出甚至枚举,不可预测得掺 secret salt 或 HMAC",
+      "生成速度会更快,但随着已存 URL 越来越多,短码长度会像计数器方案那样被迫一位一位地变长",
+      "保证零碰撞,但代价是无法从短码反解回原始长 URL",
+      "节省存储,但每次读都要重算一遍哈希"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "确定性=同一 URL 恒得同一码,免查库就能去重;代价是任何拿到 URL 的人都能算出对应短码、甚至枚举,想不可预测就必须掺入只有服务端知道的 secret(salt 或 HMAC)。",
+    "why_en": "Determinism means the same URL always yields the same code, so you get free dedup without a DB lookup, but anyone holding a URL can compute or enumerate its code, so making codes unpredictable requires mixing in a server-only secret via salt or HMAC.",
+    "tags": [
+      "bitly",
+      "security",
+      "hashing"
+    ],
+    "options_en": [
+      "Free dedup, but a code can be computed or even enumerated by others, so unpredictability needs a secret salt or HMAC",
+      "Generation is faster, but as stored URLs pile up the code length is forced to keep growing one character at a time like the counter approach",
+      "Guaranteed zero collisions, at the cost of not being able to reverse a code back to the long URL",
+      "Saves storage, but every read has to recompute the hash"
+    ],
+    "termDefinitions": [
+      {
+        "term": "HMAC",
+        "fullName": "Hash-based Message Authentication Code",
+        "meaning": "用密钥参与的哈希,只有持密钥方能算出相同输出,使结果不可被外部预测。",
+        "meaningEn": "HMAC is a keyed hash where only the holder of the secret can produce the same output, making results unpredictable to outsiders."
+      },
+      {
+        "term": "preimage",
+        "meaning": "给定哈希输出去反推或构造出能得到它的输入的攻击。",
+        "meaningEn": "A preimage attack finds or constructs an input that hashes to a given output."
+      },
+      {
+        "term": "salt",
+        "meaning": "掺进哈希输入的额外随机/秘密值,改变输出使其不可预测或去重。",
+        "meaningEn": "A salt is an extra random or secret value mixed into the hash input to change the output for unpredictability."
+      },
+      {
+        "term": "SHA-256",
+        "meaning": "一种输出 256 位定长摘要的密码学哈希函数。",
+        "meaningEn": "SHA-256 is a cryptographic hash function that outputs a fixed 256-bit digest."
+      }
+    ],
+    "optionExplanations": [
+      "对,确定性带来免费去重,也带来可预测:同 URL 同码人人可算,要不可预测得靠 secret salt/HMAC。",
+      "短码变长是「计数器方案」随 URL 增多的问题,和哈希是否确定性无关。",
+      "哈希会碰撞而非零碰撞,且取前 8 位后本就不可反解,这项把两点都说反了。",
+      "命中缓存/库里的短码直接查表返回,读路径根本不重算哈希。"
+    ],
+    "optionExplanations_en": [
+      "Right — determinism gives free dedup and predictability together: same URL, same code anyone can compute, so unpredictability needs a secret salt or HMAC.",
+      "Growing code length is the counter approach's issue as URLs pile up, unrelated to whether the hash is deterministic.",
+      "Hashes can collide rather than guarantee zero, and a truncated 8-char code isn't reversible anyway — this gets both wrong.",
+      "A cached or stored code is served by table lookup; the read path never recomputes the hash."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-bitly-055",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "hash-approach",
+    "scenario": "用确定性哈希去重要求「同一目标得同一短码」。但 https://Example.com:443/page/ 和 https://example.com/page 其实指向同一个页面。",
+    "scenario_en": "Deterministic-hash dedup requires the same target to yield the same code, yet https://Example.com:443/page/ and https://example.com/page point to the same page.",
+    "q": "为什么哈希前要先做 URL canonicalization(规范化)?",
+    "q_en": "Why should you canonicalize a URL before hashing it?",
+    "options": [
+      "host 大小写、默认端口、尾斜杠这些无意义差异会让同一目标算出不同哈希、生成多个短码",
+      "规范化能把长 URL 压得更短,直接省下大量存储空间",
+      "不先做规范化,长 URL 就无法通过 base62 编码成短码",
+      "规范化的真正目的其实是识别并过滤掉那些指向恶意站点的钓鱼、诈骗与欺诈类可疑 URL 链接"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "确定性哈希去重的前提是「同一目标→同一输入」;host 大小写、默认端口(:443)、尾斜杠这些语义等价的差异不先归一,就会把同一 URL 当成不同输入、生成多个短码,去重直接失效。",
+    "why_en": "Deterministic-hash dedup assumes the same target maps to the same input, so if you don't normalize semantically equivalent differences like host case, default ports, and trailing slashes first, the same URL looks like different inputs and produces multiple codes, breaking dedup.",
+    "tags": [
+      "bitly",
+      "hashing",
+      "canonicalization"
+    ],
+    "options_en": [
+      "Meaningless differences like host case, default ports, and trailing slashes make one target hash differently and produce multiple codes",
+      "Canonicalization squeezes a long URL much shorter and directly saves a lot of storage space",
+      "Without canonicalizing first, a long URL cannot be base62-encoded into a short code",
+      "The real purpose of canonicalization is actually to detect and filter suspicious phishing, scam, and fraudulent URLs that point at malicious sites"
+    ],
+    "termDefinitions": [
+      {
+        "term": "canonicalization",
+        "meaning": "URL 规范化:统一大小写、去掉默认端口、规范尾斜杠等,使语义相同的 URL 得到同一表示。",
+        "meaningEn": "URL canonicalization normalizes case, default ports, trailing slashes and more so semantically identical URLs share one representation."
+      },
+      {
+        "term": "base62",
+        "meaning": "用 a-z、A-Z、0-9 共 62 个字符编码数字的短码表示法。",
+        "meaningEn": "Base62 encodes numbers with the 62 characters a-z, A-Z, 0-9 for compact short codes."
+      }
+    ],
+    "optionExplanations": [
+      "对,不归一大小写/端口/尾斜杠,同一目标会得到不同哈希,去重的「同 URL 同码」前提就被破坏。",
+      "规范化只是统一表示,几乎不改变长度,省存储不是它的目的。",
+      "base62 编码的是哈希后的数值,和 URL 是否规范化毫无关系。",
+      "规范化处理的是格式等价性,不做恶意站点识别,那是安全过滤的职责。"
+    ],
+    "optionExplanations_en": [
+      "Right — without normalizing case, ports, and trailing slashes, one target yields different hashes, breaking the same-URL-same-code premise of dedup.",
+      "Canonicalization just unifies representation and barely changes length; saving storage isn't its point.",
+      "Base62 encodes the post-hash number and has nothing to do with whether the URL was canonicalized.",
+      "Canonicalization handles format equivalence, not malicious-site detection, which is a separate security filter's job."
+    ]
   }
 ]

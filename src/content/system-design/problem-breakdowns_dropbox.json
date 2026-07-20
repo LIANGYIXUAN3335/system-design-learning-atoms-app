@@ -2592,5 +2592,418 @@
     ],
     "scenario": "Dropbox 面试只有 45 分钟，Senior 候选人的基础 API 和元数据模型必须快速带过。",
     "scenario_en": "The Dropbox interview is only 45 minutes, so a senior candidate has to move fast through the basic API and metadata model."
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-051",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "sharing",
+    "scenario": "Dropbox 把分享关系从「文件里的 sharelist + 反向缓存双写」改成规范化的 SharedFiles 表（userId 分区键、fileId 排序键），不再维护 sharelist。",
+    "scenario_en": "Dropbox replaces the inline sharelist plus inverse-cache dual-write with a normalized SharedFiles table (userId partition key, fileId sort key) and drops the sharelist.",
+    "q": "这次规范化换来了什么、代价是什么？",
+    "q_en": "What does normalizing to a SharedFiles table gain, and what does it cost?",
+    "options": [
+      "shared-with-me 查询会退化成对全量 FileMetadata 的顺序扫描，更慢了",
+      "查询改走复合键索引，比单键 KV 略慢，但换掉了 sharelist 的双写同步",
+      "fileId 从此不能作为主键一部分，复合主键的查询能力被削弱",
+      "规范化后无法再对下载请求做基于分享关系的权限校验"
+    ],
+    "options_en": [
+      "Shared-with-me queries degrade into a sequential scan over all FileMetadata, which is slower.",
+      "Queries move to a composite-key index, a bit slower than a single-key KV read, but the sharelist dual-write is gone.",
+      "fileId can no longer be part of the primary key, weakening composite-key queries.",
+      "After normalizing you can no longer authorize downloads based on the share relationship."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "规范化后 SharedFiles 是唯一真相，不用再同步 sharelist；代价是查询走复合键索引，比单键 KV 查找略慢。",
+    "why_en": "Normalizing to one SharedFiles table removes the sharelist dual-write, so nothing can drift; the cost is an indexed lookup slightly slower than a single-key KV read.",
+    "tradeoff": "单一真相省掉双写同步 vs 复合键索引查询比 KV 单键略慢",
+    "tags": [
+      "dropbox",
+      "sharing",
+      "normalization"
+    ],
+    "optionExplanations": [
+      "去掉反向缓存不等于退回全表扫描——SharedFiles 用 userId 做分区键，查询仍是有索引的定位。",
+      "复合键（userId+fileId）走索引比纯单键 KV 稍慢，但不用再把 sharelist 和缓存两处写对齐。",
+      "fileId 正是排序键，复合主键的查询能力完整保留，这条说反了。",
+      "SharedFiles 表本身就是 ACL 来源，权限照常校验，只是查法从 KV 换成了索引。"
+    ],
+    "optionExplanations_en": [
+      "Dropping the inverse cache doesn't revert to a full scan — SharedFiles partitions by userId, so lookups stay indexed.",
+      "A composite key (userId+fileId) index is a touch slower than a pure single-key KV read, but there's no sharelist and cache to keep aligned.",
+      "fileId is exactly the sort key, so composite-key query power is fully retained — this gets it backwards.",
+      "The SharedFiles table is itself the ACL source, so authorization still works; only the lookup shape changed from KV to index."
+    ],
+    "termDefinitions": [
+      {
+        "term": "复合键",
+        "meaning": "由两列共同组成的主键，如 userId 做分区键、fileId 做排序键。",
+        "meaningEn": "A composite key is a primary key formed by two columns together, e.g. userId as partition key and fileId as sort key."
+      },
+      {
+        "term": "KV 查找",
+        "fullName": "Key-Value lookup",
+        "meaning": "键值查找：用单一键直接定位一条记录，通常是 O(1)。",
+        "meaningEn": "A key-value lookup locates one record directly by a single key, typically O(1)."
+      },
+      {
+        "term": "ACL",
+        "fullName": "Access Control List",
+        "meaning": "访问控制列表：记录谁能访问某资源的授权表。",
+        "meaningEn": "An access control list records which users are authorized to access a resource."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-052",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cdn",
+    "scenario": "Dropbox 用 CDN 缓存下载。某文件被用户更新或删除后，离用户最近的边缘节点上仍留着旧副本，新请求还能命中旧内容。",
+    "scenario_en": "Dropbox caches downloads on a CDN. After a file is updated or deleted, the nearest edge node still holds the old copy and new requests keep hitting stale content.",
+    "q": "怎样让边缘上的旧副本失效？",
+    "q_en": "How do you invalidate the stale copy sitting on the edge?",
+    "options": [
+      "靠 signed URL 到期自动清除，URL 一过期边缘副本就跟着没了",
+      "重启全部 CDN 边缘节点，强制清空它们上面的所有缓存",
+      "发 invalidation 让指定路径失效，或等短 TTL 到期",
+      "删掉 S3 源文件，CDN 会立即感知并同步移除对应边缘副本"
+    ],
+    "options_en": [
+      "Rely on signed-URL expiry — once the URL expires the edge copy vanishes with it.",
+      "Restart every CDN edge node to force-clear all of the caches on them.",
+      "Issue an invalidation for that path, or wait for a short TTL to lapse.",
+      "Delete the S3 origin file and the CDN instantly notices and removes the matching edge copy."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "边缘按 cache-control 的时长缓存副本；文件变更后要主动清除目标路径的边缘副本，或等它自然过期，代价是主动清除有传播延迟与调用成本。",
+    "why_en": "The edge caches per its cache-control TTL, so after a change you either issue an explicit invalidation for that path or wait for the TTL to lapse — invalidation costs API calls and takes time to propagate.",
+    "tradeoff": "主动 invalidation 即时但有成本 vs 靠短 TTL 自然过期便宜但有陈旧窗口",
+    "tags": [
+      "dropbox",
+      "cdn",
+      "operations"
+    ],
+    "optionExplanations": [
+      "signed URL 过期只是让那条 URL 不能再用，边缘上缓存的文件字节不会因此被清掉。",
+      "重启边缘会把所有缓存一起清空，代价过大，也不是针对单个文件的失效手段。",
+      "发 invalidation 精确命中要清的那条路径，再配短 TTL 让其余副本自己老去，成本与新鲜度都可控。",
+      "删源文件后，边缘在 TTL 到期或被 invalidate 前仍会继续端出旧副本，不会即时同步。"
+    ],
+    "optionExplanations_en": [
+      "Signed-URL expiry only stops that one URL from working; the cached bytes at the edge aren't purged by it.",
+      "Restarting edges clears every cache at once — far too blunt, and not a per-file invalidation tool.",
+      "An explicit invalidation targets the exact path while a short TTL lets copies lapse on their own; together they control freshness.",
+      "After the origin is deleted, the edge keeps serving the stale copy until the TTL lapses or an invalidation hits — no instant sync."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cache invalidation",
+        "meaning": "缓存失效：主动通知 CDN 让某路径的边缘副本作废，下次请求回源重取。",
+        "meaningEn": "Cache invalidation tells the CDN to purge an edge copy for a path so the next request refetches from origin."
+      },
+      {
+        "term": "cache-control",
+        "meaning": "HTTP 响应头，指定内容可缓存多久（含 max-age/TTL）。",
+        "meaningEn": "Cache-control is an HTTP response header that sets how long content may be cached, including its max-age/TTL."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "存活时间：缓存副本在自动过期前保留的时长。",
+        "meaningEn": "TTL is how long a cached copy is kept before it automatically expires."
+      },
+      {
+        "term": "signed URL",
+        "meaning": "签名 URL：带签名和过期时间的临时访问链接，控制谁能取内容。",
+        "meaningEn": "A signed URL is a temporary link carrying a signature and expiry that controls who may fetch the content."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-053",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cdn",
+    "q": "把 CDN 首次未命中时的回源填充路径排成正确顺序：",
+    "q_en": "Put the CDN cache-miss origin-fill path in the right order.",
+    "steps": [
+      "S3 把文件字节返回给该边缘节点",
+      "用户请求文件，就近的 CDN 边缘节点收到请求",
+      "后续对同一文件的请求直接在边缘命中（cache hit），不再回源",
+      "边缘节点没有该文件副本（cache miss），回源向 S3 拉取",
+      "边缘节点缓存该文件并把它返回给用户"
+    ],
+    "answerOrder": [
+      1,
+      3,
+      0,
+      4,
+      2
+    ],
+    "why": "首次请求边缘无副本（cache miss），回源到 S3 区域拉取并在边缘落地；之后同一文件的请求直接命中边缘，不再跨区回源。代价：第一个用户要承担一次回源延迟。",
+    "why_en": "The first request misses at the edge, so the CDN fetches from the S3 origin and stores it; later requests hit the edge without crossing regions — the first user just eats one origin round-trip.",
+    "tags": [
+      "dropbox",
+      "cdn",
+      "caching"
+    ],
+    "diagram": "flowchart LR\nClient[Client] --> Edge[CDN edge]\nEdge -->|cache miss| S3[(S3 origin)]\nS3 --> Edge\nEdge -->|cache hit| Client",
+    "termDefinitions": [
+      {
+        "term": "cache miss",
+        "meaning": "缓存未命中：边缘节点没有请求的内容，需回源拉取。",
+        "meaningEn": "A cache miss means the edge node lacks the requested content and must fetch it from origin."
+      },
+      {
+        "term": "cache hit",
+        "meaning": "缓存命中：边缘节点已有内容，直接返回，无需回源。",
+        "meaningEn": "A cache hit means the edge node already has the content and serves it directly without going to origin."
+      },
+      {
+        "term": "回源",
+        "meaning": "origin fetch：边缘节点向源站（这里是 S3）拉取内容的动作。",
+        "meaningEn": "Origin fetch is when an edge node pulls content from the origin, here S3."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-054",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "final-architecture",
+    "scenario": "Dropbox 最终架构里，应用服务器前面有一层 LB & API Gateway。你要决定 SSL termination、限流（rate limiting）、请求基本校验这几件横切关注点放在哪一层。",
+    "scenario_en": "In Dropbox's final architecture an LB & API Gateway sits in front of the app servers. You must decide where SSL termination, rate limiting, and basic request validation belong.",
+    "q": "这些横切关注点应落在哪？",
+    "q_en": "Which layer should these cross-cutting concerns live on?",
+    "options": [
+      "放进 File Service 业务逻辑里，每个 handler 各自实现一遍",
+      "放在 LB & API Gateway 层，统一在入口处理",
+      "下推到 S3，由对象存储在写入时执行",
+      "交给客户端 sync agent 在本地完成"
+    ],
+    "options_en": [
+      "Inside File Service business logic, reimplemented in each handler.",
+      "At the LB & API Gateway layer, handled once at the entry point.",
+      "Pushed down to S3, enforced by object storage on write.",
+      "Handed to the client sync agent to do locally."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "SSL 终止、限流、请求校验对每个请求都一样，放在入口网关统一做，让 File Service 专注业务；代价是网关成必经点，要保证其可用与扩容。",
+    "why_en": "SSL termination, rate limiting, and validation apply to every request, so doing them once at the gateway keeps File Service focused on business logic — at the cost of the gateway being a must-pass point to keep available.",
+    "whenOtherWins": "当鉴权要细到 per-file ACL 这种业务级校验时，那部分判断仍得落在 File Service，网关只做粗粒度校验。",
+    "tradeoff": "入口统一处理横切关注点 vs 网关成为必经瓶颈",
+    "tags": [
+      "dropbox",
+      "api-gateway",
+      "architecture"
+    ],
+    "optionExplanations": [
+      "每个 handler 各写一遍限流和 TLS，重复且容易不一致，正是网关层要消灭的重复。",
+      "这三件事每个请求都要过一遍，集中到入口做一次，下游业务服务就不用各自操心了。",
+      "S3 只负责存字节，做不了也不该承担限流和 SSL 终止这类入口职责。",
+      "客户端不可信，把限流/校验交给它等于没有校验，必须在服务端入口做。"
+    ],
+    "optionExplanations_en": [
+      "Reimplementing TLS and rate limiting in every handler is duplicated and drift-prone — exactly what the gateway layer exists to remove.",
+      "SSL termination, rate limiting, and validation are done once at the entry gateway, which every request passes through, keeping the business tier clean.",
+      "S3 only stores bytes; it can't and shouldn't take on entry-point duties like rate limiting or SSL termination.",
+      "The client is untrusted, so handing it rate limiting/validation is the same as no validation — it must happen at the server entry."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSL termination",
+        "meaning": "SSL 终止：在入口处解密 HTTPS 流量，内部再用明文或内网 TLS 转发。",
+        "meaningEn": "SSL termination decrypts HTTPS traffic at the entry point, forwarding it internally in plaintext or over internal TLS."
+      },
+      {
+        "term": "rate limiting",
+        "meaning": "限流：限制单位时间内每个客户端可发的请求数，防止滥用。",
+        "meaningEn": "Rate limiting caps how many requests a client may send per unit time to prevent abuse."
+      },
+      {
+        "term": "API Gateway",
+        "meaning": "API 网关：应用前的统一入口，处理路由、鉴权、限流等横切关注点。",
+        "meaningEn": "An API Gateway is a unified entry in front of the app that handles routing, auth, and rate limiting."
+      },
+      {
+        "term": "ACL",
+        "fullName": "Access Control List",
+        "meaning": "访问控制列表：记录谁能访问某资源的授权表。",
+        "meaningEn": "An access control list records which users are authorized to access a resource."
+      },
+      {
+        "term": "sync agent",
+        "meaning": "同步代理：客户端上监听本地改动并与远端同步的后台程序。",
+        "meaningEn": "A sync agent is a client-side background process that watches local changes and syncs them with the remote."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-055",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "compression",
+    "scenario": "客户端要上传一个 4GB 的 H.264 视频（或一张已编码的 PNG），这类媒体已是压缩格式，再压体积几乎不变，却要吃 CPU 时间。",
+    "scenario_en": "The client is uploading a 4GB H.264 video (or an already-encoded PNG); such media is already compressed, so recompressing barely shrinks it yet costs CPU time.",
+    "q": "上传前该压缩吗？",
+    "q_en": "Should the client compress this media before uploading?",
+    "options": [
+      "压缩，任何文件压完都会明显变小，一律压总没错",
+      "不压，已压过的媒体再压几乎没收益",
+      "让后端先解码再重压，能榨出更高的压缩比",
+      "改成先加密再压缩，据说这样能提高压缩率"
+    ],
+    "options_en": [
+      "Compress it — any file shrinks noticeably, so always compressing is safe.",
+      "Skip it — recompressing already-encoded media barely helps.",
+      "Decode it on the backend first, then recompress to squeeze out a higher ratio.",
+      "Encrypt first, then compress, which supposedly raises the compression ratio."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "视频/PNG 已是压缩编码，压缩比接近 1，省不下几个字节却要花压/解压时间；只有文本这类高压缩比文件才值得客户端压。",
+    "why_en": "Video and PNG are already compressed, so the ratio is near 1 — you burn CPU compressing but save almost no bytes; only high-ratio files like text are worth compressing on the client.",
+    "whenOtherWins": "换成 5GB 文本文件时压缩比很高（可能压到 1GB 以下），此时客户端压缩省下的传输时间远超压缩耗时。",
+    "tradeoff": "压缩省下的传输字节 vs 压/解压花掉的 CPU 时间",
+    "tags": [
+      "dropbox",
+      "compression",
+      "performance"
+    ],
+    "optionExplanations": [
+      "已压缩的媒体再压几乎不变小，一律压缩只是白费 CPU，这条把文本和媒体一概而论了。",
+      "H.264/PNG 已是压缩格式，再压体积几乎不动，省下的字节抵不上压/解压时间。",
+      "后端解码再压意味着完整文件先传了一遍，还把后端拖进数据路径，得不偿失。",
+      "加密会把数据搅成近随机，之后再压几乎无规律可压——顺序反了，应先压后加密。"
+    ],
+    "optionExplanations_en": [
+      "Recompressing already-compressed media barely shrinks it, so always compressing just wastes CPU — this lumps text and media together.",
+      "H.264/PNG are already compressed, so recompressing hardly moves the size and the saved bytes don't cover the compress/decompress time.",
+      "Decoding on the backend to recompress means the full file already crossed the wire and drags the backend into the data path — a net loss.",
+      "Encrypting first turns data near-random, leaving compression nothing to work with — the order is reversed; compress before encrypt."
+    ],
+    "termDefinitions": [
+      {
+        "term": "H.264",
+        "meaning": "一种广泛使用的视频压缩编码标准，输出已是压缩数据。",
+        "meaningEn": "H.264 is a widely used video compression codec whose output is already compressed."
+      },
+      {
+        "term": "PNG",
+        "fullName": "Portable Network Graphics",
+        "meaning": "一种无损图像格式，文件本身已经过压缩。",
+        "meaningEn": "PNG is a lossless image format whose files are already compressed."
+      },
+      {
+        "term": "压缩比",
+        "meaning": "原始大小与压缩后大小之比，越高越省字节。",
+        "meaningEn": "Compression ratio is original size over compressed size; higher means more bytes saved."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-dropbox-056",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "compression",
+    "scenario": "Dropbox 的压缩在客户端做，需要压/解压都快且压缩比不差，算法由客户端而非浏览器决定。要在 Gzip、Brotli、Zstandard 里选一个默认算法。",
+    "scenario_en": "Dropbox compresses on the client, needs fast compress and decompress with a decent ratio, and the client (not the browser) picks the algorithm. Choose a default among Gzip, Brotli, and Zstandard.",
+    "q": "默认选哪个更合适？",
+    "q_en": "Which is the better default here?",
+    "options": [
+      "Gzip，兼容性最广、哪都能解，但压缩比偏低",
+      "Brotli，文本压缩比通常高于 Gzip，浏览器都支持",
+      "Zstandard，压/解压都快且压缩比不差，速度/比率可调",
+      "无脑选压缩比最高的，速度多慢都无所谓"
+    ],
+    "options_en": [
+      "Gzip — the broadest compatibility, decodable anywhere, but a lower ratio.",
+      "Brotli — usually a higher text ratio than Gzip, and all browsers support it.",
+      "Zstandard — fast to compress and decompress with a solid ratio, tunable speed/ratio.",
+      "Just pick the highest ratio, no matter how slow it is."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "客户端压缩既要压得快又要解得快，Zstandard 在相近压缩比下压/解压都明显快于 Gzip，且速度/比率可调；代价是生态兼容性不如 Gzip 普及。",
+    "why_en": "Client-side compression needs fast compress and decompress; Zstandard is markedly faster than Gzip at comparable ratios and is tunable — the tradeoff is it's less universally available than Gzip.",
+    "tradeoff": "压缩比/速度平衡 vs Gzip 的最广兼容性",
+    "table": {
+      "headers": [
+        "算法",
+        "压缩比",
+        "速度",
+        "何时选它"
+      ],
+      "rows": [
+        [
+          "Gzip",
+          "偏低",
+          "中等",
+          "要最广兼容"
+        ],
+        [
+          "Brotli",
+          "高(尤其文本)",
+          "较慢",
+          "文本为主"
+        ],
+        [
+          "Zstandard",
+          "不错",
+          "很快",
+          "要速度平衡"
+        ]
+      ]
+    },
+    "tags": [
+      "dropbox",
+      "compression",
+      "performance"
+    ],
+    "optionExplanations": [
+      "Gzip 到处能解、最保险，但压缩比偏低；只有当兼容性压倒一切时才为它牺牲比率。",
+      "Brotli 文本压缩比常高于 Gzip，但压缩偏慢；若上传以文本为主、能容忍慢一点它更合适。",
+      "Zstandard 压/解压都快、压缩比不差，还能按需调速度/比率，最贴合客户端压缩场景。",
+      "只盯压缩比会忽略压/解压耗时，慢算法可能把省下的传输时间又赔回去。"
+    ],
+    "optionExplanations_en": [
+      "Gzip decodes everywhere and is the safest bet, but its ratio is low; only trade ratio for it when compatibility dominates.",
+      "Brotli often beats Gzip on text ratio but compresses slowly; it fits when uploads are mostly text and some slowness is tolerable.",
+      "Zstandard is fast both ways with a solid ratio and tunable speed/ratio, which best fits client-side compression.",
+      "Fixating on ratio ignores compress/decompress time; a slow algorithm can give back the transfer time it saved."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Gzip",
+        "meaning": "最广泛使用的通用压缩算法，兼容性极好但压缩比偏低。",
+        "meaningEn": "Gzip is the most widely used general-purpose compressor: great compatibility, lower ratio."
+      },
+      {
+        "term": "Brotli",
+        "meaning": "谷歌开发的压缩算法，文本压缩比常高于 Gzip，压缩偏慢。",
+        "meaningEn": "Brotli, from Google, often achieves a higher text ratio than Gzip but compresses more slowly."
+      },
+      {
+        "term": "Zstandard",
+        "meaning": "压/解压都很快、压缩比不错且速度/比率可调的压缩算法。",
+        "meaningEn": "Zstandard is a compressor that is fast both ways, has a good ratio, and lets you tune speed versus ratio."
+      }
+    ]
   }
 ]

@@ -3514,5 +3514,139 @@
       "Cells or rectangles are square while the query radius is a circle, so window corners always include points beyond the radius.",
       "The boundary problem is about missing the true nearest point; skipping the post-filter causes the opposite mistake — extra points sneak in."
     ]
+  },
+  {
+    "id": "sd-deep-dives-proximity-search-057",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "encoded-keys",
+    "q": "靠 cell ID 的什么性质能廉价地做粗粒度聚合?",
+    "q_en": "Which property of the cell ID makes coarse aggregation cheap?",
+    "scenario": "司机位置以 H3 的街区级 cell 存在一个整数列上;现在要出城市级司机密度热力图,不想为粗粒度另建索引或回原始经纬度重算。",
+    "scenario_en": "Driver positions live in one integer column as block-level H3 cells, and now you need a city-level density heat map without building a coarse index or recomputing from raw lat/long.",
+    "options": [
+      "对 64 位 cell ID 截断低位取父 cell 再上卷",
+      "回到每个司机的原始经纬度,按粗分辨率把整张表重新算一遍 cell",
+      "cell ID 是不透明数值,只能再单独建一套粗粒度索引",
+      "先查一张细 cell 到粗 cell 的外部映射表再聚合"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "64 位 cell ID 是层级编码,父 cell 就是它的高位前缀——截掉低位比特即得,同一列数据零重算就能上卷到粗分辨率。代价:只能落在固定的层级边界上,给不了任意半径的自定义聚合。",
+    "why_en": "A parent S2/H3 cell is the high-order prefix of the 64-bit child ID, so truncating the low bits rolls the same column up to a coarser resolution without recomputing anything.",
+    "tags": [
+      "h3",
+      "s2",
+      "cell-id",
+      "aggregation"
+    ],
+    "options_en": [
+      "Truncate the 64-bit cell ID's low bits to the parent cell, then roll up.",
+      "Go back to each driver's raw lat/long and recompute the whole table at the coarse resolution.",
+      "Cell IDs are opaque values, so you must build a separate coarse-resolution index.",
+      "Look up an external fine-cell-to-coarse-cell mapping table first."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cell ID",
+        "meaning": "把一个 cell 编成的定长整数标识;在 S2/H3 里它是层级编码,高位表示粗层级、低位表示细层级。",
+        "meaningEn": "A cell ID is the fixed-width integer that labels a cell; in S2 and H3 it is hierarchical, with high bits for coarse levels and low bits for finer ones."
+      },
+      {
+        "term": "H3",
+        "fullName": "Hexagonal Hierarchical Spatial Index",
+        "meaning": "Uber 开源的六边形网格编码系统,每个格子有 6 个大致等距的邻居,方便环形查询。",
+        "meaningEn": "H3 is Uber's hexagonal grid encoding system, where every cell has six roughly equal-distance neighbors, ideal for ring queries."
+      },
+      {
+        "term": "S2",
+        "fullName": "S2 Geometry (Google S2)",
+        "meaning": "Google 提出的球面网格系统,把地球包进立方体六个面再切格子,格子面积全球大致相等。",
+        "meaningEn": "Google's S2 wraps the globe in a cube and projects onto its six faces, producing roughly equal-area cells anywhere on earth."
+      }
+    ],
+    "optionExplanations": [
+      "父 cell 已写在子 ID 的高位里,对整数做位移/掩码即得,GROUP BY 父 ID 直接出粗粒度密度,零重算。",
+      "重算能得到正确结果,但整表回到经纬度再算一遍纯属浪费,层级 ID 已经把父 cell 编在高位里了。",
+      "cell ID 不是随机不透明值,而是有层级结构的编码,截断即得父 cell,不需要另建粗粒度索引。",
+      "父子关系直接编码在比特里,截断就能拿到,不需要任何外部映射表来做细粗转换。"
+    ],
+    "optionExplanations_en": [
+      "The parent lives in the child ID's high bits, so a bit-shift/mask gets it and GROUP BY parent yields coarse density with zero recompute.",
+      "Recomputing gives the right answer, but scanning the whole table back to lat/long is wasted work — the parent is already in the high bits.",
+      "Cell IDs aren't random opaque values; they're hierarchical, so truncating yields the parent cell without a separate coarse index.",
+      "The parent-child relationship is encoded right in the bits, so truncation gets it — no external mapping table needed."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-proximity-search-058",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "h3",
+    "q": "一环候选不够时,该怎么放宽搜索?",
+    "q_en": "How do you widen the search when one ring isn't enough?",
+    "scenario": "网约车调度用 H3:乘客所在 cell 加一环邻居只查到 2 个司机,产品要求至少凑够 10 个候选再返回。",
+    "scenario_en": "In H3 ride-hailing dispatch, the rider's cell plus one ring of neighbors returns only two drivers, but the product wants at least ten candidates before responding.",
+    "options": [
+      "再往外扩一环,把外圈 cell 加进 IN 列表重查",
+      "把 cell 分辨率整体调粗,让每个格子装下更多司机再重查",
+      "就返回这 2 个,候选不足属于正常结果",
+      "放弃 cell 查询,改成对全城司机暴力算距离"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "H3 的 ring 查询天然可自适应扩展:先查一环,候选不够就算下一环 cell ID 追加进 IN 列表。代价:每多扩一环,候选集和要跑的精确距离后过滤都变大,延迟随之上升,所以只在不够时才扩。",
+    "why_en": "H3 ring queries expand adaptively: if the first ring returns too few drivers, add the next ring's cell IDs to the IN list, at the cost of more candidates to post-filter.",
+    "tags": [
+      "h3",
+      "ring",
+      "dispatch",
+      "latency"
+    ],
+    "options_en": [
+      "Expand one more ring, adding the outer cells to the IN list and re-querying.",
+      "Coarsen the whole cell resolution so each cell holds more drivers, then re-query.",
+      "Just return the two; too few candidates is a normal result.",
+      "Drop the cell query and brute-force distance to every driver in the city."
+    ],
+    "termDefinitions": [
+      {
+        "term": "H3",
+        "fullName": "Hexagonal Hierarchical Spatial Index",
+        "meaning": "Uber 开源的六边形网格编码系统,每个格子有 6 个大致等距的邻居,方便环形查询。",
+        "meaningEn": "H3 is Uber's hexagonal grid encoding system, where every cell has six roughly equal-distance neighbors, ideal for ring queries."
+      },
+      {
+        "term": "ring（环）",
+        "meaning": "以某个 cell 为中心、向外一圈圈邻居 cell 组成的集合;一环是紧邻邻居,二环再外扩一圈。",
+        "meaningEn": "A ring is the set of neighbor cells around a center cell — the first ring is the immediate neighbors, the second ring the next layer out."
+      },
+      {
+        "term": "post-filter（后过滤）",
+        "meaning": "索引取回候选后,再用精确距离或几何计算把窗口内但实际超出目标范围的点剔除。",
+        "meaningEn": "A post-filter re-checks the candidates an index returns with exact math to drop ones that are inside the search window but outside the real target."
+      },
+      {
+        "term": "IN 查询",
+        "meaning": "SQL 里用 WHERE col IN (...) 一次匹配一组离散值的查询,H3 邻域就写成一组 cell ID 的 IN 列表。",
+        "meaningEn": "An IN query matches a column against a discrete list of values with WHERE col IN (...); an H3 neighborhood becomes an IN list of cell IDs."
+      }
+    ],
+    "optionExplanations": [
+      "把 k-ring 从 1 扩到 2,覆盖半径更大、候选逐层叠加,几步就能凑够 10 个,是最贴合场景的做法。",
+      "调粗分辨率确实能让格子装更多人,但那是全局改动、影响所有查询精度,不是对单次不够时的局部放宽。",
+      "在司机稀疏区强行只返回 2 个会伤用户体验,正确做法是扩环拿够候选,而不是接受不足。",
+      "回退全城暴力距离正是编码 cell 要避免的 O(n) 扫描,扩一环这种廉价手段远比它划算。"
+    ],
+    "optionExplanations_en": [
+      "Grow the k-ring from 1 to 2: a wider radius layers on more candidates, reaching ten in a few steps — the fit for this case.",
+      "Coarsening resolution does pack more drivers per cell, but it's a global change hurting every query's precision, not a local widening for one shortfall.",
+      "Returning just two in a sparse area hurts the rider experience; the fix is to expand a ring for enough candidates, not accept the shortfall.",
+      "Falling back to city-wide brute-force distance is the O(n) scan encoded cells exist to avoid — expanding one ring is far cheaper."
+    ]
   }
 ]

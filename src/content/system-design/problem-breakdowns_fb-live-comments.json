@@ -3972,5 +3972,255 @@
     ],
     "scenario": "你要把这套 SSE 广播 + pub/sub 分频道 + 多机协调的骨架，迁移到另一类系统上。",
     "scenario_en": "You want to carry this skeleton — SSE broadcast, sharded pub/sub, multi-server coordination — over to a different kind of system."
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-live-comments-076",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "pagination",
+    "q": "cursor 分页仍留下的短板是什么？",
+    "options": [
+      "翻页途中插入或删除评论会让光标错位，读到重复或缺失的评论",
+      "每翻一页仍要打一次数据库查询，高流量下这批查询量本身就吃紧",
+      "光标要逐行扫过它前面的所有评论，行数越多越慢",
+      "光标字段建不了索引，查询只能退化成全表扫描"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "文章明说 cursor 比 offset 已经省掉了扫行，但没消灭「每页一次查询」——在我们这种每秒上千评论的环境里，光这批查询量本身就是负担。要再省只能在 Realtime 层加缓存或改推送，而不是继续查库。",
+    "why_en": "Cursor pagination still issues one database query per page; the article notes this is significant in our high-traffic setting, so further savings must come from caching or push, not more queries.",
+    "tags": [
+      "pagination",
+      "cursor",
+      "database-load"
+    ],
+    "options_en": [
+      "Inserting or deleting a comment mid-scroll shifts the cursor, causing duplicates or gaps.",
+      "It still hits the database once per page, and that query volume itself is heavy under high traffic.",
+      "The cursor must scan row by row through every comment before it, getting slower as rows grow.",
+      "The cursor field cannot be indexed, so every query degrades into a full table scan."
+    ],
+    "q_en": "What limitation does cursor pagination still leave?",
+    "optionExplanations": [
+      "这是 offset 分页的毛病；cursor 恰恰是稳定的，插入删除不影响光标位置。",
+      "对，cursor 省的是扫行，不是查询次数——每一页仍要落一次库，高流量下总查询量可观。",
+      "逐行扫过前面所有行是 offset 的代价；cursor 建了索引就能直接定位，不必扫。",
+      "文章明说在光标字段上建了索引，查询按 commentId 范围直接定位，不会全表扫描。"
+    ],
+    "optionExplanations_en": [
+      "That's the offset pagination flaw; cursor is stable, so inserts and deletes don't shift its position.",
+      "Right — cursor saves the row scan, not the query count, so each page still costs one DB query, heavy at high volume.",
+      "Scanning every preceding row is the offset cost; with an index the cursor seeks directly instead of scanning.",
+      "The article builds an index on the cursor field, so the query seeks by commentId range rather than scanning the whole table."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cursor 分页",
+        "meaning": "cursor pagination，用上一页末条记录的 id 作为下一页起点，避免扫过前面的行",
+        "meaningEn": "Cursor pagination uses the last item id of a page as the start of the next, avoiding scanning preceding rows."
+      },
+      {
+        "term": "offset 分页",
+        "meaning": "offset pagination，用「跳过前 N 行」定位起点，行多时要逐行数过去",
+        "meaningEn": "Offset pagination locates the start by skipping N rows, counting through every preceding row as data grows."
+      }
+    ],
+    "scenario": "cursor 分页已经替掉了 offset：一个火爆直播每秒上千条评论，无数观众在无限滚动里往回翻历史评论。",
+    "scenario_en": "Cursor pagination has replaced offset: a hot live video gets thousands of comments per second while countless viewers infinite-scroll back through history."
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-live-comments-077",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "viewer-colocation",
+    "q": "想要比一致性哈希更灵活的路由，映射存在哪里？",
+    "options": [
+      "把 liveVideoId→服务器 映射只留在每台服务器各自的本地内存里，彼此从不同步",
+      "用 Zookeeper 存动态的 liveVideoId→服务器 映射，路由更灵活",
+      "用 L4 负载均衡按源 IP 哈希转发，四层不看应用信息",
+      "把映射硬编码进客户端配置，靠发版来更新"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "L7 一致性哈希是隐式规则、零额外基础设施；但要支持按负载等动态路由，就得把 liveVideoId→服务器 映射显式放进 Zookeeper 这类协调服务。代价：多了一套要运维、要保持一致的协调组件。",
+    "why_en": "Consistent hashing is an implicit, zero-infrastructure rule, but a dynamic mapping in Zookeeper buys flexible routing at the cost of running and keeping a coordination service consistent.",
+    "whenOtherWins": "如果只需把同一视频的观众聚到同一台机器、不需要按负载等动态规则，L7 一致性哈希更省事，不必引入 Zookeeper。",
+    "tags": [
+      "viewer-colocation",
+      "zookeeper",
+      "routing"
+    ],
+    "options_en": [
+      "Keep the liveVideoId→server map only in each server's local memory, unsynchronized.",
+      "Store a dynamic liveVideoId→server map in Zookeeper, buying more flexible routing.",
+      "Use an L4 load balancer hashing on source IP, which cannot see application data.",
+      "Hardcode the mapping into client config and update it via app releases."
+    ],
+    "q_en": "Where do you store the mapping for routing more flexible than consistent hashing?",
+    "optionExplanations": [
+      "各机独立本地映射没有单一真相，机器增减时谁也不知道该改哪份，路由会打架。",
+      "对，动态映射放进 Zookeeper 后可以加负载感知等规则，代价是协调服务的运维复杂度。",
+      "L4 只看 IP/端口，看不见 liveVideoId，做不到「同一视频聚一台」的应用层路由。",
+      "硬编码在客户端无法随观众和机器实时变化，服务器一扩缩容映射就过期。"
+    ],
+    "optionExplanations_en": [
+      "Independent local maps have no single source of truth, so scaling servers leaves no one knowing which copy to fix and routes conflict.",
+      "Right — a dynamic map in Zookeeper enables rules like load-awareness, at the cost of the coordination service's operational complexity.",
+      "L4 sees only IP and port, not liveVideoId, so it cannot do the application-layer routing that co-locates a video's viewers.",
+      "A hardcoded client map cannot track live viewer and server churn, so it goes stale the moment servers scale up or down."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Zookeeper",
+        "meaning": "一个分布式协调服务，用来存放并同步集群共享的元数据（如映射、配置、成员关系）",
+        "meaningEn": "Zookeeper is a distributed coordination service that stores and synchronizes cluster-shared metadata like mappings, config, and membership."
+      },
+      {
+        "term": "L7 一致性哈希",
+        "meaning": "Layer 7 consistent hashing，负载均衡在应用层按 liveVideoId 哈希，把同一视频的观众稳定路由到同一台服务器",
+        "meaningEn": "Layer 7 consistent hashing has the load balancer hash on liveVideoId at the application layer to route a video's viewers to the same server."
+      },
+      {
+        "term": "L4 负载均衡",
+        "meaning": "Layer 4 负载均衡，只按 IP/端口等传输层信息转发，看不到应用层内容",
+        "meaningEn": "An L4 load balancer forwards using only transport-layer info like IP and port, blind to application content."
+      }
+    ],
+    "tradeoff": "L7 一致性哈希的零运维 vs Zookeeper 动态映射的灵活性",
+    "scenario": "你要把同一直播的观众聚到同一台 Realtime 服务器好收敛 pub/sub 订阅。L7 一致性哈希能做，但你还想按服务器负载等规则动态调整路由。",
+    "scenario_en": "You want a video's viewers co-located on one Realtime server to shrink pub/sub subscriptions; consistent hashing works, but you also want to route dynamically by rules like server load."
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-live-comments-078",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "dispatcher",
+    "q": "Dispatcher 怎么知道某台推送服务器没了、别再往它转发？",
+    "options": [
+      "Dispatcher 每次转发评论前先逐台 ping 所有服务器确认存活",
+      "靠心跳加注册协议：服务器上线时注册、持续心跳，心跳超时即从映射摘除",
+      "等客户端重连报错，再由客户端通知 Dispatcher 这台机器换了",
+      "固定长周期全量重建映射，宕机的机器要等下个周期才被清掉"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "服务器上线向 Dispatcher 注册并持续心跳；宕机后心跳超时，就把它从映射摘除、评论不再投给它，观众重连转到别的机器。代价：检测窗口内的评论可能丢，靠持久化加 catch-up 补。",
+    "why_en": "Servers register their videos and heartbeat on join; when one dies the heartbeat stops, the dispatcher times it out and evicts it from the map so new comments stop going there and reconnecting viewers land elsewhere.",
+    "tags": [
+      "dispatcher",
+      "heartbeat",
+      "failure-recovery"
+    ],
+    "options_en": [
+      "The dispatcher pings every server to confirm liveness before forwarding each comment.",
+      "Via heartbeat plus a registration protocol: servers register on join, heartbeat continuously, and are evicted from the map on timeout.",
+      "It waits for a client reconnect error, then the client tells the dispatcher the server changed.",
+      "It rebuilds the whole map on a long fixed cycle, so a crashed server lingers until the next cycle."
+    ],
+    "q_en": "How does the dispatcher learn a push server is gone and stop forwarding to it?",
+    "optionExplanations": [
+      "每条评论前 ping 全体服务器代价爆炸，且仍有 ping 后即宕的窗口，不如让服务器主动心跳。",
+      "对，注册管上线、心跳管存活：心跳超时就主动摘除路由，而不是等转发失败才发现服务器已经不在。",
+      "把探活责任推给客户端，反馈慢且不可靠，宕机到客户端报错之间评论一直投给死机。",
+      "长周期全量重建让宕机机器长时间留在映射里，其间评论持续投给死掉的服务器。"
+    ],
+    "optionExplanations_en": [
+      "Pinging all servers before each comment is prohibitively costly and still leaves a ping-then-die window; server-pushed heartbeats are better.",
+      "Right — registration handles join and heartbeat handles liveness, so a timeout actively evicts the route instead of discovering the gone server only after a failed forward.",
+      "Pushing liveness detection to clients is slow and unreliable, and comments keep going to the dead server until a client errors.",
+      "A long full-rebuild cycle leaves a crashed server in the map for a long time, and comments keep flowing to the dead server meanwhile."
+    ],
+    "termDefinitions": [
+      {
+        "term": "心跳",
+        "meaning": "heartbeat，服务器周期性发出的存活信号，一段时间收不到就判定它下线",
+        "meaningEn": "A heartbeat is a periodic liveness signal from a server; missing it for a while marks the server as down."
+      },
+      {
+        "term": "注册协议",
+        "meaning": "registration protocol，服务器上线时向协调方登记自己身份与职责的约定流程",
+        "meaningEn": "A registration protocol is the agreed flow by which a server, on startup, registers its identity and responsibilities with the coordinator."
+      },
+      {
+        "term": "Dispatcher",
+        "meaning": "调度服务，维护「哪台服务器负责哪个视频」的映射，直接把新评论转发到对应服务器",
+        "meaningEn": "The Dispatcher is a routing service that keeps a map of which server owns which video and forwards each new comment to it."
+      },
+      {
+        "term": "catch-up",
+        "meaning": "补漏机制，客户端重连后按最后收到的评论 id 拉取断连期间错过的评论",
+        "meaningEn": "Catch-up is the recovery mechanism where a reconnecting client fetches comments it missed since its last received comment id."
+      }
+    ],
+    "scenario": "Dispatcher 直接把新评论转发给「负责该视频」的 Realtime 服务器。一台 Realtime 服务器突然宕机，它名下还挂着一批正在看的观众。",
+    "scenario_en": "The dispatcher forwards each new comment to the Realtime server that owns that video. One Realtime server suddenly crashes while still holding a batch of active viewers."
+  },
+  {
+    "id": "sd-problem-breakdowns-fb-live-comments-079",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "mode-switching",
+    "q": "客户端从 SSE 切到 CDN 轮询时，靠什么保证不漏评论也不重复？",
+    "options": [
+      "切换瞬间就把当前屏幕上的所有评论全部清空，再从最新一份 CDN 快照里重新拉全部内容重建整个 feed",
+      "首份 CDN 快照本就含最近 100-200 条评论，与 SSE 尾部重叠，客户端按 id 去重",
+      "断开 SSE 后先等几秒再开始拉 CDN，给服务端时间准备好快照",
+      "弹窗提示用户手动刷新页面来载入 CDN 数据"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "SSE 推时客户端记着最后评论 id；翻到 CDN 后首份快照是最近 100-200 条的环形缓冲，与 SSE 尾部重叠，按 id 去重即不漏不重。代价：延迟从 <200ms 升到 1-2s，mega-stream 下可接受。",
+    "why_en": "The first CDN snapshot is a ring buffer of the last 100-200 comments that overlaps what SSE just delivered, so the client dedupes by comment id with no gap, trading sub-200ms latency for 1-2s.",
+    "tags": [
+      "mode-switching",
+      "cdn-delivery",
+      "deduplication"
+    ],
+    "options_en": [
+      "Clear the on-screen comments at switch time and rebuild the feed from the latest CDN snapshot from scratch.",
+      "The first CDN snapshot already holds the last 100-200 comments, overlapping the just-received SSE content, so the client dedupes by comment id.",
+      "Disconnect SSE, wait a few seconds before polling the CDN, giving the server time to prepare a snapshot.",
+      "Pop a prompt asking the user to manually refresh the page to load the CDN data."
+    ],
+    "q_en": "What lets the client switch from SSE to CDN polling without missing or duplicating comments?",
+    "optionExplanations": [
+      "清屏重建会让观众眼前的评论流突然断裂重绘，正是「无缝切换」要避免的观感。",
+      "对，快照与 SSE 尾部重叠保证不漏，按评论 id 去重保证不重，切换对观众透明。",
+      "先断后等会造出一段真空期，观众看到评论流停住，违背无缝要求。",
+      "要用户手动刷新等于把无缝切换降级成一次可见的中断。"
+    ],
+    "optionExplanations_en": [
+      "Clearing and rebuilding tears the visible stream and redraws it, exactly the jank a seamless switch must avoid.",
+      "Right — the snapshot overlaps the SSE tail so nothing is lost, and comment-id dedup avoids repeats, keeping the switch invisible.",
+      "Disconnecting then waiting creates a dead gap where the stream visibly stalls, breaking the seamless requirement.",
+      "Asking the user to refresh downgrades a seamless switch into a visible interruption."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "meaning": "Server-Sent Events，基于标准 HTTP 的单向服务器推流协议",
+        "meaningEn": "SSE, Server-Sent Events, is a one-way server-to-client streaming protocol over plain HTTP."
+      },
+      {
+        "term": "CDN",
+        "meaning": "内容分发网络，把内容缓存到靠近用户的边缘节点",
+        "meaningEn": "A CDN caches content on edge servers close to users."
+      },
+      {
+        "term": "环形缓冲",
+        "meaning": "ring buffer，固定容量的循环队列，只保留最近 N 条、旧的被新的覆盖",
+        "meaningEn": "A ring buffer is a fixed-size circular queue that keeps only the most recent N items, overwriting the oldest."
+      }
+    ],
+    "scenario": "一个直播观看数刚越过 10 万阈值，系统自动从 SSE 实时推送翻转到 CDN 快照拉取。观众正盯着评论流，不能出现断流或空白重绘。",
+    "scenario_en": "A live video just crossed the 100k-viewer threshold and the system auto-flips from SSE push to CDN snapshot polling while viewers watch the stream, so no gap or blank redraw is allowed."
   }
 ]

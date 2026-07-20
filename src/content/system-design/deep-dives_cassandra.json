@@ -4846,5 +4846,211 @@
       "Right — Cassandra's types are rich: beyond the basics there are UDTs and JSON values, letting it store both flat and nested data.",
       "Pre-serializing every value into binary isn't required — CQL's type system natively supports structured writes without the application doing its own serialization."
     ]
+  },
+  {
+    "id": "sd-deep-dives-cassandra-077",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "fault-tolerance",
+    "scenario": "一个 Cassandra 节点被判定离线数小时,远超 hint 的短暂寿命;期间协调节点替它暂存的写早已过期。它重新上线时,错过的写从哪补回来?",
+    "q": "长期离线的节点靠什么补回错过的写?",
+    "options": [
+      "短暂离线回放 hint,长期离线靠 read repair",
+      "hinted handoff 一直保存到节点回来再回放",
+      "节点一上线自动拥有全部最新数据,无需补",
+      "协调节点阻塞写入直到离线节点恢复才放行"
+    ],
+    "options_en": [
+      "Replay hints if brief; read repair if long",
+      "Hinted handoff holds writes until the node returns",
+      "The node automatically has all latest data on rejoin",
+      "The coordinator blocks writes until the node recovers"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "hint 只做短期兜底:节点很快回来才回放 hint;离线超过 hint 寿命后 hint 已丢,该副本停在旧值,只能靠管理员 rebuild 或读时 read repair 逐 key 修复。",
+    "why_en": "Hints are short-lived, so a briefly-offline node gets its missed writes replayed, but after a long outage the hints are gone and you rely on a rebuild or read repair to reconcile.",
+    "termDefinitions": [
+      {
+        "term": "hinted handoff",
+        "meaning": "协调节点把发往离线节点的写暂存为 hint,节点回来后再转交,防止写丢失。",
+        "meaningEn": "Hinted handoff temporarily stores a write meant for an offline node as a hint and delivers it once the node is back online."
+      },
+      {
+        "term": "hint",
+        "meaning": "协调节点替离线节点暂存的那份写数据,寿命很短。",
+        "meaningEn": "A hint is the write data a coordinator temporarily holds on behalf of an offline node, and it is short-lived."
+      },
+      {
+        "term": "read repair",
+        "meaning": "读取时协调节点比对多个副本,发现落后副本就用最新值就地修复它。",
+        "meaningEn": "Read repair happens during a read: the coordinator compares replicas and updates any stale one with the latest value."
+      },
+      {
+        "term": "rebuild",
+        "meaning": "把一个节点的数据从其他副本整份重建,用于长期离线或换机后恢复。",
+        "meaningEn": "A rebuild reconstructs a node's data in full from other replicas, used after a long outage or hardware swap."
+      },
+      {
+        "term": "协调节点",
+        "meaning": "接收客户端请求、代为向各副本读写的那个节点。",
+        "meaningEn": "The coordinator node receives the client request and reads or writes to the replicas on its behalf."
+      }
+    ],
+    "tags": [
+      "cassandra",
+      "fault-tolerance",
+      "read-repair"
+    ],
+    "q_en": "How does a long-offline node recover the writes it missed?",
+    "scenario_en": "A Cassandra node is convicted offline for hours, far past a hint's short lifespan, so the writes the coordinator stashed for it have already expired. Where do the missed writes come from when it rejoins?",
+    "optionExplanations": [
+      "对:hint 只做短期兜底,节点很快回来才回放;离线过久 hint 已过期,靠 rebuild 或 read repair 补,后者只修被读到的 key。",
+      "错:hint 寿命很短,不会一直存到节点回来;超时后补数据换成整份重建或读时修复来兜。",
+      "错:节点上线不会自动获得离线期间的写,必须由别的机制把缺的数据送回来。",
+      "错:协调节点不阻塞写;它把 hint 暂存后就让写继续,可用性不受离线节点影响。"
+    ],
+    "optionExplanations_en": [
+      "Right — hints are a short-term safety net replayed only if the node returns fast; after a long outage the hints have expired, so a rebuild or read repair fills the gap, and read repair only fixes keys that get read.",
+      "Wrong — hints are short-lived and are not kept until the node returns; a long outage is reconciled by a rebuild or read repair.",
+      "Wrong — a node does not automatically gain the writes it missed while offline; another mechanism has to ship the missing data back.",
+      "Wrong — the coordinator does not block writes; it stashes a hint and lets the write proceed, so availability is unaffected by the offline node."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-cassandra-078",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "primary-key",
+    "scenario": "Ticketmaster 的 tickets 表按 event_id 分区,一个 event 下有成千上万个座位;应用靠场馆地图展示座位,并不关心座位的先后顺序。",
+    "q": "为什么建表时还要把 seat_id 设成 clustering key?",
+    "options": [
+      "保证主键唯一,防止同 event 多行主键相撞",
+      "为了把座位按 seat_id 排序展示给用户",
+      "clustering key 是建表强制必填项",
+      "为了让座位数据分散到多个分区上"
+    ],
+    "options_en": [
+      "Guarantees primary-key uniqueness across seats",
+      "To display seats sorted by seat_id to the user",
+      "A clustering key is a mandatory part of any table",
+      "To spread seat rows across multiple partitions"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "排序在这里不是重点:应用不在乎座位顺序,加 seat_id 只是给同一 event_id 分区下每行一个唯一主键,否则多张票主键相同会互相覆盖。",
+    "why_en": "The seat order doesn't matter here — seat_id is a clustering key purely so each row under an event_id partition has a unique primary key; without it the tickets would overwrite each other.",
+    "termDefinitions": [
+      {
+        "term": "clustering key",
+        "meaning": "主键里决定分区内行排序的列,可以有零个或多个。",
+        "meaningEn": "A clustering key is the column that orders rows within a partition; a table can have zero or more of them."
+      },
+      {
+        "term": "partition key",
+        "meaning": "主键里决定一行落在哪个分区的部分。",
+        "meaningEn": "The partition key is the part of the primary key that decides which partition a row lands in."
+      },
+      {
+        "term": "primary key",
+        "meaning": "唯一标识一行的键,由 partition key 加可选 clustering key 组成。",
+        "meaningEn": "A primary key uniquely identifies a row and is made up of the partition key plus any clustering keys."
+      }
+    ],
+    "tags": [
+      "cassandra",
+      "primary-key",
+      "ticketmaster"
+    ],
+    "q_en": "Why make seat_id a clustering key on this table?",
+    "scenario_en": "Ticketmaster's tickets table is partitioned by event_id and an event has thousands of seats; the app shows seats via a venue map and doesn't care about their order.",
+    "optionExplanations": [
+      "对:一个 event 有大量座位,单用 event_id 无法区分行,seat_id 提供区分度。",
+      "错:应用靠场馆地图看座位,不在乎排序;加 seat_id 是为唯一性不是为展示顺序。",
+      "错:clustering key 是零或多个,并非必填;这里加它是为主键唯一而非语法要求。",
+      "错:决定分区的是 partition key(event_id),clustering key 不影响数据落在哪个分区。"
+    ],
+    "optionExplanations_en": [
+      "Right — an event_id partition holds many seats, and event_id alone cannot form a unique key, so seat_id supplies the uniqueness.",
+      "Wrong — the app reads seats off a venue map and ignores order; seat_id is added for uniqueness, not display ordering.",
+      "Wrong — clustering keys are zero-or-more, not mandatory; here it exists for key uniqueness, not to satisfy syntax.",
+      "Wrong — the partition key (event_id) decides the partition; a clustering key does not change which partition a row lands in."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-cassandra-079",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "ticketmaster-example",
+    "scenario": "tickets 表已改成按 (event_id, section_id) 分区,把一个 event 摊到多台节点。可一场 Taylor Swift 级开售,某个前排 section 被海量用户同时刷新。",
+    "q": "按 section 分区后,极端爆款活动还剩什么隐患?",
+    "options": [
+      "爆款 section 仍是一个分区,读挤在同组副本",
+      "section 分区已彻底消除任何热点压力",
+      "问题转为写放大,每次浏览都要写一次表",
+      "各 section 因跨分区 JOIN 而互相阻塞等待"
+    ],
+    "options_en": [
+      "One hot section is still a single-partition hotspot",
+      "Section partitioning fully eliminates any hotspot",
+      "It turns into write amplification on every browse",
+      "Sections block each other through cross-partition joins"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "section 分区把 event 摊到多台,但分区粒度停在 section:一个超热 section 的所有读仍路由到它那一组副本,把这几台打成热点分区。文章点名却略过的 Taylor Swift Problem 正指此处。",
+    "why_en": "Partitioning by section spreads an event across nodes, but a single ultra-hot section is still one partition on one replica set, so all its read traffic hammers those nodes — that's the Taylor Swift problem the article flags.",
+    "termDefinitions": [
+      {
+        "term": "热点分区",
+        "meaning": "读写集中在单个分区,使承载它的副本节点过载。",
+        "meaningEn": "A hot partition is one whose reads or writes concentrate on it, overloading the replica nodes that hold it."
+      },
+      {
+        "term": "分区",
+        "meaning": "由 partition key 决定的一组行,落在同一组副本节点上。",
+        "meaningEn": "A partition is the set of rows chosen by the partition key, all living on the same set of replica nodes."
+      },
+      {
+        "term": "副本",
+        "meaning": "存有同一份数据拷贝的节点。",
+        "meaningEn": "A replica is a node holding a copy of the same data."
+      },
+      {
+        "term": "JOIN",
+        "meaning": "关系数据库按键把多张表连接起来的操作;Cassandra 不支持。",
+        "meaningEn": "A join stitches multiple tables together by key in a relational database; Cassandra does not support it."
+      },
+      {
+        "term": "Taylor Swift Problem",
+        "meaning": "指爆款活动瞬时抢票把系统某个热点打爆的经典难题。",
+        "meaningEn": "The Taylor Swift problem is the classic case where a hugely popular event's ticket rush overwhelms a hotspot in the system."
+      }
+    ],
+    "tags": [
+      "cassandra",
+      "ticketmaster",
+      "hot-partition"
+    ],
+    "q_en": "After partitioning by section, what risk remains for an extreme blockbuster event?",
+    "scenario_en": "The tickets table now partitions by (event_id, section_id), spreading an event across nodes. But in a Taylor Swift-scale onsale, one front-row section gets refreshed by a huge crowd at once.",
+    "optionExplanations": [
+      "对:分区最细只到 section 一级,该 section 的读集中砸在承载它的少数节点上,过载。",
+      "错:section 分区只是减轻不是消除热点;单一爆款 section 仍会压垮它所在的分区。",
+      "错:浏览是读多写少,热点表现为读集中,不是写放大;section 表也不是每次浏览都写。",
+      "错:Cassandra 不支持 JOIN,section 之间不会因 JOIN 阻塞;瓶颈是单分区的读热点。"
+    ],
+    "optionExplanations_en": [
+      "Right — partition granularity stops at the section, so all reads for one ultra-hot section land on its replica set and create a hot partition.",
+      "Wrong — section partitioning only eases hotspots, it doesn't remove them; a single blockbuster section can still overwhelm its partition.",
+      "Wrong — browsing is read-heavy, so the hotspot is read concentration, not write amplification, and the section table isn't written on every browse.",
+      "Wrong — Cassandra has no joins, so sections don't block each other via joins; the bottleneck is read concentration on one partition."
+    ]
   }
 ]

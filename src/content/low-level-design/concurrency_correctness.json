@@ -2409,5 +2409,481 @@
         ]
       ]
     }
+  },
+  {
+    "id": "lld-concurrency-correctness-042",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "fine-grained-locking",
+    "q": "细粒度锁按需懒建座位锁，若建锁那步本身不加保护会怎样？",
+    "q_en": "If lazily creating each seat's lock is not itself guarded, what breaks?",
+    "scenario": "订票系统用 `_seat_locks` 字典给每个座位懒建一把锁，字典是所有线程共享的；两个线程同时第一次预订座位 7A。",
+    "scenario_en": "A booking service lazily creates one lock per seat in a shared `_seat_locks` dict; two threads first-book seat 7A at the same time.",
+    "options": [
+      "两个线程各建一把 7A 锁，等于没锁",
+      "两个线程互相等待对方持有的座位锁而死锁",
+      "字典读到缺失的键抛 KeyError，两次预订都失败",
+      "锁会被自动升级成保护全场的一把粗粒度锁"
+    ],
+    "options_en": [
+      "Each thread builds its own 7A lock, so nothing is actually guarded.",
+      "The two threads wait on each other's seat locks and deadlock.",
+      "The dict raises KeyError on a missing key and both bookings fail.",
+      "The lock auto-upgrades into one coarse lock for the whole venue."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "`_get_lock` 是对锁字典的 check-then-act，少了这层元数据锁时两线程都发现 7A 无锁、各建一把，之后 book_seat 用不同锁互不阻塞，双订重现。",
+      "死锁需交叉持有多把锁（如换座位），这里只是懒建同一把锁，不构成循环等待。",
+      "竞态是重复创建而非缺键，字典 setdefault 语义下不会抛 KeyError，问题更隐蔽。",
+      "锁不会自动升级；粗粒度是另一种设计选择，不是这个竞态的后果。"
+    ],
+    "optionExplanations_en": [
+      "Building the per-seat lock is itself check-then-act on the shared dict; without `_locks_lock` both threads see no lock and make separate ones, so book_seat no longer serializes.",
+      "Deadlock needs two threads each holding one lock and waiting for another; lazily creating one lock is not a cycle.",
+      "The race is duplicate creation, not a missing key, so no KeyError is raised — the failure is silent.",
+      "Locks never auto-upgrade; coarse locking is a separate design choice, not a consequence of this race."
+    ],
+    "why": "存放锁的字典本身也是共享可变状态，懒建锁是先查后建的两步，必须用 `_locks_lock` 串行化；否则同一座位可能有多把锁，细粒度锁静默失效。代价是首次创建多一层元数据锁。",
+    "why_en": "The lock dictionary is shared state too, so lazily creating a seat's lock must be guarded by `_locks_lock`, or two threads make two locks for one seat and fine-grained locking silently stops working.",
+    "tradeoff": "元数据锁开销 vs 细粒度锁正确性",
+    "whenOtherWins": "若所有座位锁在初始化时一次性预建、运行期不再新增，就没有懒建竞态，`_locks_lock` 可省。",
+    "tags": [
+      "fine-grained-locking",
+      "check-then-act",
+      "shared-state"
+    ],
+    "codeSample": "def _get_lock(self, seat_id):\n    with self._locks_lock:            # guard the map itself\n        if seat_id not in self._seat_locks:\n            self._seat_locks[seat_id] = threading.Lock()\n        return self._seat_locks[seat_id]",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "check-then-act",
+        "meaning": "先检查条件再基于它行动，两步之间可被别的线程插入而失效。",
+        "meaningEn": "Check-then-act reads a condition and then acts on it, and another thread can invalidate the condition in between."
+      },
+      {
+        "term": "_locks_lock",
+        "meaning": "专门保护锁字典本身的元数据锁，串行化每把座位锁的懒创建。",
+        "meaningEn": "_locks_lock is a meta-lock that guards the lock dictionary itself so each seat lock is created only once."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-043",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "atomics",
+    "q": "在 CPython 里，靠 GIL 就能让 `self.count += 1` 线程安全吗？",
+    "q_en": "In CPython, does the GIL alone make `self.count += 1` thread-safe?",
+    "scenario": "多线程服务在 CPython 上用 `self._count += 1` 统计请求数，有人认为 GIL 已全局串行化、无需加锁。",
+    "scenario_en": "A multithreaded service on CPython counts requests with `self._count += 1`, assuming the GIL already serializes everything so no lock is needed.",
+    "options": [
+      "不能，GIL 不保证 += 的读-改-写不可分",
+      "能，GIL 让每一行 Python 语句都变成原子操作",
+      "能，但这个保证只对整数类型的自增成立",
+      "不能，因为 CPython 解释器根本没有 GIL"
+    ],
+    "options_en": [
+      "No — the GIL does not make the read-modify-write of += indivisible.",
+      "Yes — the GIL makes every single Python statement atomic.",
+      "Yes, but the guarantee only holds for integer increments.",
+      "No, because CPython has no GIL at all."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "GIL 只保证同一刻一个线程跑字节码，但 += 编译成 LOAD/ADD/STORE 多条字节码，线程可在其间切换，仍会丢更新；要用 Lock、atomics 库或 multiprocessing.Value。",
+      "单条语句常对应多条字节码，GIL 在字节码边界就能切线程，不等于语句级原子。",
+      "与类型无关；整数自增同样是多字节码的读-改-写，一样会交错丢更新。",
+      "CPython 确实有 GIL，它管的是一次执行一个线程，不管单个操作是否原子。"
+    ],
+    "optionExplanations_en": [
+      "The GIL only serializes bytecode execution, but += is several bytecodes (load, add, store) and a thread switch between them still loses updates; use a Lock, the atomics library, or multiprocessing.Value.",
+      "One statement is often several bytecodes, and the GIL can switch threads at bytecode boundaries, so statements are not atomic.",
+      "It has nothing to do with type; integer += is still a multi-bytecode read-modify-write that interleaves.",
+      "CPython does have a GIL; it just enforces one running thread, not per-operation atomicity."
+    ],
+    "why": "GIL 串行化的是字节码执行，不是业务操作；`+=` 的读-改-写跨多条字节码，切换点就在中间，计数照样丢。Python 无内置原子原语，需 Lock 或 atomics 库补上，代价是每次自增多一次加锁。",
+    "why_en": "The GIL serializes bytecode, not your operations, and += spans several bytecodes with a switch point in the middle, so counts still drop — Python has no built-in atomics, so you add a Lock or use the atomics library.",
+    "tags": [
+      "atomics",
+      "read-modify-write",
+      "python-gil"
+    ],
+    "codeSample": "# BROKEN even with the GIL: += is load, add, store\nself._count += 1\n\n# Fixed: guard the read-modify-write\nwith self._lock:\n    self._count += 1",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "GIL",
+        "fullName": "Global Interpreter Lock",
+        "meaning": "全局解释器锁(GIL)：CPython 里保证同一时刻只有一个线程执行 Python 字节码的锁。",
+        "meaningEn": "The Global Interpreter Lock (GIL) is a CPython lock that lets only one thread run Python bytecode at a time."
+      },
+      {
+        "term": "multiprocessing.Value",
+        "meaning": "标准库里带内置锁的共享值，可用来做跨进程/线程的原子计数。",
+        "meaningEn": "multiprocessing.Value is a shared value with a built-in lock, usable for atomic counting."
+      },
+      {
+        "term": "atomics",
+        "meaning": "第三方库，提供真正的无锁原子原语（如原子自增、CAS）。",
+        "meaningEn": "atomics is a third-party library that provides true lock-free atomic primitives."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-044",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "read-write-locks",
+    "q": "手写读写锁时，第一个和最后一个读者分别要做什么？",
+    "q_en": "In a hand-built read-write lock, what do the first and last reader each do?",
+    "scenario": "Python 标准库无读写锁，用一个 `_read_count` 计数加两把锁自己实现读多写少的缓存。",
+    "scenario_en": "Python's stdlib has no read-write lock, so a read-heavy cache is hand-built with a `_read_count` counter plus two locks.",
+    "options": [
+      "第一个读者获取写锁，最后一个读者释放它",
+      "每个读者进入和退出时都各获取并释放一次写锁",
+      "读者只增减读计数，任何时候都不去碰写锁",
+      "写者进入时先把当前的读计数清零再放行自己"
+    ],
+    "options_en": [
+      "The first reader takes the write lock; the last reader releases it.",
+      "Every reader acquires and releases the write lock on entry and exit.",
+      "Readers only touch the read counter and never take the write lock.",
+      "The writer resets the reader count to zero before letting itself in."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "`_read_count` 从 0 变 1 时首个读者 acquire 写锁挡住写者，回到 0 时末个读者 release，中间读者只增减计数、彼此不阻塞。",
+      "每个读者都抢写锁就退化成互斥，读读之间又互相排队，失去读写锁的意义。",
+      "读者完全不碰写锁，写者就可能在读进行时闯入，破坏读到的一致视图。",
+      "写者无权清零别人的读计数；它得等读计数归零、末个读者放行后才独占。"
+    ],
+    "optionExplanations_en": [
+      "When `_read_count` goes 0→1 the first reader acquires the write lock to block writers, and when it returns to 0 the last reader releases it; readers in between only touch the counter.",
+      "If every reader grabs the write lock it degrades to a mutex and readers block each other, defeating the point.",
+      "If readers never touch the write lock, a writer can barge in mid-read and corrupt the consistent view.",
+      "A writer cannot reset someone else's read count; it must wait until the count hits zero and the last reader releases."
+    ],
+    "why": "读写锁靠共享计数把\"有没有读者在场\"压成一次写锁的获取/释放：首读者上写锁、末读者解写锁，其余读者仅动计数因而可并发。代价是计数本身要用 `_read_count_lock` 保护，且连续读者可能饿死写者。",
+    "why_en": "A hand-built read-write lock uses a shared counter so the first reader takes the write lock and the last reader releases it, letting readers in between run concurrently while writers stay excluded.",
+    "tags": [
+      "read-write-locks",
+      "reader-writer",
+      "concurrency"
+    ],
+    "codeSample": "def get(self, key):\n    with self._read_count_lock:\n        self._read_count += 1\n        if self._read_count == 1:   # first reader\n            self._lock.acquire()    # block writers\n    try:\n        return self._data.get(key)\n    finally:\n        with self._read_count_lock:\n            self._read_count -= 1\n            if self._read_count == 0:  # last reader\n                self._lock.release()",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "read-write lock",
+        "meaning": "读写锁(共享-独占锁)：多个读者可同时持读锁，写者独占，读多写少时减少读读阻塞。",
+        "meaningEn": "A read-write lock lets many readers hold a shared lock at once while a writer takes it exclusively."
+      },
+      {
+        "term": "_read_count",
+        "meaning": "记录当前在场读者数量的计数器，决定何时上/解写锁。",
+        "meaningEn": "_read_count tracks how many readers are currently active, deciding when to grab or drop the write lock."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-045",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "fine-grained-locking",
+    "q": "对 sessionId 这类无界资源用细粒度锁，锁字典会怎样？",
+    "q_en": "With fine-grained locks over an unbounded resource like sessionId, what happens to the lock dict?",
+    "scenario": "一个按 sessionId 加锁的服务，sessionId 持续新增、永不复用；每见到新 id 就懒建一把锁存进字典。",
+    "scenario_en": "A service locks per sessionId; sessionIds keep growing and are never reused, and each new id lazily gets its own lock stored in a dict.",
+    "options": [
+      "字典随 id 只增不减，需主动清理不再用的锁",
+      "字典大小会自动封顶，闲置的锁会被运行时回收",
+      "旧的座位锁会被运行时自动合并成一把共享锁",
+      "增长完全无害，一把锁只占几字节可以忽略"
+    ],
+    "options_en": [
+      "The dict grows without bound, so unused locks must be cleaned up.",
+      "The dict self-caps and idle locks are reclaimed by the runtime.",
+      "Old locks are auto-merged by the runtime into one shared lock.",
+      "Growth is harmless since one lock is only a few bytes."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "座位这类固定集合无所谓，但 sessionId 无界时锁字典是只增不减的内存泄漏，要按 TTL 或引用计数清理空闲锁。",
+      "字典由代码显式写入，永远不会自己缩小；被它引用着的锁也不会被运行时回收。",
+      "不存在自动合并；每个 id 的锁相互独立，合并会破坏细粒度隔离。",
+      "单把锁虽小，但无界累积到数百万条目会吃满内存并拖慢字典操作。"
+    ],
+    "optionExplanations_en": [
+      "A fixed seat set is fine, but an unbounded sessionId space makes the lock dict a monotonically growing leak that must be pruned by TTL or refcount.",
+      "The dict only grows via explicit writes and never shrinks; locks it references stay reachable and are not reclaimed.",
+      "There is no auto-merge; each id's lock is independent, and merging would break the fine-grained isolation.",
+      "One lock is small, but millions of them saturate memory and slow every dict operation."
+    ],
+    "why": "细粒度锁的锁字典本身是随资源增长的状态；固定资源（座位）可放任，无界资源（session/连接）必须清理空闲锁，否则内存单调上涨。代价是清理逻辑要判断锁是否仍被持有。",
+    "why_en": "The fine-grained lock dictionary grows with the resource set, so a fixed set like seats is fine but an unbounded one like sessions needs idle locks pruned or memory climbs forever.",
+    "tags": [
+      "fine-grained-locking",
+      "memory",
+      "cleanup"
+    ],
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "存活时间(TTL)：条目在被自动清除前允许存在的时长。",
+        "meaningEn": "TTL (Time To Live) is how long an entry may exist before it is automatically evicted."
+      },
+      {
+        "term": "引用计数",
+        "meaning": "引用计数(refcount)：记录一个锁当前被多少处引用/持有，归零时才可安全清理。",
+        "meaningEn": "A reference count tracks how many holders a lock has, so it can be cleaned up only when the count hits zero."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-046",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "atomics",
+    "q": "低竞争下更新单个计数器，为什么原子变量常比锁更划算？",
+    "q_en": "For a single counter under low contention, why is an atomic often cheaper than a lock?",
+    "scenario": "一个高频调用、几乎无竞争的单变量计数器，纠结用 Lock 还是原子自增。",
+    "scenario_en": "A single counter is updated very frequently with almost no contention; the choice is between a Lock and an atomic increment.",
+    "options": [
+      "锁被争用时等待者只能自旋或被 OS 挂起",
+      "原子变量顺便还能保证多个字段之间的一致性",
+      "无竞争时获取一把锁也总要陷入内核态的系统调用",
+      "原子自增会自动把当前计数持久化到磁盘"
+    ],
+    "options_en": [
+      "A contended lock makes waiters spin or get parked by the OS.",
+      "Atomics also keep several fields consistent with each other for free.",
+      "Even uncontended, taking a lock must trap into a kernel-mode syscall.",
+      "An atomic increment automatically persists the current count to disk."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "锁一旦被占，等待线程只能空转自旋或被内核 park/唤醒，都是纯损耗；单变量用 CAS 类原子指令在硬件完成读-改-写，低竞争下多半一次成功。",
+      "原子变量只护单个值，多字段一致要靠锁，这是它的局限而非优点。",
+      "无竞争的锁多走用户态快路径，不一定进内核；开销主要出现在争用时。",
+      "原子性只关乎不可分割，与持久化无关，数据仍在内存里。"
+    ],
+    "optionExplanations_en": [
+      "Once a lock is held, waiters just spin or get parked and woken by the kernel — pure waste; a single-variable CAS does the read-modify-write in hardware and usually succeeds first try under low contention.",
+      "Atomics only guard one value; keeping multiple fields consistent still needs a lock, which is their limit, not a perk.",
+      "An uncontended lock often uses a user-space fast path and need not enter the kernel; cost shows up under contention.",
+      "Atomicity means indivisible, not durable — the data stays in memory."
+    ],
+    "why": "锁不是免费的——争用时的自旋或 OS park/唤醒是纯等待开销，这正是原子变量存在的动机；单变量更新用 CAS 在硬件完成，还没有锁可忘记释放。代价是它只护单个值。",
+    "why_en": "Locks aren't free — a contended one makes waiters spin or get parked by the OS, which is exactly why atomics exist; a single-variable CAS does the update in hardware with no lock to forget to release.",
+    "tradeoff": "锁的争用开销 vs 原子变量只护单值",
+    "whenOtherWins": "一旦正确性依赖两个及以上字段同时更新，原子变量无能为力，必须用锁把它们放进同一临界区。",
+    "tags": [
+      "atomics",
+      "lock-cost",
+      "cas"
+    ],
+    "termDefinitions": [
+      {
+        "term": "CAS",
+        "fullName": "Compare-And-Swap",
+        "meaning": "比较并交换(CAS)：仅当变量当前值等于预期值时才写入新值的原子指令。",
+        "meaningEn": "CAS (Compare-And-Swap) is an atomic instruction that writes a new value only if the current value still equals the expected one."
+      },
+      {
+        "term": "park",
+        "meaning": "操作系统把等待线程挂起、不占 CPU，直到锁可用再唤醒。",
+        "meaningEn": "Parking is the OS suspending a waiting thread off the CPU until it is woken when the lock frees."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-047",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "coarse-locking",
+    "q": "手动 acquire/release 锁时，临界区中途抛异常会怎样？",
+    "q_en": "With manual acquire/release, what happens if the critical section throws?",
+    "scenario": "订票代码用 `lock.acquire()` … `lock.release()` 包住临界区，中间一步在异常时可能抛错，且没有 try/finally。",
+    "scenario_en": "Booking code brackets a critical section with `lock.acquire()` … `lock.release()`, a middle step can throw, and there is no try/finally.",
+    "options": [
+      "异常跳过 release，锁永不释放，后续线程全部卡死",
+      "异常会自动触发 release，所以无需任何额外处理",
+      "要等 Python 解释器进程退出时才会统一释放这把锁",
+      "异常只影响当前线程，别的线程拿锁不受任何影响"
+    ],
+    "options_en": [
+      "The exception skips release, the lock is held forever, and later threads all hang.",
+      "The exception auto-triggers release, so nothing extra is needed.",
+      "The lock is only released when the interpreter process exits.",
+      "The exception affects only this thread; others acquire the lock fine."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "acquire 后异常直接跳过下面那行 release，这把锁再没人解开；所有等它的线程无限阻塞，系统表现为假死，只能重启恢复。",
+      "只有 with 或 try/finally 才保证释放；裸 acquire/release 遇异常不会自动解锁。",
+      "锁不会等到进程退出才释放，那时线程早已全部饿死；进程退出不是恢复手段。",
+      "未释放的锁是共享状态，别的线程再 acquire 就永久等待，绝非只影响本线程。"
+    ],
+    "optionExplanations_en": [
+      "After acquire, the exception skips the release below it, so the lock is held forever and every thread waiting on it hangs — the system looks frozen and needs a restart.",
+      "Only with or try/finally guarantees release; a bare acquire/release does not auto-unlock on an exception.",
+      "The lock is not held until process exit — threads starve long before that, and process exit is not a recovery path.",
+      "An unreleased lock is shared state, so any other thread that acquires it waits forever; it is not thread-local."
+    ],
+    "why": "正常路径 acquire→临界区→release；若中途抛异常就跳过 release，锁被永久持有、等待线程全卡死，只能重启恢复。改用 `with lock:` 让退出块时（含异常）都自动释放。",
+    "why_en": "Normally you acquire, run the critical section, then release; if it throws, release is skipped and the lock is held forever so waiting threads hang until a restart — `with lock:` releases on exit either way.",
+    "tags": [
+      "coarse-locking",
+      "exception-safety",
+      "context-manager"
+    ],
+    "codeSample": "# BROKEN: exception skips release, lock held forever\nlock.acquire()\nrisky()            # may raise\nlock.release()\n\n# Fixed: context manager releases on normal exit AND on exception\nwith lock:\n    risky()",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "context manager",
+        "meaning": "上下文管理器：`with` 语句进入时获取、退出时（含异常）自动释放资源的对象。",
+        "meaningEn": "A context manager is an object whose resource is acquired on entering a with block and released on exit, even on an exception."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-048",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "thread-confinement",
+    "q": "人触发、QPS 不高的订票题，面试时该先上线程封闭分区吗？",
+    "q_en": "For a human-triggered, low-QPS booking question, should you reach for thread confinement first?",
+    "scenario": "面试官出订票题，操作由人工点击触发、并发量温和；候选人想直接上按区分线程的 shared-nothing 分区。",
+    "scenario_en": "In a booking question triggered by human clicks with modest concurrency, the candidate wants to jump straight to shared-nothing per-section threads.",
+    "options": [
+      "不该，先用粗粒度锁，被追问扩展性再提分区",
+      "该，从一开始就分区能彻底消除所有锁的开销",
+      "该，因为粗粒度锁在任何并发规模下都是错的",
+      "不该，因为线程封闭无法保证操作的正确性"
+    ],
+    "options_en": [
+      "No — start with coarse locking and mention partitioning only if pushed on scale.",
+      "Yes — partitioning from day one removes all lock overhead.",
+      "Yes, because coarse locking is wrong at any concurrency level.",
+      "No, because thread confinement cannot guarantee correctness."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "人触发的操作同一微秒撞锁的不过几十个，粗粒度锁绰绰有余；线程封闭是应对机器级流量的手段，过早引入只增架构复杂度。",
+      "分区把同步复杂度换成分区、路由、跨分区协调，并非零成本，低并发下得不偿失。",
+      "粗粒度锁对短临界区、中等竞争完全正确且够快，绝非任何并发下都错。",
+      "线程封闭正确性没问题（不共享即无竞态），它的短板是架构开销而不是不正确。"
+    ],
+    "optionExplanations_en": [
+      "Human-triggered ops rarely have more than a few dozen threads hitting a lock in the same microsecond, so coarse locking is plenty; confinement is for machine-scale traffic and only adds architectural complexity here.",
+      "Partitioning swaps sync complexity for routing and cross-partition coordination — not free, and a net loss at low concurrency.",
+      "Coarse locking is fully correct and fast for short critical sections under moderate contention, not wrong at any scale.",
+      "Thread confinement is correct (no sharing, no race); its weakness is architectural overhead, not incorrectness."
+    ],
+    "why": "是否分区由负载决定：人触发、温和 QPS 下粗粒度锁最简单也够用，线程封闭属于机器级流量（连接池、缓存万级 QPS）才值得；过早分区是典型的过早优化。代价是分区带来路由与跨分区协调复杂度。",
+    "why_en": "Load decides: under human-triggered modest QPS a coarse lock is simplest and enough, while thread confinement earns its keep only for machine-scale traffic, so partitioning early is premature optimization.",
+    "tradeoff": "粗粒度锁的简单 vs 线程封闭的扩展性",
+    "whenOtherWins": "当面对机器生成流量、锁竞争成为真实瓶颈（如每秒上万次连接或缓存操作）时，才改用分区把每份状态交给专属线程。",
+    "tags": [
+      "thread-confinement",
+      "premature-optimization",
+      "coarse-locking"
+    ],
+    "termDefinitions": [
+      {
+        "term": "thread confinement",
+        "meaning": "线程封闭(shared-nothing)：把数据分片，每片只由一个线程独占访问，从而免锁。",
+        "meaningEn": "Thread confinement (shared-nothing) partitions data so each slice is owned by exactly one thread, removing the need for locks."
+      },
+      {
+        "term": "QPS",
+        "fullName": "Queries Per Second",
+        "meaning": "每秒查询数(QPS)：单位时间到达系统的请求量，衡量并发压力。",
+        "meaningEn": "QPS (Queries Per Second) is how many requests hit the system each second, a measure of concurrency load."
+      }
+    ]
+  },
+  {
+    "id": "lld-concurrency-correctness-049",
+    "topic": "low-level-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "check-then-act",
+    "q": "懒初始化单例的并发保护，和订座是同一类问题吗？根因一样吗？",
+    "q_en": "Is guarding a lazy singleton the same class of problem as booking a seat, with the same root cause?",
+    "scenario": "懒加载单例：首次调用才创建那个昂贵对象，多个线程可能同时发现实例还不存在。",
+    "scenario_en": "A lazily-initialized singleton creates its expensive object on first use, and several threads may find the instance missing at the same time.",
+    "options": [
+      "同为 check-then-act，但根因是稀缺",
+      "完全不同，单例根本不涉及任何线程共享的状态",
+      "一样，两者根因都是多字段不变量被并发破坏",
+      "无需加锁，因为单例对象的创建过程本身就是天然原子的"
+    ],
+    "options_en": [
+      "Same shape (check-then-act), but the root cause is scarcity, not a data race.",
+      "Totally different — a singleton involves no thread-shared state at all.",
+      "Same — both are rooted in a multi-field invariant being broken.",
+      "No lock needed, since creating the singleton object is itself naturally atomic."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "\"检查实例是否存在→不存在就创建\"正是 check-then-act，加锁手法与订座相同；但它要防的是重复做昂贵创建（稀缺），不是订座那种状态被写坏。",
+      "单例实例是所有线程共享的状态，两个线程可能各建一个，正是共享状态问题。",
+      "单例只有\"实例存不存在\"一个条件，不是多字段不变量；订座才涉及 owner 字典多键。",
+      "创建对象是多步（分配、初始化、赋值），并非原子，两线程可各建一份。"
+    ],
+    "optionExplanations_en": [
+      "\"Check if the instance exists, else create it\" is exactly check-then-act and locks the same way as booking, but here you are guarding against redoing an expensive creation (scarcity), not against state being corrupted.",
+      "The singleton instance is shared across threads, and two threads can each build one — that is a shared-state problem.",
+      "A singleton has one condition (does the instance exist), not a multi-field invariant; booking is what spans many keys.",
+      "Object creation is multi-step (allocate, init, assign), not atomic, so two threads can each build one."
+    ],
+    "why": "单例懒初始化与订座同属先查后建的形状，锁住\"检查+创建\"即可；差别在动机——它防的是重复付出昂贵创建成本（scarcity），而非避免状态被并发写坏。双重检查锁等优化留待 Scarcity 场景细化。",
+    "why_en": "Lazy singleton init has the same check-then-act shape as booking and locks the check-and-create together, but its motive is scarcity — avoiding a repeated expensive build — rather than preventing corrupted state.",
+    "tradeoff": "check-then-act 手法相同 vs 根因(稀缺 vs 数据竞争)不同",
+    "whenOtherWins": "若创建很廉价、重复创建无所谓，连锁都可省——这恰恰说明它的根因是稀缺而非正确性。",
+    "tags": [
+      "check-then-act",
+      "singleton",
+      "scarcity"
+    ],
+    "termDefinitions": [
+      {
+        "term": "check-then-act",
+        "meaning": "先检查条件再基于它行动，两步之间可被别的线程插入而失效。",
+        "meaningEn": "Check-then-act reads a condition and then acts on it, and another thread can invalidate the condition in between."
+      },
+      {
+        "term": "scarcity",
+        "meaning": "稀缺：某资源创建昂贵或数量有限，需避免重复或过量创建，是懒初始化单例的根因。",
+        "meaningEn": "Scarcity means a resource is expensive or limited to create, so you avoid rebuilding it — the real driver behind lazy singleton init."
+      }
+    ]
   }
 ]

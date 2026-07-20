@@ -4088,5 +4088,257 @@
     ],
     "scenario": "搜索 QPS 涨了但磁盘还够用，要判断该扩哪一类节点，先厘清两类节点的分工。",
     "scenario_en": "Search QPS is rising while disk is still fine, so you must decide which node type to scale by first separating their responsibilities."
+  },
+  {
+    "id": "sd-deep-dives-elasticsearch-068",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "pagination",
+    "scenario": "日志检索用 search_after 顺序翻几十万条，很多文档的 timestamp 撞在同一毫秒；工程师的 sort 只写了 [timestamp desc]，没带 _id 之类唯一 tie-breaker。",
+    "q": "少了唯一 tie-breaker，深翻页会怎么坏掉？",
+    "options": [
+      "同 timestamp 的文档没有稳定顺序，游标切在这批中间，部分文档重复、部分被漏",
+      "Elasticsearch 直接拒绝该请求，强制你先补一个唯一排序键才允许继续往下翻页",
+      "结果完整无缺，同 timestamp 的文档内部每次随机排列而已，对翻页完整性无伤大雅",
+      "只有 _score 相关性打分会受影响，前后翻页返回的文档集合本身仍然正确"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Tied-timestamp docs have no stable order, so the cursor lands mid-group and some repeat while others are skipped",
+      "Elasticsearch rejects the request outright and forces you to add a unique sort key before letting you page further",
+      "Results stay complete; tied-timestamp docs merely shuffle randomly within the group, harmless to pagination",
+      "Only the _score relevance ranking is affected, and the set of documents returned across pages is still correct"
+    ],
+    "why": "search_after 靠「取上一页最后一条 sort 值之后的文档」切页；排序键不唯一时同值文档没有全序，游标切不干净就会跨页重复或漏行。修法：sort 末尾补一个唯一键（如 _id）凑成全序，多存一列换来翻页不重不漏。",
+    "why_en": "Search_after pages by fetching docs after the previous page's last sort value, so a non-unique sort key leaves tied docs without a total order and the cursor can't split them cleanly — add a unique key like _id to the sort.",
+    "tags": [
+      "elasticsearch",
+      "pagination",
+      "search-after"
+    ],
+    "termDefinitions": [
+      {
+        "term": "search_after",
+        "meaning": "用上一页最后一条的 sort 值作为下一页起点的深分页方式，只能向前翻。",
+        "meaningEn": "Search_after paginates by using the previous page's last sort values as the next page's starting point, moving forward only."
+      },
+      {
+        "term": "tie-breaker（排序决胜键）",
+        "meaning": "当主排序字段出现相同值时，用来给文档定出唯一先后顺序的附加排序键。",
+        "meaningEn": "A tie-breaker is an extra sort key that assigns a unique order to documents when the main sort field has equal values."
+      },
+      {
+        "term": "_id",
+        "meaning": "Elasticsearch 每个文档的唯一标识，常被拿来当 tie-breaker 保证排序是全序。",
+        "meaningEn": "The _id is Elasticsearch's unique per-document identifier, often used as a tie-breaker to make the sort a total order."
+      },
+      {
+        "term": "_score",
+        "meaning": "文档对查询的相关性得分，默认排序依据，与翻页游标是否唯一无关。",
+        "meaningEn": "The _score is a document's relevance score for a query, the default sort key, unrelated to whether the pagination cursor is unique."
+      }
+    ],
+    "q_en": "With no unique tie-breaker, how does deep pagination break?",
+    "scenario_en": "A log search pages through hundreds of thousands of results with search_after; many docs share the same millisecond timestamp, and the engineer sorted only by [timestamp desc] with no _id tie-breaker.",
+    "optionExplanations": [
+      "同值文档缺全序，游标恰好落在这批中间时，无法判定「之后」是谁，于是这批文档在相邻页里重复或被跳过。",
+      "Elasticsearch 不会校验排序键唯一性、也不会拒绝，它照跑，坏结果要到翻页时才暴露。",
+      "同值内部顺序不稳定不是「无伤大雅」——正是它导致游标切不干净，进而漏行/重复。",
+      "问题出在切页边界而非打分，_score 正确也救不了缺失全序导致的重复与漏行。"
+    ],
+    "optionExplanations_en": [
+      "Tied docs lack a total order, so when the cursor sits inside that group there's no way to say what comes 'after' — those docs repeat or get skipped across adjacent pages.",
+      "Elasticsearch doesn't check sort-key uniqueness or reject the request; it runs, and the bad result only surfaces once you page.",
+      "Unstable order within a tie isn't 'harmless' — it's exactly what makes the cursor cut imprecisely and drop or duplicate rows.",
+      "The failure is at the page boundary, not in scoring; a correct _score can't fix repeats and gaps caused by a missing total order."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-elasticsearch-069",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "architecture",
+    "scenario": "商品搜索要在结果上做 faceting（按品类、价格区间统计计数），数据分布在多个 shard 上；团队在纠结是直接基于 Lucene 自建，还是上 Elasticsearch。",
+    "q": "跨分片的 faceting/聚合由哪一层提供，这也是选 Elasticsearch 的核心动机之一？",
+    "options": [
+      "Elasticsearch 协调层把各 shard 局部聚合合并成全局 facet，Lucene 不参与",
+      "Lucene 内核本身就能跨分片做全局聚合，Elasticsearch 只不过把查询请求原样转发过去罢了而已",
+      "由客户端应用层把全部命中文档拉回本地，再自己遍历统计出每一类的计数",
+      "由 master 主节点负责，它专门编排聚合任务、并合并来自各分片的局部结果"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Elasticsearch's coordinating layer merges each shard's local aggregation into a global facet; Lucene does none of that",
+      "The Lucene core natively performs the global cross-shard aggregation, and Elasticsearch merely forwards the query along",
+      "The client application layer pulls every matching document back and then iterates locally to tally each category's count",
+      "The master node is responsible, since it is dedicated to orchestrating aggregation tasks and merging each shard's results"
+    ],
+    "why": "聚合/faceting 是 Elasticsearch 编排层的活：协调节点把各 shard 的局部计数合并成全局 facet，Lucene 只管单机内核。需要跨分片 faceting 才选 ES 而非裸 Lucene。",
+    "why_en": "Aggregation and faceting live in Elasticsearch's orchestration layer — the coordinating node merges each shard's local counts into a global facet, while Lucene only owns the single-node search core, and that's a core reason to pick Elasticsearch over raw Lucene.",
+    "tags": [
+      "elasticsearch",
+      "aggregation",
+      "architecture"
+    ],
+    "termDefinitions": [
+      {
+        "term": "faceting",
+        "meaning": "给搜索结果按类别、价格区间等维度做计数统计（如电商侧边栏分类计数）。",
+        "meaningEn": "Faceting counts search results by dimensions like category or price range, such as an e-commerce sidebar's per-category counts."
+      },
+      {
+        "term": "aggregation（聚合）",
+        "meaning": "对匹配文档做分组统计（计数、求和、分桶）的操作，是 faceting 的底层能力。",
+        "meaningEn": "An aggregation groups and summarizes matching documents (counts, sums, buckets) and is the mechanism underneath faceting."
+      },
+      {
+        "term": "coordinating node（协调节点）",
+        "meaning": "接收客户端请求、把查询分发到各分片并合并结果的入口节点。",
+        "meaningEn": "The coordinating node is the entry point that receives client requests, fans queries out to shards, and merges the results."
+      },
+      {
+        "term": "shard（分片）",
+        "meaning": "索引被切分后的一块，1:1 对应一个 Lucene 索引，可分布到不同主机。",
+        "meaningEn": "A shard is one slice of an index, mapped 1:1 to a Lucene index and spread across hosts."
+      },
+      {
+        "term": "master node（主节点）",
+        "meaning": "负责集群级操作（增删节点、建删索引）的协调者，不参与聚合结果的合并。",
+        "meaningEn": "The master node coordinates cluster-level operations like adding nodes or creating indices, and is not involved in merging aggregation results."
+      },
+      {
+        "term": "Lucene",
+        "meaning": "Elasticsearch 底层的单机搜索库，负责倒排索引与搜索内核，不做分布式编排。",
+        "meaningEn": "Lucene is the single-node search library under Elasticsearch, owning the inverted index and search core but no distributed orchestration."
+      }
+    ],
+    "q_en": "Which layer provides cross-shard faceting/aggregation, one of the core motives for choosing Elasticsearch?",
+    "scenario_en": "A product search needs faceting on results (counts by category and price band) over data spread across many shards; the team is deciding between building directly on Lucene or adopting Elasticsearch.",
+    "optionExplanations": [
+      "协调节点收各分片的局部聚合再合并成全局 facet——这层分布式编排正是裸 Lucene 没有、要额外自建的。",
+      "Lucene 是单机搜索内核，没有跨分片概念，全局聚合必须由上层协调节点来合并。",
+      "把全部命中文档拉回应用层再统计，数据量一大就把网络和内存打爆，正是 ES 要替你省掉的活。",
+      "master 只管集群级操作（增删节点/索引），聚合合并是协调节点的职责，别混淆两种节点。"
+    ],
+    "optionExplanations_en": [
+      "The coordinating node collects each shard's local aggregation and merges it into a global facet — that distributed orchestration is exactly what raw Lucene lacks and you'd have to build.",
+      "Lucene is a single-node search core with no notion of shards, so global aggregation must be merged by the coordinating node above it.",
+      "Pulling every matching doc back to the app to tally blows up network and memory at scale — precisely the work Elasticsearch saves you.",
+      "The master only handles cluster-level operations (adding nodes/indices); merging aggregations is the coordinating node's job — don't conflate the two."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-elasticsearch-070",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "mapping",
+    "scenario": "商品搜索要在用户用词和商品标题用词不完全一致时也能召回相关商品（按含义/意图匹配），而不只是命中相同的词。",
+    "q": "要按「含义」而非「相同词」召回，mapping 里该用哪种字段能力？",
+    "options": [
+      "embedding 字段做语义搜索：按含义相近召回，用词不同也能命中",
+      "text 字段配 custom analyzer：把词归一化后进倒排索引，本质仍是共享词元匹配",
+      "keyword 字段：把整个值当不可切分的原子，只能做精确相等匹配",
+      "加大 from/size 分页深度，多翻几页自然覆盖到语义相近的结果"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "An embedding field for semantic search: it recalls by closeness of meaning, matching even when the words differ",
+      "A text field with a custom analyzer: it normalizes tokens into the inverted index, but still matches on shared tokens",
+      "A keyword field: it treats the whole value as one unsplittable atom and only does exact-equality matching",
+      "Increase from/size pagination depth — page further and you'll eventually cover the semantically similar results"
+    ],
+    "tradeoff": "语义召回（embedding） vs 词元精确匹配（analyzer/keyword）",
+    "why": "要按含义而非相同词面召回，就需要 embedding 字段做语义搜索；custom analyzer 只是把词归一化后仍进倒排索引，本质还是共享词元匹配。代价：语义召回更重，也可能引入相关性噪声。",
+    "why_en": "To recall by meaning rather than by identical words you need an embedding field for semantic search; a custom analyzer only normalizes tokens into the inverted index and still relies on shared terms, at the cost of a heavier, noisier recall path.",
+    "whenOtherWins": "当用户就是要精确命中相同词（如 SKU、书名、标签），text+analyzer 或 keyword 反而更合适，embedding 的语义召回会引入不相关结果。",
+    "tags": [
+      "elasticsearch",
+      "mapping",
+      "semantic-search"
+    ],
+    "table": {
+      "headers": [
+        "字段能力",
+        "匹配依据",
+        "跨词召回"
+      ],
+      "rows": [
+        [
+          "embedding",
+          "含义/向量",
+          "能"
+        ],
+        [
+          "text+analyzer",
+          "归一化词元",
+          "有限"
+        ],
+        [
+          "keyword",
+          "整值精确",
+          "否"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "embedding（嵌入向量）",
+        "meaning": "把文本编码成数值向量，含义相近的内容在向量空间中距离相近，支撑语义搜索。",
+        "meaningEn": "An embedding encodes text into a numeric vector so that semantically similar content is close together, enabling semantic search."
+      },
+      {
+        "term": "semantic search（语义搜索）",
+        "meaning": "按含义而非相同词面来召回结果，用词不同也能匹配。",
+        "meaningEn": "Semantic search retrieves results by meaning rather than identical words, matching even when the wording differs."
+      },
+      {
+        "term": "custom analyzer（自定义分析器）",
+        "meaning": "定义文本如何被切词和归一化（小写、去词尾等）后写入倒排索引的规则。",
+        "meaningEn": "A custom analyzer defines how text is tokenized and normalized (lowercasing, stemming) before it goes into the inverted index."
+      },
+      {
+        "term": "inverted index（倒排索引）",
+        "meaning": "从词到包含该词的文档列表的映射，让关键词查找接近 O(1)。",
+        "meaningEn": "An inverted index maps each term to the documents containing it, turning keyword lookup into a near constant-time operation."
+      },
+      {
+        "term": "keyword 字段",
+        "meaning": "把整个值当作一个不可切分的原子来索引，用于精确相等匹配和排序。",
+        "meaningEn": "A keyword field indexes the whole value as one unsplittable atom, used for exact-match and sorting."
+      },
+      {
+        "term": "text 字段",
+        "meaning": "会被分析器切词后进倒排索引的字段类型，用于全文关键词匹配。",
+        "meaningEn": "A text field is analyzed into tokens in the inverted index and used for full-text keyword matching."
+      },
+      {
+        "term": "from/size",
+        "meaning": "按起始偏移和每页大小分页的方式，只影响返回哪一段结果，与召回什么无关。",
+        "meaningEn": "From/size paginates by start offset and page size; it only affects which slice is returned, not what gets recalled."
+      }
+    ],
+    "q_en": "To recall by meaning rather than identical words, which mapping field capability fits?",
+    "scenario_en": "A product search must recall relevant items even when the user's words and the product title's words don't fully match (matching by meaning/intent), not just hits on identical terms.",
+    "optionExplanations": [
+      "embedding 把文本编码成向量，按含义相近召回，正好解决用词不一致却想匹配意图的场景。",
+      "分析器只能做小写、去词尾这类归一化，匹配仍落在共享词元上，用词完全不同就召不回。",
+      "keyword 把整值当原子只做精确相等，连近义词都匹配不了，更谈不上语义召回。",
+      "分页只决定返回结果的哪一段，召回集合本身没变，翻再多页也变不出语义相近的新文档。"
+    ],
+    "optionExplanations_en": [
+      "An embedding encodes text into a vector and recalls by closeness of meaning — exactly the case where words differ but you want to match intent.",
+      "The analyzer can only lowercase and stem, but matching still rests on shared tokens, so completely different wording won't be recalled.",
+      "A keyword field treats the whole value as an atom for exact equality, so it can't even match synonyms, let alone do semantic recall.",
+      "Pagination only picks which slice of results to return; the recalled set is unchanged, so paging further never conjures semantically similar new docs."
+    ]
   }
 ]

@@ -3958,5 +3958,128 @@
       "Reciting source code was never the interview target — the target is design judgment, not memorization.",
       "Senior's watchword is proactively spotting bottlenecks and articulating tradeoffs; staff additionally needs fluent command of scaling and consistency, with just working-level CRDT knowledge."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-google-docs-073",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "high-level-design",
+    "scenario": "多人并发编辑同时抛出两类难题：编辑冲突的一致性（谁的插入/删除赢），和百万并发 WebSocket 连接的扩展性。",
+    "scenario_en": "Concurrent multi-user editing raises two problems at once: consistency of conflicting edits (whose insert/delete wins) and scaling to millions of concurrent WebSocket connections.",
+    "q": "高层设计阶段应该先攻哪一类，把另一类显式推到 deep dive？",
+    "q_en": "Which class should the high-level design tackle first, deferring the other to a deep dive?",
+    "options": [
+      "先扩展（一致性哈希分片 WebSocket 服务），一致性留到 deep dive",
+      "先一致性（OT 中心定序），扩展留到 deep dive",
+      "一致性和扩展都必须在高层设计里彻底做完",
+      "两类都推迟，高层设计只画 CRUD 与 WebSocket 骨架"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "一致性是核心写路径的正确性前提——没有 OT 定序编辑器根本不能用；扩展是叠在正确模型之上的容量层，且「单文档 ≤100 编辑者」已让单机可行，可放心推迟。代价：deep dive 要回来补跨服务器路由。",
+    "why_en": "Consistency is a correctness prerequisite of the write path — without OT ordering the editor simply doesn't work — while scaling is a capacity layer on top, and the 100-editor-per-doc cap already keeps a single server viable, so you can safely defer it.",
+    "tags": [
+      "google-docs",
+      "high-level-design",
+      "approach"
+    ],
+    "options_en": [
+      "Scale first (shard WebSocket servers with a consistent hash ring), defer consistency",
+      "Consistency first (central OT ordering), defer scaling",
+      "Fully solve both consistency and scaling in the high-level design",
+      "Defer both, and only sketch CRUD plus a WebSocket skeleton"
+    ],
+    "termDefinitions": [
+      {
+        "term": "OT",
+        "fullName": "Operational Transformation",
+        "meaning": "操作变换（Operational Transformation）：中心服务器给编辑定全序，并按已应用的操作重写后到操作，使并发编辑收敛。",
+        "meaningEn": "OT, or operational transformation, uses a central server to totally order edits and rewrite later ops against applied ones so concurrent edits converge."
+      },
+      {
+        "term": "一致性哈希",
+        "fullName": "Consistent Hashing",
+        "meaning": "一致性哈希（consistent hashing）：把文档按 ID 映射到哈希环上的服务器，增删节点时只搬动少量连接。",
+        "meaningEn": "Consistent hashing maps each document by ID onto a hash ring of servers, so adding or removing a server relocates only a small fraction of connections."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "客户端与服务器之间保持打开的双向长连接，适合高频双向通信。",
+        "meaningEn": "WebSocket is a persistent, bidirectional connection between client and server, suited to high-frequency two-way messaging."
+      },
+      {
+        "term": "CRUD",
+        "fullName": "Create Read Update Delete",
+        "meaning": "增删改查（Create/Read/Update/Delete）：一套标准的资源管理接口。",
+        "meaningEn": "CRUD stands for create, read, update, and delete — the standard set of resource-management operations."
+      }
+    ],
+    "optionExplanations": [
+      "先分片会把还没确定的一致性模型钉死在错误结构上——扩展必须尊重已有的定序机制，方向反了。",
+      "先立起 OT 定序，写路径才有正确语义；扩展只是在其上加服务器和路由，可以后补。",
+      "高层设计就想彻底解决扩展是过度设计，会吃光时间却拿不到能跑通的核心路径。",
+      "只画骨架等于回避了这题真正的难点（编辑冲突），高层设计必须先给出一个能收敛的写路径。"
+    ],
+    "optionExplanations_en": [
+      "Sharding first pins an undecided consistency model onto the wrong structure — scaling must respect the ordering mechanism, so this reverses the order.",
+      "Standing up OT ordering first gives the write path correct semantics; scaling merely adds servers and routing on top and can come later.",
+      "Fully solving scaling in the high-level design is over-engineering that burns time without a working core path.",
+      "Only sketching a skeleton dodges the real hard part (edit conflicts); the high-level design must first produce a converging write path."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-google-docs-074",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "ot",
+    "scenario": "OT 服务器给一份文档定全序：收到一条编辑操作后，先按已应用的操作把它变换到当前状态，再写入操作日志。",
+    "scenario_en": "An OT server totally orders one document: when an edit arrives it first transforms the op against already-applied ops to fit the current state, then writes it to the operation log.",
+    "q": "OT 服务器的变换只发生在「应用前」这一次吗？",
+    "q_en": "Does the OT server transform an op only once, right before applying it?",
+    "options": [
+      "是，应用前变换一次就够，广播时按定序结果原样转发",
+      "是的，服务器只负责定序，变换永远是客户端的事",
+      "操作在发回给客户端之前也要再变换一次",
+      "只有产生冲突的操作才需要在广播前变换，其余直接转发"
+    ],
+    "answer": [
+      2
+    ],
+    "why": "OT 的变换发生在两处：操作应用到服务器文档之前，以及稍后发回客户端之前。定了全序还不够——操作要按这个全序重写后再下发，客户端拿到的才是已对齐服务器顺序的版本。",
+    "why_en": "In OT, transformation happens at two points: before an op is applied to the server's document, and again before it's sent back to clients, so what each client receives is already reconciled with the server's ordering.",
+    "tags": [
+      "google-docs",
+      "ot",
+      "write-path"
+    ],
+    "options_en": [
+      "Yes, one transform before applying is enough; broadcast forwards the ordered op as-is",
+      "Yes, the server only orders ops and transformation is always the client's job",
+      "The op must be transformed again before it is sent back to clients",
+      "Only conflicting ops need transforming before broadcast; the rest are forwarded directly"
+    ],
+    "termDefinitions": [
+      {
+        "term": "OT",
+        "fullName": "Operational Transformation",
+        "meaning": "操作变换（Operational Transformation）：中心服务器给编辑定全序，并按已应用的操作重写后到操作，使并发编辑收敛。",
+        "meaningEn": "OT, or operational transformation, uses a central server to totally order edits and rewrite later ops against applied ones so concurrent edits converge."
+      }
+    ],
+    "optionExplanations": [
+      "只变换一次会漏掉下发这一步：原样转发的操作可能不匹配接收端的顺序，仍会串位。",
+      "服务器不做变换就没人定全序了，客户端各自变换也无法收敛——服务端定序+变换是 OT 的地基。",
+      "对：应用前变换让操作落到服务器当前状态，广播前再变换让它对齐要下发给客户端的顺序。",
+      "变换需不需要不看「是否冲突」这个即时判断，而看操作与全序的位置关系，条件式转发会漏掉需要顺移的情形。"
+    ],
+    "optionExplanations_en": [
+      "Transforming only once skips the send step: an op forwarded as-is may not match the receiver's order and still lands at the wrong position.",
+      "If the server never transforms, nobody sets the total order and per-client transforms can't converge — server ordering plus transform is OT's foundation.",
+      "Correct: the apply-time transform lands the op on the server's current state, and the pre-broadcast transform aligns it with the order clients will apply.",
+      "Whether a transform is needed depends on the op's position relative to the total order, not an instant 'did it conflict' check, so conditional forwarding misses shifts."
+    ]
   }
 ]

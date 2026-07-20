@@ -3663,5 +3663,158 @@
       "A high-level box diagram alone, without bottleneck analysis, capacity estimates, or failure handling, does not carry staff-level depth.",
       "Quickly zero in on the actual bottleneck, explain how the design evolves with scale, know when to escalate complexity, and anticipate failure modes and operational cost."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-instagram-075",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "deep-dive",
+    "scenario": "5 亿 DAU 的 Instagram 改用 fan-out on write：发帖时就把 postId 预写进每个粉丝的 feed，读 feed 必须是一次快操作、取回按时间排序的 top N。",
+    "scenario_en": "Instagram (500M DAU) switches to fan-out on write: on posting, the postId is precomputed into each follower's feed, and reading a feed must be one fast op returning the top N in time order.",
+    "q": "预计算好的 feed 该存在哪种存储里？",
+    "q_en": "Which storage should hold the precomputed feed?",
+    "options": [
+      "Redis 排序集（ZSET）：feed 在内存，一次取回 top N",
+      "DynamoDB 专门 Feeds 表：天然落盘、故障不丢，所以直接选它",
+      "关系型库每次请求实时 JOIN 算 feed，不预存结构",
+      "S3 给每个用户存一份 feed JSON，请求时整份拉取"
+    ],
+    "options_en": [
+      "A Redis sorted set (ZSET): the feed lives in memory, top N in one op.",
+      "A dedicated DynamoDB Feeds table: it persists to disk and survives failures, so just pick it.",
+      "A relational DB that JOINs to compute the feed live on every request, storing no structure.",
+      "S3 holding one feed JSON per user, pulled in full on each request."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "feed 每次打开都读、且要一次取回按时间排序的 top N，Redis 内存态 ZSET 读写最快，直接压进 500ms 读预算。代价：内存态易失，得配 AOF/Sentinel 才不丢 feed。",
+    "why_en": "A feed is read on every open and must return the sorted top N in one op, so an in-memory Redis ZSET is fastest and fits the 500ms read budget, at the cost of needing AOF and Sentinel so feeds survive a crash.",
+    "whenOtherWins": "若不想为持久性额外跑 Sentinel/AOF、又能接受略高的读延迟，专门的 DynamoDB Feeds 表把 feed 落盘、节点故障不丢，反而更省心。",
+    "tradeoff": "内存 ZSET 极速读写 vs DynamoDB Feeds 表天然持久",
+    "tags": [
+      "instagram",
+      "deep-dive",
+      "feed-storage",
+      "redis"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "读写延迟",
+        "持久性",
+        "成本"
+      ],
+      "rows": [
+        [
+          "Redis(ZSET)",
+          "内存级最快",
+          "需AOF/Sentinel",
+          "内存贵"
+        ],
+        [
+          "DynamoDB Feeds表",
+          "毫秒级较慢",
+          "天然落盘",
+          "按量较省"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "ZSET",
+        "meaning": "Redis 的有序集合，成员按分数(如时间戳)排序，取 top N 是一次 O(logN) 操作。",
+        "meaningEn": "A ZSET is a Redis sorted set whose members are ordered by a score such as a timestamp, so fetching the top N is a single O(logN) operation.",
+        "fullName": "Sorted Set"
+      },
+      {
+        "term": "DynamoDB",
+        "meaning": "AWS 的托管 NoSQL 键值/文档库，天然持久化、按吞吐量水平扩展。",
+        "meaningEn": "DynamoDB is AWS's managed NoSQL key-value store that persists to disk and scales horizontally by provisioned throughput."
+      },
+      {
+        "term": "AOF",
+        "meaning": "Redis 把每条写命令追加到磁盘日志，崩溃后可重放恢复数据。",
+        "meaningEn": "AOF makes Redis append every write command to an on-disk log so data can be replayed and recovered after a crash.",
+        "fullName": "Append-Only File"
+      },
+      {
+        "term": "Sentinel",
+        "meaning": "Redis 的高可用组件，监控主节点并在故障时自动切换到从节点。",
+        "meaningEn": "Sentinel is Redis's high-availability component that monitors the primary and automatically fails over to a replica."
+      }
+    ],
+    "optionExplanations": [
+      "ZSET 常驻内存，取 top N 是一次 O(logN) 操作，无需二次聚合。",
+      "持久化的专用 feed 表，故障不丢；当持久性比极致读延迟更重要时更合适，但单次读比内存慢。",
+      "这是 fan-out on read 的实时聚合，不是「存」好的 feed，5 亿 DAU 下聚合读会拖垮延迟。",
+      "对象存储适合冷数据大文件；每次整份拉 JSON 再反序列化，扛不住热点 feed 的高频小读。"
+    ],
+    "optionExplanations_en": [
+      "A ZSET stays in memory and fetching the top N is one O(logN) op with no second aggregation.",
+      "A durable feed table loses nothing on failure and wins when persistence matters more than raw latency, but a single read is slower than memory.",
+      "That is live fan-out-on-read aggregation, not a stored feed; at 500M DAU the aggregate read blows the latency budget.",
+      "Object storage suits cold large files; pulling a whole JSON and deserializing it per request cannot serve the high-frequency small reads of a hot feed."
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-instagram-076",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "hld",
+    "scenario": "Instagram HLD 阶段：读 feed 要先查 Follow 表拿关注列表，再聚合这些人的近期帖子；发帖和读 feed 都要用到帖子数据。",
+    "scenario_en": "Instagram HLD stage: reading a feed first queries the Follow table for the followed list, then aggregates their recent posts; both posting and feed reads touch post data.",
+    "q": "feed 生成逻辑放哪个服务？",
+    "q_en": "Which service should own feed-generation logic?",
+    "options": [
+      "先放进 Post Service：feed 读依赖帖子数据，省一层服务",
+      "立刻拆出独立 Feed Service：微服务就该一功能一服务",
+      "放进 Follow Service：feed 第一步就是查用户的关注关系",
+      "放进 API Gateway：让网关直接聚合各表，少一跳"
+    ],
+    "options_en": [
+      "Keep it in the Post Service: feed reads depend on post data, saving a service.",
+      "Split out a dedicated Feed Service immediately — one feature, one microservice.",
+      "Put it in the Follow Service, since a feed first queries the user's follow relationships.",
+      "Put it in the API Gateway so the gateway aggregates the tables directly, saving a hop."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "现阶段 feed 读与帖子数据强耦合、流量还没大到要独立伸缩，放 Post Service 省掉一个服务和一次网络跳。代价：日后 feed 流量与发帖分化时得再拆分。",
+    "why_en": "For now feed reads are tightly coupled to post data and traffic is not yet large enough to scale separately, so keeping it in the Post Service saves a service and a network hop, at the cost of having to split it out later once feed and posting traffic diverge.",
+    "whenOtherWins": "当 feed 读流量与发帖流量明显分化、要各自独立扩容或独立发布节奏时，拆出专门 Feed Service 才值回它的运维成本。",
+    "tradeoff": "少一层服务(系统更简单) vs 独立 Feed Service(可独立伸缩，运维成本升)",
+    "tags": [
+      "instagram",
+      "hld",
+      "service-decomposition"
+    ],
+    "termDefinitions": [
+      {
+        "term": "微服务",
+        "meaning": "把系统拆成多个各自部署、各自伸缩的小服务，每个负责一块业务能力。",
+        "meaningEn": "Microservices split a system into small independently deployed and scaled services, each owning one business capability."
+      },
+      {
+        "term": "API Gateway",
+        "meaning": "所有客户端请求的统一入口，负责路由、认证、限流，通常不放业务聚合逻辑。",
+        "meaningEn": "An API Gateway is the single entry point for client requests, handling routing, auth, and rate limiting, and usually not business aggregation logic."
+      }
+    ],
+    "optionExplanations": [
+      "读 feed 依赖帖子元数据，与发帖同属一个域；流量未分化时合并可省一次网络往返。",
+      "「一功能一服务」是教条；本阶段耦合自然、流量未分化，多一个服务只增系统复杂度。",
+      "Follow Service 只提供第一步的关注列表；把聚合塞进它会让它越权持有帖子读逻辑。",
+      "API Gateway 该做路由/认证/限流，塞业务聚合会让网关变胖、难独立演进。"
+    ],
+    "optionExplanations_en": [
+      "Reading a feed depends on post metadata and belongs to the same domain as posting; while traffic has not diverged, merging saves a network round-trip.",
+      "\"One feature, one service\" is dogma; here coupling is natural and traffic has not diverged, so an extra service only adds system complexity.",
+      "The Follow Service only supplies the first-step followed list; pushing aggregation into it makes it overreach into post-read logic.",
+      "An API Gateway should route, auth, and rate-limit; stuffing aggregation in bloats it and blocks independent evolution."
+    ]
   }
 ]

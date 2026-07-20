@@ -3122,5 +3122,263 @@
       "ES isn't a strong-ACID transactional system — making it the sole primary database loses core data guarantees.",
       "Services split by responsibility without overdoing it, database constraints and incremental ratings hold the data."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-yelp-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "average-rating",
+    "scenario": "Yelp 每次搜索都实时 join reviews 算平均分太慢。团队想让读路径更便宜，但还没准备好做写时同步的增量更新。",
+    "scenario_en": "Computing the average rating by joining reviews on every Yelp search is too slow. The team wants a cheaper read path but isn't ready to build synchronous incremental updates on writes yet.",
+    "q": "介于实时聚合和写时增量更新之间的中间档方案是什么？",
+    "q_en": "What is the middle-tier approach between on-the-fly aggregation and incremental-on-write updates?",
+    "options": [
+      "每次搜索实时 join reviews 表并计算 AVG 再返回",
+      "每条评论写入时同步增量更新 average_rating 并加乐观锁防止并发覆盖",
+      "用 cron 定时任务周期性重算 average_rating 列，读时直接取",
+      "把全部 reviews 常驻 Redis，读时在内存里现算平均分"
+    ],
+    "options_en": [
+      "Join the reviews table and compute AVG live on every search.",
+      "Incrementally update average_rating synchronously on each new review, guarded by optimistic locking against concurrent overwrites.",
+      "Run a periodic cron job that recomputes the average_rating column, and just read it at query time.",
+      "Keep all reviews resident in Redis and compute the average in memory on each read."
+    ],
+    "answer": [
+      2
+    ],
+    "tradeoff": "读成本 vs 评分新鲜度",
+    "why": "cron 把聚合从「每次读」搬到固定周期一次，搜索只读预算好的 average_rating 列，省掉重复 join；代价是两次运行之间的新评论不反映，评分会陈旧。",
+    "why_en": "A cron job moves the aggregation off the read path to a fixed schedule, so search just reads a precomputed average_rating column instead of re-joining every time; the cost is that reviews between runs aren't reflected, so the rating goes stale.",
+    "whenOtherWins": "当写量可承受（Yelp 约 1 写/秒）时，写时同步增量更新更好——评分即时新鲜，永不陈旧，只多一次乐观锁读改写。",
+    "tags": [
+      "yelp",
+      "average-rating",
+      "fit"
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "读成本",
+        "新鲜度",
+        "何时选"
+      ],
+      "rows": [
+        [
+          "实时聚合",
+          "高",
+          "实时",
+          "原型/极小量"
+        ],
+        [
+          "cron 预计算",
+          "低",
+          "陈旧",
+          "读多可容忍延迟"
+        ],
+        [
+          "增量同步",
+          "低",
+          "实时",
+          "写量可控(本题)"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "实时 join 聚合是被否决的朴素档，热门商家评论越多越慢，正是要绕开的方案。",
+      "这是写时同步的增量终极档，评分即时新鲜但更复杂，不是本题要的中间方案。",
+      "它把聚合搬到后台周期任务，读时零计算，正好落在朴素实时聚合和写时增量之间。",
+      "把评论全塞进 Redis 现算仍是实时聚合，只换了存储，没消除每次重算。"
+    ],
+    "optionExplanations_en": [
+      "Live join-aggregation is the rejected naive tier — slower the more reviews a popular business has, exactly what we want to avoid.",
+      "This is the incremental-on-write final tier — instantly fresh but more complex, not the middle option asked for.",
+      "A cron recomputes and lands the result in the average_rating column, so reads do zero aggregation — the middle tier.",
+      "Stuffing all reviews into Redis and computing live is still on-the-fly aggregation, just different storage — the recompute remains."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cron job",
+        "meaning": "按固定时间表周期运行的后台定时任务。",
+        "meaningEn": "A cron job is a background task that runs on a fixed, repeating schedule."
+      },
+      {
+        "term": "optimistic locking / 乐观锁",
+        "meaning": "先读后写，提交时若发现状态已被别人改动就让本次更新失败重试。",
+        "meaningEn": "Optimistic locking reads then writes, and fails the update on commit if the state changed underneath it."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-yelp-054",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "average-rating",
+    "scenario": "Yelp 用每天一次的 cron 预计算 average_rating 列。某商家评论很少、当前平均分偏低；一位用户刚给它投了 5 星。",
+    "scenario_en": "Yelp uses a once-daily cron to precompute the average_rating column. A business has very few reviews and a currently low average; a user just left it a 5-star rating.",
+    "q": "这套 cron 预计算方案下，用户最可能看到什么问题？",
+    "q_en": "Under this cron precompute approach, what problem is the user most likely to see?",
+    "options": [
+      "平均分会立即更新，只是小数位偶尔四舍五入出错",
+      "刚投的评分要等下次 cron 运行才反映，几小时到几天里看到陈旧平均分",
+      "cron 运行期间整个数据库对所有搜索和读请求都完全不可用，且持续到任务结束",
+      "一人一评约束会因为 cron 而被绕过失效"
+    ],
+    "options_en": [
+      "The average updates immediately, just with occasional rounding errors in the decimals.",
+      "Their new rating isn't reflected until the next cron run, so they see a stale average for hours or even days.",
+      "The entire database is completely unavailable to all search and read requests while the cron runs, until the job finishes.",
+      "The one-review-per-business constraint gets bypassed and stops holding because of the cron."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "cron 只在固定周期重算，两次运行之间的新评论不进 average_rating 列，用户看到旧分、以为投票没生效；低评论量商家尤其明显，修法是改成写时增量更新。",
+    "why_en": "The cron only recomputes on a fixed schedule, so reviews between runs never reach the average_rating column — the user sees the old score and thinks their vote didn't count; it's most visible on low-review businesses, and the fix is incremental-on-write.",
+    "tags": [
+      "yelp",
+      "average-rating",
+      "consequence"
+    ],
+    "optionExplanations": [
+      "浮点/取整问题属于增量公式，cron 的核心缺陷是新鲜度不是精度，方向错。",
+      "cron 周期外的新评论不进列，低票商家一张 5 星本应明显抬分却纹丝不动，用户困惑。",
+      "cron 是后台批处理，只更新列，不锁库、不让读不可用，把它想成停机是误解。",
+      "一人一评由数据库唯一约束保证，与评分预计算无关，cron 不会影响它。"
+    ],
+    "optionExplanations_en": [
+      "Floating-point/rounding issues belong to the incremental formula; cron's core flaw is freshness, not precision — wrong axis.",
+      "Reviews outside the cron cycle never reach the column, so a 5-star that should visibly lift a low-count business doesn't move — user is confused.",
+      "The cron is a background batch that only updates a column; it doesn't lock the DB or make reads unavailable.",
+      "One-review-per-business is enforced by a DB unique constraint, unrelated to rating precompute — cron doesn't affect it."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cron job",
+        "meaning": "按固定时间表周期运行的后台定时任务。",
+        "meaningEn": "A cron job is a background task that runs on a fixed, repeating schedule."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-yelp-055",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "elasticsearch",
+    "scenario": "Yelp 用 Elasticsearch 作派生搜索索引，主库经 CDC 同步过去。此时一个 ES 节点宕机或发生网络分区。",
+    "scenario_en": "Yelp uses Elasticsearch as a derived search index, kept in sync from the primary database via CDC. Now an ES node crashes or a network partition occurs.",
+    "q": "关于 ES 的容错，文章提醒的主要运维风险与应对是什么？",
+    "q_en": "On Elasticsearch fault tolerance, what operational risk and mitigation does the article call out?",
+    "options": [
+      "容错未配好时节点或网络故障可能丢数据，但 ES 是派生索引可从主库重放重建",
+      "配置得当后 ES 就完全免维护，任何节点或网络故障都零数据影响，也无需重建索引",
+      "ES 节点一故障，作为上游的主数据库也会被连带拖垮宕机",
+      "ES 故障只影响写入索引，所有搜索读请求都不受任何影响"
+    ],
+    "options_en": [
+      "If fault tolerance is misconfigured, a node or network failure can lose data — but since ES is a derived index it can be rebuilt from the primary via replay.",
+      "Once configured well, ES is entirely maintenance-free with zero data impact from any node or network failure and no need to rebuild the index.",
+      "The moment an ES node fails, the upstream primary database gets dragged down and crashes too.",
+      "An ES failure only affects index writes; all search read requests are completely unaffected."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "ES 的容错要靠副本、刷新等配置，配不好在节点/网络故障时可能丢未持久化变更；因真相在主库，可经 CDC 重放重建索引，代价是重建期间搜索结果暂时不全。",
+    "why_en": "ES fault tolerance depends on replica and refresh settings; misconfigured, a node or network failure can lose unpersisted changes — but since the truth lives in the primary DB, the index can be rebuilt via CDC replay, at the cost of temporarily incomplete search during rebuild.",
+    "tags": [
+      "yelp",
+      "elasticsearch",
+      "consequence"
+    ],
+    "optionExplanations": [
+      "ES 容错靠副本/refresh 配置，配不好故障时会丢变更；但它只是派生索引，可从主库经 CDC 重放补回。",
+      "副本和网络故障恢复都需谨慎配置，宣称零影响免维护正是文章警告的坑。",
+      "ES 与主库解耦，ES 挂掉不会拖垮主库，主库仍能独立读写，方向反了。",
+      "丢的是索引里的数据，故障期搜索会返回不全结果，说读完全不受影响是错的。"
+    ],
+    "optionExplanations_en": [
+      "ES fault tolerance rides on replica/refresh config; misconfigured it drops changes on failure — but as a derived index it's backfilled from the primary via CDC replay.",
+      "Replica and network-failure recovery need careful configuration; claiming zero-impact and maintenance-free is exactly the trap the article warns about.",
+      "ES is decoupled from the primary; ES going down doesn't drag the primary, which keeps reading and writing — reversed.",
+      "What's lost is index data, so search returns incomplete results during the failure — saying reads are unaffected is wrong."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Elasticsearch (ES)",
+        "meaning": "面向搜索的分布式数据库，擅长全文和地理/过滤查询，常作派生索引而非主事务库。",
+        "meaningEn": "Elasticsearch is a search-optimized distributed database strong at full-text and geo/filter queries, typically used as a derived index rather than the primary transactional store."
+      },
+      {
+        "term": "CDC",
+        "fullName": "Change Data Capture",
+        "meaning": "变更数据捕获：把主库的每次数据变更作为事件流出，供下游（如 ES）应用以保持同步。",
+        "meaningEn": "Change Data Capture streams each change in the primary database as an event so downstream systems like ES can apply it and stay in sync."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-yelp-056",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "non-functional",
+    "scenario": "写 Yelp 非功能需求时，候选人常罗列「高可用、可扩展、容错、合规」这些几乎人人都写的通用属性。",
+    "scenario_en": "When writing Yelp's non-functional requirements, candidates often list generic properties every system claims — highly available, scalable, fault tolerant, compliant.",
+    "q": "哪一条才是真正塑造 Yelp 设计的独有挑战？",
+    "q_en": "Which one is the distinctive challenge that actually shapes the Yelp design?",
+    "options": [
+      "系统必须高可用，因为几乎所有面向用户的线上系统都要求高可用性",
+      "低延迟(<500ms)完成地理+全文+类别搜索，逼出专用搜索索引",
+      "必须满足 GDPR 合规，保护用户隐私数据不被泄露",
+      "必须容错，任一节点故障都不能导致整体服务不可用"
+    ],
+    "options_en": [
+      "The system must be highly available, since virtually every user-facing online system requires high availability.",
+      "Serving geo + full-text + category search under low latency (<500ms), which forces a purpose-built search index.",
+      "It must meet GDPR compliance and protect user privacy data from leaks.",
+      "It must be fault tolerant so that no single node failure takes down the whole service."
+    ],
+    "answer": [
+      1
+    ],
+    "tradeoff": "独有挑战 vs 通用属性",
+    "why": "高可用、容错、合规几乎每个系统都写，没有区分度；Yelp 的独有挑战是大规模下把地理+全文+类别过滤压进 <500ms，这直接决定了搜索索引选型。",
+    "why_en": "Highly available, fault tolerant, and compliant are claimed by nearly every system, so they don't distinguish anything; Yelp's distinctive challenge is squeezing geo + full-text + category filtering under 500ms at scale, which directly drives the search-index choice.",
+    "whenOtherWins": "若系统换成金融或医疗，强一致和合规反而成为主导设计驱动，那时它们才是该系统的独有挑战。",
+    "tags": [
+      "yelp",
+      "non-functional",
+      "fit"
+    ],
+    "optionExplanations": [
+      "高可用几乎所有线上系统都要，写进 NFR 不构成区分度，也不改变 Yelp 的架构选择。",
+      "<500ms 是给定 SLO(非推导值)，跨 100M 日活/10M 商家的多维搜索逼出专用索引，是真正的设计驱动。",
+      "GDPR 合规本题划为范围外，且是通用属性，不是塑造搜索/评分设计的独有挑战。",
+      "容错本题也在范围外，几乎人人都要，它不驱动 Yelp 的索引与评分方案。"
+    ],
+    "optionExplanations_en": [
+      "High availability is required by almost every online system; listing it adds no distinction and doesn't change Yelp's architecture.",
+      "<500ms is a given SLO (not a derived number); multi-dimensional search across 100M users / 10M businesses forces a dedicated index — the real design driver.",
+      "GDPR compliance is out of scope here and a generic property, not the distinctive challenge shaping search/rating design.",
+      "Fault tolerance is also out of scope and near-universal; it doesn't drive Yelp's indexing or rating scheme."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SLO",
+        "fullName": "Service Level Objective",
+        "meaning": "服务级目标：给定的性能/可用性目标（如搜索 <500ms），是设计要满足的约束而非推导结果。",
+        "meaningEn": "A Service Level Objective is a given performance or availability target, such as search under 500ms, that the design must meet rather than a derived value."
+      },
+      {
+        "term": "GDPR",
+        "fullName": "General Data Protection Regulation",
+        "meaning": "欧盟通用数据保护条例，规定个人数据的处理与隐私保护要求。",
+        "meaningEn": "GDPR is the EU General Data Protection Regulation governing how personal data must be handled and protected."
+      }
+    ]
   }
 ]

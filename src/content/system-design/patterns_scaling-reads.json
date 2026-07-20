@@ -3272,5 +3272,264 @@
       "Right — design per data type's own consistency needs: profiles can use a TTL, venue addresses need active invalidation or no caching at all.",
       "Caching nothing throws away all caching benefit for data like profiles that can easily tolerate staleness — too costly."
     ]
+  },
+  {
+    "id": "sd-patterns-scaling-reads-071",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "strategy",
+    "q": "缓存和读副本各该用在哪类数据？",
+    "q_en": "Which data should go to a cache versus a read replica?",
+    "scenario": "读密集服务里两类数据：短链→长链映射几乎永不变；账户设置这类数据改动不频繁但改后必须尽快让所有人看到。",
+    "scenario_en": "In a read-heavy service, short→long URL mappings almost never change, while account settings change rarely but must be visible to everyone soon after a change.",
+    "options": [
+      "不变的内容激进缓存，需新鲜的数据走读副本",
+      "两类都激进缓存，账户设置靠短 TTL 反复失效兜底",
+      "两类都只走读副本，不引入缓存层省掉失效管理",
+      "按流量高低分：高流量走缓存，低流量走读副本"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "几乎不变的内容激进缓存换极致读性能，代价是 TTL 内可能陈旧；需保持新鲜的数据靠读副本承接读量，只差一个复制延迟、省掉失效难题。",
+    "why_en": "Cache content that rarely changes for sub-millisecond reads, and lean on read replicas for data that must stay fresh so you avoid invalidation headaches.",
+    "table": {
+      "headers": [
+        "方案",
+        "新鲜度",
+        "最适合"
+      ],
+      "rows": [
+        [
+          "激进缓存",
+          "TTL 内可能陈旧",
+          "几乎不变的内容"
+        ],
+        [
+          "读副本",
+          "近实时(仅复制延迟)",
+          "需保持新鲜的数据"
+        ]
+      ]
+    },
+    "tags": [
+      "strategy",
+      "caching",
+      "read-replicas",
+      "contrast"
+    ],
+    "options_en": [
+      "Cache immutable content aggressively; route freshness-critical data to read replicas.",
+      "Cache both aggressively, repeatedly invalidating settings via short TTLs as a backstop.",
+      "Send both to read replicas only and add no cache layer, to avoid managing invalidation.",
+      "Split by traffic level: high-traffic to cache, low-traffic to read replicas."
+    ],
+    "tradeoff": "极致读性能+陈旧风险 vs 保持新鲜",
+    "termDefinitions": [
+      {
+        "term": "读副本 / read replica",
+        "meaning": "从主库复制数据、只承接读请求的副本，数据近实时。",
+        "meaningEn": "A read replica copies data from the primary and serves only reads, staying near-real-time."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "生存时间：缓存条目的固定有效期，到期即失效。",
+        "meaningEn": "TTL (Time To Live) is the fixed lifetime of a cache entry, after which it expires."
+      },
+      {
+        "term": "复制延迟 / replication lag",
+        "meaning": "主库写入传播到副本的时间差。",
+        "meaningEn": "Replication lag is the delay between a write on the primary and its arrival on a replica."
+      }
+    ],
+    "optionExplanations": [
+      "对，选型轴是新鲜度而非流量：永不变的映射激进缓存吃满命中率，改后要尽快可见的数据交给读副本。",
+      "账户设置改后要尽快可见，长 TTL 拖慢可见性、短 TTL 又损命中率，反复失效不如直接交给读副本。",
+      "永不变的映射交给读副本会白白放弃亚毫秒命中和对主库的零打扰，性价比远不如缓存。",
+      "流量高低不是决定轴——决定轴是数据变不变、要不要保持新鲜。"
+    ],
+    "optionExplanations_en": [
+      "Right — the axis is freshness, not traffic: cache immutable mappings for hit rate, and route freshness-critical data to replicas.",
+      "Settings must show up soon after a change; a long TTL delays it and a short one kills hit rate, so a replica beats repeated invalidation.",
+      "Serving immutable mappings from a replica throws away sub-millisecond hits and zero primary load — worse value than caching.",
+      "Traffic level isn't the deciding axis; whether the data changes and must stay fresh is."
+    ]
+  },
+  {
+    "id": "sd-patterns-scaling-reads-072",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "strategy",
+    "q": "读扩展模式在这里该怎么定位？",
+    "q_en": "How should read-scaling patterns be positioned here?",
+    "scenario": "设计库存管理系统：陈旧的库存数会导致真实超卖，一致性要求高，读写比也就 3:1 左右。",
+    "scenario_en": "Designing an inventory system: stale stock counts cause real overselling, consistency demands are high, and the read/write ratio is only about 3:1.",
+    "options": [
+      "读扩展不主攻；要用也配激进失效+更短 TTL",
+      "照内容型应用那样激进缓存并设长 TTL 提升命中",
+      "彻底禁止缓存和读副本，一切读都直查主库",
+      "把堆读副本当作主要扩展手段来分摊读压力"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "陈旧数据会造成真实损失（超卖）的强一致系统，本就不该主攻读扩展；这些模式仍可用，但要配激进失效和更短 TTL 把陈旧窗口压到最小。",
+    "why_en": "Strongly consistent systems where stale data causes real harm shouldn't lead with read scaling; you can still use these patterns but with aggressive invalidation and shorter TTLs.",
+    "whenOtherWins": "若系统里某些字段其实能容忍陈旧（如商品描述、分类标签），那部分仍可照常激进缓存加长 TTL。",
+    "tags": [
+      "strategy",
+      "consistency",
+      "when-not-to-use"
+    ],
+    "options_en": [
+      "Read scaling isn't the lead; if used, pair it with aggressive invalidation and shorter TTLs.",
+      "Cache aggressively with long TTLs like a content app to push up the hit rate.",
+      "Ban caching and read replicas entirely and send every read straight to the primary.",
+      "Make piling on read replicas the primary way to spread read load."
+    ],
+    "tradeoff": "读扩展的陈旧收益 vs 强一致的正确性",
+    "termDefinitions": [
+      {
+        "term": "强一致 / strong consistency",
+        "meaning": "读总能拿到最新写入的一致性保证，陈旧不可接受。",
+        "meaningEn": "Strong consistency guarantees reads always see the latest write, so staleness is unacceptable."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "生存时间：缓存条目的固定有效期，到期即失效。",
+        "meaningEn": "TTL (Time To Live) is the fixed lifetime of a cache entry, after which it expires."
+      }
+    ],
+    "optionExplanations": [
+      "对，超卖类强一致系统把读扩展当『不该主攻』类别；真要缓存就用激进失效+短 TTL 压住陈旧窗口。",
+      "长 TTL 会让库存数陈旧到足以超卖，正是这类系统最不能接受的失败。",
+      "一刀切禁掉太极端——能容忍陈旧的旁支字段仍可缓存，只是核心库存要强一致。",
+      "读写比才 3:1、瓶颈在写一致，堆读副本解决不了超卖，复制延迟还会加剧陈旧。"
+    ],
+    "optionExplanations_en": [
+      "Right — oversell-prone strongly consistent systems treat read scaling as a 'not the main focus' category; if caching, use aggressive invalidation and short TTLs.",
+      "A long TTL lets stock counts go stale enough to oversell — exactly the failure these systems can't accept.",
+      "A blanket ban is too extreme — staleness-tolerant fields can still be cached; only the core stock path needs strong consistency.",
+      "At a 3:1 ratio the bottleneck is write consistency; replicas don't fix overselling and their lag makes staleness worse."
+    ]
+  },
+  {
+    "id": "sd-patterns-scaling-reads-073",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "replication",
+    "q": "把 Ticketmaster 的购买路径也放到读副本上会发生什么故障？",
+    "q_en": "What breaks if Ticketmaster's purchase path also reads from a read replica?",
+    "scenario": "Ticketmaster 开票瞬间：浏览活动页走读副本没问题，但假设实际购买也从落后 200ms 的读副本读座位余量再下单。",
+    "scenario_en": "At Ticketmaster's on-sale moment browsing hits read replicas fine, but suppose the actual purchase also reads seat availability from a replica 200ms behind before committing.",
+    "options": [
+      "两买家都从旧副本读到有票，各自预留同座→超卖",
+      "购买延迟升高但结果始终正确，副本最终自行补正",
+      "副本自动拒绝购买写请求，用户直接看到下单报错",
+      "已售座位在副本上的库存记录被永久覆盖并丢失"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "座位卖出后主库已更新，但副本还落后 200ms；此窗口内两个买家都从旧副本读到『有票』并各自下单 → 同一座位超卖。修法：浏览走读副本，购买必须查主库权威库存并用锁/事务原子预留；代价是主库承接了购买写压力。",
+    "why_en": "After a seat sells, the primary is updated but the replica lags 200ms, so two buyers both read 'available' and both reserve the same seat — an oversell; purchases must read the authoritative primary and reserve atomically.",
+    "diagram": "sequenceDiagram\n    participant A as Buyer A\n    participant B as Buyer B\n    participant P as Primary\n    participant R as Lagging Replica\n    A->>P: buy seat 12C (reserve)\n    P-->>A: OK\n    B->>R: read availability\n    R-->>B: seat 12C available (stale)\n    B->>P: buy seat 12C\n    Note over A,B: oversold — purchase must read primary",
+    "tags": [
+      "replication-lag",
+      "read-write-split",
+      "consistency"
+    ],
+    "options_en": [
+      "Both buyers read 'available' from the stale replica and each reserves the same seat — oversell.",
+      "Purchases get slower but stay correct; the replica eventually self-corrects.",
+      "The replica auto-rejects the purchase write, so the user sees an immediate order error.",
+      "The sold seat's stock record on the replica gets permanently overwritten and lost."
+    ],
+    "termDefinitions": [
+      {
+        "term": "读副本 / read replica",
+        "meaning": "从主库复制数据、只承接读请求的副本，可能落后于主库。",
+        "meaningEn": "A read replica copies data from the primary and serves reads, possibly lagging behind."
+      },
+      {
+        "term": "复制延迟 / replication lag",
+        "meaning": "主库写入传播到副本的时间差，此处约 200ms。",
+        "meaningEn": "Replication lag is the delay before a primary's write reaches a replica, here about 200ms."
+      },
+      {
+        "term": "超卖 / oversell",
+        "meaning": "同一库存/座位被卖给多个买家。",
+        "meaningEn": "Overselling is selling the same inventory or seat to more than one buyer."
+      }
+    ],
+    "optionExplanations": [
+      "对，复制延迟窗口内副本仍显示『有票』，两买家各自读到旧值并下单，同座被卖两次。",
+      "问题不是延迟，而是从落后副本读到的库存本身就是错的，副本不会补正这次超卖。",
+      "副本本就不接写请求；这里的错误是从它读到了陈旧库存，不是它拒绝写。",
+      "副本落后不代表数据丢失——已售数据安全在主库，只是还没传播到副本。"
+    ],
+    "optionExplanations_en": [
+      "Right — within the lag window the replica still shows 'available', so both buyers read the stale value and commit, selling the seat twice.",
+      "The issue isn't latency; the stock read from the lagging replica is simply wrong, and the replica won't undo this oversell.",
+      "A replica never takes writes anyway; the bug is reading stale stock from it, not it rejecting writes.",
+      "A lagging replica doesn't lose data — sold data is safe on the primary, just not yet propagated."
+    ]
+  },
+  {
+    "id": "sd-patterns-scaling-reads-074",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "materialized-view",
+    "q": "物化视图的平均分何时才会反映新评论？",
+    "q_en": "When does a materialized view's average reflect a new review?",
+    "scenario": "商品平均评分用物化视图预计算，由后台作业每 10 分钟重算一次；用户刚提交一条新评论。",
+    "scenario_en": "Product average ratings are precomputed in a materialized view rebuilt by a background job every 10 minutes; a user just submitted a new review.",
+    "options": [
+      "要等下次后台重算才更新，刷新周期即陈旧上限",
+      "新评论一写入就被物化视图实时增量重算并反映",
+      "每次页面加载都会触发一次全表聚合重算",
+      "物化视图永不自动更新，必须人工手动重建"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "物化视图是落地存储的预计算结果，不随底表实时变；它靠后台作业周期重算，两次重算之间读到的都是旧聚合，所以刷新周期就是陈旧上限。要更新，就得刷得更勤——代价是每次全表聚合的计算开销。",
+    "why_en": "A materialized view stores precomputed results that don't update with the base tables; a background job recomputes it periodically, so the refresh interval is the staleness ceiling.",
+    "tags": [
+      "materialized-view",
+      "staleness",
+      "denormalization"
+    ],
+    "options_en": [
+      "It waits for the next background rebuild; the refresh interval is the staleness ceiling.",
+      "The new review is incrementally recomputed into the materialized view in real time.",
+      "Every page load triggers a full-table aggregation recompute.",
+      "The materialized view never auto-updates and must be rebuilt manually."
+    ],
+    "termDefinitions": [
+      {
+        "term": "物化视图 / materialized view",
+        "meaning": "把 join+聚合的结果落地存储，读时零计算，靠后台作业周期刷新。",
+        "meaningEn": "A materialized view stores the result of a join/aggregation on disk for zero-compute reads, refreshed by a periodic background job."
+      }
+    ],
+    "optionExplanations": [
+      "对，聚合值只在后台作业重算时刷新，两次重算之间读到旧值，所以刷新周期决定最大陈旧。",
+      "物化视图存的是上次算好的值，底表插入一条评论不会触发它自动增量重算。",
+      "预计算的意义正是避免每次加载现算；每次都重算就退化回了昂贵的实时聚合。",
+      "它不是永不更新——由后台作业按周期自动重算，只是不是实时的。"
+    ],
+    "optionExplanations_en": [
+      "Right — the aggregate refreshes only when the background job reruns, so reads between runs are stale and the interval sets the max staleness.",
+      "A materialized view holds the last computed value; inserting one review into the base table won't trigger an incremental recompute.",
+      "Precomputing exists precisely to avoid recomputing on every load; doing so reverts to the expensive live aggregation.",
+      "It isn't never-updating — a background job rebuilds it on a schedule, just not in real time."
+    ]
   }
 ]

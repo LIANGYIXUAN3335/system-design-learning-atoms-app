@@ -3290,5 +3290,287 @@
         "meaningEn": "A watch is a one-time change notification a client registers on a znode."
       }
     ]
+  },
+  {
+    "id": "sd-deep-dives-zookeeper-061",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "consistency",
+    "scenario": "两台聊天服务器几乎同时对同一个 /users/bob 节点调 setData，各写自己算出的新位置。",
+    "scenario_en": "Two chat servers call setData on the same /users/bob znode at almost the same moment, each writing its own computed location.",
+    "q": "调 setData 时把 version 参数传 -1，并发下会怎样？",
+    "q_en": "What happens under concurrency if you pass version = -1 to setData?",
+    "options": [
+      "传 -1 表示用当前版本号做 CAS，版本不符就拒绝，天然挡住并发覆盖",
+      "传 -1 表示忽略版本、无条件覆盖，后写直接盖掉先写，成丢失更新",
+      "传 -1 会让 ZooKeeper 自动合并两次写的差异，两边更新都保留下来",
+      "传 -1 会阻塞第二个写，直到第一个提交完成，把两次更新串行化"
+    ],
+    "options_en": [
+      "-1 means do a CAS against the current version and reject on mismatch, blocking concurrent overwrites.",
+      "-1 means ignore the version and overwrite unconditionally, so the later write clobbers the earlier one.",
+      "-1 makes ZooKeeper auto-merge the two writes so both updates are kept.",
+      "-1 blocks the second write until the first commits, serializing the two updates."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "-1 忽略版本做无条件覆盖，并发下后写覆盖先写=丢失更新；要安全就把读到的版本号传进去做 CAS，代价是版本不符要重读重试。",
+    "why_en": "Passing -1 overwrites unconditionally so concurrent writers lose updates; pass the version you read to make it a CAS that costs a re-read on conflict.",
+    "codeSample": "# 无条件覆盖：忽略版本，后写必赢（可能丢更新）\nzk.setData(\"/chat-app/users/bob\", \"server3\", -1)\n# CAS 写：仅当节点版本仍是 7 才成功，否则抛 BadVersion 需重读\nzk.setData(\"/chat-app/users/bob\", \"server3\", 7)",
+    "lang": "java",
+    "tags": [
+      "zookeeper",
+      "znode-version",
+      "optimistic-concurrency"
+    ],
+    "optionExplanations": [
+      "记反了：-1 恰恰是「忽略版本」；真正的 CAS 要传你读到的那个版本号，不是 -1。",
+      "对：-1 让写无条件生效，两台并发写时后到的直接覆盖先到的，先写的改动就丢了。",
+      "ZooKeeper 不做值合并，只按顺序覆盖；「自动合并」是把它当成了 CRDT 那类系统。",
+      "setData 不替你排队阻塞并发写，谁后到谁生效，没有自动串行化这回事。"
+    ],
+    "optionExplanations_en": [
+      "Backwards: -1 means ignore the version; a real CAS passes the version you read, not -1.",
+      "Right: -1 applies the write unconditionally, so the later concurrent write overwrites the earlier one and its change is lost.",
+      "ZooKeeper never merges values, it only overwrites in order; auto-merge treats it like a CRDT-style system.",
+      "setData does not queue or block concurrent writes; the later one simply wins, with no auto-serialization."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CAS",
+        "fullName": "Compare-And-Swap",
+        "meaning": "CAS(比较并交换)：只有当数据的版本/值仍等于你读到的那个时写才成功，否则失败，用来做无锁并发控制。",
+        "meaningEn": "Compare-And-Swap succeeds only if the value or version still equals the one you read, otherwise it fails — a lock-free way to guard concurrent writes."
+      },
+      {
+        "term": "version",
+        "fullName": "ZNode Version Number",
+        "meaning": "版本号(version)：每个 ZNode 每被修改一次就自增的计数器，setData 可带上它做条件写。",
+        "meaningEn": "Each ZNode has a version counter that increments on every change; setData can pass it to make the write conditional."
+      },
+      {
+        "term": "丢失更新",
+        "fullName": "Lost Update",
+        "meaning": "丢失更新：两个写并发发生，后提交的直接覆盖先提交的，先写的改动无声消失。",
+        "meaningEn": "A lost update is when two concurrent writes race and the later one overwrites the earlier, silently discarding the first change."
+      },
+      {
+        "term": "CRDT",
+        "fullName": "Conflict-free Replicated Data Type",
+        "meaning": "CRDT(无冲突复制数据类型)：能自动合并并发修改而不丢数据的数据结构，ZK 并不是这类。",
+        "meaningEn": "A Conflict-free Replicated Data Type auto-merges concurrent edits without losing data; ZooKeeper is not one of these."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-zookeeper-062",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "leader-election",
+    "scenario": "你想让「唯一一台」服务器负责跑支付处理和定时任务，其余待命，它崩了要自动有人接班。",
+    "scenario_en": "You want exactly one server to run payment processing and scheduled jobs, with the rest on standby and automatic takeover if it dies.",
+    "q": "该用应用级 leader 选举，还是每次操作抢分布式锁？",
+    "q_en": "Should you use application-level leader election or grab a distributed lock per operation?",
+    "options": [
+      "用分布式锁：每台服务器每次跑支付前抢一次锁，用完立刻释放",
+      "用 leader 选举：选一台长期持有该角色，崩了下一台自动接班",
+      "两者其实完全等价，反正都靠顺序临时节点实现，随便挑一个用就行了",
+      "都不用，让每台服务器都跑支付，靠数据库唯一约束事后去重"
+    ],
+    "options_en": [
+      "Use a distributed lock: each server grabs the lock before every payment run and releases it right after.",
+      "Use leader election: one server holds the role long-term and the next takes over automatically if it dies.",
+      "They are equivalent — both use sequential ephemeral nodes, so just pick either one.",
+      "Skip both: let every server run payments and de-duplicate afterward with a database unique constraint."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "支付/调度要的是「长期只有一台在跑这个角色」，leader 选举给你持续独占+自动故障转移；分布式锁只保证单次操作互斥、用完就放，撑不起长期独占。",
+    "why_en": "Payments and scheduling need one server to own the role long-term, which leader election gives with auto-failover; a lock only enforces per-operation mutual exclusion.",
+    "whenOtherWins": "当你只需要在一小段临界区里互斥（如卖票时扣一次库存），用完立即释放，分布式锁更合适。",
+    "tradeoff": "leader 选举「长期角色归属+自动接班」 vs 分布式锁「单次操作互斥+即用即放」",
+    "tags": [
+      "zookeeper",
+      "leader-election",
+      "distributed-lock"
+    ],
+    "optionExplanations": [
+      "锁是围绕单次操作的互斥，支付角色要长期独占，锁一放开别的服务器就能抢进来，守不住。",
+      "对：选举让一台长期担这个角色，它崩了下一台顺序接班，正好匹配「持续只有一台在跑」。",
+      "两者都用顺序临时节点当积木，但语义不同：一个管长期角色，一个管单次互斥，不能混用。",
+      "让所有机器都跑再事后去重，等于放弃了「同一时刻只有一台在处理」，重复副作用已经发生。"
+    ],
+    "optionExplanations_en": [
+      "A lock guards a single operation; once released another server can grab it, so it cannot hold a long-term role.",
+      "Right: election makes one server own the role long-term and the next takes over on crash — exactly \"one at a time\".",
+      "Both use sequential ephemeral nodes as blocks, but the semantics differ: long-term role vs single-shot exclusion.",
+      "Running everywhere and de-duping later abandons \"only one at a time\" — the duplicate side effects already happened."
+    ],
+    "termDefinitions": [
+      {
+        "term": "leader 选举",
+        "fullName": "Leader Election",
+        "meaning": "leader 选举：在一组对等服务器中选出唯一一台长期承担某职责，它失效时自动换下一台。",
+        "meaningEn": "Leader election picks one server from a peer group to own a role long-term, automatically promoting the next if it fails."
+      },
+      {
+        "term": "分布式锁",
+        "fullName": "Distributed Lock",
+        "meaning": "分布式锁：跨机器的互斥原语，同一时刻只有一个客户端持有，用来保护共享资源避免竞态。",
+        "meaningEn": "A distributed lock is a cross-machine mutual-exclusion primitive held by one client at a time to guard a shared resource."
+      },
+      {
+        "term": "顺序临时节点",
+        "fullName": "Sequential Ephemeral ZNode",
+        "meaning": "顺序临时节点：名字带自增序号、且会话结束即消失的 ZNode，是 ZK 选举和锁共用的积木。",
+        "meaningEn": "A sequential ephemeral znode has an auto-incrementing suffix and vanishes when the session ends — the shared building block for ZK election and locks."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-zookeeper-063",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "consistency",
+    "scenario": "ZooKeeper 集群里一台 follower 因网络抖动短暂掉线，期间 leader 又提交了好几批写。",
+    "scenario_en": "A follower in a ZooKeeper ensemble briefly drops off due to a network blip, and the leader commits several batches of writes while it is gone.",
+    "q": "这台 follower 重连后，如何恢复到和其他节点一致的视图？",
+    "q_en": "After reconnecting, how does this follower get back to a view consistent with the others?",
+    "options": [
+      "直接继续服务读，漏掉的写等下次客户端写它时顺带补齐",
+      "跟 leader 跑追赶同步，重放漏掉的事务，追平后才对外服务读",
+      "清空自己全部数据，当作全新节点从头全量拉一遍快照",
+      "掉线期间它其实一条写都没漏，因为 follower 也全程参与了每次提交"
+    ],
+    "options_en": [
+      "Keep serving reads immediately; the missed writes get patched in the next time a client writes to it.",
+      "Run catch-up synchronization with the leader, replay the missed transactions, then serve reads once caught up.",
+      "Wipe all its data and pull a full snapshot from scratch as if it were a brand-new node.",
+      "It actually missed no writes at all, because a follower takes part in every commit even while disconnected."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "正常时 follower 内存副本紧跟 leader；掉线就落后成陈旧副本；重连后靠同步协议追赶、重放漏掉的事务才恢复 single system image；代价：追平前从它读可能读到旧值。",
+    "why_en": "A lagging follower catches up by replaying the writes it missed before it can serve consistent reads; until it catches up, reads from it can be stale.",
+    "tags": [
+      "zookeeper",
+      "follower-catchup",
+      "single-system-image"
+    ],
+    "optionExplanations": [
+      "继续服务读=对外吐陈旧数据，且写只落在被写的那个节点，靠它捎带补不齐整段漏掉的历史。",
+      "对：落后的 follower 先跟 leader 追平漏掉的事务，追上后才恢复一致视图再对外读。",
+      "全量拉快照只在落后太多时才需要；一般小差距重放事务日志即可，清空重来是过度动作。",
+      "follower 掉线就收不到 leader 的提交广播，确实会漏写，「全程参与」与掉线自相矛盾。"
+    ],
+    "optionExplanations_en": [
+      "Serving reads means emitting stale data, and a write only lands on the node written — it cannot backfill missed history.",
+      "Right: the lagging follower first replays the transactions it missed, then serves a consistent view again.",
+      "A full snapshot is only needed when a follower is too far behind; a small gap just replays the log — wiping is overkill.",
+      "A disconnected follower stops receiving the commit broadcast, so it does miss writes; \"took part in every commit\" contradicts being offline."
+    ],
+    "termDefinitions": [
+      {
+        "term": "follower",
+        "fullName": "Follower",
+        "meaning": "follower(跟随者)：ZK 集群里非 leader 的服务器，复制 leader 的状态并直接服务读请求。",
+        "meaningEn": "A follower is a non-leader server in the ensemble that replicates the leader's state and serves read requests directly."
+      },
+      {
+        "term": "single system image",
+        "fullName": "Single System Image",
+        "meaning": "单一系统映像：不管连到哪台服务器，客户端(同步后)看到的都是同一份系统视图。",
+        "meaningEn": "Single system image means a client sees the same view of the system regardless of which server it connects to, once synchronized."
+      },
+      {
+        "term": "追赶同步",
+        "fullName": "Catch-up Synchronization",
+        "meaning": "追赶同步：落后的 follower 重连后向 leader 补拉并重放掉线期间漏掉的事务，直到追平。",
+        "meaningEn": "Catch-up synchronization is when a lagging follower replays the transactions it missed from the leader until it is up to date."
+      },
+      {
+        "term": "快照",
+        "fullName": "Snapshot",
+        "meaning": "快照(snapshot)：ZK 内存数据库的周期性磁盘镜像，重启时先加载它再重放日志加速恢复。",
+        "meaningEn": "A snapshot is a periodic on-disk image of ZooKeeper's in-memory database, loaded first on restart to speed recovery before replaying logs."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-zookeeper-064",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "storage",
+    "scenario": "ZooKeeper 每次写都要先把事务 fsync 落盘才返回成功，而它内部所有操作是全序处理的。",
+    "scenario_en": "ZooKeeper fsyncs every transaction to disk before returning success, and it processes all operations in a single total order.",
+    "q": "把事务日志和快照、其它 IO 挤在同一块磁盘上，会有什么后果？",
+    "q_en": "What happens if you put the transaction log on the same disk as snapshots and other I/O?",
+    "options": [
+      "没影响，数据反正最终都落到同一块盘，顺序写快慢都一样",
+      "fsync 要和别的 IO 抢盘，写延迟一抖，全序队列后面全被拖慢",
+      "只有生成快照那一刻会慢，平时的读写完全不受磁盘争用影响",
+      "无所谓，ZooKeeper 会把事务日志全缓存在内存里，根本不落磁盘"
+    ],
+    "options_en": [
+      "No impact — the data all lands on the same disk anyway, so sequential writes are just as fast.",
+      "fsync now contends for the disk; one latency spike stalls every request queued behind it in the total order.",
+      "Only the moment a snapshot is written is slow; normal reads and writes are unaffected by disk contention.",
+      "It does not matter — ZooKeeper keeps the whole transaction log in memory and never hits the disk."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "事务日志是 ZK 最性能攸关的部分：必须先 fsync 再返回，又因操作全序，一次慢盘写会把整条队列拖垮，所以官方建议配独立日志盘；代价是多一块专用磁盘设备。",
+    "why_en": "The transaction log must fsync before acking, and since ops are totally ordered, one slow write stalls the whole queue — so give it a dedicated disk.",
+    "tags": [
+      "zookeeper",
+      "transaction-log",
+      "dedicated-disk"
+    ],
+    "optionExplanations": [
+      "同一块盘上 fsync 要和快照写、系统 IO 争用磁头/带宽，写延迟并不「一样」，会被拖高。",
+      "对：先 fsync 才返回，再叠加全序，一次慢盘写就把排在后面的所有请求一起卡住。",
+      "不止快照那一刻：任何与日志抢盘的 IO 都会抬高 fsync 延迟，进而影响平时每次写。",
+      "事务日志必须先 fsync 真正落盘才返回，把它「全缓存在内存不落盘」直接违背持久化前提。"
+    ],
+    "optionExplanations_en": [
+      "On one disk, fsync competes with snapshot writes and system I/O for the head and bandwidth, so latency is not \"the same\".",
+      "Right: fsync-before-ack plus total ordering means one slow disk write jams every request queued behind it.",
+      "Not just at snapshot time: any I/O competing with the log raises fsync latency and thus every normal write.",
+      "The transaction log must fsync to disk before acking; keeping it wholly in memory breaks the durability premise."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fsync",
+        "fullName": "File Sync",
+        "meaning": "fsync：强制把文件改动从操作系统缓存刷到物理磁盘的系统调用，返回后数据才算真正持久化。",
+        "meaningEn": "fsync is a system call that forces buffered file changes out to physical disk, so data is truly durable only after it returns."
+      },
+      {
+        "term": "事务日志",
+        "fullName": "Transaction Log",
+        "meaning": "事务日志：ZK 把每个状态变更先顺序写入的预写日志(WAL)，保证已确认的更新崩溃也不丢。",
+        "meaningEn": "The transaction log is a write-ahead log where ZooKeeper records every state change first, so acknowledged updates survive a crash."
+      },
+      {
+        "term": "全序",
+        "fullName": "Total Order",
+        "meaning": "全序：所有写请求被排成唯一一条线性顺序依次处理，因此队头一慢，后面全部跟着等。",
+        "meaningEn": "Total order means all writes are processed in one single linear sequence, so a slow item at the head makes everything behind it wait."
+      },
+      {
+        "term": "快照",
+        "fullName": "Snapshot",
+        "meaning": "快照(snapshot)：ZK 内存数据库的周期性磁盘镜像，重启时先加载它再重放日志加速恢复。",
+        "meaningEn": "A snapshot is a periodic on-disk image of ZooKeeper's in-memory database, loaded first on restart to speed recovery before replaying logs."
+      }
+    ]
   }
 ]

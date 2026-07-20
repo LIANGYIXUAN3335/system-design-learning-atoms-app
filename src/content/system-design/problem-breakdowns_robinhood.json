@@ -2515,5 +2515,262 @@
       "Login and signup are generic capability nearly every system needs, not what makes the Robinhood problem distinct.",
       "HTTP status code meanings are generic protocol trivia, unrelated to the actual problem the trading system needs to solve."
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-robinhood-051",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "api-subscription",
+    "scenario": "价格从 request/response 拉取改成服务端主动推送(SSE:单向持久 HTTP 连接,只有服务端往客户端发);用户想一次盯多个 symbol 的价格。",
+    "scenario_en": "Price delivery moves from request/response pull to server push over SSE (a one-way persistent HTTP connection where only the server sends); a user wants to watch several symbols at once.",
+    "q": "改用 SSE 推送价格后,价格 API 应该变成什么形态?",
+    "q_en": "Once price delivery moves to SSE push, what should the price API look like?",
+    "options": [
+      "改成 GET /subscribe?symbols=... ,一条连接订阅多个 symbol,服务端在流上持续推价格",
+      "保留 GET /symbol/:name,客户端对每个 symbol 每隔几秒发一次请求拿最新价",
+      "改成 POST /prices 把 symbol 列表放请求体,一次返回当前全部价格然后关闭连接",
+      "改成 WebSocket 双向持久连接,让客户端和服务端都能在同一条连接上互相发送消息、持续地双向交换实时的数据流"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "GET /subscribe?symbols=META,AAPL — one connection subscribes to many symbols and the server keeps pushing prices on that stream",
+      "Keep GET /symbol/:name and have the client re-request each symbol every few seconds for the latest price",
+      "POST /prices with the symbol list in the body, return all current prices once, then close the connection",
+      "Switch to a WebSocket duplex connection so both client and server can send messages to each other on it"
+    ],
+    "why": "SSE 是单向持久连接,一次订阅就能持续收多个 symbol 的推送;request/response 的 GET /symbol/:name 无法主动推,只能靠轮询。代价:连接要 sticky session 和断线重连。",
+    "why_en": "SSE is a one-way persistent stream, so one subscribe keeps pushing many symbols; a request/response GET can only be polled — the cost is sticky sessions and reconnect handling.",
+    "tags": [
+      "api",
+      "sse",
+      "real-time"
+    ],
+    "optionExplanations": [
+      "订阅端点带 symbol 列表最贴合推送模型:一条流建立后,多支股票的价格变化都从这条流送出。",
+      "这是轮询老形态,SSE 的意义正是取代它;逐 symbol 定时发请求既慢又浪费带宽。",
+      "一次返回再关闭仍是一问一答的拉取,拿不到后续变化,失去持续推送的意义。",
+      "客户端不需要往上发数据,双向的 WebSocket 是过度设计,单向 SSE 更省资源。"
+    ],
+    "optionExplanations_en": [
+      "A subscribe endpoint carrying the symbol list fits push best: one stream keeps delivering updates for many symbols.",
+      "This is the old polling shape SSE exists to replace; re-requesting per symbol is slow and wastes bandwidth.",
+      "Returning once and closing is still request/response, so it misses later changes and loses continuous push.",
+      "The client never sends data upward, so a duplex WebSocket is over-engineering; one-way SSE is leaner."
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "服务器通过一条持久 HTTP 连接单向向客户端推送数据。",
+        "meaningEn": "Server-Sent Events let a server push data one-way to a client over a persistent HTTP connection."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "全双工持久连接,客户端和服务端都能在同一条连接上互发消息。",
+        "meaningEn": "WebSocket is a full-duplex persistent connection where both client and server can send messages."
+      },
+      {
+        "term": "sticky session",
+        "meaning": "负载均衡把同一用户始终路由到同一台服务器,以维持长连接。",
+        "meaningEn": "Sticky sessions make the load balancer keep routing a user to the same server to preserve a long-lived connection."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-robinhood-052",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "trade-processor-deploy",
+    "scenario": "exchange 通过成交回调把每笔 trade 推给我们更新订单;成交量很大,架构图上 trade processor 只画成一个方块。",
+    "scenario_en": "The exchange pushes each trade back to us via callbacks to update orders; trade volume is high, and the diagram draws the trade processor as a single box.",
+    "q": "trade processor 在真实系统里应该是什么接入形态?",
+    "q_en": "In a real system, what deployment form should the trade processor take?",
+    "options": [
+      "注册 webhook endpoint 给 exchange,回调背后是 LB + 机队,按流量水平扩展",
+      "用一台常驻服务器不停轮询 exchange 的 REST 接口拉取全部成交",
+      "让每个 order service 实例各自和 exchange 保持一条连接来接收成交",
+      "把成交拉取放到客户端,让手机 App 自己轮询 exchange,再把结果回传后端做订单对账,后端不直连"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Register a webhook endpoint with the exchange; behind the callback sits a load balancer over a fleet that scales with traffic",
+      "Run one long-lived server that continuously polls the exchange's REST API to pull all trades",
+      "Have each order-service instance hold its own connection to the exchange to receive trades",
+      "Push trade pulling to the client so the phone app polls the exchange and relays results back for reconciliation"
+    ],
+    "why": "exchange 用 webhook 回调推成交且量大;单方块其实是 LB + 机队才能水平扩展承接回调,也避免每个实例各自连 exchange。代价:要运维一个对外可达的 webhook 服务(证书/鉴权/幂等)。",
+    "why_en": "The exchange pushes trades via webhooks at volume, so the single box is really a load balancer over a fleet; the cost is operating a public, authenticated, idempotent endpoint.",
+    "whenOtherWins": "如果 exchange 只提供订阅式 trade feed 而不支持 webhook 回调,就改成一小组常驻消费者维持长连接再内部分发,而不是 webhook 机队。",
+    "tradeoff": "webhook 机队(push+水平扩展) vs 单机拉取",
+    "tags": [
+      "trade-processor",
+      "operations",
+      "webhook"
+    ],
+    "optionExplanations": [
+      "webhook 被动接收 exchange 推送,量大时前加 LB、后接机队才能扩展,这才是方块的真实展开。",
+      "轮询 REST 既慢又浪费,exchange 本可主动推;单机也扛不住高成交量。",
+      "每个实例各连 exchange 会放大对 exchange 的对外连接开销,正好违反最小化连接的要求。",
+      "客户端存储不可靠、可被杀进程,把对账放客户端会丢更新,绝不能依赖它。"
+    ],
+    "optionExplanations_en": [
+      "Webhooks receive the exchange's push; at volume you need an LB in front and a fleet behind — that's the box expanded.",
+      "Polling REST is slow and wasteful when the exchange can push, and one box can't absorb high trade volume.",
+      "Per-instance connections multiply outbound links to the exchange, violating the minimize-connections requirement.",
+      "Client storage is unreliable and can be killed, so putting reconciliation on the client loses updates."
+    ],
+    "termDefinitions": [
+      {
+        "term": "webhook",
+        "meaning": "对方在事件发生时主动回调你预先注册的 HTTP 端点来推送数据。",
+        "meaningEn": "A webhook is an HTTP endpoint you register so the other side calls it to push data when an event happens."
+      },
+      {
+        "term": "REST",
+        "fullName": "Representational State Transfer",
+        "meaning": "基于 HTTP 的资源式请求/响应 API 风格。",
+        "meaningEn": "REST is an HTTP-based request/response API style organized around resources."
+      },
+      {
+        "term": "load balancer",
+        "meaning": "把进来的请求分发到一组后端机器上以分担负载。",
+        "meaningEn": "A load balancer spreads incoming requests across a fleet of backend machines."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-robinhood-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cleanup-idempotent",
+    "scenario": "取消已发到 exchange 并被取消,但回写内部 cancelled 状态失败,订单卡在 pending_cancel;cleanup 后台任务扫到它并去 exchange 查了真实状态。",
+    "scenario_en": "A cancel reached the exchange and did cancel, but writing the internal cancelled status failed, leaving the order stuck in pending_cancel; the cleanup job finds it and queries the exchange for the real status.",
+    "q": "cleanup 查到这单其实已在 exchange 取消,应该怎么处理?",
+    "q_en": "The cleanup job finds the order is already cancelled on the exchange — what should it do?",
+    "options": [
+      "幂等 no-op:不再向 exchange 发取消,直接把内部状态推进为 cancelled",
+      "再向 exchange 发一次取消请求,确保它一定被取消,然后再写 cancelled 状态",
+      "把订单状态回滚成 submitted,当作这次取消从未发生过",
+      "直接删掉这条订单记录,因为它已经不再是 outstanding 订单"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Idempotent no-op: don't re-send a cancel; just advance the internal status to cancelled",
+      "Send the exchange another cancel request to be sure it's cancelled, then write the cancelled status",
+      "Roll the status back to submitted and treat this cancel as if it never happened",
+      "Delete the order record outright since it is no longer an outstanding order"
+    ],
+    "why": "exchange 已取消,重发取消要么被拒要么白费一次调用;cleanup 只需把内部状态对齐成 cancelled,所以它必须对'已取消'幂等。代价:每次都要先查 exchange 真实状态再决定动作,才能安全重跑。",
+    "why_en": "The exchange already cancelled it, so re-sending is wasted; cleanup just advances the internal status to cancelled, so it must be idempotent and check real exchange state first.",
+    "whenOtherWins": "如果 cleanup 查到订单其实还没被取消(第一次取消请求失败了),它就要真的向 exchange 发出取消,而不是 no-op。",
+    "tradeoff": "幂等对齐状态 vs 盲目重发取消",
+    "tags": [
+      "cleanup",
+      "fault-tolerance",
+      "idempotency"
+    ],
+    "optionExplanations": [
+      "订单在 exchange 已是取消态,cleanup 的职责只是补齐内部状态,重发多余,做 no-op。",
+      "对已取消的单再发一次取消,可能被 exchange 拒或报错,还多一次外部调用,没必要。",
+      "回滚成 submitted 丢掉了用户的取消意图,会让本应取消的单重新变成活跃单。",
+      "删记录会毁掉订单历史和审计线索,状态应向前推进到 cancelled 而不是凭空消失。"
+    ],
+    "optionExplanations_en": [
+      "It's already cancelled on the exchange, so cleanup only fills in the internal state; re-sending is redundant, hence a no-op.",
+      "Re-cancelling an already-cancelled order may be rejected or error, and adds a needless external call.",
+      "Rolling back to submitted drops the user's cancel intent and revives an order that should be dead.",
+      "Deleting the record destroys order history and audit trail; the state should move forward to cancelled."
+    ],
+    "termDefinitions": [
+      {
+        "term": "idempotent",
+        "meaning": "同一操作执行一次和多次结果相同,可以安全重试。",
+        "meaningEn": "An idempotent operation gives the same result whether run once or many times, so it is safe to retry."
+      },
+      {
+        "term": "no-op",
+        "fullName": "no operation",
+        "meaning": "不执行任何实际动作、直接跳过的操作。",
+        "meaningEn": "A no-op does nothing and simply skips the action."
+      },
+      {
+        "term": "pending_cancel",
+        "meaning": "订单已发起取消但尚未确认取消完成的中间状态。",
+        "meaningEn": "pending_cancel is the interim state where a cancel has been initiated but not yet confirmed complete."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-robinhood-054",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "scope-price-feed",
+    "scenario": "需求把'实时看到完整买卖挂单 order book'划到范围外,只保留看当前股价;exchange trade feed 每笔成交推来 symbol、price、shares、orderId。",
+    "scenario_en": "The requirements put 'seeing the full real-time order book' out of scope and keep only viewing the current price; the exchange trade feed pushes symbol, price, shares, and orderId per trade.",
+    "q": "把实时 order book 划到范围外,对价格数据通路有什么影响?",
+    "q_en": "With the real-time order book out of scope, how does the price data path change?",
+    "options": [
+      "每个 symbol 只需存最新成交价一个值,symbol→price 的 KV cache 加 SSE 推单值就够",
+      "仍要为每个 symbol 维护完整的买卖挂单深度阶梯,并把整个 order book 都通过 SSE 推给客户端",
+      "要为每个 symbol 保存全部历史成交价序列,才能算出并推送当前价格",
+      "要上一个按 symbol 分区的关系型数据库存所有挂单,支持复杂范围查询"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Each symbol needs just one latest-trade value; a symbol→price KV cache plus SSE pushing that value is enough",
+      "Still maintain the full bid/ask depth per symbol and push the whole order book to clients over SSE",
+      "Store the full history of trade prices per symbol in order to compute and push the current price",
+      "Stand up a symbol-partitioned relational database holding every resting order for complex range queries"
+    ],
+    "why": "order book 出范围后 UI 只显示当前价,每 symbol 只需一个最新价,symbol→price 的 KV cache 加 SSE 推单值就够;若 order book 在范围内则要 fanout 买卖深度阶梯,结构完全不同。",
+    "why_en": "Out of scope, the UI shows only the current price, so each symbol needs one value — a symbol→price KV cache plus SSE; in scope you'd fan out the whole bid/ask depth ladder instead.",
+    "tags": [
+      "scope",
+      "live-prices",
+      "data-model"
+    ],
+    "optionExplanations": [
+      "价格是唯一要展示的数据,每 symbol 一个数即可,用内存缓存存最新价、只推这一个值,通路最省。",
+      "维护完整挂单深度是 order book 属于范围内时才需要的,这里已明确排除,是过度设计。",
+      "算当前价只需最新一笔成交,历史序列属于历史数据(也在范围外),这里用不上。",
+      "关系库存全部挂单是为深度查询准备的;当前价读多写多,KV cache 才合适。"
+    ],
+    "optionExplanations_en": [
+      "Price-only means one number per symbol; a KV cache holds the latest and SSE pushes just that value — leanest path.",
+      "Maintaining full depth is exactly what an in-scope order book needs; here it's excluded, so this is over-engineering.",
+      "The current price needs only the latest trade; a full history is historical data (also out of scope) and unused here.",
+      "A relational store of all resting orders serves depth queries; current price is read/write-heavy, better in a KV cache."
+    ],
+    "termDefinitions": [
+      {
+        "term": "order book",
+        "meaning": "某只股票所有未成交买单和卖单按价格排列的清单。",
+        "meaningEn": "An order book is the ranked list of all outstanding buy and sell orders for a stock at each price."
+      },
+      {
+        "term": "KV cache",
+        "fullName": "key-value cache",
+        "meaning": "按键直接查值的内存缓存,这里键是 symbol、值是最新价。",
+        "meaningEn": "A key-value cache looks up a value directly by key; here the key is the symbol and the value is its latest price."
+      },
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "服务器通过一条持久 HTTP 连接单向向客户端推送数据。",
+        "meaningEn": "Server-Sent Events let a server push data one-way to a client over a persistent HTTP connection."
+      }
+    ]
   }
 ]

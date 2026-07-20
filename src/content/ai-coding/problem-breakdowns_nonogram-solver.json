@@ -2939,5 +2939,366 @@
       "Column information can shrink candidates as you go; saving it only for a final check throws away a lot of early deduction.",
       "From per-cell brute force to row candidates to two-axis propagation, the core lesson is to find where deduction applies first so constraints shrink the search tree instead of just waiting on search."
     ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-051",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "ai-coding",
+    "sub": "input-isolation",
+    "scenario": "`solve()` 第一行就 `puzzle = self.puzzle.clone()`，solver 全程在这个副本上试填、回溯、失败。",
+    "scenario_en": "solve() starts with puzzle = self.puzzle.clone(), and the solver guesses, backtracks, and fails all on that copy.",
+    "q": "solver 为什么一开始就把传入的 puzzle 克隆一份再工作？",
+    "q_en": "Why does the solver clone the incoming puzzle before doing any work?",
+    "options": [
+      "让失败搜索只弄脏副本，不污染调用者原始 grid",
+      "克隆时顺便把 clue 编译成候选填法列表",
+      "副本对象比原对象读写都更快一些",
+      "防止多线程并发写同一个 grid 时发生数据竞争和撕裂"
+    ],
+    "options_en": [
+      "So a failed search only dirties the copy, never the caller's original grid.",
+      "Cloning also compiles the clues into candidate fills along the way.",
+      "The copy is somewhat faster to read and write than the original.",
+      "To stop concurrent threads racing and tearing the same grid."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "solver 反复试填再回退，直接改原 grid 会在失败路径上留下半成品；副本把这些脏状态隔离在调用者之外。",
+      "clone 只复制 grid 的格子状态，候选列表是另外单独 generate 出来的，两件事不相干。",
+      "读副本不会比原对象更快，性能从来不是这次 clone 的动机。",
+      "这份 solver 是单线程递归搜索，clone 防的是自我污染，而不是并发竞争。"
+    ],
+    "optionExplanations_en": [
+      "The solver guesses and backtracks repeatedly, so writing the original grid would leave half-filled state on failure; the copy isolates that from the caller.",
+      "Clone only copies cell state; the candidate lists are generated separately, so this is unrelated.",
+      "Reading the copy is not faster than the original; performance was never the reason to clone.",
+      "This solver is single-threaded recursion — clone guards against self-pollution, not concurrency."
+    ],
+    "why": "solver 是破坏性的反复试填，clone 用一份可丢弃的副本换来调用者输入的不可变；代价是多一份 O(r·c) 的内存拷贝。",
+    "why_en": "The solver mutates the grid as it guesses and backtracks, so it works on a throwaway clone to keep the caller's input intact — at the cost of one extra O(r·c) copy.",
+    "tags": [
+      "clone",
+      "input-isolation"
+    ],
+    "termDefinitions": [
+      {
+        "term": "clone",
+        "meaning": "复制一份对象，之后的改动只作用在副本上，原对象不受影响。",
+        "meaningEn": "Clone makes a copy so later changes touch only the copy, leaving the original untouched."
+      },
+      {
+        "term": "grid",
+        "meaning": "存棋盘每个格子状态的 r×c 二维数组。",
+        "meaningEn": "The grid is the r-by-c array holding each cell's state."
+      },
+      {
+        "term": "clue",
+        "meaning": "描述一行/列上从左到右（或从上到下）filled run 长度的整数列表。",
+        "meaningEn": "A clue is the ordered list of filled-run lengths required on one row or column."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-052",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "ai-coding",
+    "sub": "prune-timing",
+    "scenario": "cell-by-cell 版只在填完某行最后一格时才比对该行 runs 与 clue，中途每填一格并不检查。",
+    "scenario_en": "The cell-by-cell version compares a row's runs against its clue only when the row's last cell is set, not after each cell mid-row.",
+    "q": "为什么行内中途不比对 runs 是否等于 clue？",
+    "q_en": "Why not compare a row's runs against its clue midway through the row?",
+    "options": [
+      "部分填的行 runs 本就不必等于 clue，中途比对没意义",
+      "中途检查会顺手修改格子状态，破坏之后回溯的 UNKNOWN 恢复",
+      "extract_runs 只能沿列方向提取，行方向算不出来",
+      "clue 会在填充过程中被动态改写，比不了"
+    ],
+    "options_en": [
+      "A partly filled row's runs need not equal the clue yet, so a mid-row check is pointless.",
+      "A mid-row check would mutate cell state and break the later UNKNOWN restore on backtrack.",
+      "extract_runs can only read along columns, not rows.",
+      "The clue is rewritten dynamically while filling, so it can't be compared."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "行没填完时这一行的 runs 属于中间状态，可以暂时不匹配 clue；填满整行那一刻的比对才真正判定违规。",
+      "extract_runs 只是读当前行的值来算 runs，并不写格子；状态恢复由 unwind 的 set UNKNOWN 负责，与检查无关。",
+      "行和列的 runs 都能算，方向从来不是限制；问题出在检查的时机而非轴向。",
+      "clue 是题目给定的固定输入，全程不会变，动态改写的说法不成立。"
+    ],
+    "optionExplanations_en": [
+      "Before a row is full its runs are only a prefix and may legitimately differ from the clue; only at the last cell does a mismatch mean a real violation.",
+      "extract_runs just reads the row to compute runs; it never writes cells, and restoring UNKNOWN is unwind's job, not the check's.",
+      "extract_runs works on both rows and columns; the issue is timing, not axis.",
+      "The clue is a fixed given input that never changes, so it is never rewritten."
+    ],
+    "why": "行没填满前 runs 只是前缀、允许不等于 clue；把行检查放到行末，是在第一个能确定违规的时刻剪枝，省掉中途注定不匹配的无效比对。",
+    "why_en": "A partial row's runs are only a prefix and may differ from the clue, so the row check runs at the last cell — the first moment a mismatch is real — and skips wasted mid-line comparisons.",
+    "tags": [
+      "pruning",
+      "prune-timing"
+    ],
+    "termDefinitions": [
+      {
+        "term": "run",
+        "meaning": "一行/列里连续被 filled 的一段格子。",
+        "meaningEn": "A run is a contiguous block of filled cells on a line."
+      },
+      {
+        "term": "clue",
+        "meaning": "描述一行/列上从左到右（或从上到下）filled run 长度的整数列表。",
+        "meaningEn": "A clue is the ordered list of filled-run lengths required on one row or column."
+      },
+      {
+        "term": "extract_runs",
+        "meaning": "读一条线的当前格子、算出它的 filled run 长度序列的辅助函数。",
+        "meaningEn": "extract_runs is the helper that reads a line's current cells and returns its filled-run lengths."
+      },
+      {
+        "term": "UNKNOWN",
+        "meaning": "格子状态之一：该格尚未确定是 filled 还是 empty。",
+        "meaningEn": "UNKNOWN is the cell state meaning the cell is not yet decided as filled or empty."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-053",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "ai-coding",
+    "sub": "complexity",
+    "scenario": "cell-by-cell 版把整个棋盘存在一个 r 行 c 列的 grid 里，并按格子顺序逐格递归下探。",
+    "scenario_en": "The cell-by-cell version stores the whole board in one r-by-c grid and recurses cell by cell in order.",
+    "q": "补全 cell-by-cell 的空间复杂度：",
+    "q_en": "Complete the space complexity of cell-by-cell backtracking:",
+    "text": "grid 本身占 {{O(r·c)}}，递归栈深度等于已下探的格子数所以也是 {{O(r·c)}}，合计 {{O(r·c)}} 的多项式空间——远小于 2^(r·c) 的时间。",
+    "why": "空间 = grid 存储 O(r·c) + 递归调用栈 O(r·c)；r=行数、c=列数、栈深等于已探格子数 r·c。它是多项式空间，说明 cell-by-cell 的真正瓶颈只在指数时间，不在内存。",
+    "why_en": "Space is O(r times c) for the grid plus O(r times c) for the recursion stack, so memory is only polynomial — the real bottleneck is the exponential time, not space.",
+    "tags": [
+      "complexity",
+      "space"
+    ],
+    "termDefinitions": [
+      {
+        "term": "递归栈",
+        "meaning": "记录尚未返回的递归调用的栈；深度等于当前下探的层数。",
+        "meaningEn": "The recursion stack holds the not-yet-returned recursive calls; its depth equals how deep the search has descended."
+      },
+      {
+        "term": "grid",
+        "meaning": "存棋盘每个格子状态的 r×c 二维数组。",
+        "meaningEn": "The grid is the r-by-c array holding each cell's state."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-054",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "ai-coding",
+    "sub": "row-backtracking-complexity",
+    "scenario": "row-by-row 回溯每行选一个候选 fill、共 r 行，搜索树最多 P^r 个叶子；到达一个叶子后还要验证全部列。",
+    "scenario_en": "Row-by-row backtracking picks one candidate fill per row over r rows, up to P^r leaves; at each leaf it still verifies all columns.",
+    "q": "除了 P^r 个叶子，row-by-row 每个叶子还要额外付出多少代价？",
+    "q_en": "Beyond P^r leaves, what extra cost does row-by-row pay per leaf?",
+    "options": [
+      "O(r·c) 的整盘列扫描",
+      "O(1) 的常数级检查",
+      "O(P) 重新枚举该行候选",
+      "额外再乘上一个 2^c 的因子"
+    ],
+    "options_en": [
+      "An O(r·c) scan of the whole board's columns.",
+      "An O(1) constant-time check.",
+      "An O(P) re-enumeration of that row's candidates.",
+      "One more 2^c multiplicative factor."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "每落一个叶子都要逐列重算 runs 检查一致性，扫过 r×c 个格子，所以真实上界是 P^r 个叶子乘以每叶 O(r·c)。",
+      "列一致性检查要遍历整盘格子，不是常数级；把它当 O(1) 会低估总代价。",
+      "候选是开局一次性 generate 好的，叶子处只做列扫描，不会再重新枚举行候选。",
+      "列扫描是线性 O(r·c) 而非再套一层 2^c；2^c 是 cell-by-cell 的量级，用错了方案。"
+    ],
+    "optionExplanations_en": [
+      "Each leaf rescans every column to recompute runs, walking r×c cells, so the real bound is P^r leaves times O(r·c) per leaf.",
+      "The column-consistency check walks the whole board, not a constant; calling it O(1) underestimates the cost.",
+      "Candidates are generated once up front; a leaf only scans columns, it never re-enumerates row candidates.",
+      "The column scan is linear O(r·c), not another 2^c factor; 2^c belongs to cell-by-cell, the wrong solver here."
+    ],
+    "why": "叶子数是 P^r（P=每行平均合法候选数、r=行数），但每到一个叶子都要 O(r·c) 地扫全部列验证一致性；总代价是 P^r × O(r·c)，别只数叶子忘了每叶的列扫描。",
+    "why_en": "Leaves number P^r, but each leaf costs O(r·c) to scan every column for consistency, so the real total is P^r times O(r·c) — don't count leaves and forget the per-leaf column scan.",
+    "tags": [
+      "complexity",
+      "per-leaf-cost"
+    ],
+    "termDefinitions": [
+      {
+        "term": "run",
+        "meaning": "一行/列里连续被 filled 的一段格子。",
+        "meaningEn": "A run is a contiguous block of filled cells on a line."
+      },
+      {
+        "term": "候选",
+        "meaning": "一条线满足其 clue 的一种合法填法；过滤会逐轮删掉不再匹配已知格的候选。",
+        "meaningEn": "A candidate is one valid fill of a line that satisfies its clue; filtering drops candidates that no longer match the known cells."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-055",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "ai-coding",
+    "sub": "propagation-termination",
+    "scenario": "传播反复扫全盘：每次 pass 过滤候选并提交所有被强制的格子，直到某次 pass 没有新格被固定才停。",
+    "scenario_en": "Propagation repeatedly scans the whole grid: each pass filters candidates and commits every forced cell, stopping when a pass fixes no new cell.",
+    "q": "凭什么保证这个传播循环一定会终止？",
+    "q_en": "What guarantees this propagation loop terminates?",
+    "options": [
+      "每次有效 pass 至少固定一格，格子有限，故最多 rows×cols 轮",
+      "因为每次 pass 一定恰好固定一格不多不少，跑满整盘格子数那么多轮之后必然停下",
+      "循环里有显式计数器，到上限就强制退出",
+      "候选列表只增不减，最终收敛到唯一解"
+    ],
+    "options_en": [
+      "Each effective pass fixes at least one cell, and cells are finite, so at most rows×cols passes.",
+      "Each pass fixes exactly one cell, so it stops after as many passes as there are cells on the board.",
+      "An explicit counter in the loop forces an exit at its limit.",
+      "Candidate lists only grow, converging to a unique solution."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "只要一次 pass 还在提交新格，它至少推进一格；能提交新格的轮数被有限的格子数卡住，无新格时循环退出。",
+      "一次 pass 可能一口气固定多格，也可能一格都固定不了就触发退出；不是恰好一格。",
+      "代码没有硬编码计数器，靠的是 changed 标志：本轮没有新格被固定就停，不是数到某个上限。",
+      "候选列表是被 filter 越过滤越短，不是只增不减；把方向记反了。"
+    ],
+    "optionExplanations_en": [
+      "As long as a pass commits a new cell it advances by at least one; the number of such passes is capped by the finite cell count, and the loop exits when none change.",
+      "A single pass may fix several cells at once, or zero (which triggers the exit); it is not exactly one per pass.",
+      "There is no hard-coded counter; the changed flag stops the loop when a pass fixes no new cell, not at some limit.",
+      "Filtering makes candidate lists shrink, not grow; this reverses the direction."
+    ],
+    "why": "终止性靠单调进度：每次有效 pass 至少把一个 UNKNOWN 格固定成确定值，而格子总数 rows×cols 有限，所以固定新格的 pass 最多 rows×cols 次，之后必有一次 pass 无变化并退出。",
+    "why_en": "Each effective pass fixes at least one UNKNOWN cell and cells are finite at rows×cols, so at most rows×cols passes make progress before one changes nothing and the loop stops.",
+    "tags": [
+      "propagation",
+      "termination"
+    ],
+    "termDefinitions": [
+      {
+        "term": "pass",
+        "meaning": "传播的一轮：把全盘每条线都过滤一次并提交所有被强制的格子。",
+        "meaningEn": "A pass is one propagation sweep that filters every line and commits any forced cells."
+      },
+      {
+        "term": "UNKNOWN",
+        "meaning": "格子状态之一：该格尚未确定是 filled 还是 empty。",
+        "meaningEn": "UNKNOWN is the cell state meaning the cell is not yet decided as filled or empty."
+      },
+      {
+        "term": "候选",
+        "meaning": "一条线满足其 clue 的一种合法填法；过滤会逐轮删掉不再匹配已知格的候选。",
+        "meaningEn": "A candidate is one valid fill of a line that satisfies its clue; filtering drops candidates that no longer match the known cells."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-056",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "ai-coding",
+    "sub": "pass-cost",
+    "scenario": "传播每一轮（pass）对每条线做一次过滤：拿已知格去筛掉不再匹配的候选，随候选收缩，后面的 pass 越跑越便宜。",
+    "scenario_en": "Each propagation pass filters every line once, dropping candidates that no longer match the known cells; as candidates shrink, later passes get cheaper.",
+    "q": "补全单次传播 pass 的成本量级：",
+    "q_en": "Complete the cost of a single propagation pass:",
+    "text": "一次 pass 的成本 ≈ {{所有线剩余候选数之和}} 的线性量（每个候选按其线长各测一次），所以候选越少后面的 pass {{越便宜}}。",
+    "why": "单 pass 成本 ≈ Σ(每条线的剩余候选数)，每个候选沿其线长各扫一次；这是算术不是搜索。用途：它解释了为什么传播随候选收缩越跑越快，而 P^r 的搜索每层都指数膨胀。",
+    "why_en": "A pass costs about the sum of remaining candidates across all lines, since each is tested once along its line; that's arithmetic, so passes get cheaper as candidates shrink.",
+    "tags": [
+      "propagation",
+      "pass-cost"
+    ],
+    "termDefinitions": [
+      {
+        "term": "pass",
+        "meaning": "传播的一轮：把全盘每条线都过滤一次并提交所有被强制的格子。",
+        "meaningEn": "A pass is one propagation sweep that filters every line and commits any forced cells."
+      },
+      {
+        "term": "候选",
+        "meaning": "一条线满足其 clue 的一种合法填法；过滤会逐轮删掉不再匹配已知格的候选。",
+        "meaningEn": "A candidate is one valid fill of a line that satisfies its clue; filtering drops candidates that no longer match the known cells."
+      }
+    ]
+  },
+  {
+    "id": "aic-problem-breakdowns-nonogram-solver-057",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "ai-coding",
+    "sub": "np-complete",
+    "scenario": "传播+回退能在毫秒级解掉测试里的 25×25，但 Nonogram 判定本身是 NP-complete。",
+    "scenario_en": "Propagation plus fallback solves the test suite's 25x25 in milliseconds, yet deciding a Nonogram is itself NP-complete.",
+    "q": "既然 Nonogram 是 NP-complete，传播到底改变了什么？",
+    "q_en": "Given Nonogram is NP-complete, what does propagation actually change?",
+    "options": [
+      "只改善真实 puzzle 的实际表现，最坏复杂度仍是指数",
+      "把最坏复杂度从指数降到多项式，问题不再是 NP-complete",
+      "让 solver 对所有可能输入都保证毫秒返回",
+      "证明了 Nonogram 其实属于 P"
+    ],
+    "options_en": [
+      "It only improves real puzzles' practical runtime; the worst case stays exponential.",
+      "It lowers the worst case from exponential to polynomial, so it's no longer NP-complete.",
+      "It guarantees a millisecond return on every possible input.",
+      "It proves Nonogram actually lies in P."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "传播把人类的 overlap 推理机械化，让设计良好的真实 puzzle 大多不靠搜索就解出；但对抗性最坏输入仍可能逼出指数级回退。",
+      "最坏复杂度是问题固有的属性，任何算法都改不了它；传播只挪动了实际耗时，不动复杂度类。",
+      "对刻意构造的最坏 puzzle，propagation 收敛后仍剩大量歧义，回退可能指数级展开，不存在全输入的毫秒保证。",
+      "除非 P=NP，否则没人能把 NP-complete 问题证进 P；一个快解法不构成这种证明。"
+    ],
+    "optionExplanations_en": [
+      "Propagation mechanizes the human overlap deduction so well-formed real puzzles mostly solve without search, but adversarial worst cases can still force exponential fallback.",
+      "NP-completeness is the problem's inherent hardness; no algorithm changes the worst-case bound — propagation shifts real runtime, not the complexity class.",
+      "On a crafted worst-case puzzle, ambiguity remains after propagation and fallback can expand exponentially; there is no all-inputs millisecond guarantee.",
+      "Short of P=NP, no one proves an NP-complete problem into P; a fast solver is not such a proof."
+    ],
+    "why": "NP-complete 是问题的固有最坏难度，传播这类启发式改不了它；它改的是真实、良构 puzzle 的平均表现——多数格子靠演绎定下、搜索只收尾。代价：遇到对抗性输入仍会退化成指数搜索。",
+    "why_en": "Propagation can't change the NP-complete worst case; it only speeds up real, well-formed puzzles where deduction fixes most cells, while adversarial inputs still fall back to exponential search.",
+    "tags": [
+      "complexity",
+      "np-complete"
+    ],
+    "termDefinitions": [
+      {
+        "term": "NP-complete",
+        "fullName": "Nondeterministic Polynomial-time complete",
+        "meaning": "全称 Nondeterministic Polynomial-time complete：一类最坏情况被认为无多项式算法的判定问题。",
+        "meaningEn": "NP-complete (Nondeterministic Polynomial-time complete) is a class of decision problems with no known worst-case polynomial algorithm."
+      },
+      {
+        "term": "overlap argument",
+        "meaning": "若一条线所有合法候选在某格取值一致，该格就被强制成那个值——人类解谜时的推理。",
+        "meaningEn": "The overlap argument: if every valid candidate for a line agrees on a cell, that cell is forced to that value."
+      }
+    ]
   }
 ]
