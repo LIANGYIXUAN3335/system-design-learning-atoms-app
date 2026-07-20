@@ -62,7 +62,9 @@
       "Incorrect — proxying turns the server into a bandwidth bottleneck.",
       "Incorrect — SQL queries cannot carry raw file bytes."
     ],
-    "q_en": "What core problem does the Handling Large Blobs pattern solve?"
+    "q_en": "What core problem does the Handling Large Blobs pattern solve?",
+    "scenario": "你要为一个视频社区做上传，单个文件 500MB，而 API server 出口带宽只有 1Gbps。",
+    "scenario_en": "You are building uploads for a video community: files run 500MB each and your API servers only have about 1Gbps of egress."
   },
   {
     "id": "sd-patterns-large-blobs-002",
@@ -176,7 +178,9 @@
       "Correct — structured data and blobs scale differently, so mixing them blocks independent scaling.",
       "Incorrect — a database does not automatically get global CDN distribution."
     ],
-    "q_en": "What problems come from storing a 100MB file directly in a database BLOB column? (Select all that apply)"
+    "q_en": "What problems come from storing a 100MB file directly in a database BLOB column? (Select all that apply)",
+    "scenario": "Postgres 主库每晚要做全量备份并同步只读副本，现在有人提议把 100MB 视频写进 BLOB 字段。",
+    "scenario_en": "Your Postgres primary does a nightly full backup and streams to read replicas, and someone proposes storing 100MB videos in a BLOB column."
   },
   {
     "id": "sd-patterns-large-blobs-004",
@@ -233,7 +237,29 @@
       "Incorrect — however high durability is, it never auto-deletes objects you no longer need; lifecycle rules still have to be configured to control storage cost.",
       "Correct — eleven-nines durability already beats what most teams achieve with homegrown replication, so large-file persistence can safely go to object storage without you building your own copies.",
       "Incorrect — the durability guarantee is a property of the storage service itself, not something that changes between free and paid tiers."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "耐久性",
+        "谁清理",
+        "一致性"
+      ],
+      "rows": [
+        [
+          "S3 对象存储",
+          "约 11 个九",
+          "需配 lifecycle 规则",
+          "对象级，非全局强一致"
+        ],
+        [
+          "自建多副本",
+          "取决于自己运维",
+          "自己写清理任务",
+          "自己实现复制协议"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-patterns-large-blobs-005",
@@ -312,7 +338,9 @@
       "Incorrect — databases do not auto-compress uploaded files.",
       "Correct — the server moves bytes without adding value while burning bandwidth and connections."
     ],
-    "q_en": "What is the main problem with having the API server proxy large uploads and downloads?"
+    "q_en": "What is the main problem with having the API server proxy large uploads and downloads?",
+    "scenario": "全球用户上传 1GB 文件，你的 API server 只在单个 region，出口流量还按 GB 计费。",
+    "scenario_en": "Users worldwide upload 1GB files, your API servers live in one region, and egress traffic is billed per GB."
   },
   {
     "id": "sd-patterns-large-blobs-006",
@@ -323,8 +351,8 @@
     "scenario": "用户从悉尼上传 2GB 视频，而你的 API server 在 Virginia。你不想让服务器代理全部字节。",
     "q": "上传路径应该怎么设计？",
     "options": [
-      "API server 鉴权后签发 presigned URL，客户端直传 blob storage",
-      "客户端先把 2GB 完整发给 API server，再由服务器转发到 S3",
+      "API server 鉴权后签发 presigned URL，客户端直传存储",
+      "客户端先把 2GB 完整发给 API server，再由服务器转发写入 S3",
       "先把整段视频写进 Postgres 的 BLOB 字段再处理",
       "要求用户把视频压缩打包成 JSON 字符串上传"
     ],
@@ -341,8 +369,8 @@
     ],
     "diagram": "flowchart LR\n  A[\"Client\"] --> B[\"API creates URL\"]\n  B --> C[\"Blob storage\"]\n  A -->|\"upload bytes\"| C\n  C --> D[\"Storage event\"]",
     "options_en": [
-      "The API server authorizes and issues a presigned URL, and the client uploads directly to blob storage.",
-      "The client sends the full 2GB to the API server, which forwards it to S3.",
+      "The API server authorizes and issues a presigned URL; the client uploads directly to storage.",
+      "The client sends the full 2GB to the API server, which then forwards and writes it into S3.",
       "Write the entire video into a Postgres BLOB column first.",
       "Require the user to compress the video into a JSON string."
     ],
@@ -503,7 +531,9 @@
       "Incorrect — a transaction ID is a database concept unrelated to storage permissions.",
       "Incorrect — the app generates presigned URLs with its own cloud credentials, not only CDNs."
     ],
-    "q_en": "What is a presigned URL really?"
+    "q_en": "What is a presigned URL really?",
+    "scenario": "你要让浏览器直传 S3，但绝不能把长期有效的云账号密钥下发到客户端。",
+    "scenario_en": "You want the browser to upload straight to S3, but you can never ship long-lived cloud credentials to the client."
   },
   {
     "id": "sd-patterns-large-blobs-009",
@@ -513,10 +543,10 @@
     "sub": "presigned-url",
     "q": "生成 S3 presigned URL 是否必须先调用 S3？",
     "options": [
-      "必须先把整个文件发给 S3",
-      "必须先创建数据库事务",
-      "不一定；通常应用用自己的云凭证在内存中计算签名即可",
-      "必须先通过 CDN 回源"
+      "必须先把整个文件上传给 S3 才能拿到 URL",
+      "必须先在数据库里开一个事务并落盘记录",
+      "不必；应用用自己的云凭证在本地算签名",
+      "必须先让 CDN 回源一次把对象预热"
     ],
     "answer": [
       2
@@ -529,10 +559,10 @@
       "s3"
     ],
     "options_en": [
-      "It must send the entire file to S3 first.",
-      "It must create a database transaction first.",
-      "Not necessarily — the app usually computes the signature locally using its own cloud credentials.",
-      "It must go through the CDN to origin first."
+      "You must upload the whole file to S3 before you can get a URL.",
+      "You must first open a database transaction and persist a record.",
+      "No — the app computes the signature locally with its own cloud credentials.",
+      "You must first make the CDN pull from origin to warm the object."
     ],
     "termDefinitions": [
       {
@@ -558,7 +588,9 @@
       "Correct — the signature is computed locally from request details and a secret key.",
       "Incorrect — this is about storage signing, not CDN origin fetches."
     ],
-    "q_en": "Must you call S3 before generating an S3 presigned URL?"
+    "q_en": "Must you call S3 before generating an S3 presigned URL?",
+    "scenario": "上传接口峰值 5k QPS，你想知道每次签发 URL 是否都要多付一次到 S3 的网络往返。",
+    "scenario_en": "Your upload endpoint peaks around 5k QPS and you need to know whether every signed URL costs an extra round trip to S3."
   },
   {
     "id": "sd-patterns-large-blobs-010",
@@ -620,7 +652,9 @@
       "Correct — a fixed key prevents overwriting other files or path injection.",
       "Incorrect — no restrictions means anyone holding the URL has unlimited power."
     ],
-    "q_en": "Which limits should you encode into a presigned upload URL? (Select all that apply)"
+    "q_en": "Which limits should you encode into a presigned upload URL? (Select all that apply)",
+    "scenario": "你为头像上传签发 presigned URL，但这个 URL 可能被抓包后转发给任意第三方使用。",
+    "scenario_en": "You issue a presigned URL for avatar uploads, but that URL can be sniffed and reused by anyone who gets it."
   },
   {
     "id": "sd-patterns-large-blobs-011",
@@ -670,7 +704,9 @@
       "Incorrect — this restriction has nothing to do with query speed.",
       "Correct — without a size cap, an attacker can use a small-image permission to store a huge object."
     ],
-    "q_en": "What risk appears if a profile-picture upload URL has no content-length-range limit?"
+    "q_en": "What risk appears if a profile-picture upload URL has no content-length-range limit?",
+    "scenario": "头像上传只该写入一张 200KB 的图，存储按 GB 计费，而你的签名里没写大小限制。",
+    "scenario_en": "Avatar uploads should only ever write a 200KB image, storage is billed per GB, and your signature carries no size limit."
   },
   {
     "id": "sd-patterns-large-blobs-012",
@@ -799,9 +835,9 @@
     "sub": "cdn-signature",
     "q": "S3 presigned URL 和 CloudFront signed URL 的关键区别是什么？",
     "options": [
-      "两者都必须回 API server 验证",
-      "CloudFront signed URL 不能过期",
-      "S3 签名由存储服务验证；CloudFront 签名由 CDN edge 用公钥验证",
+      "两者都必须回 API server 做一次在线验证才生效",
+      "CloudFront signed URL 永不过期，无需设置有效期",
+      "S3 签名由存储服务验证，CloudFront 由 edge 公钥验证",
       "S3 presigned URL 只能用于下载，不能用于上传"
     ],
     "answer": [
@@ -834,10 +870,10 @@
       ]
     },
     "options_en": [
-      "Both must call back to the API server for validation.",
-      "CloudFront signed URLs never expire.",
-      "S3 signatures are validated by the storage service; CloudFront signatures are validated by CDN edges using a public key.",
-      "S3 presigned URLs can only be used for downloads, never uploads."
+      "Both have to call back to the API server for an online check before they work.",
+      "A CloudFront signed URL never expires, so you never set a lifetime.",
+      "S3 signatures are verified by the storage service; CloudFront ones by the edge with a public key.",
+      "An S3 presigned URL only works for downloads, never for uploads."
     ],
     "tradeoff": "存储服务验证签名 vs CDN 边缘节点公钥验证",
     "termDefinitions": [
@@ -869,7 +905,9 @@
       "Correct — storage validates with cloud credentials; CDN edges validate with a public key, no origin round trip needed.",
       "Incorrect — presigned URLs support both uploads and downloads."
     ],
-    "q_en": "What is the key difference between an S3 presigned URL and a CloudFront signed URL?"
+    "q_en": "What is the key difference between an S3 presigned URL and a CloudFront signed URL?",
+    "scenario": "付费课程视频放在 CDN 上要防盗链，你希望鉴权在 edge 就完成，不回源也不回应用服务器。",
+    "scenario_en": "Paid course videos sit behind a CDN and you want the access check done at the edge, without going back to origin or your app servers."
   },
   {
     "id": "sd-patterns-large-blobs-015",
@@ -1062,7 +1100,9 @@
           "文件/Blob"
         ]
       ]
-    }
+    },
+    "scenario": "同一套上传要在 AWS、GCS、Azure 上都支持 5GB 文件断点续传，你得找出各家的对应能力。",
+    "scenario_en": "The same upload flow must support resumable 5GB files on AWS, GCS, and Azure, so you need each provider’s equivalent capability."
   },
   {
     "id": "sd-patterns-large-blobs-018",
@@ -1117,7 +1157,9 @@
       "Incorrect — transcoding is a post-upload processing step unrelated to checksums.",
       "Incorrect — a checksum verifies bytes already sent; the client still must upload real data."
     ],
-    "q_en": "What do per-part checksums or ETags do in multipart upload?"
+    "q_en": "What do per-part checksums or ETags do in multipart upload?",
+    "scenario": "客户端把 5GB 文件切成 1000 个 part 并行上传，其中几个 part 在弱网下失败要重传。",
+    "scenario_en": "A client splits a 5GB file into 1000 parts uploaded in parallel, and a few parts fail on a flaky network and must be retried."
   },
   {
     "id": "sd-patterns-large-blobs-019",
@@ -1216,7 +1258,37 @@
       "Correct — after a crash or disconnect, parts sit in storage and keep costing money.",
       "Incorrect — the complete endpoint relies on exactly that part list to assemble the object."
     ],
-    "q_en": "Why do incomplete multipart uploads need lifecycle cleanup?"
+    "q_en": "Why do incomplete multipart uploads need lifecycle cleanup?",
+    "scenario": "移动端用户在地铁里上传 2GB 视频，网络频繁断开，而对象存储按 GB-月 计费。",
+    "scenario_en": "Mobile users upload 2GB videos on the subway with constant disconnects, and object storage bills you per GB-month.",
+    "table": {
+      "headers": [
+        "状态",
+        "谁持有",
+        "谁清理",
+        "不清理的代价"
+      ],
+      "rows": [
+        [
+          "已完成 object",
+          "对象存储",
+          "业务按需删除",
+          "正常计费"
+        ],
+        [
+          "未完成 parts",
+          "对象存储",
+          "lifecycle 规则",
+          "一直占容量并计费"
+        ],
+        [
+          "上传进度",
+          "客户端内存",
+          "崩溃即丢",
+          "无人回收 parts"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-patterns-large-blobs-021",
@@ -1295,7 +1367,9 @@
       "Incorrect — skipping metadata loses owner, status, and every other queryable fact.",
       "Correct — databases are good at querying structured fields, object storage is good at holding bytes."
     ],
-    "q_en": "How should file metadata be stored in a large-file system?"
+    "q_en": "How should file metadata be stored in a large-file system?",
+    "scenario": "产品要按 user_id 和上传时间分页查文件列表，但每个文件本体有几百 MB。",
+    "scenario_en": "The product must page through files by user_id and upload time, while each file itself is hundreds of megabytes."
   },
   {
     "id": "sd-patterns-large-blobs-022",
@@ -1353,7 +1427,38 @@
       "Correct — storage_key is the link between the database row and the real object.",
       "Correct — status tells you whether the file is safe to download yet."
     ],
-    "q_en": "Which fields should a file metadata table usually include? (Select all that apply)"
+    "q_en": "Which fields should a file metadata table usually include? (Select all that apply)",
+    "scenario": "你要支持“列出我上传中和失败的文件”，并能把每条记录对上存储里的真实 object。",
+    "scenario_en": "You need to list a user’s in-progress and failed uploads and match every row to the real object in storage.",
+    "table": {
+      "headers": [
+        "字段",
+        "用途",
+        "谁写入"
+      ],
+      "rows": [
+        [
+          "user_id",
+          "按用户查文件",
+          "API 建行时"
+        ],
+        [
+          "storage_key",
+          "对上真实 object",
+          "签发 URL 时"
+        ],
+        [
+          "status",
+          "驱动上传状态机",
+          "存储事件或对账"
+        ],
+        [
+          "size/content_type",
+          "展示与配额校验",
+          "上传完成后回填"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-patterns-large-blobs-023",
@@ -1364,10 +1469,10 @@
     "scenario": "你已经签发 presigned URL；文件真正上传完成后，存储事件必须能对上号，找到对应记录来更新状态。",
     "q": "什么时候创建数据库 metadata row 更合理？",
     "options": [
-      "签发 URL 时立即建 pending row，记 key",
-      "等用户第一次下载文件时才创建这条记录",
+      "签发 URL 时就建 pending row",
+      "等用户第一次下载这个文件的时候再创建记录",
       "永远不为这个文件创建数据库记录",
-      "让客户端自己直接创建这条数据库行"
+      "让客户端自己直接向数据库创建这一行记录"
     ],
     "answer": [
       0
@@ -1381,10 +1486,10 @@
       "fit"
     ],
     "options_en": [
-      "Issue the URL and immediately create the pending row with its key.",
-      "Create the row only when the user later downloads the file.",
+      "Create the pending row at the moment you issue the URL.",
+      "Create the row only when the user later downloads the file for the first time.",
       "Never create a database record for this file.",
-      "Let the client create the database row itself."
+      "Let the client write the database row into the database itself."
     ],
     "tradeoff": "上传前先建 pending row vs 完成后才建记录",
     "termDefinitions": [
@@ -1464,7 +1569,9 @@
       "Correct — notifications travel over the network and can be lost or delayed.",
       "Incorrect — it's the opposite: object storage, not the database, is the source of truth for bytes."
     ],
-    "q_en": "What problems come from trusting only a client-side \"upload complete\" call? (Select all that apply)"
+    "q_en": "What problems come from trusting only a client-side \"upload complete\" call? (Select all that apply)",
+    "scenario": "客户端直传 S3 后再调用你的 /complete 接口标记完成，而移动端网络和客户端都不可信。",
+    "scenario_en": "Clients upload straight to S3 and then call your /complete endpoint, but neither the mobile network nor the client is trustworthy."
   },
   {
     "id": "sd-patterns-large-blobs-025",
@@ -1538,10 +1645,10 @@
     "sub": "reconciliation",
     "q": "既然有 storage events，为什么还需要 reconciliation job？",
     "options": [
-      "事件机制永远不可靠，所以完全不该使用",
-      "对账任务的作用是替客户端上传文件字节",
-      "事件也可能延迟或丢失；对账能修复 stuck pending 情况",
-      "对账任务会完全替代数据库里的 metadata"
+      "事件机制永远不可靠，所以主路径完全不该用它",
+      "对账任务的作用是替客户端上传缺失的文件字节",
+      "事件会延迟或丢失，对账修复 stuck pending",
+      "对账任务会完全替代数据库里的 metadata 记录"
     ],
     "answer": [
       2
@@ -1554,10 +1661,10 @@
       "state-sync"
     ],
     "options_en": [
-      "Events are never reliable, so they should not be used at all.",
-      "Reconciliation's job is to upload file bytes on the client's behalf.",
-      "Events can also be delayed, lost, or fail to process; periodic reconciliation fixes stuck-pending and orphan cases.",
-      "Reconciliation completely replaces database metadata."
+      "Events are never reliable, so the main path should not use them at all.",
+      "The reconciliation job exists to upload the missing file bytes for the client.",
+      "Events can be delayed or lost; reconciliation repairs rows stuck in pending.",
+      "The reconciliation job fully replaces the metadata records in the database."
     ],
     "termDefinitions": [
       {
@@ -1583,7 +1690,9 @@
       "Correct — events are the primary path, and reconciliation is the safety net.",
       "Incorrect — reconciliation repairs records, it doesn't replace metadata."
     ],
-    "q_en": "If you already have storage events, why do you still need a reconciliation job?"
+    "q_en": "If you already have storage events, why do you still need a reconciliation job?",
+    "scenario": "storage events 走 SQS，偶尔延迟几分钟甚至丢失，用户却看到文件一直卡在 pending。",
+    "scenario_en": "Storage events arrive over SQS, sometimes minutes late or not at all, and users see files stuck in pending."
   },
   {
     "id": "sd-patterns-large-blobs-027",
@@ -1695,10 +1804,10 @@
     "sub": "object-tags",
     "q": "为什么不把丰富 metadata 只放在 S3 object tags/custom headers 里？",
     "options": [
-      "它们容量和查询能力有限，难以高效查“某用户上周上传的所有 PDF”",
-      "object tags 比数据库更适合复杂查询",
-      "object tags 可以替代所有索引",
-      "object tags 永远不会丢失"
+      "容量和查询能力有限，查不出“上周的所有 PDF”",
+      "object tags 比数据库更适合复杂的条件查询",
+      "object tags 可以替代数据库里的所有索引结构",
+      "object tags 写入后永远不会丢失或被覆盖"
     ],
     "answer": [
       0
@@ -1711,10 +1820,10 @@
       "contrast"
     ],
     "options_en": [
-      "Object tags have limited capacity and query power, so finding 'all PDFs user X uploaded last week' is inefficient.",
-      "Object tags are better suited for complex queries than a database.",
-      "Object tags can replace all database indexes.",
-      "Object tags never get lost."
+      "They are size- and query-limited, so you cannot ask for \"all PDFs from last week\".",
+      "Object tags handle complex conditional queries better than a database does.",
+      "Object tags can replace every index structure you keep in the database.",
+      "Once written, object tags can never be lost or overwritten."
     ],
     "tradeoff": "数据库支撑复杂查询 vs object tags 只放少量标签",
     "termDefinitions": [
@@ -1741,7 +1850,9 @@
       "Incorrect — object tags provide no indexing, so they can't substitute for one.",
       "Incorrect — tags live and die with the object; delete the object and the tags go too."
     ],
-    "q_en": "Why not store rich metadata only in S3 object tags or custom headers?"
+    "q_en": "Why not store rich metadata only in S3 object tags or custom headers?",
+    "scenario": "产品要查“某用户上周上传的所有 PDF”，有人提议 metadata 只写进 S3 object tags。",
+    "scenario_en": "The product must query \"every PDF this user uploaded last week\", and someone proposes keeping metadata only in S3 object tags."
   },
   {
     "id": "sd-patterns-large-blobs-030",
@@ -1906,7 +2017,9 @@
       "Correct — compliance scanning requires data to pass a controlled system first.",
       "Incorrect — a 2GB video is exactly the scenario this pattern is built for."
     ],
-    "q_en": "Which cases should not default to direct blob upload? (Select all that apply)"
+    "q_en": "Which cases should not default to direct blob upload? (Select all that apply)",
+    "scenario": "你的平台既有 2GB 视频，也有 5KB 的 JSON 表单和必须合规扫描后才能入库的证件照。",
+    "scenario_en": "Your platform handles 2GB videos, but also 5KB JSON form posts and ID photos that must be compliance-scanned before they land."
   },
   {
     "id": "sd-patterns-large-blobs-033",
@@ -1917,10 +2030,10 @@
     "scenario": "用户上传的文件可能包含病毒、违规图片或伪装成照片的可执行文件。",
     "q": "更安全的处理模式是什么？",
     "options": [
-      "文件一上传完成就立即公开永久下载链接",
-      "只根据 content-type 请求头就判断文件安全",
-      "为了方便用户，跳过所有的文件大小限制",
-      "先进 quarantine，扫描过了再挪到 public bucket"
+      "文件一上传完成就立即公开永久可访问的下载链接",
+      "只根据 content-type 请求头就判断文件是否安全",
+      "为了方便用户，跳过所有文件大小和类型限制",
+      "先进 quarantine 桶，扫描通过再对外开放"
     ],
     "answer": [
       3
@@ -1934,10 +2047,10 @@
       "security"
     ],
     "options_en": [
-      "Make the download link public the instant the upload finishes.",
-      "Trust the content-type header alone to judge safety.",
-      "Skip all file size limits for convenience.",
-      "Upload to quarantine first; move to the public bucket only after scans pass."
+      "Publish a permanent, publicly reachable download link the instant the upload finishes.",
+      "Trust the content-type request header alone to decide whether the file is safe.",
+      "Skip every file size and type limit so uploading stays convenient.",
+      "Land it in a quarantine bucket first, and only expose it after scans pass."
     ],
     "tradeoff": "隔离扫描后再放出 vs 上传后立即公开",
     "termDefinitions": [
@@ -2017,7 +2130,9 @@
       "Correct — type validation stops an executable disguised as a photo from leaking out.",
       "Incorrect — skipping checks defeats the whole point of the processing pipeline."
     ],
-    "q_en": "What checks can a post-upload processing pipeline usually perform? (Select all that apply)"
+    "q_en": "What checks can a post-upload processing pipeline usually perform? (Select all that apply)",
+    "scenario": "UGC 平台允许任意用户直传图片和文件，上传成功后其他用户马上就能访问。",
+    "scenario_en": "On a UGC platform any user can upload files directly, and other users can reach them the moment the upload finishes."
   },
   {
     "id": "sd-patterns-large-blobs-035",
@@ -2127,7 +2242,9 @@
       "Incorrect — CDNs and mainstream storage natively cache range responses.",
       "Incorrect — range requests are mainly a download-side resumability tool."
     ],
-    "q_en": "How do HTTP range requests help with large-file downloads?"
+    "q_en": "How do HTTP range requests help with large-file downloads?",
+    "scenario": "用户在移动网络下载 5GB 视频，连接平均每几分钟就断一次。",
+    "scenario_en": "A user downloads a 5GB video over mobile data and the connection drops every few minutes."
   },
   {
     "id": "sd-patterns-large-blobs-037",
@@ -2179,7 +2296,9 @@
       "Correct — most bottlenecks are total bandwidth, not per-connection, so the extra complexity rarely pays off.",
       "Incorrect — total bandwidth is a hard ceiling that parallel connections cannot exceed."
     ],
-    "q_en": "What are the tradeoffs of parallel chunk downloads? (Select all that apply)"
+    "q_en": "What are the tradeoffs of parallel chunk downloads? (Select all that apply)",
+    "scenario": "用户要下载 20GB 数据集，而单条 TCP 连接被服务端限速到 10MB/s。",
+    "scenario_en": "A user is downloading a 20GB dataset while a single TCP connection is throttled to about 10MB/s."
   },
   {
     "id": "sd-patterns-large-blobs-038",
@@ -2226,7 +2345,9 @@
       "Correct — file sync relies on chunked direct upload and a metadata state machine.",
       "Correct — chat media uses references plus short-lived signed downloads, another fit."
     ],
-    "q_en": "Which system-design prompts commonly trigger the large-blobs pattern? (Select all that apply)"
+    "q_en": "Which system-design prompts commonly trigger the large-blobs pattern? (Select all that apply)",
+    "scenario": "面试白板上给你一个新题目，题里的核心对象是几百 MB 到 GB 级的用户媒体，不是纯文本记录。",
+    "scenario_en": "On the interview whiteboard the core objects in the prompt are user media hundreds of megabytes to gigabytes in size, not text records."
   },
   {
     "id": "sd-patterns-large-blobs-039",
@@ -2239,7 +2360,7 @@
     "options": [
       "让 API server 先接收整个 2GB 文件再同步转码",
       "把整段视频直接存进 MySQL 的 BLOB 字段",
-      "客户端 multipart 直传，storage events 触发转码，CDN 分发",
+      "客户端 multipart 直传，事件触发转码，CDN 分发",
       "把视频原始字节放进消息队列的消息正文"
     ],
     "answer": [
@@ -2256,7 +2377,7 @@
     "options_en": [
       "The API server receives the entire 2GB file and transcodes it synchronously.",
       "Store the entire video inside a MySQL BLOB column.",
-      "The client does a multipart direct upload; storage events trigger transcoding; a CDN serves the segments.",
+      "The client uploads multipart directly; a storage event kicks off transcoding; a CDN serves it.",
       "Put the raw video bytes in a message queue's message body."
     ],
     "tradeoff": "客户端直传+异步转码 vs 服务器同步接收整份视频",
@@ -2434,8 +2555,8 @@
     "scenario": "设计 WhatsApp 发送视频消息，聊天系统不应承载视频 bytes。",
     "q": "媒体路径应该怎么设计？",
     "options": [
-      "把视频的原始 bytes 直接塞进聊天消息正文里传输",
-      "视频直传 storage，聊天只传引用 + 短期 signed URL",
+      "把视频的原始 bytes 直接塞进每条聊天消息正文里传输",
+      "视频直传 storage，聊天只传引用和短期 URL",
       "让发送方对每一个接收方都重新上传一次视频",
       "上传后立即生成永久公开的下载链接"
     ],
@@ -2451,8 +2572,8 @@
       "fit"
     ],
     "options_en": [
-      "Put the raw video bytes directly inside the chat message body.",
-      "The video uploads directly to storage; chat only carries a reference plus a short-lived signed URL.",
+      "Put the raw video bytes directly inside the body of every chat message.",
+      "The video goes straight to storage; chat carries only a reference and a short-lived URL.",
       "Have the sender re-upload the video separately for every recipient.",
       "Generate a permanent public download link right after upload."
     ],
@@ -2541,7 +2662,38 @@
       "Correct — AWS pushes storage events downstream via S3 Event Notifications.",
       "Correct — Azure's equivalent event mechanism is called Event Grid."
     ],
-    "q_en": "Which cloud-provider term mappings are correct? (Select all that apply)"
+    "q_en": "Which cloud-provider term mappings are correct? (Select all that apply)",
+    "scenario": "系统要同时部署在 AWS 和 Azure，临时上传权限和上传完成事件两边都得有对等能力。",
+    "scenario_en": "The system must run on both AWS and Azure, so temporary upload permissions and upload-completion events need equivalents on each.",
+    "table": {
+      "headers": [
+        "能力",
+        "AWS",
+        "Azure"
+      ],
+      "rows": [
+        [
+          "临时上传权限",
+          "Presigned URL",
+          "SAS token"
+        ],
+        [
+          "分块上传",
+          "Multipart Upload",
+          "Block Blobs"
+        ],
+        [
+          "完成事件",
+          "S3 Event Notif.",
+          "Event Grid"
+        ],
+        [
+          "过期清理",
+          "Lifecycle 规则",
+          "生命周期管理"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-patterns-large-blobs-044",
@@ -2597,9 +2749,9 @@
     "scenario": "面试题里出现“video upload”“file sharing”“photo storage”或“用户生成媒体”。",
     "q": "你应该立刻想到哪条主线？",
     "options": [
-      "把所有用户上传的文件都存进关系数据库里",
+      "把所有用户上传的大文件都存进关系数据库的 BLOB 里",
       "让所有下载请求都回应用服务器代理",
-      "大文件别走 API server，用直传 + CDN 处理",
+      "大文件别走 API server，直传 + CDN",
       "忽略上传失败重试和状态同步问题"
     ],
     "answer": [
@@ -2614,9 +2766,9 @@
       "summary"
     ],
     "options_en": [
-      "Store every uploaded file inside the relational database.",
+      "Store every large user upload inside a relational database BLOB column.",
       "Route every download back through the application server as a proxy.",
-      "Keep large files off the API server; use direct upload plus CDN delivery.",
+      "Keep large files off the API server: direct upload plus CDN.",
       "Ignore upload failure retries and state synchronization."
     ],
     "tradeoff": "服务器做控制面（鉴权/事件） vs 服务器做数据面代理",
@@ -2651,5 +2803,688 @@
     ],
     "q_en": "What main design thread should you think of immediately?",
     "scenario_en": "An interview prompt mentions \"video upload\", \"file sharing\", \"photo storage\", or user-generated media."
+  },
+  {
+    "id": "sd-patterns-large-blobs-046",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "resumable-upload",
+    "scenario": "移动端上传 800MB 视频，产品要求界面显示百分比进度条；后端已改成签发 presigned URL 直传，字节不再经过应用服务器。",
+    "scenario_en": "A mobile client uploads an 800MB video and the product wants a percentage progress bar, but the backend now only issues presigned URLs so bytes never touch the app server.",
+    "q": "上传进度条的数据应该从哪里来？",
+    "q_en": "Where should the upload progress bar get its data from?",
+    "options": [
+      "后端定期轮询对象存储里该 object 的 size，估算已上传字节",
+      "改用分块上传，用已完成 part 数除以总 part 数算百分比",
+      "让后端在转发字节时统计已接收字节并推给前端",
+      "签发 presigned URL 时把预估耗时写进响应，前端按时间线性推进进度条"
+    ],
+    "options_en": [
+      "Have the backend poll the object size in storage and estimate uploaded bytes.",
+      "Switch to chunked upload and compute percent as completed parts over total parts.",
+      "Let the backend count received bytes as it forwards them and push that to the client.",
+      "Return an estimated duration with the presigned URL and animate the bar linearly over time."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。单次 PUT 的 object 在完成前不可见，轮询不到中间大小。",
+      "对。每个 part 完成就是一个可数事件，百分比由客户端直接算。",
+      "错。这等于把服务器放回字节路径，带宽瓶颈又回来了。",
+      "错。时间估算与真实网速无关，弱网下进度条会先满后卡死。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — a single PUT object is not visible until it completes, so polling sees nothing.",
+      "Correct — each completed part is a countable event the client can turn into a percentage.",
+      "Incorrect — that puts the server back on the byte path and restores the bandwidth bottleneck.",
+      "Incorrect — a time estimate ignores real throughput; on a weak network the bar fills then stalls."
+    ],
+    "why": "直传把服务器移出字节路径，进度只能由客户端自己算；分块上传把文件切成可数的 part，完成度天然是百分比。代价是多了 initiate 和 complete 两次调用。",
+    "why_en": "Direct upload takes the server off the byte path, so progress has to come from the client; chunked upload gives you countable parts, at the cost of extra initiate and complete calls.",
+    "tags": [
+      "large-blobs",
+      "resumable-upload",
+      "progress-tracking"
+    ],
+    "termDefinitions": [
+      {
+        "term": "presigned URL",
+        "meaning": "带签名、限定操作和过期时间的临时权限 URL。",
+        "meaningEn": "A presigned URL is a temporary signed URL scoped to one operation with an expiration."
+      },
+      {
+        "term": "part",
+        "meaning": "分块上传中单独传输并单独确认的一个文件分片。",
+        "meaningEn": "A part is one slice of a file that is uploaded and acknowledged on its own in a multipart upload."
+      },
+      {
+        "term": "PUT",
+        "fullName": "HTTP PUT method",
+        "meaning": "HTTP 的写入方法，直传时客户端用它把整个文件体发给存储。",
+        "meaningEn": "PUT is the HTTP write method a client uses to send the whole file body straight to storage."
+      }
+    ]
+  },
+  {
+    "id": "sd-patterns-large-blobs-047",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "presigned-url",
+    "scenario": "你为 5GB 视频签发上传用 presigned URL；URL 一旦被抓包泄露，任何人在它过期前都能往你的桶里写同一个 key。",
+    "scenario_en": "You issue an upload presigned URL for a 5GB video; if the URL leaks, anyone can write that key into your bucket until it expires.",
+    "q": "这个 URL 的过期时间该怎么定？",
+    "q_en": "How should you set the expiry on that presigned URL?",
+    "options": [
+      "设成 7 天，免得用户中途还要回来重新申请一次 URL",
+      "设成 15 分钟到 1 小时，覆盖预期传输时间即可",
+      "设成 30 秒，把泄露窗口压到最小",
+      "不设过期，改为上传完成后由后端调接口把这个 URL 作废"
+    ],
+    "options_en": [
+      "Set it to seven days so the user never has to come back and request a new URL.",
+      "Set it to roughly 15 minutes to an hour, just covering the expected transfer time.",
+      "Set it to 30 seconds to shrink the leak window as much as possible.",
+      "Skip expiry and have the backend revoke the URL through an API once the upload finishes."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。7 天的可写窗口意味着泄露后一周内谁都能覆盖这个 key。",
+      "对。既够 5GB 传完，泄露后的可滥用时间又只有分钟级。",
+      "错。30 秒连 5GB 的握手都不够，用户还没开始传就失效。",
+      "错。签名是自校验的，存储服务不会回头问你这条 URL 还有效吗。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — a seven-day write window lets anyone who sees the URL overwrite that key all week.",
+      "Correct — long enough to finish 5GB, yet a leak is only abusable for minutes.",
+      "Incorrect — 30 seconds expires before a 5GB transfer even gets going.",
+      "Incorrect — the signature is self-validating; storage never calls back to ask if it is still good."
+    ],
+    "why": "有效期必须覆盖预期传输时间：太短大文件传一半就失效，太长则放大泄露后的可写窗口。典型取值是 15 分钟到 1 小时。",
+    "why_en": "The expiry has to cover the expected transfer time: too short and a big file dies midway, too long and a leaked URL stays writable — typically 15 minutes to an hour.",
+    "tradeoff": "泄露后的可滥用窗口 vs 大文件传输所需时间",
+    "whenOtherWins": "如果文件只有几百 KB 且客户端立即上传，几分钟的更短有效期更安全；如果上传要几小时，应改用分块上传逐 part 续签，而不是把单个 URL 拉长到几天。",
+    "tags": [
+      "large-blobs",
+      "presigned-url",
+      "security"
+    ],
+    "termDefinitions": [
+      {
+        "term": "presigned URL",
+        "meaning": "带签名、限定操作和过期时间的临时权限 URL。",
+        "meaningEn": "A presigned URL is a temporary signed URL scoped to one operation with an expiration."
+      },
+      {
+        "term": "X-Amz-Expires",
+        "meaning": "S3 presigned URL 里以秒为单位表示有效期的查询参数。",
+        "meaningEn": "X-Amz-Expires is the query parameter that carries an S3 presigned URL's lifetime in seconds."
+      },
+      {
+        "term": "key",
+        "meaning": "对象存储里唯一标识一个对象的路径字符串。",
+        "meaningEn": "A key is the path string that uniquely identifies one object in blob storage."
+      }
+    ],
+    "codeSample": "https://mybucket.s3.amazonaws.com/uploads/user123/video.mp4\n?X-Amz-Algorithm=AWS4-HMAC-SHA256\n&X-Amz-Date=20240115T000000Z\n&X-Amz-Expires=900          # 900s = 15 分钟有效期\n&X-Amz-SignedHeaders=host  # 签名覆盖的 header 列表\n&X-Amz-Signature=b2754f5b1c9d7c4b8d4f6e9a1b2c3d4e",
+    "lang": "http"
+  },
+  {
+    "id": "sd-patterns-large-blobs-048",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "resumable-upload",
+    "scenario": "同一套断点续传上传要同时跑在 AWS S3、Google Cloud Storage 和 Azure Blob Storage 上，客户端得知道每家给的上传端点长什么样。",
+    "scenario_en": "One resumable upload client must run on AWS S3, Google Cloud Storage, and Azure Blob Storage, so it needs to know what upload endpoint each one hands back.",
+    "q": "三家分块上传的 URL 结构差在哪？",
+    "q_en": "How does the chunked-upload URL structure differ across the three clouds?",
+    "options": [
+      "三家都是每个 part 一个独立签名 URL，只是查询参数名不同",
+      "S3 逐 part 签 URL；GCS/Azure 用单一 session URL 加 range",
+      "三家都用单一 session URL，客户端只发 range header，不需要签名",
+      "S3 用单一 session URL，GCS 和 Azure 反过来每个 chunk 各签一个 URL，且参数顺序与命名规则也完全相反"
+    ],
+    "options_en": [
+      "All three sign a separate URL per part; only the query parameter names differ.",
+      "S3 signs a URL per part, while GCS and Azure use one session URL with range headers.",
+      "All three use one session URL and the client just sends range headers, with no signature at all.",
+      "S3 uses a single session URL while GCS and Azure sign one URL per chunk, with reversed parameter ordering and naming."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。GCS/Azure 的 chunk 打到同一个 session 端点，不是逐块签名。",
+      "对。S3 是 per-part 签名，另外两家是 session URL + range 语义。",
+      "错。session URL 本身就是凭证，它被签过，不是无鉴权端点。",
+      "错。方向记反了；这类混淆会让客户端在其中一朵云上完全跑不通。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — GCS and Azure chunks all hit the same session endpoint rather than per-block signed URLs.",
+      "Correct — S3 signs per part, while the other two use a session URL with range semantics.",
+      "Incorrect — the session URL is itself the signed credential, not an unauthenticated endpoint.",
+      "Incorrect — the direction is flipped, which would break the client on one of the clouds entirely."
+    ],
+    "why": "三家都能只重传失败的块，差别在端点形态：S3 逐 part 签 URL，GCS/Azure 给一个 session URL 用 range 定位。写客户端时这层抽象要自己包一次。",
+    "why_en": "All three let you retry only the failed chunks; the difference is the endpoint shape, so a cross-cloud client has to abstract per-part URLs and session URLs behind one interface.",
+    "tradeoff": "per-part 签名 URL vs 单一 session URL + range header",
+    "table": {
+      "headers": [
+        "方案",
+        "上传端点",
+        "分块大小",
+        "续传查询"
+      ],
+      "rows": [
+        [
+          "S3",
+          "每 part 一个签名 URL",
+          "5MB–5GB",
+          "ListParts"
+        ],
+        [
+          "GCS",
+          "单一 session URL",
+          "块大小灵活",
+          "查 session 状态"
+        ],
+        [
+          "Azure",
+          "单一 block 端点",
+          "4MB–100MB",
+          "列已提交 block"
+        ]
+      ]
+    },
+    "tags": [
+      "large-blobs",
+      "resumable-upload",
+      "cloud-parity"
+    ],
+    "termDefinitions": [
+      {
+        "term": "GCS",
+        "fullName": "Google Cloud Storage",
+        "meaning": "Google 的对象存储服务，分块上传叫 resumable upload。",
+        "meaningEn": "GCS is Google Cloud Storage, whose chunked upload feature is called resumable upload."
+      },
+      {
+        "term": "session URL",
+        "meaning": "一次上传会话专用的端点，所有 chunk 都打到它。",
+        "meaningEn": "A session URL is the single endpoint dedicated to one upload session that all chunks are sent to."
+      },
+      {
+        "term": "range header",
+        "meaning": "HTTP 头，标明这次请求携带的是文件的哪一段字节。",
+        "meaningEn": "A range header is the HTTP header stating which byte span of the file this request carries."
+      },
+      {
+        "term": "ListParts",
+        "meaning": "S3 接口，列出某次 multipart upload 已成功上传的 part。",
+        "meaningEn": "ListParts is the S3 call that lists which parts of a multipart upload already succeeded."
+      },
+      {
+        "term": "block blob",
+        "meaning": "Azure 的分块对象类型，由多个 block 提交合成。",
+        "meaningEn": "A block blob is Azure's chunked object type, assembled by committing a list of blocks."
+      }
+    ]
+  },
+  {
+    "id": "sd-patterns-large-blobs-049",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "resumable-upload",
+    "scenario": "用户在地铁里上传 3GB 视频，传到第 60/100 个 part 时 app 被系统杀掉；重启后他希望从第 61 个 part 接着传。",
+    "scenario_en": "A user uploads a 3GB video on the subway and the app is killed after part 60 of 100; on relaunch they want to resume from part 61.",
+    "q": "客户端必须提前持久化什么？",
+    "q_en": "What must the client have persisted ahead of time?",
+    "options": [
+      "把已上传的 60 个 part 的字节内容缓存到本地磁盘",
+      "把 upload session identifier（S3 的 upload ID）存进 localStorage",
+      "把每个 part 的 checksum 上报给你的后端，重启后由后端替客户端重放上传",
+      "什么都不用存，重启后重新 initiate 一个全新的 multipart upload，存储服务会自动把旧会话的进度接上去"
+    ],
+    "options_en": [
+      "Cache the bytes of the 60 uploaded parts on local disk.",
+      "Persist the upload session identifier — S3's upload ID — in localStorage.",
+      "Report each part checksum to your backend so it can replay the upload for the client after restart.",
+      "Persist nothing and initiate a brand-new multipart upload on restart; storage will splice the old progress back in."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。字节已经在存储侧了，本地再存一份只是把 3GB 占两遍。",
+      "对。有 session id 才能查到已传 part 并从断点续传。",
+      "错。后端根本没有文件字节，直传的前提就是它不碰 bytes。",
+      "错。新的 upload ID 是全新会话，旧的 60 个 part 挂在旧会话上。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — the bytes are already in storage; a local copy just stores 3GB twice.",
+      "Correct — only the session id lets the client list uploaded parts and resume from the break.",
+      "Incorrect — the backend never has the bytes; direct upload exists precisely so it does not.",
+      "Incorrect — a new upload ID is a brand-new session, and the old 60 parts hang off the old one."
+    ],
+    "why": "session id 只活在客户端内存里，app 一死就找不回存储侧已传的 part；持久化到 localStorage 才能重启后 ListParts 续传。代价是残留会话照常计费。",
+    "why_en": "The session id lives only in client memory, so if the app dies the already-uploaded parts become unreachable; persist it to localStorage and you can list parts and resume, at the cost of orphaned uploads that lifecycle rules must clean up.",
+    "tradeoff": "续传能力 vs 会话状态持久化与清理的额外复杂度",
+    "whenOtherWins": "如果文件只有几十 MB、几秒钟就传完，简单的单次 PUT 直传更省事，不值得为续传维护 session id 的持久化和 lifecycle 清理逻辑。",
+    "tags": [
+      "large-blobs",
+      "resumable-upload",
+      "failure-recovery"
+    ],
+    "termDefinitions": [
+      {
+        "term": "upload session identifier",
+        "meaning": "标识一次分块上传会话的句柄，S3 叫 upload ID，GCS 是 resumable URL。",
+        "meaningEn": "An upload session identifier is the handle for one chunked upload session — an upload ID in S3 or a resumable URL in GCS."
+      },
+      {
+        "term": "localStorage",
+        "meaning": "浏览器/客户端的本地持久化键值存储，进程重启后仍在。",
+        "meaningEn": "localStorage is the client-side key-value store that survives an app restart."
+      },
+      {
+        "term": "ListParts",
+        "meaning": "S3 接口，列出某次 multipart upload 已成功上传的 part。",
+        "meaningEn": "ListParts is the S3 call that lists which parts of a multipart upload already succeeded."
+      },
+      {
+        "term": "checksum",
+        "meaning": "对数据算出的哈希值，用来校验某个 part 传输是否完整。",
+        "meaningEn": "A checksum is a hash over the data used to verify that a part transferred intact."
+      },
+      {
+        "term": "lifecycle rule",
+        "meaning": "对象存储的定时策略，可自动删除超期的未完成分块上传。",
+        "meaningEn": "A lifecycle rule is a storage policy that automatically deletes stale incomplete multipart uploads."
+      }
+    ],
+    "table": {
+      "headers": [
+        "状态",
+        "谁持有",
+        "丢失后果"
+      ],
+      "rows": [
+        [
+          "已传 part",
+          "存储服务",
+          "仍在，但要 id 才能找到"
+        ],
+        [
+          "session id",
+          "客户端内存",
+          "断点全丢，只能重传"
+        ],
+        [
+          "未完成会话",
+          "存储服务",
+          "持续计费，靠 lifecycle 清"
+        ],
+        [
+          "metadata 行",
+          "你的数据库",
+          "卡在 pending，靠对账修"
+        ]
+      ]
+    }
+  },
+  {
+    "id": "sd-patterns-large-blobs-050",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cdn-delivery",
+    "scenario": "你的付费课程视频放在 CDN 上，URL 一旦被拿到就能无限播放；已经有别的网站把 video 标签直接指向你的 CDN 地址。",
+    "scenario_en": "Your paid course videos sit on a CDN, and anyone who gets the URL can stream forever — other sites are already pointing their video tags at your CDN.",
+    "q": "CDN URL 不加签名会发生什么？",
+    "q_en": "What happens if those CDN URLs are not signed?",
+    "options": [
+      "外站盗链你的 CDN，带宽账单算你的，付费墙形同虚设",
+      "CDN 边缘节点会自动校验 Referer 头并拒绝外站请求，不需要额外签名",
+      "只会拖慢 origin，因为每次外站请求都要回源取一次完整视频",
+      "影响仅限于统计口径，播放数被外站计走，带宽由 CDN 免费承担"
+    ],
+    "options_en": [
+      "Other sites hotlink your CDN, the bandwidth bill is yours, and the paywall stops meaning anything.",
+      "CDN edge nodes automatically check the Referer header and reject off-site requests without any signing.",
+      "It only slows the origin, since every off-site request has to fetch the full video from origin again.",
+      "The impact is only on analytics; other sites take the view counts while the CDN eats the bandwidth."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对。裸 URL 谁拿到谁能播，鉴权和计费都被绕过。",
+      "错。Referer 校验要显式配置，且可被伪造，不是默认行为。",
+      "错。边缘缓存命中后根本不回源，成本落在出口带宽而不是 origin。",
+      "错。CDN 出口流量按 GB 计费，盗链直接变成你的账单。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a bare URL plays for anyone who has it, bypassing both authorization and billing.",
+      "Incorrect — Referer checking must be configured explicitly and is trivially spoofed.",
+      "Incorrect — once the edge caches it, origin is never hit; the cost lands on egress bandwidth.",
+      "Incorrect — CDN egress is billed per GB, so hotlinking turns straight into your invoice."
+    ],
+    "why": "CDN 签名 URL 的核心动机之一是防盗链，不只是加速：签名让链接绑定过期时间和密钥对，外站嵌入的旧链接会失效。代价是播放器必须能在过期后重新申请。",
+    "why_en": "A big reason to sign CDN URLs is anti-hotlinking, not just speed: the signature binds the link to an expiry and a key pair, so embedded links go stale — but your player must be able to re-request one.",
+    "tags": [
+      "large-blobs",
+      "cdn",
+      "security"
+    ],
+    "termDefinitions": [
+      {
+        "term": "hotlinking",
+        "meaning": "盗链：别的站点直接引用你的资源 URL，让你替它付带宽。",
+        "meaningEn": "Hotlinking is when another site embeds your asset URL directly so you pay for its bandwidth."
+      },
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "内容分发网络，在全球边缘节点缓存并就近分发文件。",
+        "meaningEn": "A CDN is a content delivery network that caches files at edge locations and serves users from nearby."
+      },
+      {
+        "term": "signed URL",
+        "meaning": "带签名与过期时间的临时访问链接，由 CDN 边缘校验。",
+        "meaningEn": "A signed URL is a temporary access link carrying a signature and expiry that CDN edges validate."
+      },
+      {
+        "term": "Referer",
+        "meaning": "HTTP 头，声明请求是从哪个页面发起的，可被客户端伪造。",
+        "meaningEn": "Referer is the HTTP header naming the page a request came from, and clients can forge it."
+      },
+      {
+        "term": "origin",
+        "meaning": "CDN 回源取内容的源站，通常是对象存储桶。",
+        "meaningEn": "The origin is the source the CDN fetches from when it has no cached copy, usually a storage bucket."
+      }
+    ]
+  },
+  {
+    "id": "sd-patterns-large-blobs-051",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "file-sharing",
+    "scenario": "Dropbox 类产品里，用户要把一个 500MB 文件发给公司外的人：对方没有账号，且链接必须在三天后自动失效。",
+    "scenario_en": "In a Dropbox-style product a user shares a 500MB file with someone outside the company: the recipient has no account, and the link must expire on its own after three days.",
+    "q": "这个分享链接该怎么实现？",
+    "q_en": "How should that share link be implemented?",
+    "options": [
+      "给收件人创建一个临时账号，并邮件发送初始密码",
+      "生成一个限时 signed URL，直接指向对象存储或 CDN 上的该文件",
+      "把文件复制一份到公开桶，靠 URL 里的随机 UUID 保证猜不到",
+      "让收件人的下载请求走你的 API server 代理，服务端逐次校验分享 token 再转发字节"
+    ],
+    "options_en": [
+      "Create a temporary account for the recipient and email them an initial password.",
+      "Generate a time-limited signed URL pointing straight at the file in blob storage or the CDN.",
+      "Copy the file into a public bucket and rely on a random UUID in the URL to stay unguessable.",
+      "Route the recipient's download through your API server, checking a share token each time before forwarding bytes."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。为一次性下载强推注册，转化率和体验都很差。",
+      "对。签名把授权和过期都编进 URL，收件人无需账号。",
+      "错。随机 UUID 不会过期，链接一旦转发就永久有效。",
+      "错。500MB 走服务器代理，正是这个模式要消除的带宽瓶颈。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — forcing signup for a one-off download hurts both conversion and experience.",
+      "Correct — the signature encodes both authorization and expiry, so no account is needed.",
+      "Incorrect — a random UUID never expires, so a forwarded link works forever.",
+      "Incorrect — proxying 500MB is exactly the bandwidth bottleneck this pattern removes."
+    ],
+    "why": "约束是收件人无账号且到期要自动失效：signed URL 把权限和过期时间写进 URL 本身，不依赖账号体系。代价是签出去的 URL 在过期前无法主动作废。",
+    "why_en": "The constraints are no account and automatic expiry, and a signed URL encodes both into the link itself — the price being that once issued you cannot revoke it before it expires.",
+    "tradeoff": "签出即不可撤销 vs 服务端逐次校验带来的带宽成本",
+    "whenOtherWins": "如果分享必须随时可撤销、要记录每个下载者、或有合规审计要求，走服务端 token 校验的代理下载更合适——signed URL 一旦签出，到期前收不回来。",
+    "tags": [
+      "large-blobs",
+      "signed-url",
+      "file-sharing"
+    ],
+    "termDefinitions": [
+      {
+        "term": "signed URL",
+        "meaning": "带签名与过期时间的临时访问链接，无需登录即可下载。",
+        "meaningEn": "A signed URL is a temporary link carrying a signature and expiry that allows download without logging in."
+      },
+      {
+        "term": "UUID",
+        "fullName": "Universally Unique Identifier",
+        "meaning": "通用唯一标识符，随机生成、几乎不重复的 128 位 id。",
+        "meaningEn": "A UUID is a universally unique identifier, a randomly generated 128-bit id that practically never collides."
+      },
+      {
+        "term": "share token",
+        "meaning": "代表一次分享授权的凭证，由服务端在每次下载时校验。",
+        "meaningEn": "A share token is a credential representing one share grant that the server validates on each download."
+      }
+    ],
+    "codeSample": "https://d123456.cloudfront.net/shares/abc-123/report.pdf\n?Expires=1705305600        # 三天后的 unix 时间戳，到点自动失效\n&Key-Pair-Id=APKAIOSFODNN7EXAMPLE  # CDN 用对应公钥校验\n&Signature=j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0",
+    "lang": "http"
+  },
+  {
+    "id": "sd-patterns-large-blobs-052",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "when-not-to-use",
+    "scenario": "换头像功能：一张 2MB 图片上传后要立刻显示，并当场做人脸检测把脸裁到中间，用户在同一屏等结果。",
+    "scenario_en": "Avatar upload: a 2MB image must appear immediately and be face-detected and cropped on the spot, with the user waiting on the same screen.",
+    "q": "这里该用直传加异步处理吗？",
+    "q_en": "Should this use direct upload with async processing?",
+    "options": [
+      "该用。直传后靠存储事件触发 worker 生成裁剪结果，再推送通知让前端刷新头像",
+      "不该。文件小且需要基于内容的即时反馈，走普通 API 同步处理更合适",
+      "该用。把人脸检测放到 CDN edge 上执行就能做到即时",
+      "不该。因为 presigned URL 无法限制 content-type，头像可能被传成视频"
+    ],
+    "options_en": [
+      "Yes — let a storage event trigger a worker to crop it, then push a notification so the client refreshes.",
+      "No — the file is small and needs instant content-based feedback, so a normal synchronous API fits better.",
+      "Yes — just run face detection at the CDN edge and the feedback becomes instant.",
+      "No — because a presigned URL cannot restrict content-type, so a video could be uploaded as an avatar."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "错。upload→process→notify 这条链路的秒级延迟撑不住同屏等待。",
+      "对。2MB 远低于 10MB 门槛，代理开销小于异步链路带来的 UX 损失。",
+      "错。CDN edge 是缓存分发层，不承担图像识别这类处理。",
+      "错。presigned URL 恰恰可以把 content-type 写进签名条件来限制。"
+    ],
+    "optionExplanations_en": [
+      "Incorrect — the seconds-long upload-process-notify chain cannot hold a user waiting on one screen.",
+      "Correct — 2MB is well under the 10MB threshold, so proxying costs less than the async UX penalty.",
+      "Incorrect — the CDN edge is a caching and delivery layer, not an image-recognition tier.",
+      "Incorrect — a presigned URL can in fact pin content-type as a signed condition."
+    ],
+    "why": "约束是同一屏内要拿到基于文件内容的结果：异步链路走完要秒级，撑不住交互式 UX；而 2MB 文件代理开销本来就小。代价是这条路径的带宽重新压在服务器上。",
+    "why_en": "The constraint is content-based feedback while the user waits, and the async chain takes seconds, so for a 2MB file you proxy it — paying that bandwidth back on your servers.",
+    "tradeoff": "服务器带宽成本 vs 基于文件内容的即时反馈延迟",
+    "whenOtherWins": "如果反馈可以延后——比如上传后几秒才出缩略图，或用户可以离开页面等推送通知——直传加事件驱动 worker 依然更省服务器带宽。",
+    "tags": [
+      "large-blobs",
+      "when-not-to-use",
+      "ux"
+    ],
+    "termDefinitions": [
+      {
+        "term": "UX",
+        "fullName": "User Experience",
+        "meaning": "用户体验，这里指用户等待反馈时的交互感受。",
+        "meaningEn": "UX is user experience, here the feel of waiting for feedback in the interface."
+      },
+      {
+        "term": "content-type",
+        "meaning": "声明文件 MIME 类型的 HTTP 头，可写进签名条件做限制。",
+        "meaningEn": "Content-type is the HTTP header declaring a file's MIME type, and it can be pinned as a signed condition."
+      },
+      {
+        "term": "CDN edge",
+        "meaning": "CDN 部署在各地的缓存节点，只做缓存与分发。",
+        "meaningEn": "A CDN edge is a regional cache node that only caches and delivers content."
+      },
+      {
+        "term": "worker",
+        "meaning": "消费事件、在后台执行处理任务的异步进程。",
+        "meaningEn": "A worker is an async process that consumes events and runs processing jobs in the background."
+      }
+    ]
+  },
+  {
+    "id": "sd-patterns-large-blobs-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "metadata",
+    "scenario": "上传证件照时必须带上 case-id 这个业务标记；客户端一旦漏带，桶里就多一张无法归档的孤儿文件。",
+    "scenario_en": "An ID-photo upload must carry a case-id business tag; if the client omits it you get an unfilable orphan object in the bucket.",
+    "q": "怎么让 metadata 与上传原子生效？",
+    "q_en": "How do you make the metadata atomic with the upload itself?",
+    "options": [
+      "签发 presigned URL 时把所需 metadata header 写进签名条件，缺失则上传失败",
+      "上传成功后再调用一个 /attach-metadata 接口补写 case-id",
+      "把 case-id 拼进服务端生成的 storage key，靠事件回调时解析出来",
+      "数据库先建 pending 记录，由对账 job 定期扫描，把缺 case-id 的文件标记失败并要求用户重传"
+    ],
+    "options_en": [
+      "Bake the required metadata headers into the presigned URL's signed conditions so the upload fails without them.",
+      "Call a separate /attach-metadata endpoint to write the case-id after the upload succeeds.",
+      "Embed the case-id in the server-generated storage key and parse it out when the event fires.",
+      "Create a pending database row and let a reconciliation job periodically flag files missing a case-id and ask for a re-upload."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对。签名条件由存储服务校验，header 缺失时字节根本写不进去。",
+      "错。第二步失败就留下有文件无 metadata 的中间态。",
+      "错。key 里能带的信息有限，业务标记变了就得重命名对象。",
+      "错。对账只能事后补救，孤儿文件已经在桶里存在过一段时间。"
+    ],
+    "optionExplanations_en": [
+      "Correct — storage validates the signed conditions, so the bytes never land if the header is missing.",
+      "Incorrect — if that second call fails you are left with a file that has no metadata.",
+      "Incorrect — a key holds limited information, and changing the tag means renaming the object.",
+      "Incorrect — reconciliation only repairs after the fact; the orphan already existed in the bucket."
+    ],
+    "why": "只有把 metadata header 烘进签名条件，存储服务才会在 header 缺失时直接拒收，metadata 与字节才是原子的。代价：客户端必须精确复现这些 header，任何不匹配都变成上传失败。",
+    "why_en": "Only by baking the metadata headers into the signed conditions does storage reject the write when they are missing, at the cost that any client mismatch turns into a failed upload.",
+    "tradeoff": "metadata 与字节的原子性 vs 客户端必须精确匹配 header 的脆弱性",
+    "whenOtherWins": "如果签发 URL 时 metadata 已经确定，把它编码进服务端生成的 storage key 或 pending 数据库行就够了——conditional upload 的额外复杂度多数场景用不上。",
+    "tags": [
+      "large-blobs",
+      "metadata",
+      "conditional-upload"
+    ],
+    "termDefinitions": [
+      {
+        "term": "conditional upload",
+        "meaning": "在签名里附加条件（如必须带某 header），不满足就拒绝上传。",
+        "meaningEn": "A conditional upload attaches requirements such as mandatory headers to the signature and rejects uploads that miss them."
+      },
+      {
+        "term": "metadata",
+        "meaning": "描述文件的结构化信息，如上传者、用途、业务标记。",
+        "meaningEn": "Metadata is the structured information describing a file, such as uploader, purpose, and business tags."
+      },
+      {
+        "term": "storage key",
+        "meaning": "对象在桶里的路径，通常由服务端按固定模式生成。",
+        "meaningEn": "The storage key is the object's path in the bucket, normally generated server-side from a fixed pattern."
+      },
+      {
+        "term": "reconciliation job",
+        "meaning": "定期比对数据库状态与存储实际内容的补偿任务。",
+        "meaningEn": "A reconciliation job periodically compares database state against what actually exists in storage."
+      }
+    ]
+  },
+  {
+    "id": "sd-patterns-large-blobs-054",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "download-optimization",
+    "scenario": "用户在移动网络下载 5GB 游戏包，下载器靠 HTTP Range 分段拉取；安全团队要求签名 URL 锁死 HTTP verb 和 SignedHeaders 列表。",
+    "scenario_en": "Users pull a 5GB game package over mobile using HTTP Range requests, and the security team wants signed URLs to pin the HTTP verb and the SignedHeaders list.",
+    "q": "把 Range header 也签死会怎样？",
+    "q_en": "What breaks if the Range header is pinned by the signature too?",
+    "options": [
+      "带 Range 的请求签名校验失败被拒，断点续传退化成整包重下",
+      "存储服务会忽略 Range header 并返回完整对象，客户端拿到 200 而不是 206，只是多花带宽",
+      "CDN edge 会代替客户端完成分段拼装，签名限制不会传导到下载体验",
+      "没有影响，Range 属于传输层能力，不参与请求签名的计算"
+    ],
+    "options_en": [
+      "Range requests fail signature validation and get rejected, so resumable download degrades to full re-download.",
+      "Storage ignores the Range header and returns the whole object, so the client gets a 200 instead of a 206 and just wastes bandwidth.",
+      "The CDN edge reassembles the ranges on the client's behalf, so the signing restriction never reaches the user.",
+      "Nothing changes, since Range is a transport-layer capability and is not part of the request signature."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对。签名对不上直接 403，下载器每次重连都被打回。",
+      "错。签名校验发生在处理请求之前，请求被拒而不是被降级。",
+      "错。CDN 只是转发 Range，不会替客户端管理分段状态。",
+      "错。Range 走在 HTTP 头里，被纳入签名名单后就必须逐字匹配。"
+    ],
+    "optionExplanations_en": [
+      "Correct — a mismatch returns 403, so the downloader is rejected on every reconnect.",
+      "Incorrect — validation happens before the request is processed, so it is rejected, not downgraded.",
+      "Incorrect — the CDN only forwards ranges; it does not manage segment state for the client.",
+      "Incorrect — Range travels as an HTTP header and must match byte-for-byte once it is covered."
+    ],
+    "why": "签名固定了 verb 和 SignedHeaders 后，多带一个 Range 就算另一个请求、校验不过；结果是 5GB 下载一断线就从头开始。签名该限制的是过期与路径，别锁掉续传要用的 header。",
+    "why_en": "Once the signature pins the verb and header list, adding a Range makes it a different request that fails validation, so a dropped 5GB download restarts from zero — sign the expiry and path, not the headers resumption needs.",
+    "tags": [
+      "large-blobs",
+      "range-request",
+      "signed-url"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Range request",
+        "meaning": "客户端只索取文件某段字节的 HTTP 请求，用于续传和并行下载。",
+        "meaningEn": "A range request is an HTTP request for only a byte span of a file, used for resuming and parallel downloads."
+      },
+      {
+        "term": "SignedHeaders",
+        "meaning": "签名覆盖的 header 名单，请求里的这些 header 必须逐字匹配。",
+        "meaningEn": "SignedHeaders is the list of headers covered by the signature, which the request must match exactly."
+      },
+      {
+        "term": "HTTP verb",
+        "fullName": "HTTP method",
+        "meaning": "请求方法（GET/PUT 等），签名会把它算进哈希。",
+        "meaningEn": "The HTTP verb is the request method such as GET or PUT, and the signature hashes it in."
+      },
+      {
+        "term": "206",
+        "meaning": "HTTP 状态码 Partial Content，表示返回的是请求的那段字节。",
+        "meaningEn": "206 is the HTTP Partial Content status meaning only the requested byte range was returned."
+      }
+    ],
+    "codeSample": "GET /large-file.zip HTTP/1.1\nRange: bytes=0-10485759    # 只要前 10MB\n# 若签名把 range 列入 SignedHeaders，此请求会 403\n# 正确做法：签名只覆盖 host + 过期时间",
+    "lang": "http"
   }
 ]

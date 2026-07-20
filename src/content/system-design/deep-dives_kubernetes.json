@@ -54,7 +54,9 @@
         "meaning": "K8s 的「大脑」：API Server + scheduler + controller，决定期望状态并驱动集群向它收敛",
         "meaningEn": "The control plane is K8s's brain (API server + scheduler + controllers) that drives the cluster toward the desired state."
       }
-    ]
+    ],
+    "scenario": "判题服务从 3 个容器长到 200 个、跨 20 台机器跑，崩了要秒级自愈、峰值要自动扩。",
+    "scenario_en": "A judge service grew from 3 containers to 200 across 20 machines, and must self-heal in seconds and scale up at peak."
   },
   {
     "id": "sd-deep-dives-kubernetes-002",
@@ -80,14 +82,14 @@
       0
     ],
     "optionExplanations": [
-      "对：Pod 是 container 外面的一层包装，是 K8s 调度/扩缩的最小单位；常见 1 Pod=1 container。",
-      "错：Pod 能装多个共享 localhost 和卷的容器(如 sidecar)，不等于单个 container。",
+      "对：所以 kubectl scale 调的是 Pod 数而不是容器数，同 Pod 的容器必然落在同一台 Node。",
+      "错：两者等价的话，日志边车就没法用 127.0.0.1 直连主进程了——这正是 Pod 存在的理由。",
       "错：跑 Pod 的机器叫 Node；Pod/container 都不是物理机。",
       "错：一个 Pod 通常 1 个容器，数量没有硬性规定，更不是 100。"
     ],
     "optionExplanations_en": [
-      "Right: a Pod wraps container(s) and is the smallest schedulable unit; commonly one Pod = one container.",
-      "Wrong: a Pod can hold several containers sharing localhost and volumes (e.g. a sidecar), so it is not just one container.",
+      "Right: so kubectl scale changes Pod count, not container count, and containers in one Pod always land on the same Node.",
+      "Wrong: if they were equivalent, a log sidecar could not reach the main process over 127.0.0.1 — that is precisely why Pods exist.",
       "Wrong: the machine running Pods is a Node; neither Pod nor container is a physical machine.",
       "Wrong: a Pod usually holds one container; there is no fixed count, certainly not 100."
     ],
@@ -136,7 +138,9 @@
         "meaning": "和主容器同一个 Pod 里的辅助容器(如日志/代理)，共享网络和卷、随主容器一起调度",
         "meaningEn": "A sidecar is a helper container in the same Pod (e.g. logging/proxy) sharing its network and volumes."
       }
-    ]
+    ],
+    "scenario": "判题服务要扩到 50 个副本，每个副本还带一个共享 localhost 的日志 sidecar 容器。",
+    "scenario_en": "You need 50 replicas of the judge service, each paired with a log sidecar container sharing localhost."
   },
   {
     "id": "sd-deep-dives-kubernetes-003",
@@ -197,13 +201,13 @@
       0
     ],
     "optionExplanations": [
-      "对：HPA 监控 Pod 的 CPU/指标，超阈值加 Pod、回落减 Pod，正是「突发自动扩」。",
+      "对：默认约 15 秒一轮，副本数按「当前指标 / 目标值」等比算出，赛事峰值几分钟内顶上。",
       "错：手动 scale 不能自动跟随突发，人也盯不过来。",
       "错：Cluster Autoscaler 加的是 Node(机器)，不是 Pod 副本。",
       "错：垂直扩容有 CPU 上限、不弹性、还烧空闲成本(见 leetcode-036)。"
     ],
     "optionExplanations_en": [
-      "Right: the HPA watches Pod CPU/metrics and adds/removes Pods above/below a target — exactly bursty autoscaling.",
+      "Right: it reconciles about every 15s and sizes replicas by current-metric over target, so a contest spike is absorbed in minutes.",
       "Wrong: manual scale cannot follow spikes automatically and no one can watch it continuously.",
       "Wrong: the Cluster Autoscaler adds Nodes (machines), not Pod replicas.",
       "Wrong: vertical scaling hits a CPU ceiling, is not elastic, and wastes idle cost (see leetcode-036)."
@@ -232,7 +236,8 @@
         "meaning": "采集各 Pod 的 CPU/内存指标并通过 K8s API 暴露；HPA 的前置依赖",
         "meaningEn": "The Metrics Server collects per-Pod CPU/memory and exposes it via the K8s API — a prerequisite for the HPA."
       }
-    ]
+    ],
+    "tradeoff": "HPA 自动横向扩 Pod（弹性·需 Metrics Server） vs 手动 scale/垂直扩容（简单但跟不上突发）"
   },
   {
     "id": "sd-deep-dives-kubernetes-005",
@@ -305,16 +310,16 @@
     "q": "HPA 和 Cluster Autoscaler 的区别与配合是什么？",
     "q_en": "How do the HPA and Cluster Autoscaler differ and work together?",
     "options": [
-      "HPA 按指标加/减 Pod 副本；CA 按「Pod 调度不了」加/减 Node；HPA 加 Pod 装不下就触发 CA 加机器",
-      "两者完全一样，只是新旧版本不同的名字而已",
-      "HPA 加机器，Cluster Autoscaler 加 Pod，正好相反",
-      "两者都只能手动触发，不能根据负载自动运行"
+      "HPA 按指标加/减 Pod 副本；CA 按 Pod 调度不了加/减 Node",
+      "两者是同一个组件在新旧版本里的两个名字，功能完全重合",
+      "正好反过来：HPA 负责加机器 Node，Cluster Autoscaler 负责加 Pod 副本数",
+      "两者都只能人工 kubectl 触发一次，不会自动跟随负载变化"
     ],
     "options_en": [
-      "The HPA scales Pod replicas by metrics; the CA scales Nodes when Pods cannot schedule; HPA adding Pods that do not fit triggers the CA to add machines",
-      "They are identical, just old and new names for the same thing",
-      "The HPA adds machines and the Cluster Autoscaler adds Pods — the opposite",
-      "Both can only be triggered manually and never run automatically by load"
+      "The HPA scales Pod replicas by metrics; the CA scales Nodes when Pods cannot be scheduled",
+      "They are the same component under two names from different versions, with identical behaviour",
+      "Exactly reversed: the HPA is what adds machines (Nodes) and the Cluster Autoscaler is what adds Pod replicas",
+      "Both only run once when you trigger them by hand with kubectl, never following load"
     ],
     "answer": [
       0
@@ -338,7 +343,7 @@
       "headers": [
         "",
         "HPA",
-        "Cluster Autoscaler"
+        "CA"
       ],
       "rows": [
         [
@@ -369,7 +374,9 @@
       "cluster-autoscaler",
       "contrast"
     ],
-    "termDefinitions": []
+    "termDefinitions": [],
+    "scenario": "赛事峰值时 HPA 已把副本从 2 拉到 10，但新 Pod 全卡在 Pending：机器装满了。",
+    "scenario_en": "At contest peak the HPA scaled replicas from 2 to 10, but the new Pods all sit Pending — the machines are full."
   },
   {
     "id": "sd-deep-dives-kubernetes-007",
@@ -382,16 +389,16 @@
     "q": "什么时候才值得上 Kubernetes？",
     "q_en": "When is Kubernetes actually worth it?",
     "options": [
-      "很多容器/服务、跨多机、要自愈+弹性扩缩+滚动发布时；小规模上 K8s 是过度设计",
-      "任何项目从第一天起都应该先搭一套 K8s 再写业务",
-      "K8s 只有超大公司能用，中小团队一律不能碰",
-      "K8s 能替代写业务代码，上了它就不用自己实现功能了"
+      "多容器跨多机、要自愈+弹性扩缩+滚动发布时；小规模上它是过度设计",
+      "任何项目从第一天起都应该先搭好一整套 K8s 集群，再开始写业务代码",
+      "K8s 只有超大公司能用，中小团队一律不该碰它",
+      "上了 K8s 就不必自己实现功能，它能替代业务代码"
     ],
     "options_en": [
-      "When you have many containers/services across machines needing self-healing, elastic scaling, and rolling deploys; at small scale K8s is over-engineering",
-      "Every project should stand up K8s on day one before writing any business logic",
+      "When many containers span many machines and you need self-healing, elastic scaling, and rolling deploys; at small scale it is over-engineering",
+      "Every project should stand up a full K8s cluster on day one before any business code gets written",
       "Only huge companies can use K8s; small teams must never touch it",
-      "K8s replaces writing business code — once you have it you need not implement features"
+      "Once you have K8s you need not implement features — it replaces business code"
     ],
     "answer": [
       0
@@ -423,6 +430,7 @@
         "meaning": "云厂商托管的 K8s(EKS/GKE/AKS)，省去自己维护 control plane，中小团队也能用",
         "meaningEn": "Managed Kubernetes (EKS/GKE/AKS) is cloud-run K8s that removes control-plane maintenance, making it accessible to small teams."
       }
-    ]
+    ],
+    "tradeoff": "K8s 的编排能力（弹性/自愈/滚动发布） vs 运维复杂度（control plane、YAML、排障成本）"
   }
 ]

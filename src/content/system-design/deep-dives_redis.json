@@ -8,7 +8,7 @@
     "q": "Redis 对自己的定位最准确的是？",
     "options": [
       "磁盘上的关系型数据库，靠表和外键组织数据",
-      "内存中的「数据结构存储」(data structure store)",
+      "内存中的数据结构存储：字符串、哈希、有序集合",
       "面向批量扫描的列式分析引擎，不追求单条低延迟",
       "跨机器切分文件块的分布式文件系统"
     ],
@@ -23,7 +23,7 @@
     ],
     "options_en": [
       "A disk-based relational database organized around tables and foreign keys",
-      "An in-memory data structure store",
+      "An in-memory data structure store of strings, hashes, and sorted sets",
       "A columnar analytics engine built for batch scans, not single-record speed",
       "A distributed file system that splits files into blocks across machines"
     ],
@@ -39,7 +39,9 @@
       "Right: it holds structures like strings, hashes, and sorted sets in memory — that's Redis's actual positioning.",
       "Wrong: Redis is built for low-latency single-record access, not batch-scan columnar analytics.",
       "Wrong: Redis stores in-memory data structures, not file blocks split across machines."
-    ]
+    ],
+    "scenario": "你要给团队选一个存用户会话的组件：单 key 读要 <1ms，还要直接存哈希和有序集合，不需要 join。",
+    "scenario_en": "You're picking a component to hold user sessions: sub-millisecond single-key reads, native hashes and sorted sets, and no joins needed."
   },
   {
     "id": "sd-deep-dives-redis-002",
@@ -82,7 +84,45 @@
       "Wrong: row-level locking is a relational-database concurrency model; Redis's executor has no locks.",
       "Right: commands run one at a time on a single thread, so they're atomic without any lock coordination.",
       "Wrong: Redis doesn't fan commands out across a coroutine pool — the executor stays single-threaded and serial."
-    ]
+    ],
+    "scenario": "你在 Redis 上做 INCR 计数器，5 万 QPS 并发写同一个 key，想知道要不要自己加锁防丢更新。",
+    "scenario_en": "You're building an INCR counter on Redis with 50k QPS hammering one key, and you want to know whether you need your own lock to avoid lost updates.",
+    "table": {
+      "headers": [
+        "模型",
+        "并发单位",
+        "要锁吗",
+        "切换开销"
+      ],
+      "rows": [
+        [
+          "单线程串行",
+          "一次一条命令",
+          "不需要",
+          "无线程切换"
+        ],
+        [
+          "一连接一线程",
+          "每个连接一线程",
+          "看共享结构",
+          "随连接数上升"
+        ],
+        [
+          "多线程+行级锁",
+          "每行",
+          "需要",
+          "锁竞争"
+        ],
+        [
+          "协程池",
+          "每个协程",
+          "需要",
+          "调度开销"
+        ]
+      ]
+    },
+    "codeSample": "# 两个客户端同时对同一个 key 发 INCR：Redis 一次只跑一条\nINCR counter:page:home\nINCR counter:page:home\n# 结果一定是 2，不会互相覆盖，应用层不用加锁\n# 需要多步也原子时，用 Lua 脚本整体当一条命令执行\nEVAL \"return redis.call('INCR', KEYS[1])\" 1 counter:page:home",
+    "lang": "redis"
   },
   {
     "id": "sd-deep-dives-redis-003",
@@ -285,7 +325,9 @@
       "Wrong: a ~1s loss window is what AOF's default fsync policy gives you, not plain RDB.",
       "Wrong: pure in-memory plus periodic snapshots always has a loss window — zero loss isn't possible this way.",
       "Wrong: a crash loses writes that never made it to disk; it doesn't corrupt the snapshot file that already exists."
-    ]
+    ],
+    "scenario": "订单服务把待支付订单存在 Redis，只开了 RDB、每 5 分钟一次快照；进程被 OOM kill 掉。",
+    "scenario_en": "An order service keeps pending orders in Redis with only RDB enabled, snapshotting every five minutes, and the process gets OOM-killed."
   },
   {
     "id": "sd-deep-dives-redis-006",
@@ -295,7 +337,7 @@
     "sub": "persistence",
     "q": "这个 fsync 频率的量级最支持哪条设计判断？",
     "options": [
-      "关键写入要么接受约 1 秒的丢失窗口，要么改成每写 fsync 或换真正持久化的实现",
+      "要么接受约 1 秒的丢失窗口，要么每写都 fsync",
       "默认配置和关系型数据库一样是提交即落盘",
       "丢失窗口只取决于网络延迟，与 fsync 频率无关",
       "只要打开了 AOF 就等于零丢失，不需要额外设计"
@@ -313,7 +355,7 @@
     ],
     "scenario": "AOF 默认策略是每秒 fsync 一次；你要为「已确认写入」写一份诚实的持久性说明给业务方。",
     "options_en": [
-      "Critical writes must either accept a roughly one-second loss window, fsync on every write, or use a truly durable option",
+      "Either accept a roughly one-second loss window, or fsync on every write",
       "The defaults give the same commit-is-on-disk guarantee as a relational database",
       "The loss window depends only on network latency, not fsync frequency",
       "Turning on AOF alone means zero data loss with no extra design needed"
@@ -426,7 +468,9 @@
       "Wrong: running RDB and AOF together doesn't change the default fsync frequency — there's still a loss window.",
       "Wrong: durability is a server-side setting; the client driver version can't change when Redis flushes to disk.",
       "Right: the Redis team deliberately trades weaker durability for speed — a confirmed write can still be lost by design."
-    ]
+    ],
+    "scenario": "支付团队问你一句话：Redis 回了 OK 的写入，和 MySQL COMMIT 返回的写入，安全性一样吗？",
+    "scenario_en": "The payments team asks you point-blank whether a write Redis has acked is as safe as one MySQL has committed."
   },
   {
     "id": "sd-deep-dives-redis-008",
@@ -439,7 +483,7 @@
     "options": [
       "开源 Redis 默认配置：最快，但确认写可能仍有丢失窗口",
       "Redis RDB+AOF：更安全，但仍取决于 fsync 策略",
-      "AWS MemoryDB：Redis-compatible，写入进 Multi-AZ log 后再确认",
+      "AWS MemoryDB：写入进 Multi-AZ log 后才确认",
       "Memcached：纯缓存，节点故障或重启就丢"
     ],
     "answer": [
@@ -456,7 +500,7 @@
     "options_en": [
       "Stock Redis defaults: fastest, but acknowledged writes may still have a loss window.",
       "Redis RDB plus AOF: safer, but still depends on the fsync policy.",
-      "AWS MemoryDB: Redis-compatible, confirms writes after the Multi-AZ log.",
+      "AWS MemoryDB: Redis-compatible, and it acks a write only after the Multi-AZ log",
       "Memcached: pure cache; data is lost on restart or node failure."
     ],
     "tradeoff": "持久主数据库 vs 纯缓存/弱持久 Redis",
@@ -540,7 +584,7 @@
     "sub": "data-model",
     "q": "Redis 逻辑模型最准确的描述是？",
     "options": [
-      "每个字符串 key 指向一个 value，数据结构就住在 value 里",
+      "字符串 key 指向 value，结构住在 value 里",
       "表、行和列组成的关系模型，靠外键做跨表关联",
       "嵌套的文档树，字段可以任意深度嵌套（如 MongoDB）",
       "节点和边组成的图，边可以带权重和属性"
@@ -572,7 +616,9 @@
       "Wrong: tables, rows, columns, and foreign-key joins describe a relational database; Redis has no tables or foreign keys.",
       "Wrong: a Redis hash is flat fields, not an arbitrarily nested document tree — that's MongoDB's model.",
       "Wrong: Redis has no native weighted-edge graph structure; nodes and edges aren't its logical model."
-    ]
+    ],
+    "scenario": "你要在 Redis 里存「每个用户一个好友有序集合」，先得说清这个有序集合到底挂在什么上面。",
+    "scenario_en": "You want to store each user's friend list as a sorted set in Redis, so first you need to say what that sorted set actually hangs off."
   },
   {
     "id": "sd-deep-dives-redis-010",
@@ -640,7 +686,9 @@
       "Right: Stream is a native append-only log structure; paired with consumer groups it works as a job queue.",
       "Right: geospatial indexing is native — GEOADD/GEOSEARCH directly support radius queries.",
       "Wrong: Redis has no cross-key JOIN; relating data means stitching it in the app or modeling it into one structure."
-    ]
+    ],
+    "scenario": "你在评估能不能把排行榜、附近的人、事件日志三个需求全压在 Redis 上，不再引入别的存储。",
+    "scenario_en": "You're checking whether leaderboards, nearby-users, and an event log can all sit on Redis without adding another store."
   },
   {
     "id": "sd-deep-dives-redis-011",
@@ -975,7 +1023,7 @@
     "sub": "cluster-slots",
     "q": "这个「槽数量在集群运行期间固定」的设计，最支持哪个判断？",
     "options": [
-      "扩缩容 = 重新分配槽归属哪个节点，而不是重新对所有 key 哈希",
+      "扩缩容 = 重新分配槽的归属节点，而非重新哈希 key",
       "每加一个节点，哈希函数本身都要跟着重新调整算法",
       "槽的总数必须精确等于集群里的节点数量",
       "槽总数会随着集群规模自动增加或减少"
@@ -993,7 +1041,7 @@
     "diagram": "flowchart TB\n  K[\"key = order:99\"] --> H[\"CRC16(key) % 16384\"]\n  H --> S[\"slot = 13000\"]\n\n  subgraph Before[\"Before adding node D\"]\n    A1[\"Node A owns slots 0-5460\"]\n    B1[\"Node B owns slots 5461-10922\"]\n    C1[\"Node C owns slots 10923-16383\"]\n  end\n\n  S -->|lookup slot map| C1\n\n  subgraph After[\"After adding node D\"]\n    A2[\"Node A owns slots 0-4095\"]\n    B2[\"Node B owns slots 4096-8191\"]\n    C2[\"Node C owns slots 8192-12287\"]\n    D2[\"Node D owns slots 12288-16383\"]\n  end\n\n  S -.same slot, new owner.-> D2\n  C1 -.move slot 13000 and its keys.-> D2",
     "scenario": "Redis Cluster 把整个 key 空间预先切成 16384 个哈希槽。加/减节点时，key->slot 的算法不变，变化的是 slot->node 的归属表。",
     "options_en": [
-      "Scaling means reassigning which node owns which slots, not rehashing every key",
+      "Scaling reassigns which node owns which slots rather than rehashing keys",
       "Adding a node forces you to re-tune the hash function's algorithm itself",
       "The total slot count must exactly equal the number of nodes in the cluster",
       "The total slot count automatically grows or shrinks as the cluster resizes"
@@ -1072,7 +1120,7 @@
     "options": [
       "随便连一个节点，由它读懂请求内容后代为转发",
       "每次操作前先询问一个独立的外部配置中心服务",
-      "客户端本地缓存 slot→node 映射，从 key 算出槽后直连目标节点",
+      "本地缓存 slot 到 node 表，算槽后直连该节点",
       "把每个请求广播到集群里所有节点，取第一个响应"
     ],
     "answer": [
@@ -1088,7 +1136,7 @@
     "options_en": [
       "Connect to any node and have it read the request and forward it on your behalf",
       "Ask a separate external configuration-center service before every operation",
-      "Cache the slot-to-node map locally, compute the slot from the key, and connect directly to the owning node",
+      "Cache the slot-to-node map locally and connect straight to the owning node",
       "Broadcast every request to all nodes in the cluster and take the first response"
     ],
     "q_en": "How does a Redis Cluster client find the node that owns a key?",
@@ -1103,7 +1151,9 @@
       "Wrong: the client doesn't ask an external config service before every operation — the slot table is cached locally.",
       "Right: the client caches a local slot-to-node map, computes the slot from the key, and connects straight to the right node.",
       "Wrong: broadcasting to every node and taking the first reply is wasteful and unreliable — not how Redis clients work."
-    ]
+    ],
+    "scenario": "你的服务连着 6 节点 Redis Cluster，要求一次 GET 只花一跳网络往返、p99 亚毫秒。",
+    "scenario_en": "Your service talks to a six-node Redis Cluster and needs a GET to cost exactly one network round trip with sub-millisecond p99."
   },
   {
     "id": "sd-deep-dives-redis-016",
@@ -1154,7 +1204,9 @@
       "Wrong: the node doesn't queue the request waiting for migration to finish — it replies immediately.",
       "Right: the node replies MOVED pointing to the correct node; the client refreshes its slot map and resends.",
       "Wrong: hitting the wrong node is normal slot routing — it doesn't error out and disconnect, just tells you where to go."
-    ]
+    ],
+    "scenario": "扩容正在迁移槽位，客户端本地缓存的 slot 到 node 映射已经过期，但它照旧发出了 GET。",
+    "scenario_en": "A resharding is migrating slots, the client's cached slot-to-node map has gone stale, and it fires a GET anyway."
   },
   {
     "id": "sd-deep-dives-redis-017",
@@ -1209,7 +1261,9 @@
       "Right: nodes propagate cluster state to each other via a gossip protocol, so every node ends up with the full slot map.",
       "Wrong: Redis Cluster maintains membership and slot state itself via gossip — it doesn't depend on ZooKeeper.",
       "Wrong: slot distribution spreads node-to-node on its own; it isn't the client's job to announce it each time."
-    ]
+    ],
+    "scenario": "6 节点集群不允许再部署任何外部协调服务，但每个节点都得知道某个槽当前归谁。",
+    "scenario_en": "A six-node cluster is not allowed to run any external coordination service, yet every node still has to know who owns a given slot."
   },
   {
     "id": "sd-deep-dives-redis-018",
@@ -1253,7 +1307,9 @@
       "Wrong: migration only moves the reassigned slots and the keys in them, not the entire dataset.",
       "Wrong: slot migration happens online; clients keep up via MOVED/ASK — no full-cluster downtime needed.",
       "Right: scaling moves some slots, and the keys inside them, to the new node; clients catch up via MOVED and a refreshed map."
-    ]
+    ],
+    "scenario": "缓存集群要从 6 台扩到 8 台，硬要求是不停机、客户端代码一行都不改。",
+    "scenario_en": "A cache cluster grows from six nodes to eight, with hard requirements of no downtime and no client code changes."
   },
   {
     "id": "sd-deep-dives-redis-019",
@@ -1265,7 +1321,7 @@
     "scenario_en": "A client writes SET order:123 paid to a Redis primary. Two replicas follow that primary for replication and failover. The question is: when does the client receive OK?",
     "q": "Redis 主从复制的确认时序是？",
     "options": [
-      "主节点在副本收到写入之前就向客户端确认（异步复制）",
+      "副本收到之前主就回 OK（异步复制）",
       "必须多数副本确认才向客户端返回",
       "主副本同步双写完成后才确认",
       "客户端直接把写入发给副本"
@@ -1281,7 +1337,7 @@
       "async"
     ],
     "options_en": [
-      "The primary acknowledges the client before replicas have seen the write (async replication)",
+      "The primary acknowledges before replicas have seen the write (async replication)",
       "It must wait for a majority of replicas to acknowledge before returning",
       "It confirms only after synchronously writing to both primary and replica",
       "Clients write directly to the replicas"
@@ -1460,7 +1516,7 @@
     "options": [
       "自动帮你解决扩展性问题",
       "内置跨节点查询优化器",
-      "只给你原语，扩展性问题由你自己靠 key 设计解决",
+      "只给原语，扩展性靠你的 key 设计",
       "提供强一致的跨节点分布式事务"
     ],
     "answer": [
@@ -1491,7 +1547,9 @@
       "Wrong: Redis has no cross-node query optimizer planning execution paths — that's a relational-database capability.",
       "Right: Redis expects one request's data to live on a single node — 'how you organize keys is how you scale Redis'.",
       "Wrong: Redis Cluster doesn't offer strongly consistent cross-node transactions; MULTI must stay inside one slot."
-    ]
+    ],
+    "scenario": "你在问 Redis Cluster 能不能像 Spanner 那样，自动帮你处理跨节点查询和扩展性。",
+    "scenario_en": "You're asking whether Redis Cluster, like Spanner, will handle cross-node queries and scaling for you automatically."
   },
   {
     "id": "sd-deep-dives-redis-022",
@@ -1503,7 +1561,7 @@
     "q": "正确做法是？",
     "options": [
       "放弃集群模式，把整个部署缩回成本更低的单节点 Redis",
-      "用 hash tag：key 里用花括号包住哈希部分，如 {user:123}:posts",
+      "用 hash tag：{user:123}:posts 同槽",
       "把这次修改拆成两个独立事务分别提交，接受中间态可见",
       "在客户端代码里再加一把分布式锁做双重保护"
     ],
@@ -1522,7 +1580,7 @@
     ],
     "options_en": [
       "Give up cluster mode entirely and shrink the deployment back to a cheaper single Redis node",
-      "Use a hash tag: wrap the hashed part of the key in braces, like {user:123}:posts",
+      "Use a hash tag like {user:123}:posts so both keys share one slot",
       "Split the change into two separate transactions committed independently, accepting a visible intermediate state",
       "Add another client-side distributed lock on top as a second layer of protection"
     ],
@@ -1656,7 +1714,7 @@
     "sub": "performance",
     "q": "这个耗时量级最支持哪条设计判断？",
     "options": [
-      "命令本身很少是瓶颈，优化重点应放在减少网络往返（pipeline/MGET）",
+      "命令很少是瓶颈，重点是减少网络往返（pipeline/MGET）",
       "命令执行本身是主要瓶颈，要用 Lua 脚本替换所有命令",
       "微秒级执行意味着可以放心做同步跨机房调用",
       "既然命令很快，热点 key 就不需要任何缓解手段"
@@ -1673,7 +1731,7 @@
     ],
     "scenario": "一条 Redis 命令在服务器上的执行只有微秒级开销，网络往返才是你看到的亚毫秒延迟的主因。",
     "options_en": [
-      "The command itself is rarely the bottleneck, so optimize by cutting round trips with pipelining or MGET",
+      "The command itself is rarely the bottleneck, so cut round trips with pipelining or MGET",
       "Command execution is the main bottleneck, so replace every command with a Lua script",
       "Microsecond execution means synchronous cross-region calls are safe",
       "Since commands are fast, hot keys need no mitigation at all"
@@ -1702,7 +1760,7 @@
     "scenario": "页面要展示 100 条订单及买家名：先 1 次查订单列表，再对每条订单各查 1 次买家资料，总共 101 次查询。这就是 N+1。",
     "q": "「N+1 查询」打在 SQL 上是灾难，打在 Redis 上却勉强可行，为什么？",
     "options": [
-      "每条命令只花服务器微秒级，还能用 pipeline 或 MGET 把多次往返合成一次",
+      "命令只花微秒，pipeline/MGET 能把往返合成一次",
       "Redis 会在服务端自动检测并合并相似的重复查询",
       "Redis 内置一个查询优化器，会帮你规划执行路径",
       "因为这种场景下业务数据量一定很小，可以忽略"
@@ -1720,7 +1778,7 @@
       "pipeline"
     ],
     "options_en": [
-      "Each command costs the server only microseconds, and pipelining or MGET collapses many round trips into one",
+      "Each command costs only microseconds, and pipelining or MGET collapses the round trips into one",
       "Redis automatically detects and merges similar repeated queries on the server",
       "Redis has a built-in query optimizer that plans the execution path for you",
       "Because in this scenario the data volume is guaranteed to be negligible"
@@ -1913,7 +1971,9 @@
       "Wrong: deleting the oldest-written key isn't the default either — by default Redis won't proactively delete anything.",
       "Right: counterintuitive but true — the default is noeviction, so a full memory just rejects new writes; using Redis as a cache needs an explicit policy.",
       "Wrong: Redis has no tiered mechanism that swaps cold data out to disk — data is either in memory or evicted."
-    ]
+    ],
+    "scenario": "线上 Redis 纯做缓存，内存已经到 maxmemory，但运维从没配过 maxmemory-policy。",
+    "scenario_en": "A production Redis used purely as a cache has hit maxmemory, but nobody ever configured maxmemory-policy."
   },
   {
     "id": "sd-deep-dives-redis-028",
@@ -1925,7 +1985,7 @@
     "q": "应配置哪种淘汰策略？",
     "options": [
       "allkeys-lru：对全部 key 做近似 LRU 淘汰",
-      "noeviction（默认，满了就拒写）",
+      "noeviction：保持默认，内存满了就拒绝新写入",
       "手动写定时任务 DEL 旧 key",
       "把所有 key 的 TTL 都调得很短"
     ],
@@ -1942,7 +2002,7 @@
     ],
     "options_en": [
       "allkeys-lru: apply approximate LRU eviction across all keys",
-      "noeviction (the default, which rejects writes once full)",
+      "noeviction: keep the default and reject new writes once memory is full",
       "Write a scheduled job that manually DELs old keys",
       "Set a very short TTL on every key"
     ],
@@ -2001,7 +2061,7 @@
     "q": "Redis 的 LRU 淘汰在实现上的特点是？",
     "options": [
       "精确维护一条全局访问顺序链表",
-      "严格按 key 的插入顺序淘汰",
+      "严格按 key 的插入顺序淘汰，先进先出",
       "完全随机挑选 key 淘汰",
       "抽样若干 key 做近似 LRU，不追踪精确顺序"
     ],
@@ -2019,7 +2079,7 @@
     ],
     "options_en": [
       "It precisely maintains one global access-order linked list",
-      "It strictly evicts in insertion order",
+      "It strictly evicts in insertion order, first in first out",
       "It picks keys to evict completely at random",
       "It samples a handful of keys to approximate LRU without tracking exact order"
     ],
@@ -2091,7 +2151,7 @@
     "q": "TTL 过期和淘汰策略（eviction）分别解决什么问题？",
     "options": [
       "两者本质上都是在解决同一个内存不足的问题",
-      "TTL 管数据新鲜度（staleness），eviction 管内存满了删谁",
+      "TTL 管数据新鲜度，eviction 管内存满时删谁",
       "TTL 管的是内存占用，eviction 管的是数据新鲜度",
       "两者语义完全等价，配置一个就能替代另一个"
     ],
@@ -2132,7 +2192,7 @@
     },
     "options_en": [
       "Both are fundamentally solving the same out-of-memory problem",
-      "TTL handles staleness, while eviction handles what to delete when memory is full",
+      "TTL handles staleness; eviction decides what to drop when memory is full",
       "TTL governs memory usage, while eviction governs data freshness",
       "The two are fully equivalent in semantics, and configuring one can replace the other"
     ],
@@ -2149,7 +2209,9 @@
       "Right: TTL handles staleness (is this value still fresh), eviction handles memory pressure (who gets deleted when full).",
       "Wrong: that's reversed — TTL governs freshness, not memory footprint; eviction is the mechanism for a full memory.",
       "Wrong: they aren't interchangeable — a TTL doesn't create eviction headroom, and an eviction policy doesn't keep data fresh."
-    ]
+    ],
+    "scenario": "缓存里的商品价格既怕过时（要 5 分钟刷新一次），又怕撑爆 32GB 内存上限。",
+    "scenario_en": "Cached product prices must refresh every five minutes and also stay inside a 32 GB memory ceiling."
   },
   {
     "id": "sd-deep-dives-redis-031",
@@ -2262,7 +2324,9 @@
       "Wrong: lapsing immediately after write is what EX 0/PX 0 would do — unrelated to NX's existence check.",
       "Wrong: NX doesn't skip replication; the write still replicates normally — it only gates whether the write happens.",
       "Wrong: unconditional overwrite is a plain SET with no flag; NX does the opposite, adding a 'write only if absent' condition."
-    ]
+    ],
+    "scenario": "多个 worker 抢同一个 order:123 的处理权，你要用一条命令完成「没人占就占上」。",
+    "scenario_en": "Several workers race for the right to handle order:123, and you want one single command that takes it only if nobody holds it."
   },
   {
     "id": "sd-deep-dives-redis-033",
@@ -2305,7 +2369,11 @@
       "Wrong: clock skew affects how precisely the TTL is judged, not the problem EX itself is meant to solve.",
       "Wrong: a network partition just means the client can't reach Redis — a different failure mode entirely.",
       "Right: without a TTL, a crashed process would hold the lock forever and block everyone; EX caps how long it can be held."
-    ]
+    ],
+    "scenario": "worker 用 SET lock:order:123 tokenA NX 拿到锁后进程被 kill，没机会执行 DEL。",
+    "scenario_en": "A worker takes the lock with SET lock:order:123 tokenA NX and is then killed before it ever runs DEL.",
+    "codeSample": "# 抢锁：key 不存在才成功，且 30 秒后自动过期\nSET lock:order:123 tokenA NX EX 30\n# 若进程在这里崩溃，永远没人执行 DEL lock:order:123\n# EX 让 key 到点自己消失，下一个 worker 才能重新抢到\nTTL lock:order:123",
+    "lang": "redis"
   },
   {
     "id": "sd-deep-dives-redis-034",
@@ -2318,7 +2386,7 @@
     "options": [
       "对锁的内容做加密",
       "让 key 在集群里分布更均匀",
-      "释放时能先验证锁还是不是自己的，避免删掉别人的锁",
+      "释放前先验证锁还是自己的，避免删别人的锁",
       "统计这把锁被持有了多久"
     ],
     "answer": [
@@ -2354,7 +2422,7 @@
     "options_en": [
       "To encrypt the lock's contents",
       "To spread the key more evenly across the cluster",
-      "So release can first verify the lock is still yours before deleting it",
+      "So release can verify the lock is still yours before deleting it",
       "To measure how long the lock was held"
     ],
     "q_en": "Why store a random token as the lock's value instead of a fixed value?",
@@ -2446,7 +2514,7 @@
     "scenario": "释放分布式锁：必须「核对 token 是自己的 → 再删除」，且两步之间不能被其他命令插入。",
     "q": "正确的实现是？",
     "options": [
-      "用 Lua 脚本一次执行 GET 比对 + DEL",
+      "Lua 脚本里一次做 GET 比对 + DEL",
       "先 GET 再 DEL 两条独立命令",
       "WATCH 之后直接 DEL",
       "EXPIRE 设为 0"
@@ -2466,7 +2534,7 @@
     ],
     "diagram": "flowchart TD\n  A[\"SET NX EX token\"] --> B[\"Do work\"]\n  B --> C[\"Lua compare token\"]\n  C --> D[\"DEL only owner\"]",
     "options_en": [
-      "Run a Lua script that does the GET compare and DEL as one command",
+      "Run a Lua script that does the GET compare and the DEL as one step",
       "Send GET then DEL as two separate commands",
       "WATCH the key, then DEL it directly",
       "Set EXPIRE to 0 on the key"
@@ -2509,7 +2577,7 @@
     "q": "「先抢锁再干活」和 Redis 的 WATCH + MULTI/EXEC 分别属于哪种并发控制？",
     "options": [
       "两者都属于乐观并发控制，不阻塞其他客户端",
-      "前者悲观；后者乐观——被 WATCH 的 key 中途变了，事务就中止",
+      "前者悲观；后者乐观，EXEC 时冲突就中止",
       "前者是乐观策略；后者是悲观阻塞式并发控制",
       "两者都属于会阻塞其他客户端的悲观锁"
     ],
@@ -2528,7 +2596,7 @@
     ],
     "options_en": [
       "Both are optimistic concurrency control that never blocks other clients",
-      "The first is pessimistic; the second is optimistic and aborts if the watched key changed mid-transaction",
+      "The first is pessimistic; the second is optimistic and aborts at EXEC if the watched key changed",
       "The first is optimistic; the second is pessimistic and blocks",
       "Both are pessimistic locks that block other clients"
     ],
@@ -2602,7 +2670,7 @@
     "scenario": "客户端 C1 在 Redis primary 上用 SET lock:order:123 tokenA NX PX 30000 抢到锁；primary 已经回 OK，但这条锁记录还没复制到 replica，primary 就崩了。",
     "q": "单节点 Redis 锁在主从 failover 时的经典失效方式是？",
     "options": [
-      "主挂时锁还没异步复制到副本，新主把同一把锁再发给别人",
+      "锁还没复制到副本主就挂了，新主把锁再发一次",
       "锁 key 被迁移到了错误的槽位",
       "锁的 TTL 被意外重置为 0",
       "副本拒绝所有加锁请求"
@@ -2670,7 +2738,7 @@
     "q": "Redlock 算法的核心思路是？",
     "options": [
       "只是把锁的 TTL 设得比原来更长一些",
-      "在多数（quorum）个互不复制的独立 Redis 节点上都拿到锁才算成功",
+      "在多数（quorum）个独立 Redis 上都拿到锁",
       "把锁写进 AOF 日志并强制立即刷盘",
       "用 hash tag 把锁强制绑到某个固定槽位"
     ],
@@ -2840,10 +2908,10 @@
     "scenario_en": "A payment or inventory service protects order:123 with a Redis lock. Worker A gets a 30-second lock but pauses for 45 seconds because of GC, network delay, or a slow external API. The lock expires, worker B acquires it and writes the correct newer state. If A wakes up and still writes the database, it can overwrite B with stale data.",
     "q": "防止「过期锁的持有者继续写坏数据」的标准手段是？",
     "options": [
-      "让持有者每隔几秒就主动给锁续租延长时限",
+      "让持有者每隔几秒主动续租，锁到期前不断延长时限",
       "简单粗暴地把锁的 TTL 加大十倍来兜底",
       "同时申请两把互相独立的锁做双重保险来兜底",
-      "fencing token：每次授锁附带递增编号，存储层拒绝旧编号的写入"
+      "fencing token：授锁带递增编号，存储层拒旧编号"
     ],
     "answer": [
       3
@@ -2857,10 +2925,10 @@
       "distributed-lock"
     ],
     "options_en": [
-      "Have the holder proactively renew the lock's lease every few seconds to extend it",
+      "Have the holder renew the lease every few seconds, extending it before it expires",
       "Just brute-force the lock's TTL to ten times longer as a safety net",
       "Acquire two mutually independent locks at once as a double safeguard",
-      "A fencing token: each grant carries an increasing number, and storage rejects writes stamped with an old one"
+      "A fencing token: each grant carries an increasing number and storage rejects older ones"
     ],
     "tradeoff": "Redis 锁的简单互斥 vs 数据层 fencing 的真正防旧写能力",
     "table": {
@@ -2938,7 +3006,7 @@
       "把 TTL 直接加长到 10 分钟",
       "上 Redlock 就万无一失",
       "把 Redis 锁当作正确性的基石",
-      "Redis 锁只当效率优化；正确性靠数据层约束或共识系统"
+      "Redis 锁只当效率优化，正确性靠数据层约束"
     ],
     "answer": [
       3
@@ -2955,7 +3023,7 @@
       "Just extend the TTL to ten minutes",
       "Adding Redlock makes it foolproof",
       "Treat the Redis lock as the foundation of correctness",
-      "Treat a Redis lock as an efficiency tool; enforce correctness with data-layer constraints or a consensus system"
+      "Treat a Redis lock as an efficiency tool and enforce correctness with data-layer constraints"
     ],
     "tradeoff": "Redis 锁的效率 vs 数据层/共识系统的正确性保证",
     "table": {
@@ -3074,7 +3142,7 @@
     "scenario": "关键词帖子榜（搜索 tiger 时按点赞数出 Top 帖）：更新频繁、读延迟要低，这个量级下 SQL 开始吃力。",
     "q": "最合适的 Redis 结构是？",
     "options": [
-      "Sorted Set：member = 帖子 ID，score = 点赞数",
+      "Sorted Set：member 存帖子，score 存点赞数",
       "List，靠每次在头部做插入维持顺序",
       "Hash 存 {帖子: 点赞数} 的映射，没有内建排序",
       "Set 存帖子 ID，排序逻辑全靠客户端自己实现"
@@ -3091,7 +3159,7 @@
       "leaderboard"
     ],
     "options_en": [
-      "A sorted set with the post ID as member and like count as score",
+      "A sorted set with the post ID as member and the like count as score",
       "A list, keeping order by always inserting at the head",
       "A hash storing a post-to-like-count mapping with no built-in ordering",
       "A set of post IDs, with all sorting logic implemented on the client"
@@ -3228,7 +3296,7 @@
       "命令直接报错",
       "追加一个重复的成员",
       "静默忽略这次写入",
-      "用新分数覆盖旧分数，成员名次随之移动"
+      "覆盖旧分数并重排名次"
     ],
     "answer": [
       3
@@ -3272,7 +3340,9 @@
       "Wrong: sorted-set members are unique; re-running ZADD doesn't create a duplicate entry.",
       "Wrong: the write isn't silently ignored — the score really does update; a common misconception is that it's a no-op.",
       "Right: ZADD's semantics are 'set the score' — an existing member gets its score replaced, and its rank moves with it."
-    ]
+    ],
+    "scenario": "排行榜用 sorted set 存每个帖子的点赞数；帖子又被点了一次赞，你再次 ZADD 写新值。",
+    "scenario_en": "A leaderboard keeps each post's like count in a sorted set; the post gets another like and you ZADD it again with the new value."
   },
   {
     "id": "sd-deep-dives-redis-047",
@@ -3523,7 +3593,7 @@
     "q": "哪组 Redis 命令直接支持这个需求？",
     "options": [
       "SETRANGE 改字符串局部片段 + SCAN 遍历全部 key 逐个比对",
-      "GEOADD 写入位置；GEOSEARCH FROMLONLAT ... BYRADIUS 按半径查",
+      "GEOADD 写位置；GEOSEARCH ... BYRADIUS 按半径查",
       "ZRANGEBYLEX 按字典序区间查询有序集合成员",
       "SINTERCARD 只返回多个集合交集大小，不返回位置信息"
     ],
@@ -3542,7 +3612,7 @@
     ],
     "options_en": [
       "SETRANGE to patch a string fragment plus SCAN to walk every key and compare manually",
-      "GEOADD to write locations; GEOSEARCH FROMLONLAT ... BYRADIUS to query by radius",
+      "GEOADD to write locations, then GEOSEARCH ... BYRADIUS to query by radius",
       "ZRANGEBYLEX, querying a sorted set's members by lexicographic range",
       "SINTERCARD, returning only the intersection size of several sets, no location data"
     ],
@@ -3587,7 +3657,7 @@
     "sub": "geospatial",
     "q": "Redis 地理索引的底层实现是？",
     "options": [
-      "按外接矩形层层嵌套组织的 R-tree 空间索引",
+      "按外接矩形层层嵌套组织的 R-tree 空间索引，逐层裁剪",
       "递归四等分平面区域的四叉树（quadtree）",
       "geohash：经纬度编码成一个可排序的值，存进 sorted set",
       "把平面均匀切分成固定大小格子的网格表"
@@ -3604,7 +3674,7 @@
     ],
     "diagram": "flowchart LR\n  P[\"lon,lat\"] --> H[\"encode to geohash-like score\"]\n  H --> Z[\"Redis sorted set<br/>member -> score\"]\n  Q[\"GEOSEARCH radius/box\"] --> R[\"score-range candidate scan\"]\n  R --> F[\"exact distance filter\"]\n  Z --> R",
     "options_en": [
-      "An R-tree spatial index organized by nested bounding rectangles",
+      "An R-tree spatial index of nested bounding rectangles, pruned level by level",
       "A quadtree that recursively splits the plane into four quadrants",
       "Geohash: latitude and longitude encoded into one sortable value stored in a sorted set",
       "A grid table that uniformly divides the plane into fixed-size cells"
@@ -3677,7 +3747,9 @@
       "Wrong: a quadtree recursively splits the plane into quarters — not Redis GEO's implementation either.",
       "Right: Redis GEO encodes lat/lon into a sortable geohash-like score and stores it directly in a sorted set.",
       "Wrong: a fixed-size grid cell table isn't Redis GEO's underlying structure — the actual backing structure is a plain sorted set."
-    ]
+    ],
+    "scenario": "面试官追问：Redis 只有 KV 加几种数据结构，它凭什么支持「查我附近 5 公里」的半径查询？",
+    "scenario_en": "The interviewer presses you: Redis only has KV plus a few data structures, so how can it answer a five-kilometre radius query?"
   },
   {
     "id": "sd-deep-dives-redis-053",
@@ -3687,7 +3759,7 @@
     "sub": "geospatial",
     "q": "GEOSEARCH 复杂度 O(N + log M) 里为什么同时出现 N（包围盒内候选数）和 M（半径内命中数）？",
     "options": [
-      "两遍过滤：先取网格对齐包围盒里的 N 个候选，再精确筛出半径内的 M 个",
+      "两遍过滤：先取包围盒内 N 个候选，再筛半径内 M 个",
       "因为底层排序算法本身需要跑完整两趟",
       "N 其实指的是 Redis 集群里的节点数量",
       "这是文档笔误，N 和 M 其实是同一个数"
@@ -3703,7 +3775,7 @@
       "complexity"
     ],
     "options_en": [
-      "Two passes: grab N candidates inside grid-aligned boxes, then precisely filter to the M within radius",
+      "Two passes: take the N candidates inside the bounding box, then filter to the M within the radius",
       "Because the underlying sort algorithm itself needs two full passes",
       "N actually refers to the number of nodes in the Redis cluster",
       "It's a documentation typo, and N and M are actually the same number"
@@ -3720,7 +3792,9 @@
       "Wrong: running two passes isn't a property of the sort algorithm — it comes from the two-stage coarse-then-precise filtering strategy.",
       "Wrong: N refers to candidate members inside the bounding box, unrelated to how many nodes are in the cluster.",
       "Wrong: N and M come from two different filtering stages (candidates vs actual hits) — not the same number, and not a typo."
-    ]
+    ],
+    "scenario": "你要向面试官解释 GEOSEARCH 的复杂度，说明它为什么不是一个干净的 O(log N)。",
+    "scenario_en": "You need to explain to an interviewer why GEOSEARCH is not a clean O(log N)."
   },
   {
     "id": "sd-deep-dives-redis-054",
@@ -3730,7 +3804,7 @@
     "sub": "streams",
     "q": "Redis Stream 的本质是？",
     "options": [
-      "追加写日志（append-only log），类似 Kafka 的 topic",
+      "追加写日志（append-only log）",
       "一个固定大小、写满就自动覆盖旧数据的环形缓冲区",
       "一个按分数排序、支持弹出最小值成员的优先队列",
       "一个不保留任何状态、消息即发即失的广播信道"
@@ -3771,7 +3845,9 @@
       "Wrong: Stream isn't a fixed-size ring buffer that auto-overwrites old data — XADD keeps appending, and trimming needs explicit XTRIM.",
       "Wrong: score-ordered pop-the-minimum describes a sorted set; Stream appends by ID order, not by score.",
       "Wrong: no retained state and fire-and-forget describes Pub/Sub — Stream durably keeps entries so later consumers can read history."
-    ]
+    ],
+    "scenario": "你想在已有的 Redis 上做一个能重放历史的事件队列，短期内不想再引入 Kafka。",
+    "scenario_en": "You want a replayable event queue on the Redis you already run, without bringing in Kafka for now."
   },
   {
     "id": "sd-deep-dives-redis-055",
@@ -3955,7 +4031,7 @@
     "sub": "streams",
     "q": "XCLAIM 接管机制带来的副作用是？",
     "options": [
-      "同一条目可能被处理两次——Redis 分不清「慢」和「死」，处理逻辑必须幂等",
+      "同一条目可能被处理两次，处理逻辑必须幂等",
       "超时的条目会被 Redis 静默丢弃，不再投递",
       "整个消费组的消费顺序会被完全打乱",
       "接管机制强制一个消费组只能有一个 worker"
@@ -3971,7 +4047,7 @@
       "idempotency"
     ],
     "options_en": [
-      "An entry can be processed twice, since Redis cannot tell slow from dead, so handlers must be idempotent",
+      "An entry can be processed twice, so handlers must be idempotent",
       "A timed-out entry gets silently dropped by Redis and never redelivered",
       "The entire consumer group's processing order gets completely scrambled",
       "The takeover mechanism forces a consumer group to have only one worker"
@@ -4013,7 +4089,10 @@
       "Wrong: a timed-out entry isn't silently dropped — it gets taken over and redone via XCLAIM/XAUTOCLAIM.",
       "Wrong: XCLAIM only transfers ownership of one pending entry to another worker — it doesn't scramble the group's order.",
       "Wrong: the takeover mechanism doesn't cap a consumer group at one worker — parallel consumption is the whole point."
-    ]
+    ],
+    "scenario": "支付回调 worker 用消费组消费 Stream，其中一个 worker GC 暂停 70 秒，超过了 idle 阈值。",
+    "scenario_en": "Payment-callback workers consume a stream through a consumer group, and one worker GC-pauses for 70 seconds, past the idle threshold.",
+    "diagram": "flowchart LR\n  A[\"XREADGROUP: worker A 领取条目\"] --> B[\"条目留在 PEL, 尚未 XACK\"]\n  B --> C[\"A GC 暂停, idle 超过阈值\"]\n  C --> D[\"worker B XCLAIM 接管\"]\n  D --> E[\"B 重做并 XACK\"]\n  E --> F[\"代价: A 只是慢的话, 同一条目跑了两次\"]"
   },
   {
     "id": "sd-deep-dives-redis-058",
@@ -4023,7 +4102,7 @@
     "sub": "streams",
     "q": "把 Stream 当「可靠日志」用之前必须记住什么？",
     "options": [
-      "条目的持久性只取决于你的 RDB/AOF 配置——默认下崩溃可能丢最近的条目",
+      "持久性只取决于 RDB/AOF 配置，默认下崩溃丢最近条目",
       "Stream 的写入总是同步落盘，绝不会丢失数据",
       "Stream 会自动把条目复制一份镜像到 Kafka 集群",
       "Stream 里写入的条目永远不可以被删除"
@@ -4039,7 +4118,7 @@
       "durability"
     ],
     "options_en": [
-      "Entry durability depends entirely on your RDB/AOF settings, and a crash can lose recent entries under defaults",
+      "Entry durability depends entirely on your RDB/AOF settings, and defaults can lose recent entries on a crash",
       "Stream writes are always synchronously flushed to disk and never lost",
       "Streams automatically mirror a copy of every entry into a Kafka cluster",
       "Once written, entries in a stream can never be deleted"
@@ -4056,7 +4135,9 @@
       "Wrong: Stream isn't 'always synced to disk' — its durability still depends on RDB snapshot intervals or AOF fsync frequency.",
       "Wrong: Redis has no built-in feature that auto-mirrors Stream entries to a Kafka cluster.",
       "Wrong: entries in a Stream can be deleted — XDEL removes a single entry, XTRIM trims by length or time."
-    ]
+    ],
+    "scenario": "团队想把 Redis Stream 当审计日志，要求一条都不能丢；而 Redis 用的是默认持久化配置。",
+    "scenario_en": "A team wants to use a Redis stream as an audit log where nothing may ever be lost, on default persistence settings."
   },
   {
     "id": "sd-deep-dives-redis-059",
@@ -4122,7 +4203,9 @@
       "Wrong: 'we already run Redis' isn't a reason to switch — the choice should follow retention/replay/loss requirements, not convenience.",
       "Wrong: consumer groups are a Streams feature too (XREADGROUP), not Kafka-exclusive — using one is no reason to switch.",
       "Right: it's worth Kafka's operational cost once you need long retention, multiple independent consumers replaying history, and durable throughput that can't drop a message."
-    ]
+    ],
+    "codeSample": "# Redis Streams：保留多长完全靠你自己用 MAXLEN 裁\nXADD jobs MAXLEN ~ 100000 * type email\nXREADGROUP GROUP workers w1 COUNT 10 STREAMS jobs >\nXACK jobs workers 1710000000000-0\n# 想让第二拨消费者从头重放，得自己再建一个消费组\nXGROUP CREATE jobs analytics 0",
+    "lang": "redis"
   },
   {
     "id": "sd-deep-dives-redis-060",
@@ -4133,7 +4216,7 @@
     "q": "Pub/Sub 和 Streams 的分工，一句话是？",
     "options": [
       "Pub/Sub 会把消息持久化落盘，Streams 反而不落盘",
-      "Streams 服务「需要补课的消费者」；Pub/Sub 只投递给「此刻在线的听众」",
+      "Streams 服务要补历史的消费者；Pub/Sub 只投给在线者",
       "两者的投递语义和可靠性完全等价，可以互换",
       "Pub/Sub 天生持久可靠，更适合做工作队列"
     ],
@@ -4186,7 +4269,9 @@
       "Right: Streams keeps replayable history for 'consumers that need to catch up'; Pub/Sub only reaches 'listeners online right now' — pick by that need.",
       "Wrong: their delivery semantics differ a lot — Streams is closer to at-least-once with replay, Pub/Sub is at-most-once.",
       "Wrong: durable and reliable enough for a work queue describes Streams, not Pub/Sub — Pub/Sub has no persistence or replay."
-    ]
+    ],
+    "scenario": "聊天系统要选实时投递通道，硬要求是：用户断线重连后必须能补看错过的消息。",
+    "scenario_en": "A chat system is choosing a real-time delivery channel, with one hard requirement: after reconnecting, users must catch up on missed messages."
   },
   {
     "id": "sd-deep-dives-redis-061",
@@ -4229,7 +4314,9 @@
       "Wrong: there's no retry while offline — messages aren't persisted, so Redis won't hold them for a subscriber that comes back later.",
       "Right: messages aren't persisted or replayable — disconnect or be offline and you miss it forever, which is at-most-once.",
       "Wrong: Pub/Sub has no transactional guarantee across subscribers — it delivers to whoever's online individually."
-    ]
+    ],
+    "scenario": "行情推送走 Pub/Sub，一个订阅者网络抖动断开 3 秒后重连，你要说清这 3 秒的消息去哪了。",
+    "scenario_en": "A market-data feed runs over Pub/Sub; a subscriber drops for three seconds and reconnects, and you must say where those messages went."
   },
   {
     "id": "sd-deep-dives-redis-062",
@@ -4368,7 +4455,9 @@
       "Wrong: CONFIG SET tunes server parameters; it isn't used to register a Pub/Sub channel.",
       "Wrong: a consumer group is a Streams concept — a Pub/Sub channel doesn't need one.",
       "Right: a channel is just a name — a publisher sends to it and a subscriber listens on it, with no pre-creation step."
-    ]
+    ],
+    "scenario": "你要上线新的通知频道 notify:user:123，正在写部署脚本，纠结要不要先建这个频道。",
+    "scenario_en": "You're shipping a new notification channel notify:user:123 and writing the deploy script, unsure whether the channel needs creating first."
   },
   {
     "id": "sd-deep-dives-redis-064",
@@ -4471,7 +4560,7 @@
       "只是把 Pub/Sub 内部的消息缓冲区调得更大一些而已",
       "想尽各种办法保证客户端的连接永远都不会意外断开或掉线",
       "把全部实时投递流程都直接改成客户端定时轮询查询",
-      "Pub/Sub 之外再落一份可回放存储：Streams、Kafka/SQS 或 outbox 表"
+      "Pub/Sub 外再落一份可回放存储：Streams/Kafka"
     ],
     "answer": [
       3
@@ -4596,9 +4685,9 @@
       1,
       2
     ],
-    "why": "原生 Pub/Sub 复用 chat server 到 Redis 的 TCP/TLS 连接，Redis 维护订阅并 push。自制只让 Redis 存地址，发布者查表后自己 fanout；连接池、重试、背压和旧地址清理都归应用。",
+    "why": "原生 Pub/Sub 复用 chat server 到 Redis 的连接，Redis 维护订阅并 push；自制只存地址，fanout、重试和清理都归应用。",
     "why_en": "Native Pub/Sub still uses TCP/TLS, but it reuses established Redis client connections from chat servers to Redis; Redis maintains channel-to-connection state and pushes over those connections. In a homegrown design, Redis only stores addresses, so the publisher fans out itself and owns server-to-server pools, TLS, retries, backpressure, health checks, and stale-address cleanup.",
-    "whenOtherWins": "如果你已经有一套成熟的 service mesh、长连接池、健康检查和路由层，自制直发可以降低 Redis 数据面压力；但这时你其实是在重建一个消息路由系统，复杂度要算进去。",
+    "whenOtherWins": "已有成熟 service mesh、连接池和健康检查时，自制直发能减轻 Redis 数据面压力；但那等于自己重建一个消息路由系统。",
     "tags": [
       "redis",
       "pubsub",
@@ -4737,7 +4826,9 @@
       "Right: Redis only spends memory on channels with active subscribers; an unwatched channel doesn't exist, so a publish to it is just dropped.",
       "Wrong: Pub/Sub doesn't persist or queue — with no subscriber, a message doesn't pile up waiting, it's just discarded.",
       "Wrong: publishing to a channel nobody's listening on doesn't error — Redis processes the call fine, it just has no subscriber to deliver to."
-    ]
+    ],
+    "scenario": "聊天系统里房间的最后一个用户下线了，你担心这些没人听的空频道会一直占着内存。",
+    "scenario_en": "The last user in a chat room goes offline, and you worry these unlistened-to channels will keep occupying memory forever."
   },
   {
     "id": "sd-deep-dives-redis-068",
@@ -4781,7 +4872,9 @@
       "Wrong: a key's hash maps to a single fixed slot and node; traffic doesn't spread out just because the cluster has 100 nodes.",
       "Wrong: Redis has no built-in 'detect hot key, auto-replicate it' mechanism — that's a mitigation you build in the app layer.",
       "Right: key hashing fixes ownership — a key lives on exactly one node, so that one node absorbs the traffic while the rest sit idle."
-    ]
+    ],
+    "scenario": "大促当天缓存集群 100 节点、总读 200 万 QPS，其中一个爆款商品 key 就吃掉了一半流量。",
+    "scenario_en": "On sale day the 100-node cache cluster serves two million reads per second, and one hot product key alone eats half of that."
   },
   {
     "id": "sd-deep-dives-redis-069",
@@ -4884,7 +4977,7 @@
     "q": "「key 副本」方案怎么做？",
     "options": [
       "只是把 key 的名字改得更短一点，指望能减少内存占用",
-      "同一份数据存成 product:123:1..10 多个 key 散到不同槽，读者随机挑后缀读",
+      "拆成 product:123:1..10 多个 key，读者随机挑",
       "用 hash tag 反而把这些数据副本全部绑到同一个槽上",
       "打开集群自带的代理转发模式，指望它来分摊流量"
     ],
@@ -4901,7 +4994,7 @@
     ],
     "options_en": [
       "Just shorten the key's name a little, hoping that alone uses less memory",
-      "Store the data under suffixed keys like product:123:1 through 10 spread across slots, readers pick a random suffix",
+      "Store the data under suffixed keys like product:123:1 through 10 spread across slots, and readers pick a random suffix",
       "Use a hash tag to pin all of these data copies onto that very same slot instead",
       "Turn on the cluster's built-in proxy forwarding mode, hoping it spreads the traffic"
     ],
@@ -4933,13 +5026,13 @@
     "options": [
       "副本运行成本更贵，读取延迟也比主节点更慢",
       "副本节点根本无法部署到别的机房或可用区",
-      "集群客户端默认仍读主节点（须显式配置副本读）；且对写热 key 毫无帮助",
+      "默认仍读主节点（须显式开副本读）；写热 key 无用",
       "只要存在多个副本就会直接导致集群出现脑裂"
     ],
     "answer": [
       2
     ],
-    "why": "Redis Cluster 客户端默认把 GET 发到 slot primary；副本不会自动分担读流量。要显式启用 replica read/READONLY，且只帮读热 key；SET、INCR 等写热 key 仍打 primary。",
+    "why": "Redis Cluster 客户端默认把 GET 发到 slot primary，副本不自动分担读；要显式开 replica read/READONLY，且写热 key（SET/INCR）仍打 primary。",
     "why_en": "Redis replicas do not automatically serve cluster reads; enable replica reads or READONLY explicitly, and remember this helps read-hot keys, not write-hot keys.",
     "whenOtherWins": "如果业务必须读到刚写入的新值，如库存扣减后的立即校验、支付状态确认，就不要随便读 replica；可以读 primary、做读己之写路由，或用短 TTL 客户端缓存承受可控陈旧。",
     "tags": [
@@ -5129,7 +5222,9 @@
       "Right: memory is the most expensive place to store data — once the working set is too big to fit economically, look at disk-based storage instead.",
       "Right: Redis has no cross-key join capability; a case needing flexible relational queries should use a database built for that.",
       "Wrong: sub-millisecond reads are exactly the reason TO use Redis, not a signal against it — this option points the wrong direction."
-    ]
+    ],
+    "scenario": "你在评审一个方案：数据是唯一真相源，工作集 20TB，查询还要按多个字段做 join。",
+    "scenario_en": "You're reviewing a design where the data is the single source of truth, the working set is 20 TB, and queries need joins across several fields."
   },
   {
     "id": "sd-deep-dives-redis-074",
@@ -5141,7 +5236,7 @@
     "scenario_en": "Redis Cluster maps keys into 16,384 hash slots, with each slot owned by one primary node. You want one command to touch two keys, such as MSET user:1:name A user:1:age 20, or a MULTI/EXEC transaction that updates two keys together.",
     "q": "集群模式下多 key 操作（MSET、含多个 key 的 MULTI）的限制是？",
     "options": [
-      "所有 key 必须落在同一个槽（hash tag 可以安排到）",
+      "所有 key 必须同槽（hash tag 可安排）",
       "集群模式完全不支持任何形式的多 key 命令",
       "跨槽的多 key 操作会自动做两阶段提交协调",
       "跨槽情况下只支持只读的多 key 命令"
@@ -5157,7 +5252,7 @@
       "multi-key"
     ],
     "options_en": [
-      "All keys must land in the same slot (a hash tag can arrange this)",
+      "All keys must land in the same slot, which a hash tag can arrange",
       "Cluster mode does not support any form of multi-key command at all",
       "A cross-slot multi-key operation automatically runs two-phase commit coordination",
       "Across slots, only read-only multi-key commands are supported"
@@ -5241,7 +5336,7 @@
     "q": "相比自带优化器和查询计划器的数据库，Redis 的取向是？",
     "options": [
       "追求比别人更智能的自动优化",
-      "刻意保持简单：只把简单操作做到极快，组合方式留给你",
+      "刻意简单：简单操作极快，组合留给你",
       "把所有实现细节都藏起来",
       "面向复杂的分析型查询设计"
     ],
@@ -5661,13 +5756,13 @@
     "q": "Redis 锁 vs 数据库锁，什么时候用哪个？",
     "q_en": "Redis lock vs database lock — when do you use which?",
     "options": [
-      "高吞吐低延迟用 Redis 锁+下游 fencing；要和业务写同事务、强一致用 DB 锁",
+      "高吞吐低延迟用 Redis 锁+下游 fencing；强一致用 DB 锁",
       "数据库锁在任何并发场景都又慢又弱，任何时候都应该用 Redis 锁去替代掉它",
       "两种锁在性能和一致性上完全等价，随便选哪一个都不会有任何区别",
       "Redis 锁天生和业务的数据库写在同一个事务里，所以一致性比 DB 锁更强"
     ],
     "options_en": [
-      "High throughput/low latency: Redis lock + downstream fencing; need the lock and the business write in one transaction / strong consistency: DB lock",
+      "High throughput and low latency: a Redis lock plus downstream fencing; when you need the lock and the write in one transaction, use a DB lock",
       "A database lock is always slower and weaker in every case, so you should always replace it with a Redis lock",
       "The two locks are completely equivalent in performance and consistency, so pick either one freely",
       "A Redis lock is inherently in the same transaction as the database write, so it is more consistent than a DB lock"
@@ -5773,13 +5868,13 @@
     "q": "怎么选出这个分片的新 master?",
     "q_en": "How is a new master chosen for this shard?",
     "options": [
-      "挂掉 master 的 replica 发起选举、向其他 master 拉票,得多数票者自升为 master 接管槽(集群内置)",
+      "挂掉 master 的 replica 发起选举，拿到多数 master 授权即自升",
       "由客户端投票,得票最多的那个 replica 被选为新的 master 节点",
       "必须运维人工登录、手动把某个 replica 提升成 master 才行",
       "由外部的 ZooKeeper / 协调服务来指定哪个 replica 当新 master"
     ],
     "options_en": [
-      "The dead master's replicas hold an election, requesting votes from the other masters; the one with a majority promotes itself and takes over the slots (built into the cluster)",
+      "The dead master's replicas hold an election; whichever gets a majority of master votes promotes itself and takes over the slots",
       "Clients vote, and the replica with the most votes becomes the new master",
       "An operator must manually SSH in and promote a replica by hand",
       "An external ZooKeeper / coordination service designates which replica becomes master"
