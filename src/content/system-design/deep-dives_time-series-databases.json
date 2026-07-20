@@ -2820,5 +2820,282 @@
     ],
     "scenario": "评估这套监控 workload 能不能吃到 TSDB 的红利，先看数据本身有哪些可利用特征。",
     "scenario_en": "Before betting on a TSDB for this monitoring workload, you check which properties of the data it can actually exploit."
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-051",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "compaction",
+    "scenario": "LSM 引擎里删除只是追加一个 tombstone 标记，随着写入 SSTable 越积越多，磁盘占用和读取耗时都在上涨。",
+    "scenario_en": "In an LSM engine a delete only appends a tombstone marker, and as writes continue SSTables pile up, pushing both disk usage and read latency higher.",
+    "q": "后台 compaction 具体靠什么缓解这个局面？",
+    "q_en": "What exactly does background compaction do to relieve this?",
+    "options": [
+      "合并多个 SSTable，丢弃重复 key 与被 tombstone 标记的旧数据",
+      "读取时对每个 SSTable 逐一扫描全部 key，靠实时比对来跳过所有已删除的行",
+      "直接原地覆盖对应行，从此不再写 tombstone 标记",
+      "把最新 memtable 刷成更大的文件，完全不动已有 SSTable"
+    ],
+    "options_en": [
+      "Merge multiple SSTables, discarding duplicate keys and tombstone-marked stale data.",
+      "At read time scan every key in each SSTable and skip deleted rows by live comparison.",
+      "Overwrite the affected rows in place and stop writing tombstone markers.",
+      "Flush the newest memtable into a bigger file and leave existing SSTables untouched."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对，compaction 在后台把多个 SSTable 归并，去掉重复 key 并真正回收 tombstone 占的空间。",
+      "扫描比对能过滤已删数据，但文件数和占用都不降，读放大反而更糟——这正是 compaction 要解决的。",
+      "append-only 引擎不做原地覆盖；删除本就是写 tombstone，靠事后 compaction 回收。",
+      "那是 flush（memtable 落盘），只会新增文件；归并旧 SSTable、清 tombstone 才是 compaction。"
+    ],
+    "optionExplanations_en": [
+      "Right — compaction merges SSTables in the background, drops duplicate keys, and reclaims the space tombstones held.",
+      "Comparing at read time filters deleted rows but shrinks neither file count nor space, so read amplification worsens — the very thing compaction fixes.",
+      "Append-only engines never overwrite in place; a delete is a tombstone, reclaimed later by compaction.",
+      "That describes a flush (memtable to disk), which only adds files; merging old SSTables and clearing tombstones is compaction."
+    ],
+    "why": "删除只追加 tombstone，SSTable 越积、空间不释放、读要查的文件越多；compaction 后台归并去重并清掉 tombstone。代价是写放大：数据被反复重写。",
+    "why_en": "Deletes only append tombstones, so SSTables pile up and reads slow; compaction merges files and reclaims tombstones — at the cost of write amplification.",
+    "tags": [
+      "tsdb",
+      "lsm",
+      "compaction"
+    ],
+    "termDefinitions": [
+      {
+        "term": "tombstone",
+        "meaning": "标记某条数据已删除的墓碑记录，删除时追加写入，空间要靠 compaction 回收。",
+        "meaningEn": "A tombstone is a marker written to record that a row is deleted; its space is reclaimed later during compaction."
+      },
+      {
+        "term": "compaction",
+        "meaning": "合并多个存储文件、清理重复和已删除数据的后台过程。",
+        "meaningEn": "Compaction is the background process that merges storage files and removes stale or deleted data."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "LSM 刷盘产生的不可变有序磁盘文件。",
+        "meaningEn": "An SSTable is the immutable, sorted on-disk file produced when an LSM memtable is flushed."
+      },
+      {
+        "term": "memtable",
+        "fullName": "Memory Table",
+        "meaning": "LSM 中驻留内存、接收最新写入的有序缓冲结构。",
+        "meaningEn": "A memtable is the in-memory sorted buffer that absorbs the newest writes in an LSM tree."
+      },
+      {
+        "term": "write amplification",
+        "meaning": "compaction 反复重写数据，使实际磁盘写入量大于逻辑写入量。",
+        "meaningEn": "Write amplification means the bytes actually written to disk exceed the logical write size because compaction rewrites data repeatedly."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-052",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lsm",
+    "scenario": "监控持续 5 万点/秒写入，同时 dashboard 在并发读最近一小时的数据，写入吞吐却几乎不受影响。",
+    "scenario_en": "Monitoring sustains 50k points/sec of writes while dashboards concurrently read the last hour, yet write throughput barely dips.",
+    "q": "LSM 引擎靠什么让持续写入不被并发读拖慢？",
+    "q_en": "What lets an LSM engine keep sustained writes from being slowed by concurrent reads?",
+    "options": [
+      "写只进内存 memtable 加 WAL，后台线程整理旧 SSTable，读写走不同路径",
+      "把所有读请求都排到当前这批写入全部刷盘并完成 compaction 之后再统一逐个执行",
+      "每次写入前先锁住全部 SSTable，串行化读写来避免冲突",
+      "写入直接原地更新对应 SSTable，省掉后台整理这一步"
+    ],
+    "options_en": [
+      "Writes hit only the in-memory memtable plus WAL, while background threads reorganize old SSTables — reads and writes take different paths.",
+      "Queue every read until the current batch of writes has fully flushed and compacted, then run them together.",
+      "Lock all SSTables before each write, serializing reads and writes to avoid conflicts.",
+      "Update the target SSTable in place on each write, skipping background reorganization."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对，新写只碰内存与 WAL，磁盘上的旧数据交给后台 compaction，前后台分离所以写不等读。",
+      "把读排到写之后会直接拖垮写入吞吐，正是 LSM 靠前后台分离要避免的阻塞。",
+      "加锁串行化会让写等读、读等写，吞吐塌方；LSM 用路径分离而非锁来解冲突。",
+      "原地更新 SSTable 违背 append-only，还会把随机写带回写路径，不是 LSM 的做法。"
+    ],
+    "optionExplanations_en": [
+      "Right — new writes touch only memory and the WAL, old on-disk data is left to background compaction, so writes don't wait on reads.",
+      "Queuing reads behind writes would cripple write throughput — exactly the blocking LSM's front/back split avoids.",
+      "Locking serializes writes behind reads and vice versa, collapsing throughput; LSM resolves conflict by separate paths, not locks.",
+      "Updating SSTables in place breaks append-only and drags random writes back onto the write path — not how LSM works."
+    ],
+    "why": "写只落内存 memtable 与 WAL，旧 SSTable 由后台线程整理，两路分离所以写不等读。代价：读可能要查多个未合并的 SSTable（读放大）。",
+    "why_en": "New writes hit only the memtable and WAL while background threads reorganize old SSTables, so writes never block on reads — at the cost of reads scanning several SSTables.",
+    "tags": [
+      "tsdb",
+      "lsm",
+      "throughput"
+    ],
+    "termDefinitions": [
+      {
+        "term": "memtable",
+        "fullName": "Memory Table",
+        "meaning": "LSM 中驻留内存、接收最新写入的有序缓冲结构。",
+        "meaningEn": "A memtable is the in-memory sorted buffer that absorbs the newest writes in an LSM tree."
+      },
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "写入先落地的追加日志，用于崩溃后恢复未持久化的数据。",
+        "meaningEn": "A WAL is an append-only log written before data is applied, used to recover uncommitted writes after a crash."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "LSM 刷盘产生的不可变有序磁盘文件。",
+        "meaningEn": "An SSTable is the immutable, sorted on-disk file produced when an LSM memtable is flushed."
+      },
+      {
+        "term": "compaction",
+        "meaning": "合并多个存储文件、清理重复和已删除数据的后台过程。",
+        "meaningEn": "Compaction is the background process that merges storage files and removes stale or deleted data."
+      },
+      {
+        "term": "LSM tree",
+        "fullName": "Log-Structured Merge Tree",
+        "meaning": "把随机写转成顺序写、再靠后台合并整理数据的存储结构。",
+        "meaningEn": "An LSM tree turns random writes into sequential writes and reorganizes data later via background merges."
+      },
+      {
+        "term": "read amplification",
+        "meaning": "一次读取可能要检查多个未合并的 SSTable，实际读盘量高于逻辑读。",
+        "meaningEn": "Read amplification means a single read may have to check several unmerged SSTables, so actual disk reads exceed the logical read."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "rollups",
+    "scenario": "团队打算给一年历史指标预计算 1 分钟、5 分钟、1 小时多层 rollup 让 dashboard 更快，但存储预算紧张。",
+    "scenario_en": "The team plans to pre-compute 1-minute, 5-minute and 1-hour rollups over a year of history to speed dashboards, but storage budget is tight.",
+    "q": "采用预计算 rollup 的主要代价是什么？",
+    "q_en": "What is the main cost of using pre-computed rollups?",
+    "options": [
+      "额外存储加写放大：每个原始点要多写进若干层预聚合桶",
+      "唯一代价是时间精度下降，存储占用和写入负载和原来完全一样",
+      "查询会变慢，因为聚合要在读的时候临时重新算一遍",
+      "必须立刻删掉原始点，否则 rollup 无法生效"
+    ],
+    "options_en": [
+      "Extra storage plus write amplification: each raw point is also written into several pre-aggregated bucket layers.",
+      "The only cost is lower time resolution; storage footprint and write load stay exactly the same.",
+      "Queries get slower because the aggregation has to be recomputed on the fly at read time.",
+      "The raw points must be deleted immediately, or the rollups won't take effect."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对，rollup 在写路径上把点多写进 1 分、5 分、1 小时等多层桶，多占存储也放大写入。",
+      "精度确实降，但它同时多花存储、多做写入，说成本不变漏掉了预计算的代价。",
+      "rollup 是预计算不是现算，查询反而更快；临时重算是没做 rollup 时的行为。",
+      "原始点通常按保留策略单独过期，rollup 与原始点是并存的两份数据。"
+    ],
+    "optionExplanations_en": [
+      "Right — a rollup writes each point into several bucket layers (1m, 5m, 1h) on the write path, costing extra storage and amplifying writes.",
+      "Resolution does drop, but it also spends more storage and more writes; saying cost is unchanged misses the pre-computation price.",
+      "A rollup is pre-computed, not computed on the fly, so queries get faster; on-read recompute is what you do without rollups.",
+      "Raw points usually roll off under their own retention policy — rollups and raw points coexist as two datasets."
+    ],
+    "why": "rollup 是预计算：写路径上把原始点额外聚合进多层时间桶，多占存储也放大写入，换来历史查询扫描量骤降。",
+    "why_en": "A rollup pre-aggregates raw points into multiple time-bucket layers on the write path, spending extra storage and write amplification to collapse how much history a query scans.",
+    "whenOtherWins": "如果历史很少被查，或存储/写入已是瓶颈，直接查原始点、按需现算更划算，省下预计算的存储与写放大。",
+    "tags": [
+      "tsdb",
+      "rollups",
+      "tradeoff"
+    ],
+    "tradeoff": "预计算 rollup 的存储+写放大 vs 查询时现算的低写入成本",
+    "termDefinitions": [
+      {
+        "term": "rollup",
+        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换存储和查询效率。",
+        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for storage and query speed."
+      },
+      {
+        "term": "write amplification",
+        "meaning": "同一份数据被多写进多层桶，使实际写入量大于逻辑写入量。",
+        "meaningEn": "Write amplification means the same data is written into several bucket layers, so actual writes exceed the logical write size."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-time-series-databases-054",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "file-format",
+    "scenario": "TSDB 数据文件里，同一 series 的一个 block 内，时间戳和浮点值被分成两段、各用不同编码存。",
+    "scenario_en": "Inside one block for a series in a TSDB data file, timestamps and float values are stored as two separate segments, each with its own encoding.",
+    "q": "为什么把时间戳和值拆成两段、用不同编码，而不是按行一起存？",
+    "q_en": "Why split timestamps and values into two segments with different codecs instead of storing them row by row?",
+    "options": [
+      "两者冗余结构不同，时间戳规整走 Δ-of-Δ，浮点值走 XOR，分开各自压到最优",
+      "按行把每个时间戳和它的值绑在一起顺序存，再对整段套一种通用压缩算法，压缩率反而更高",
+      "分成两段只是为了可读性，两段其实用的是同一种编码算法",
+      "拆开是为了让时间戳可以乱序写入，不必再保持递增"
+    ],
+    "options_en": [
+      "Their redundancy differs: timestamps are near-uniform so use delta-of-delta, floats use XOR — splitting lets each compress best.",
+      "Storing each timestamp bound to its value row by row and then applying one general compressor to the whole thing compresses better.",
+      "Splitting into two segments is only for readability; both segments actually use the same encoding algorithm.",
+      "Splitting lets timestamps be written out of order, so they no longer need to stay increasing."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对，时间戳近乎等差、浮点值相邻相近，两种冗余不同，分块才能各用最合适的编码。",
+      "按行混存迫使一种编码同时对付两类数据，压不动；列式分段才是压缩率高的原因。",
+      "两段用的是不同编码——时间戳走 Δ-of-Δ 加 varint、值走 XOR，不是同一种。",
+      "拆段不改变时间戳必须有序的要求，乱序会破坏 Δ-of-Δ 与范围扫描。"
+    ],
+    "optionExplanations_en": [
+      "Right — timestamps are near-arithmetic and floats are near-neighbors; the redundancies differ, so separate blocks each get the best-fit codec.",
+      "Row-wise mixing forces one codec to handle two data kinds and compresses poorly; columnar segments are what make the ratio high.",
+      "The two segments use different codecs — delta-of-delta plus varint for timestamps, XOR for values — not one shared algorithm.",
+      "Splitting doesn't lift the requirement that timestamps stay ordered; out-of-order data breaks delta-of-delta and range scans."
+    ],
+    "why": "时间戳规整、浮点值相近是两种不同冗余，分段后各用最优编码——文中一个 block 因此从 32 字节压到约 13 字节（≈60%）。代价：读取要分别解码两段。",
+    "why_en": "Timestamps are near-uniform and floats are near-neighbors — two different redundancies — so splitting lets each use its best codec, shrinking a block from 32 to about 13 bytes.",
+    "tags": [
+      "tsdb",
+      "compression",
+      "file-format"
+    ],
+    "termDefinitions": [
+      {
+        "term": "delta-of-delta",
+        "meaning": "对时间戳做二阶差分，固定采样间隔下大量结果为 0，极易压缩。",
+        "meaningEn": "Delta-of-delta stores the second-order difference of timestamps, which is mostly zero at a fixed sampling interval and compresses heavily."
+      },
+      {
+        "term": "varint",
+        "fullName": "Variable-length Integer",
+        "meaning": "变长整数编码，用更少字节表示小数值。",
+        "meaningEn": "Varint is a variable-length integer encoding that stores small numbers in fewer bytes."
+      },
+      {
+        "term": "XOR compression",
+        "meaning": "利用相邻浮点数按位异或后大量为 0 位来压缩数值的技术。",
+        "meaningEn": "XOR compression exploits the fact that XORing similar adjacent floating-point values leaves mostly zero bits."
+      }
+    ]
   }
 ]

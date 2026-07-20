@@ -4208,5 +4208,180 @@
         "term": "quorum"
       }
     ]
+  },
+  {
+    "id": "sd-deep-dives-dynamodb-071",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "data-model",
+    "scenario": "每个订单 item 里内嵌一个不断追加的事件历史列表,条目越攒越多。",
+    "scenario_en": "Each order item embeds an ever-growing list of event history, and entries keep piling up.",
+    "q": "内嵌历史持续变大会怎样,该怎么建模?",
+    "q_en": "What happens as the embedded history grows, and how should you model it?",
+    "options": [
+      "没事,DynamoDB 的单个 item 没有大小上限,随便追加即可",
+      "超过 400KB 会写入失败,应把大字段拆出、item 只留引用",
+      "换成强一致读模式就能放进更大的 item",
+      "多开一些 RCU/WCU 容量单位就能突破单 item 的大小限制"
+    ],
+    "options_en": [
+      "No problem -- a single DynamoDB item has no size cap, just keep appending.",
+      "Past 400KB the write fails; split the big field out and keep only a reference in the item.",
+      "Switching to strongly consistent reads lets a larger item fit.",
+      "Provisioning more RCU/WCU capacity units raises the per-item size cap."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "单个 item 硬上限 400KB:内嵌列表越追越大,到上限后写入直接被拒;把历史拆到独立表、item 只留引用,写入才不撞墙。",
+    "why_en": "A single item is hard-capped at 400KB, so an unbounded embedded list eventually gets its writes rejected -- move the history to a separate table and keep only a reference.",
+    "tags": [
+      "dynamodb",
+      "data-model",
+      "400kb",
+      "consequence"
+    ],
+    "termDefinitions": [
+      {
+        "term": "RCU",
+        "fullName": "Read Capacity Unit",
+        "meaning": "读容量单位:一个 RCU 每秒最多读 4KB。",
+        "meaningEn": "A Read Capacity Unit reads up to four kilobytes per second."
+      },
+      {
+        "term": "WCU",
+        "fullName": "Write Capacity Unit",
+        "meaning": "写容量单位:一个 WCU 每秒最多写 1KB。",
+        "meaningEn": "A Write Capacity Unit writes up to one kilobyte per second."
+      }
+    ],
+    "optionExplanations": [
+      "恰恰相反:item 有 400KB 的硬上限,无限追加迟早撞上它。",
+      "400KB 是硬性写入约束,拆表后主 item 保持小巧,大字段单独存、只留一个引用键。",
+      "一致性模型只影响读到的新旧程度,和 item 能存多大毫无关系。",
+      "容量单位管的是每秒吞吐(RCU/WCU),不是单条 item 的体积上限,加多少都突破不了 400KB。"
+    ],
+    "optionExplanations_en": [
+      "The opposite is true: an item is hard-capped at 400KB, so unbounded appends will hit it.",
+      "400KB is a hard write constraint, so split it out -- the base item stays small and the big field lives elsewhere behind a reference key.",
+      "The consistency model only affects how fresh the read is; it has nothing to do with how big an item can be.",
+      "Capacity units govern per-second throughput (RCU/WCU), not a single item's size ceiling -- no amount of them breaks 400KB."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-dynamodb-072",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "secondary-index",
+    "scenario": "一张主表配了 3 个 GSI,主表按每秒 1000 次写入,团队在估总写容量。",
+    "scenario_en": "A base table has 3 GSIs and takes 1000 writes/sec; the team is estimating total write capacity.",
+    "q": "主表每次写入对总写容量意味着什么?",
+    "q_en": "What does each base-table write mean for total write capacity?",
+    "options": [
+      "GSI 由系统免费维护,主表写入不产生额外写容量",
+      "主表一次写会异步复制到每个 GSI,额外消耗写容量",
+      "GSI 与主表共享同一份写容量,总量不额外增加",
+      "GSI 是最终一致的,维护它不消耗任何写容量"
+    ],
+    "options_en": [
+      "GSIs are maintained for free; base writes generate no extra write capacity.",
+      "One base write is asynchronously propagated to each GSI, consuming extra write capacity.",
+      "GSIs share the base table's write capacity, so the total does not grow.",
+      "GSIs are eventually consistent, so maintaining them costs no write capacity."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "每次主表写都会异步复制到每个相关 GSI,各扣一份写容量;总 WCU≈主表×(1+GSI 数),3 个 GSI 约 4 倍,是估写成本的基数。",
+    "why_en": "Every base write is asynchronously propagated to each affected GSI, so total write capacity is roughly base times one-plus-the-number-of-GSIs -- about 4x here.",
+    "tags": [
+      "dynamodb",
+      "gsi",
+      "write-amplification",
+      "consequence"
+    ],
+    "termDefinitions": [
+      {
+        "term": "GSI",
+        "fullName": "Global Secondary Index",
+        "meaning": "全局二级索引:分区键与主表不同,独立物理分区、独立读写容量。",
+        "meaningEn": "A Global Secondary Index has a different partition key from the base table, with its own partitions and its own read/write capacity."
+      },
+      {
+        "term": "WCU",
+        "fullName": "Write Capacity Unit",
+        "meaning": "写容量单位:一个 WCU 每秒最多写 1KB。",
+        "meaningEn": "A Write Capacity Unit writes up to one kilobyte per second."
+      }
+    ],
+    "optionExplanations": [
+      "GSI 维护并不免费:它有自己独立的写容量,主表每次写都会外溢一份到它上面。",
+      "GSI 有自己的分区和写容量,主表一写就异步复制过去,3 个 GSI 就把写量放大到约 4 倍。",
+      "共享写容量的是 LSI;GSI 是独立分区、独立计量,消耗叠加而不是共享。",
+      "最终一致说的是 GSI 何时可见新数据,不代表维护它免费——异步复制照样扣写容量。"
+    ],
+    "optionExplanations_en": [
+      "GSI upkeep is not free: it has its own write capacity, and each base write spills a copy onto it.",
+      "A GSI has its own partitions and write capacity, so each base write is copied over -- 3 GSIs push write volume to about 4x.",
+      "It's the LSI that shares write capacity; a GSI is separately partitioned and metered, so its cost adds up rather than sharing.",
+      "Eventual consistency is about when the GSI shows new data, not about it being free -- the async replication still consumes write capacity."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-dynamodb-073",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "scalability",
+    "scenario": "一个全球应用要为欧洲用户选 DynamoDB 的部署 region,既想低延迟又要过当地法规。",
+    "scenario_en": "A global app must pick a DynamoDB region for European users -- wanting low latency while meeting local law.",
+    "q": "选 region 时主要在权衡什么?",
+    "q_en": "What is the main tradeoff when choosing a region?",
+    "options": [
+      "只挑单价最低的 region,其它因素一概不用考虑",
+      "只挑离用户最近的 region,延迟最低就是最优解",
+      "兼顾就近降延迟与数据驻留合规",
+      "region 选择对延迟和合规都不产生影响"
+    ],
+    "options_en": [
+      "Pick whichever region is cheapest and ignore every other factor.",
+      "Pick purely by geographic proximity -- lowest latency is the only goal.",
+      "Balance latency from proximity against data-residency compliance.",
+      "Region choice affects neither latency nor compliance."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "region 选择既要就近降延迟,也受数据驻留/合规法规约束;两者冲突时合规是硬约束,延迟是优化目标。",
+    "why_en": "Region choice trades proximity-driven latency against data-residency law; when they conflict, compliance is the hard constraint and latency the thing you optimize.",
+    "whenOtherWins": "若数据不受任何驻留/合规法规约束,就可纯按就近原则选 region,把延迟压到最低。",
+    "tags": [
+      "dynamodb",
+      "region",
+      "data-residency",
+      "fit"
+    ],
+    "tradeoff": "就近降延迟 vs 数据驻留合规约束",
+    "termDefinitions": [
+      {
+        "term": "数据驻留",
+        "meaning": "数据驻留:法规要求某类数据只能存放在特定国家/地区境内。",
+        "meaningEn": "Data residency is a legal requirement that certain data be stored only within a specific country or region."
+      }
+    ],
+    "optionExplanations": [
+      "单价可以纳入考量,但把合规和延迟都甩掉只看价格,可能选出违法或高延迟的 region。",
+      "只顾就近会漏掉硬约束:欧洲用户数据可能被法规要求必须留在欧盟境内。",
+      "就近能降延迟,但数据驻留法规可能限定数据只能落在特定地区,两者都要满足。",
+      "恰恰相反:region 决定了物理距离(影响延迟)和数据落地位置(影响合规),两头都受它左右。"
+    ],
+    "optionExplanations_en": [
+      "Price can be a factor, but dropping compliance and latency to chase the cheapest region can land you on an illegal or high-latency one.",
+      "Proximity-only misses the hard constraint: European user data may be legally required to stay inside the EU.",
+      "Proximity cuts latency, but residency law may pin data to a specific region -- you must satisfy both.",
+      "The opposite: region sets physical distance (latency) and where data lands (compliance), so it governs both."
+    ]
   }
 ]

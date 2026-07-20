@@ -3896,5 +3896,375 @@
     ],
     "scenario": "面试收尾要给 PostgreSQL 选型结论，既要说清能力边界，也要说清扩展路径。",
     "scenario_en": "You are wrapping up an interview and need to justify PostgreSQL, covering both where it stops and how you would scale it."
+  },
+  {
+    "id": "sd-deep-dives-postgres-071",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "read-vs-write-cost",
+    "scenario": "同一台 Postgres、同一批行：简单 indexed 读能到每核 5 万+/秒，而简单 insert 只有约 5 千/秒。",
+    "q": "为什么读几乎总比写快一个量级？",
+    "options": [
+      "读命中内存缓存，而每一次写都必须先随机写磁盘上的数据页",
+      "读只定位并返回行，不生成 WAL、也不更新索引；写两者都要做",
+      "读会被 Postgres 自动分散到所有 read replica 上并行执行",
+      "写必须等到所有相关索引整体重建完成之后才能提交"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "读只按索引定位取行，不落 WAL 也不改索引；写在 commit 时要同步刷 WAL 并更新每个索引。这两步同步成本让写（约 5 千/核）比读（5 万+/核）慢一个量级，索引越多越慢。",
+    "why_en": "Reads only locate and return rows, but every write must flush a WAL record and update each index at commit — so reads run about 10x faster, and more indexes slow writes further.",
+    "tags": [
+      "postgres",
+      "read-performance",
+      "write-performance"
+    ],
+    "options_en": [
+      "Reads hit an in-memory cache while every write must randomly write data pages to disk first.",
+      "Reads just locate and return rows, generating no WAL and touching no index; writes do both.",
+      "Reads get automatically fanned out across all read replicas in parallel by Postgres.",
+      "A write must wait until every related index is fully rebuilt before it can commit."
+    ],
+    "q_en": "Why are reads almost always about an order of magnitude faster than writes?",
+    "scenario_en": "Same Postgres node, same rows: simple indexed reads hit 50k+ per core per second, while simple inserts top out around 5k per core per second.",
+    "optionExplanations": [
+      "写的数据页也是先改内存、由后台异步落盘，并非每次都同步随机写磁盘——这不是读写差距的来源。",
+      "读路径省掉了写的两个同步成本：WAL 记录和索引维护，所以更快。",
+      "本题是单节点内比较；副本并行是另一种扩展手段，不解释同机上读为何比写快。",
+      "写只是对索引做增量更新，不是整体重建；重建的说法本身就是误解。"
+    ],
+    "optionExplanations_en": [
+      "Dirty data pages are also buffered in memory and flushed later by the background writer, so writes are not per-op random disk I/O — not the real cause.",
+      "The read path skips both synchronous write costs: WAL records and index maintenance, so it is faster.",
+      "This compares reads and writes on one node; replica parallelism is a different scaling lever and doesn't explain the same-node gap.",
+      "A write only incrementally updates indexes, not rebuilds them; the rebuild claim is itself a misconception."
+    ],
+    "termDefinitions": [
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "预写日志：提交前先把变更顺序写入的日志，崩溃后可重放恢复。",
+        "meaningEn": "The Write-Ahead Log records changes sequentially before commit so they can be replayed to recover after a crash."
+      },
+      {
+        "term": "read replica",
+        "meaning": "只读副本：从主库复制数据、专门分摊读请求的实例。",
+        "meaningEn": "A read replica copies data from the primary and serves read queries to spread read load."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-postgres-072",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lost-update",
+    "scenario": "拍卖出价里 `UPDATE Auction SET maxBid=100 WHERE id=123 AND maxBid<100` 是条件写，但前面的 `INSERT bid` 无条件。Read Committed 下 A、B 都基于旧值 $90 出价，A 先提交 $100。",
+    "q": "B 随后提交 $95，库里会留下什么不一致状态？",
+    "options": [
+      "B 的条件 UPDATE 更新 0 行，于是连带把它前面的那条 INSERT 也一起挡掉，bids 表不新增记录",
+      "INSERT 让 $95 bid 落库，它的条件 UPDATE 更新 0 行，留下一条不该接受的出价",
+      "Postgres 检测到冲突并自动回滚 B，向应用返回 serialization 错误",
+      "maxBid 被 B 覆写成 $95，导致 A 先前的 $100 出价反而丢失"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "INSERT 先写入 $95 bid，随后条件 UPDATE 因 maxBid 已被 A 设为 100 而更新 0 行，留下孤立出价。根因是 check 与 insert 不原子，用 FOR UPDATE 或 serializable 修。",
+    "why_en": "The unconditional INSERT lands the $95 bid, but its conditional UPDATE hits 0 rows since A already set maxBid to 100 — an orphan bid remains; fix with FOR UPDATE or serializable.",
+    "tags": [
+      "postgres",
+      "concurrency",
+      "isolation"
+    ],
+    "options_en": [
+      "B's conditional UPDATE blocks the whole transaction, so no new row is added to the bids table.",
+      "The INSERT lands the $95 bid, its conditional UPDATE matches 0 rows, leaving a bid that should have been rejected.",
+      "Postgres detects the conflict and automatically rolls B back, returning a serialization error.",
+      "maxBid gets overwritten to $95 by B, so A's earlier $100 bid is lost instead."
+    ],
+    "q_en": "After B commits a $95 bid, what inconsistent state is left in the database?",
+    "scenario_en": "In auction bidding, `UPDATE Auction SET maxBid=100 WHERE id=123 AND maxBid<100` is conditional but the preceding `INSERT bid` is not. Under Read Committed, A and B both bid off the stale $90 and A commits $100 first.",
+    "optionExplanations": [
+      "UPDATE 更新 0 行不会回滚同一事务里已执行的 INSERT；两条是独立语句，INSERT 照样落库。",
+      "$95 记录进了 bids 表，条件 UPDATE 却更新 0 行，于是一条本该被拒的出价被永久留下。",
+      "自动回滚加序列化错误是 Serializable 隔离下的表现；默认 Read Committed 不会这么做。",
+      "maxBid 不会被写成 95——`maxBid<100` 条件不满足，那条 UPDATE 根本没改这一行。"
+    ],
+    "optionExplanations_en": [
+      "An UPDATE matching 0 rows does not undo the INSERT already run in the same transaction; they are separate statements, so the INSERT still lands.",
+      "The $95 row enters the bids table while the conditional UPDATE changes 0 rows, permanently leaving a bid that should have been rejected.",
+      "Auto-rollback plus a serialization error is Serializable behavior; the default Read Committed does not do this.",
+      "maxBid is not set to 95 — the `maxBid<100` condition fails, so that UPDATE never touches the row."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Read Committed",
+        "meaning": "读已提交：Postgres 默认隔离级别，只看别的事务已提交的数据，允许不可重复读。",
+        "meaningEn": "Read Committed is Postgres's default isolation level: a query only sees data committed before it began, allowing non-repeatable reads."
+      },
+      {
+        "term": "FOR UPDATE",
+        "meaning": "SELECT ... FOR UPDATE 会锁住读到的行，其他事务想加同类锁必须等待。",
+        "meaningEn": "SELECT ... FOR UPDATE locks the rows it reads so other transactions must wait to lock them."
+      },
+      {
+        "term": "serialization 错误",
+        "fullName": "serialization failure",
+        "meaning": "序列化失败：Serializable 隔离下检测到冲突时抛出的错误，应用需重试事务。",
+        "meaningEn": "A serialization failure is the error Serializable isolation raises on a detected conflict, requiring the application to retry the transaction."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-postgres-073",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "batch-failure",
+    "scenario": "为提升 likes 写吞吐，服务器把上千条 insert 先攒在应用内存里，凑成一个事务再一次性 commit。",
+    "q": "这种 batch 提交在服务器崩溃时的失败模式是什么？",
+    "options": [
+      "已经 commit 成功的那些批次，会在崩溃后被回滚，需要整批重新提交",
+      "崩溃若发生在 commit 之前，缓冲在内存里的整批写会全部丢失",
+      "每条写都各自落一次 WAL，所以崩溃时最多只会丢掉最后一条",
+      "Postgres 会从 WAL 里自动重放并补回那些还没提交的批次"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "batching 把多条写攒在服务器内存、到点一次 commit，省掉每条的固定 commit/WAL flush 成本。代价：commit 前崩溃时这批还没进 WAL 的写全丢，所以只适合 likes 这类可重试、能容忍短暂丢失的写。",
+    "why_en": "Batching buffers writes in memory and commits them together to cut per-commit cost — but a crash before commit loses the batch, so use it only for retryable writes like likes.",
+    "tags": [
+      "postgres",
+      "write-performance",
+      "durability"
+    ],
+    "options_en": [
+      "Batches that have already committed successfully get rolled back after a crash and must be re-submitted.",
+      "If the crash happens before commit, the entire batch buffered in memory is lost.",
+      "Each write flushes its own WAL, so a crash loses at most the last single write.",
+      "Postgres automatically replays the uncommitted batches from the WAL and restores them."
+    ],
+    "q_en": "What is the failure mode of this batched commit when the server crashes?",
+    "scenario_en": "To raise likes write throughput, the server buffers a thousand inserts in application memory and commits them together in a single transaction.",
+    "optionExplanations": [
+      "commit 完成即写入 WAL、已持久，崩溃后是被重放恢复而不是回滚——这理解反了。",
+      "写还缓冲在应用内存、尚未 commit，崩溃时没有任何持久记录，整批一起消失。",
+      "逐条落 WAL 正是没做 batching 的情形；一旦合批缓冲，就不再是每条一次 flush。",
+      "WAL 只能重放已提交的事务；还没 commit 的批次不在 WAL 里，无从重放。"
+    ],
+    "optionExplanations_en": [
+      "A committed batch is already in the WAL and durable, so a crash replays it rather than rolling it back — this is backwards.",
+      "The writes are still buffered in application memory and uncommitted, so a crash leaves no durable record and the whole batch vanishes.",
+      "Per-write WAL flushes are exactly the un-batched case; once you buffer a batch, it is no longer one flush per write.",
+      "The WAL can only replay committed transactions; an uncommitted batch is not in the WAL and cannot be replayed."
+    ],
+    "termDefinitions": [
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "预写日志：提交前先把变更顺序写入的日志，崩溃后可重放恢复已提交事务。",
+        "meaningEn": "The Write-Ahead Log records changes sequentially before commit so committed transactions can be replayed after a crash."
+      },
+      {
+        "term": "batching",
+        "meaning": "批处理：把多条写合成一个事务一次提交，减少固定提交成本。",
+        "meaningEn": "Batching combines many writes into one transaction committed together to reduce fixed per-commit cost."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-postgres-074",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "sharding-ops",
+    "scenario": "单节点写入到顶，决定按 user_id 分片。团队习惯了 DynamoDB 的自动分区，问 Postgres 上该怎么落地。",
+    "q": "在 Postgres 上做 sharding，运维现实是什么？",
+    "options": [
+      "Postgres 会像 DynamoDB 一样自动分区，只要配置好分片键就行",
+      "Postgres 没有内建 sharding，要么手工实现，要么用 Citus 这类托管方案",
+      "Postgres 完全不支持 sharding，唯一出路是不断加大单机硬件",
+      "只要开启 synchronous replication，数据就会被自动分片并均匀分布到多台机器上"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "与 DynamoDB 自带分区不同，Postgres 把 shard 路由、跨 shard 查询、多库 schema 一致性都留给你自己处理；Citus 扩展能托管大部分复杂度。代价：手工分片放大运维面，只在索引、副本、分区都不够时才上。",
+    "why_en": "Unlike DynamoDB's built-in partitioning, Postgres has no native sharding — you implement routing yourself or use Citus; either way it adds ops load, so shard only as a last resort.",
+    "tags": [
+      "postgres",
+      "sharding",
+      "scaling"
+    ],
+    "options_en": [
+      "Postgres auto-partitions just like DynamoDB as long as you configure a shard key.",
+      "Postgres has no built-in sharding; you either implement it manually or use a managed option like Citus.",
+      "Postgres does not support sharding at all, so the only path is ever-bigger single-node hardware.",
+      "Turning on synchronous replication is equivalent to sharding the data across many machines."
+    ],
+    "q_en": "What is the operational reality of sharding on PostgreSQL?",
+    "scenario_en": "A single node has maxed out on writes, so you decide to shard by user_id. The team is used to DynamoDB's automatic partitioning and asks how it works on Postgres.",
+    "optionExplanations": [
+      "DynamoDB 靠分区键自动分片，但 Postgres 没有这套内建能力，不能指望配置一下就自动分。",
+      "现实是自己实现分片逻辑，或引入 Citus 这类托管方案来接管路由与跨库协调。",
+      "并非不支持——手工或用 Citus 都能分片；加大单机是垂直扩展，是另一条路。",
+      "复制是把整份数据拷到多台做读扩展或高可用，不切分数据，和 sharding 不是一回事。"
+    ],
+    "optionExplanations_en": [
+      "DynamoDB auto-shards by partition key, but Postgres has no such built-in ability, so you can't expect it to shard just from config.",
+      "The reality is you implement the sharding logic yourself, or bring in a managed option like Citus to take over routing and cross-database coordination.",
+      "It is not unsupported — manual sharding or Citus both work; growing a single node is vertical scaling, a different path.",
+      "Replication copies the whole dataset to more nodes for read scaling or HA; it does not split the data, so it is not sharding."
+    ],
+    "termDefinitions": [
+      {
+        "term": "DynamoDB",
+        "meaning": "AWS 托管的键值/文档数据库，内建自动分区扩展。",
+        "meaningEn": "DynamoDB is AWS's managed key-value and document database with built-in automatic partitioning."
+      },
+      {
+        "term": "Citus",
+        "meaning": "把 Postgres 扩展成分布式分片集群的扩展/托管服务。",
+        "meaningEn": "Citus is an extension and managed service that turns Postgres into a distributed, sharded cluster."
+      },
+      {
+        "term": "sharding",
+        "meaning": "分片：按某个键把数据水平切分到多台机器以分摊负载。",
+        "meaningEn": "Sharding horizontally splits data across machines by a key to spread load."
+      },
+      {
+        "term": "synchronous replication",
+        "meaning": "同步复制：主库要等副本确认写入后才向客户端确认提交。",
+        "meaningEn": "Synchronous replication makes the primary wait for a replica to acknowledge a write before confirming the commit."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-postgres-075",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "hybrid-replication",
+    "scenario": "系统既要关键写不因单点故障丢失，又要横向扩读；Postgres 允许逐个副本指定它是同步还是异步。",
+    "q": "既要强一致又要扩读，常见的复制拓扑怎么搭？",
+    "options": [
+      "把所有副本都设为 synchronous，这样任何一个副本都绝不会落后主库、也不会读到旧数据",
+      "留少量 synchronous 副本保一致，其余用 asynchronous 副本扩读",
+      "把所有副本都设为 asynchronous，靠副本数量来弥补一致性缺口",
+      "只保留单个副本，并在同步与异步模式之间来回切换它"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "同步副本保证提交数据已落多节点但拖慢每次写，异步副本扩读但有滞后窗口。所以留少量同步副本守一致、其余异步副本摊读，Postgres 支持逐副本指定——同步副本越多写越慢。",
+    "why_en": "A few synchronous replicas keep committed data safe on multiple nodes, while many asynchronous replicas scale reads — Postgres lets you choose sync or async per replica.",
+    "tags": [
+      "postgres",
+      "replication",
+      "consistency"
+    ],
+    "options_en": [
+      "Set every replica to synchronous so no replica can ever fall behind the primary.",
+      "Keep a few synchronous replicas for consistency and use asynchronous replicas to scale reads.",
+      "Set every replica to asynchronous and rely on replica count to make up for consistency.",
+      "Keep a single replica and switch it back and forth between synchronous and asynchronous."
+    ],
+    "q_en": "To get both strong consistency and read scaling, how do you commonly arrange replication?",
+    "scenario_en": "The system must not lose critical writes to a single-node failure yet must scale reads horizontally; Postgres lets you designate each replica as synchronous or asynchronous.",
+    "optionExplanations": [
+      "全同步能保证零滞后，但每次写都要等所有副本确认，写延迟和吞吐都会明显变差。",
+      "少量同步副本守住关键一致性，其余异步副本纯摊读，兼顾持久与吞吐。",
+      "全异步性能最好，但始终存在滞后窗口，给不了任何强一致保证。",
+      "单副本既谈不上扩读也谈不上冗余，来回切同步异步只是徒增运维复杂度。"
+    ],
+    "optionExplanations_en": [
+      "All-synchronous guarantees zero lag but every write waits for all replicas, badly hurting write latency and throughput.",
+      "A few synchronous replicas hold the critical consistency while the rest scale reads, balancing durability and throughput.",
+      "All-asynchronous is fastest but always has a lag window and gives no strong-consistency guarantee.",
+      "One replica offers neither read scaling nor redundancy, and toggling sync/async just adds operational complexity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "synchronous replication",
+        "meaning": "同步复制：主库要等副本确认写入后才向客户端确认提交，更持久但更慢。",
+        "meaningEn": "Synchronous replication makes the primary wait for a replica's acknowledgment before confirming a commit — more durable but slower."
+      },
+      {
+        "term": "asynchronous replication",
+        "meaning": "异步复制：主库立即确认写入，在后台复制到副本，更快但有滞后窗口。",
+        "meaningEn": "Asynchronous replication confirms the write immediately and replicates in the background — faster but with a lag window."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-postgres-076",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "error-handling",
+    "scenario": "并发更新同一批行，你在 Serializable 隔离与显式 row-level locking 之间二选一；两者都要应用配合处理各自的失败。",
+    "q": "这两种并发控制分别要求应用处理哪种失败？",
+    "options": [
+      "两者都不会因并发而失败，应用完全不需要额外的错误处理逻辑",
+      "Serializable 要处理 serialization failure 并重试；row locking 要处理 deadlock",
+      "两者都只需处理网络超时重连，和并发冲突控制本身没有关系",
+      "Serializable 要处理 deadlock 死锁；row locking 要处理 serialization failure"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "Serializable 在检测到读写依赖冲突时抛 serialization failure，应用要重试整个事务；row-level locking 在互相等锁时可能 deadlock，要处理被回滚的那一方。二者都把冲突推给应用兜。",
+    "why_en": "Serializable throws serialization failures on a dependency conflict, so you retry the transaction; row-level locking can deadlock, so you handle the rolled-back victim.",
+    "tags": [
+      "postgres",
+      "concurrency",
+      "error-handling"
+    ],
+    "options_en": [
+      "Neither fails due to concurrency, so the application needs no extra error-handling logic at all.",
+      "Serializable must handle serialization failures and retry; row locking must handle deadlocks.",
+      "Both only need network-timeout reconnection handling, unrelated to concurrency conflict control.",
+      "Serializable must handle deadlocks; row locking must handle serialization failures."
+    ],
+    "q_en": "Which failure must the application handle under each of these two concurrency-control approaches?",
+    "scenario_en": "For concurrent updates to the same rows you choose between Serializable isolation and explicit row-level locking; each needs the application to handle its own failure mode.",
+    "optionExplanations": [
+      "两种并发控制都可能因冲突让某个事务失败，应用必须准备重试或回退，不能假设永不失败。",
+      "对：一个把冲突暴露成需重试的失败，另一个暴露成互相等锁后的被迫回滚，方向不能记反。",
+      "冲突失败是隔离或锁机制本身产生的，不是网络问题，超时重连挡不住并发异常。",
+      "方向刚好反了：需重试的失败对应严格串行隔离，互等被迫回滚对应显式行锁。"
+    ],
+    "optionExplanations_en": [
+      "Both approaches can fail a transaction on conflict, so the app must be ready to retry or back off — it cannot assume no failures.",
+      "Correct: one surfaces the conflict as a retryable failure, the other as a forced rollback after mutual lock waits; do not swap them.",
+      "Conflict failures come from the isolation or lock mechanism itself, not the network, so timeout reconnection will not stop concurrency anomalies.",
+      "Backwards: the retryable failure belongs to strict serial isolation, the forced-rollback-on-wait to explicit row locks."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Serializable",
+        "meaning": "可串行化：最强隔离级别，让事务表现得像逐个串行执行，冲突时需重试。",
+        "meaningEn": "Serializable is the strongest isolation level, making transactions behave as if run one at a time, requiring retries on conflict."
+      },
+      {
+        "term": "serialization failure",
+        "meaning": "序列化失败：Serializable 下检测到冲突时抛出的错误，应用需重试事务。",
+        "meaningEn": "A serialization failure is the error Serializable raises on a detected conflict, requiring the app to retry the transaction."
+      },
+      {
+        "term": "deadlock",
+        "meaning": "死锁：两个事务互相等待对方持有的锁，Postgres 检测后回滚其中一方。",
+        "meaningEn": "A deadlock is when two transactions each wait on a lock the other holds; Postgres detects it and rolls one back."
+      },
+      {
+        "term": "row-level locking",
+        "meaning": "行级锁：用 FOR UPDATE 只锁住要原子更新的具体行，冲突范围小。",
+        "meaningEn": "Row-level locking uses FOR UPDATE to lock only the specific rows needing atomic updates, narrowing the conflict scope."
+      }
+    ]
   }
 ]

@@ -4920,5 +4920,273 @@
       "any dependency call crossing the network that can fail or slow down fits within a breaker's scope.",
       "an in-process, in-memory call never crosses the network, so a breaker there is needless overhead."
     ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-079",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "dedicated-lb",
+    "scenario": "面向公网的服务,后端实例随流量频繁扩缩容,你需要几秒内让路由跟上实例增减,还要按 URL 路径把请求分到不同后端。",
+    "scenario_en": "A public-facing service whose backend instances scale up and down constantly; routing must reflect added/removed instances within seconds and split requests by URL path.",
+    "q": "该用客户端负载均衡还是专用负载均衡器?",
+    "q_en": "Client-side load balancing or a dedicated load balancer here?",
+    "options": [
+      "客户端负载均衡:客户端自己直连后端,省掉那一跳延迟最低",
+      "专用负载均衡器:多一跳,换秒级更新和精细路由",
+      "DNS 轮转 IP 就够,不必加组件",
+      "让每台后端各自随机拒绝一部分请求来分摊负载"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "专用 LB 夹在客户端和后端之间,每请求多一跳;代价换来的是秒级同步服务器列表、按 path/user 精细路由。公网多变后端值这一跳。",
+    "why_en": "A dedicated load balancer adds one hop per request, but in return gives second-level server-list updates and fine-grained routing by path or user — worth it when the backend churns.",
+    "whenOtherWins": "当客户端可控且数量少(gRPC 内部服务、Redis Cluster 客户端),或客户端海量但能容忍慢更新(DNS)时,客户端负载均衡省掉那一跳更划算。",
+    "tags": [
+      "load-balancing",
+      "dedicated-lb",
+      "client-lb"
+    ],
+    "options_en": [
+      "Client-side LB: the client connects to backends directly and skips the hop for lowest latency.",
+      "Dedicated load balancer: one extra hop for second-level updates and fine-grained routing.",
+      "Just rotate IPs with DNS; no extra component needed.",
+      "Have each backend randomly reject a share of requests to spread load."
+    ],
+    "tradeoff": "专用 LB 多一跳但更新快、路由细 vs 客户端 LB 省一跳但更新慢",
+    "termDefinitions": [
+      {
+        "term": "专用负载均衡器",
+        "meaning": "夹在客户端和后端之间的独立服务器或硬件,集中决定每个请求发往哪台后端。",
+        "meaningEn": "A dedicated load balancer is a standalone server or appliance between clients and backends that centrally decides which backend each request goes to."
+      },
+      {
+        "term": "客户端负载均衡",
+        "meaning": "客户端自己从服务注册中心拿服务器列表并直连目标,省掉集中式 LB 那一跳。",
+        "meaningEn": "Client-side load balancing has the client fetch a server list from a registry and connect directly, skipping the hop through a central load balancer."
+      },
+      {
+        "term": "DNS",
+        "fullName": "Domain Name System",
+        "meaning": "把域名解析成 IP 的系统,常返回轮转的 IP 列表,间接充当一种慢更新的客户端负载均衡。",
+        "meaningEn": "DNS resolves domain names to IPs and often returns a rotated IP list, acting as a slow-updating form of client-side load balancing."
+      }
+    ],
+    "optionExplanations": [
+      "客户端 LB 直连确实省掉那一跳、延迟最低,但它靠定期同步列表,更新慢,实例秒级下线时会发给已死实例。",
+      "专用 LB 多一跳,换来秒级更新服务器列表和按 path 分流,正好命中频繁扩缩容加路由的需求。",
+      "DNS 轮转属于客户端 LB,受 TTL 缓存影响同样更新慢,跟不上秒级实例变化。",
+      "随机拒绝不是负载均衡,只会制造错误和重试风暴,不解决路由。"
+    ],
+    "optionExplanations_en": [
+      "Client-side LB does skip the hop for lowest latency, but it syncs the list periodically, so it lags and may hit instances that just died.",
+      "The dedicated LB adds a hop but gets second-level list updates and path-based routing — exactly what fast scaling plus splitting needs.",
+      "DNS rotation is client-side LB and is slowed by TTL caching, so it cannot track second-level instance changes.",
+      "Random rejection isn't load balancing; it just creates errors and retry storms without solving routing."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-080",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "user-kernel-space",
+    "scenario": "应用层协议(HTTP)在 user space 处理,下面的 L4/L3 在内核(kernel space)处理。你要加一段经常迭代、按请求内容判断的路由逻辑。",
+    "scenario_en": "The application layer (HTTP) is processed in user space, while the L4/L3 layers below run in the OS kernel (kernel space). You need to add routing logic that iterates often and inspects request content.",
+    "q": "把它放 user space 还是 kernel space,各自的代价是什么?",
+    "q_en": "Put it in user space or kernel space, and what does each cost?",
+    "options": [
+      "放 kernel space,因为内核里改路由逻辑最方便最快",
+      "放 user space:改起来灵活,代价是比内核处理慢、开销大",
+      "两层没区别,放哪都一样",
+      "放 kernel space,因为应用层根本无法运行任何自定义路由逻辑"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "上层(user space)灵活易改,但处理慢、开销大;下层(kernel space)极高效但难改。经常迭代的内容路由放 user space,代价是更慢——这也是 L7 比 L4 灵活却更重的原因。",
+    "why_en": "User space is flexible and easy to change but slower; kernel space is efficient but hard to change. Frequently-changed routing belongs in user space — the reason L7 is heavier than L4.",
+    "tags": [
+      "user-kernel-space",
+      "networking",
+      "l4-l7"
+    ],
+    "options_en": [
+      "Put it in kernel space, since changing routing logic in the kernel is easiest and fastest.",
+      "Put it in user space: flexible to change, at the cost of being slower and heavier than the kernel.",
+      "There's no difference between the layers; either is fine.",
+      "Put it in kernel space, because the application layer can't run any custom routing logic at all."
+    ],
+    "tradeoff": "user space 灵活易改但慢 vs kernel space 高效但难改",
+    "termDefinitions": [
+      {
+        "term": "user space",
+        "meaning": "操作系统里运行应用程序的区域,应用层协议在这里处理,灵活易改但每次处理要多绕一圈、更慢。",
+        "meaningEn": "User space is where an OS runs application programs; the application layer is processed here — flexible and easy to change, but slower per operation."
+      },
+      {
+        "term": "kernel space",
+        "meaning": "操作系统内核运行的区域,L4/L3 等底层在这里处理,极高效但代码难改。",
+        "meaningEn": "Kernel space is where the OS kernel runs; lower layers like L4/L3 are processed here — very efficient but hard to change."
+      },
+      {
+        "term": "L7",
+        "fullName": "Layer 7",
+        "meaning": "应用层负载均衡,能看 HTTP 内容做智能路由,跑在 user space,更灵活但更重。",
+        "meaningEn": "L7 is an application-layer load balancer that inspects HTTP content to route, runs in user space, and is more flexible but heavier."
+      },
+      {
+        "term": "L4",
+        "fullName": "Layer 4",
+        "meaning": "传输层负载均衡,只看 IP/端口转发,跑在内核,极高效但路由粒度粗。",
+        "meaningEn": "L4 is a transport-layer load balancer that forwards on IP/port only, runs in the kernel, and is very efficient but coarse-grained."
+      }
+    ],
+    "optionExplanations": [
+      "反了:内核代码极难改、迭代慢,把常改逻辑塞进内核会拖慢整个开发。",
+      "user space 处理灵活可改,适合常迭代的规则;代价是每次处理多绕用户态一圈,慢、开销大。",
+      "两层区别正是本题重点:上层灵活慢、下层高效难改,不能混为一谈。",
+      "过于绝对:应用层完全能跑自定义逻辑(L7 LB 就是),它只是比内核慢。"
+    ],
+    "optionExplanations_en": [
+      "Backwards: kernel code is very hard to change and slow to iterate, so hot-changing logic there drags down development.",
+      "User space is flexible to change, good for often-iterated rules; the cost is extra user-mode processing, making it slower and heavier.",
+      "The layer difference is the whole point: upper is flexible but slow, lower is efficient but hard to change.",
+      "Too absolute: the app layer absolutely can run custom logic (that's what an L7 LB does); it's just slower than the kernel."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-081",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "graphql",
+    "scenario": "团队上 GraphQL,想让前端自由查询、不再为每个新页面改后端。上线后前端开始发各种深层嵌套的宽查询。",
+    "scenario_en": "A team adopts GraphQL so the frontend can query freely without backend changes per page. After launch the frontend starts sending deeply nested, wide queries.",
+    "q": "GraphQL 后端这边会付出什么代价?",
+    "q_en": "What does GraphQL cost on the backend side?",
+    "options": [
+      "几乎没有额外代价,后端只需照着前端发来的这条查询把它要的那些字段原样返回即可",
+      "查询执行成为延迟和复杂度来源,常又退回想省掉的 resolver 代码",
+      "前端的查询会自动帮后端做好缓存、限流和鉴权",
+      "GraphQL 会自动把后端数据库水平分片扩容,吞吐随之提升"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "前端灵活查询的代价压在后端:嵌套宽查询要后端执行,带来延迟;为拼出任意形状常又要写定制 resolver,正是它想省掉的后端代码。甜蜜点是多团队宽查询的复杂前端。",
+    "why_en": "The flexibility lands on the backend: nested queries still must run there, and shaping arbitrary responses often means bespoke resolver code — the very thing GraphQL meant to avoid.",
+    "tags": [
+      "graphql",
+      "api-paradigms",
+      "tradeoff"
+    ],
+    "options_en": [
+      "Almost no extra cost — the backend just returns the fields the frontend asked for.",
+      "Query execution becomes a source of latency and complexity, often falling back to the resolver code it tried to avoid.",
+      "The frontend's queries automatically handle caching, rate-limiting, and auth for the backend.",
+      "GraphQL automatically shards and scales the backend database, so throughput rises."
+    ],
+    "termDefinitions": [
+      {
+        "term": "GraphQL",
+        "meaning": "Facebook 2015 年开源的 API 范式,让前端一次查询精确指定要哪些字段和嵌套对象。",
+        "meaningEn": "GraphQL is an API paradigm open-sourced by Facebook in 2015 that lets the frontend specify exactly which fields and nested objects it wants in one query."
+      },
+      {
+        "term": "resolver",
+        "meaning": "后端为 GraphQL 每个字段编写的取数函数;拼任意查询形状时它容易膨胀成定制代码。",
+        "meaningEn": "A resolver is the backend function that fetches data for each GraphQL field; shaping arbitrary queries tends to bloat it into bespoke code."
+      }
+    ],
+    "optionExplanations": [
+      "查询要后端真正执行,深层嵌套会放大延迟,并非零成本。",
+      "灵活性的账单落在后端:执行嵌套查询增加延迟,拼任意形状又常退回定制 resolver 代码。",
+      "GraphQL 不自带缓存/限流/鉴权,这些仍要后端自己实现,反而更难做统一。",
+      "GraphQL 只是查询层,与数据库分片扩容无关,不会自动提升吞吐。"
+    ],
+    "optionExplanations_en": [
+      "Queries still have to be executed by the backend, and deep nesting amplifies latency — it isn't free.",
+      "The bill for flexibility lands on the backend: running nested queries adds latency, and shaping responses drags you back to bespoke resolvers.",
+      "GraphQL brings no built-in caching, rate-limiting, or auth; the backend still implements them, and uniformly at that.",
+      "GraphQL is just a query layer, unrelated to database sharding or scaling, so it won't auto-improve throughput."
+    ]
+  },
+  {
+    "id": "sd-core-concepts-networking-essentials-082",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "http2-multiplexing",
+    "scenario": "内部服务间每秒海量短调用,你担心每次调用都要重新建立 TCP 连接的开销。团队已在用 gRPC(跑在 HTTP/2 上)。",
+    "scenario_en": "A huge volume of short internal service-to-service calls per second, and you worry about the cost of setting up a fresh TCP connection each call. The team already uses gRPC (which runs on HTTP/2).",
+    "q": "HTTP/2 的哪个特性消掉了每请求重建连接的开销?",
+    "q_en": "Which HTTP/2 feature removes the per-request connection setup cost?",
+    "options": [
+      "protobuf 二进制编码,让每个请求都能更快地把连接建立起来",
+      "多路复用:多个请求复用同一条持久连接,不必每次重建",
+      "健康检查,自动剔除坏连接",
+      "DNS 轮转,把请求分散到多台服务器"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "多路复用让多个请求共享一条持久连接,省掉为每个请求重复的 TCP/TLS 握手——这是 gRPC 跑在 HTTP/2 上拿到的低开销。protobuf 管报文变小,和连接复用是两回事。",
+    "why_en": "Multiplexing lets many requests share one persistent connection instead of a fresh handshake per request — the overhead win gRPC gets from HTTP/2. Protobuf only shrinks the payload.",
+    "tags": [
+      "http2",
+      "multiplexing",
+      "grpc",
+      "connection-reuse"
+    ],
+    "options_en": [
+      "Protobuf binary encoding, which sets up each request connection faster.",
+      "Multiplexing: many requests reuse one persistent connection instead of rebuilding it each time.",
+      "Health checks that automatically evict bad connections.",
+      "DNS rotation that spreads requests across many servers."
+    ],
+    "termDefinitions": [
+      {
+        "term": "多路复用",
+        "fullName": "multiplexing",
+        "meaning": "多个请求共享同一条持久连接,不必为每个请求重复建立连接。",
+        "meaningEn": "Multiplexing lets many requests share one persistent connection so you do not rebuild the connection for each request."
+      },
+      {
+        "term": "HTTP/2",
+        "meaning": "支持多路复用的 HTTP 版本,gRPC 就跑在它上面以避免每请求重建连接。",
+        "meaningEn": "HTTP/2 is a version of HTTP that supports multiplexing; gRPC runs on it to avoid rebuilding a connection per request."
+      },
+      {
+        "term": "gRPC",
+        "meaning": "Google 的高性能 RPC 框架,用 HTTP/2 和 protobuf,是二进制协议,比 JSON over HTTP 更快更省。",
+        "meaningEn": "gRPC is Google's high-performance RPC framework using HTTP/2 and protobuf; being binary it is faster and leaner than JSON over HTTP."
+      },
+      {
+        "term": "protobuf",
+        "fullName": "Protocol Buffers",
+        "meaning": "Google 的二进制序列化格式,报文比 JSON 小、解析更省 CPU,但不涉及连接复用。",
+        "meaningEn": "Protobuf is Google's binary serialization format; messages are smaller than JSON and cheaper to parse, but it has nothing to do with connection reuse."
+      },
+      {
+        "term": "TCP",
+        "fullName": "Transmission Control Protocol",
+        "meaning": "面向连接的可靠传输层协议,靠握手建立连接,重建连接有开销。",
+        "meaningEn": "TCP is a connection-oriented reliable transport protocol whose handshake to open a connection carries overhead."
+      }
+    ],
+    "optionExplanations": [
+      "protobuf 让报文更小、解析更省 CPU,但它不复用连接,握手开销照旧。",
+      "多路复用让多请求共用一条持久连接,免掉每请求重复握手,正是 HTTP/2 省开销的关键。",
+      "健康检查是负载均衡剔除坏后端用的,和连接复用无关。",
+      "DNS 轮转决定连哪台服务器,不改变每条连接是否需要重复握手。"
+    ],
+    "optionExplanations_en": [
+      "Protobuf makes messages smaller and cheaper to parse, but it doesn't reuse connections — the handshake cost stays.",
+      "Multiplexing lets many requests share one persistent connection, skipping a per-request handshake — HTTP/2's key overhead win.",
+      "Health checks are how a load balancer drops bad backends; unrelated to connection reuse.",
+      "DNS rotation decides which server you hit, not whether each connection repeats a handshake."
+    ]
   }
 ]

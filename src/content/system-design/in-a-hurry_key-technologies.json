@@ -3955,5 +3955,390 @@
     ],
     "scenario": "架构图上已经画了 CDN 层，面试官问你选哪家服务商、除了缓存还能顺带解决什么。",
     "scenario_en": "Your diagram already has a CDN tier, and the interviewer asks which provider you'd use and what else it solves besides caching."
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-064",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cache-eviction",
+    "scenario": "分布式缓存快满了，热点 key 被高频访问但读是突发的——有些热 key 会连续几分钟没人读，随后又被猛读。你要保证它们别在冷静期被误淘汰。",
+    "scenario_en": "Your distributed cache is nearly full; hot keys are read very frequently but in bursts, so a hot key may go quiet for minutes before being hammered again, and you must not evict it during the lull.",
+    "q": "该配哪种淘汰策略？",
+    "q_en": "Which eviction policy fits?",
+    "options": [
+      "LFU：淘汰累计访问次数最少的项",
+      "LRU：淘汰最久没被访问过的项",
+      "FIFO：按写入先后淘汰，先进先出",
+      "不设淘汰，缓存满了就拒绝新写入"
+    ],
+    "options_en": [
+      "LFU: evict the least frequently accessed items",
+      "LRU: evict the items not accessed for the longest time",
+      "FIFO: evict in insertion order, first in first out",
+      "No eviction: reject new writes once the cache is full"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "LFU 按累计访问频次淘汰，热 key 计数高，冷静几分钟也不会被挤掉；LRU 只看最近一次访问时间，会在冷静期误杀这些热 key。代价：LFU 要为每个 key 维护访问计数，且对突然变冷的旧热点反应慢。",
+    "why_en": "LFU evicts by cumulative access count, so a bursty hot key keeps a high count and survives quiet gaps, whereas LRU looks only at recency and would drop it during the lull.",
+    "whenOtherWins": "当\"最近用过\"比\"用得多\"更能预测下次访问时（如会话数据、时间局部性强的读），LRU 更合适；只想要简单、无需为每次访问记账时选 FIFO。",
+    "tradeoff": "按访问频次淘汰（LFU）vs 按最近使用淘汰（LRU）vs 按写入顺序淘汰（FIFO）",
+    "tags": [
+      "cache",
+      "eviction",
+      "lfu"
+    ],
+    "table": {
+      "headers": [
+        "策略",
+        "淘汰依据"
+      ],
+      "rows": [
+        [
+          "LRU",
+          "最久未访问"
+        ],
+        [
+          "LFU",
+          "累计频次最低"
+        ],
+        [
+          "FIFO",
+          "最早写入"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "对，本题突发读要求保住热点，LFU 用累计频次做淘汰依据，正好把常被访问的 key 留在缓存里。",
+      "LRU 按最近访问时间排序，热 key 在几分钟没人读时就排到了\"最久未用\"，会被错杀。",
+      "FIFO 只按写入先后淘汰，跟访问热度无关，早写入的热点也会被先踢掉。",
+      "拒绝新写入不是淘汰策略，会让新数据进不来、缓存命中率停滞，不解决\"留住热点\"的问题。"
+    ],
+    "optionExplanations_en": [
+      "Right - LFU evicts by frequency, so a high-count hot key survives quiet gaps, matching the \"don't drop bursty hot keys\" constraint.",
+      "LRU keys off last-access time, so a hot key becomes \"least recently used\" during a few quiet minutes and gets wrongly evicted.",
+      "FIFO evicts purely by insertion order, ignoring access heat, so an early-written hot item gets kicked first.",
+      "Rejecting new writes is not an eviction policy; it just blocks new data and stalls hit rate without keeping hot keys."
+    ],
+    "termDefinitions": [
+      {
+        "term": "LRU",
+        "fullName": "Least Recently Used",
+        "meaning": "淘汰最久没被访问过的项。",
+        "meaningEn": "LRU (Least Recently Used) evicts the items not accessed for the longest time."
+      },
+      {
+        "term": "LFU",
+        "fullName": "Least Frequently Used",
+        "meaning": "淘汰累计访问次数最少的项。",
+        "meaningEn": "LFU (Least Frequently Used) evicts the items with the fewest cumulative accesses."
+      },
+      {
+        "term": "FIFO",
+        "fullName": "First In First Out",
+        "meaning": "按写入先后淘汰，最早进来的最先被踢。",
+        "meaningEn": "FIFO (First In First Out) evicts in insertion order, oldest first."
+      }
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-065",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "cache-invalidation",
+    "scenario": "设计 Ticketmaster，把热门活动缓存在 Redis 里。运营在数据库把某场活动的场馆（venue）改了，但缓存里还是旧场馆。",
+    "scenario_en": "In a Ticketmaster design you cache popular events in Redis. An operator changes an event's venue in the database, but the cache still holds the old venue.",
+    "q": "缓存里那份旧数据该怎么处理，才不会让用户看到错的场馆？",
+    "q_en": "What must you do so users don't see the stale venue that's still cached?",
+    "options": [
+      "在写 DB 时主动失效该 key，下次读回源取新值",
+      "什么都不做，写策略会自动把 DB 的更新同步进缓存",
+      "整个缓存全清一遍，保证绝对一致",
+      "等 LRU 淘汰，旧值迟早会被挤出去"
+    ],
+    "options_en": [
+      "Invalidate that key on the DB write so the next read repopulates from source",
+      "Do nothing - the write strategy syncs the DB update into the cache automatically",
+      "Flush the entire cache to guarantee absolute consistency",
+      "Wait for LRU eviction - the stale value gets pushed out eventually"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "正常路径读缓存命中旧场馆 → DB 改了但缓存没动 → 用户一直看到错场馆。修法是写 DB 时同步失效该 key：下次读 miss、回源取新值再写回缓存。代价：那次读多一跳 DB，且每条写路径都得挂上失效逻辑。",
+    "why_en": "The cache keeps serving the old venue because the DB write never touched it, so you must invalidate that key on write and let the next read miss and repopulate from the database.",
+    "tradeoff": "失效单个 key（快、但要挂到每条写路径）vs 全清缓存（简单但引发回源风暴）",
+    "tags": [
+      "cache",
+      "invalidation",
+      "consistency"
+    ],
+    "optionExplanations": [
+      "对，写 DB 时失效对应 key，下次读自然 miss 回源取新值——这是把源更新反映到缓存的标准做法。",
+      "写策略（write-through/back/around）管的是\"经缓存写\"的路径；这次更新绕过缓存直接改了 DB，缓存不会自己知道。",
+      "全清能一致，但会让所有热点同时 miss、瞬间打爆 DB（缓存雪崩），代价过大。",
+      "靠 LRU 淘汰不可控：这个 key 越热越不会被淘汰，用户可能长时间持续看到旧场馆。"
+    ],
+    "optionExplanations_en": [
+      "Right - invalidate the key on the DB write so the next read misses and repopulates; this is how source updates reach the cache.",
+      "Write strategies govern writes that go through the cache; this update bypassed it and hit the DB directly, so the cache can't know.",
+      "Flushing is consistent but makes all hot keys miss at once and hammers the DB (cache stampede) - too costly.",
+      "LRU eviction is uncontrolled: the hotter the key, the less it's evicted, so users may keep seeing the old venue for a long time."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cache invalidation",
+        "meaning": "源数据更新时，主动让缓存里对应的旧副本失效，保证下次读取到新值。",
+        "meaningEn": "Cache invalidation actively removes the stale cached copy when the source data changes so the next read gets fresh data."
+      },
+      {
+        "term": "LRU",
+        "fullName": "Least Recently Used",
+        "meaning": "一种淘汰策略，优先踢掉最久没被访问的项。",
+        "meaningEn": "LRU (Least Recently Used) is an eviction policy that drops the items not accessed for the longest time."
+      }
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-066",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "lock-granularity",
+    "scenario": "Ticketmaster 抢票，用户挑的是对号入座的单个座位，高并发下多人同时抢不同座位。你要用分布式锁在结账期间锁住座位。",
+    "scenario_en": "On Ticketmaster, users pick specific reserved seats and many buy different seats concurrently; you use a distributed lock to hold a seat during checkout.",
+    "q": "锁的粒度该选哪一级？",
+    "q_en": "What locking granularity should you choose?",
+    "options": [
+      "锁单张票（ticket-123），只挡住抢同一座位的人",
+      "锁整个看台区（section），把该区所有座位一起锁",
+      "锁整场活动，一次只允许一个用户下单",
+      "不用分布式锁，用 DB 事务锁短暂锁一下就行"
+    ],
+    "options_en": [
+      "Lock the single ticket (ticket-123), blocking only buyers of that same seat",
+      "Lock the whole section, holding every seat in that section at once",
+      "Lock the entire event, allowing only one user to check out at a time",
+      "Skip distributed locks - a brief DB transaction lock is enough"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "粒度要匹配可售的最小单位：这里卖的是单个座位，锁 ticket-123 只挡住抢同一座位的人，其他座位照常并发售卖。锁整区会把无关买家全挡住、并发直接崩塌。代价：锁数量随座位数增长，要管好大量短期锁。",
+    "why_en": "Match granularity to the smallest sellable unit: since seats sell individually, locking ticket-123 blocks only rivals for that seat while other seats sell in parallel.",
+    "whenOtherWins": "当售卖单位本身就是整片区域（如包厢、整区团体票、无对号的站席区）时，锁 section 才对——粒度粗一点反而匹配业务。",
+    "tradeoff": "细粒度（单票，高并发但锁多）vs 粗粒度（整区，锁少但并发低）",
+    "tags": [
+      "distributed-lock",
+      "granularity",
+      "concurrency"
+    ],
+    "optionExplanations": [
+      "对，卖的是单座位，锁到单票粒度只挡抢同一座位的人，其余座位并发不受影响。",
+      "锁整区会把只想买该区其他座位的人也全挡住，高并发抢票场景并发度直接塌掉——只有整区作为售卖单位时才对。",
+      "锁整场活动是极端粗粒度，全站一次只能一人下单，吞吐低到不可用。",
+      "DB 事务锁是为\"更新记录的一瞬\"设计的，扛不住结账那 ~10 分钟的长时持有，这正是分布式锁存在的理由。"
+    ],
+    "optionExplanations_en": [
+      "Right - seats sell individually, so a per-ticket lock blocks only rivals for that seat and leaves other seats concurrent.",
+      "A section lock also blocks people who just want other seats in it, collapsing concurrency - only right when the section itself is the sellable unit.",
+      "Locking the whole event is extreme coarse granularity: one checkout at a time site-wide, unusably low throughput.",
+      "DB transaction locks are built for the instant of updating a row, not the ~10-minute checkout hold - exactly why distributed locks exist."
+    ],
+    "termDefinitions": [
+      {
+        "term": "锁粒度",
+        "fullName": "locking granularity",
+        "meaning": "一把锁覆盖的资源范围，可以是单个资源，也可以是一组资源。",
+        "meaningEn": "Locking granularity is the scope a lock covers - a single resource or a group of resources."
+      },
+      {
+        "term": "分布式锁",
+        "meaning": "跨进程/机器、可设过期的锁，常用 Redis 或 ZooKeeper 实现，用于较长时间锁住资源。",
+        "meaningEn": "A distributed lock spans processes and machines with an expiry, often via Redis or ZooKeeper, to hold a resource for a while."
+      }
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-067",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cdn-invalidation",
+    "scenario": "你用 CDN 缓存产品页图片，刚在源站换了新图，业务要求用户立刻看到新版，不能等。",
+    "scenario_en": "You cache product-page images on a CDN and just replaced an image at the origin; the business needs users to see the new version immediately.",
+    "q": "怎样让边缘节点停止返回旧版本？",
+    "q_en": "How do you make edge nodes stop serving the old version?",
+    "options": [
+      "主动 invalidation：发 purge，立即清掉边缘旧副本",
+      "靠 TTL 到期：等缓存自然过期后，边缘再回源拉取新版内容并返回",
+      "把 TTL 设成 0，让每次请求都强制回源取内容",
+      "什么都不做，CDN 会自己察觉源站内容已变化"
+    ],
+    "options_en": [
+      "Active invalidation: send a purge so edges immediately drop the old copy",
+      "Rely on TTL expiry: wait for the cache to expire, then edges refetch",
+      "Set TTL to 0 so every request goes back to the origin",
+      "Do nothing - the CDN detects the origin change on its own"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "CDN 只有两种淘汰机制：TTL 被动过期，或主动 invalidation。要\"立刻\"生效就得发 purge，一次性清掉各边缘的旧副本，下次请求回源取新图。代价：purge 要传播到所有边缘节点，且每次改内容都得触发它。",
+    "why_en": "A CDN evicts either by passive TTL expiry or by active invalidation, so an immediate update requires a purge that clears the stale copy across edges.",
+    "whenOtherWins": "当内容可以容忍一段陈旧窗口（如每天更新一次的博客）时，直接靠 TTL 过期更省事，不用维护 purge 触发逻辑。",
+    "tradeoff": "被动 TTL 过期（简单但有陈旧窗口）vs 主动 invalidation（即时但每次改都要触发 purge）",
+    "tags": [
+      "cdn",
+      "invalidation",
+      "ttl"
+    ],
+    "optionExplanations": [
+      "对，需要即时生效就发 purge 主动失效，立即清掉边缘旧副本，绕开等 TTL 的陈旧窗口。",
+      "TTL 过期是被动的：在过期前全球边缘会一直返回旧图，满足不了\"立刻\"的要求。",
+      "TTL=0 等于关掉缓存，每次请求都回源，丢掉了 CDN 低延迟分发的意义。",
+      "CDN 不会主动轮询源站看内容变没变；不通知它，边缘会一直服务旧副本直到过期。"
+    ],
+    "optionExplanations_en": [
+      "Right - for immediate effect, send a purge to actively invalidate and clear stale edge copies, skipping the TTL staleness window.",
+      "TTL expiry is passive: until it expires, edges worldwide keep serving the old image, missing the \"immediate\" requirement.",
+      "TTL=0 effectively disables caching - every request hits the origin, defeating the CDN's low-latency delivery.",
+      "A CDN doesn't poll the origin for changes; without notifying it, edges serve the stale copy until expiry."
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDN",
+        "fullName": "Content Delivery Network",
+        "meaning": "把内容缓存在靠近用户的边缘节点、就近分发的网络。",
+        "meaningEn": "A CDN caches content on edge nodes near users to deliver it from nearby."
+      },
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "缓存项的存活时长，到期后边缘会回源重新取。",
+        "meaningEn": "TTL (Time To Live) is how long a cached item lives before an edge refetches it from origin."
+      },
+      {
+        "term": "purge",
+        "meaning": "主动通知 CDN 清除某个已缓存对象，让边缘不再返回旧副本。",
+        "meaningEn": "A purge tells the CDN to actively drop a cached object so edges stop serving the old copy."
+      }
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-068",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "queue-work-distribution",
+    "scenario": "云端图片处理服务：用户上传后要做昂贵的滤镜/转码。上传速率平稳，不是尖峰流量，但每个任务耗时且不均。",
+    "scenario_en": "A cloud photo-processing service runs expensive filtering/transcoding after upload; the upload rate is steady (not spiky) but each task is slow and uneven.",
+    "q": "这里引入队列，主要作用是什么？",
+    "q_en": "What is the queue mainly doing here?",
+    "options": [
+      "把昂贵任务分发到 worker 池，各 worker 自行拉取",
+      "缓冲突发流量的尖峰，把瞬时高峰摊平到系统可以处理的稳定速率",
+      "保证图片严格按上传的先后顺序被逐一处理完成",
+      "缓存已处理的结果，避免同一张图被重复处理两次"
+    ],
+    "options_en": [
+      "Distribute expensive tasks across a worker pool, each pulling at its own pace",
+      "Buffer bursty spikes, smoothing peaks down to a handleable rate",
+      "Guarantee images are processed one by one in upload order",
+      "Cache the results so the same image isn't processed twice"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "队列有两大用途：削峰缓冲 和 把工作分发到 worker 池。这里流量平稳、单任务昂贵，价值在后者——生产者投递任务后就走，worker 池各自拉取，负载均匀分布，还能独立增减 worker。",
+    "why_en": "Queues serve two purposes - buffering bursts and distributing work - and here, with steady traffic but heavy tasks, the value is even work distribution across a worker pool.",
+    "tags": [
+      "queue",
+      "work-distribution",
+      "workers"
+    ],
+    "optionExplanations": [
+      "对，流量不尖峰但任务昂贵，队列的价值是把任务均匀分发给 worker 池，各 worker 按能力拉取、还能独立扩缩。",
+      "削峰是队列另一大用途，但本题流量平稳没有尖峰，这不是引入它的理由——换成突发流量场景它才是主因。",
+      "FIFO 只是队列的默认顺序属性，不是这里引入它的目的；图片处理并不要求严格保序。",
+      "去重缓存是缓存的活儿，不是队列的职责；队列负责传递和分发任务，不负责记住结果。"
+    ],
+    "optionExplanations_en": [
+      "Right - traffic isn't spiky but tasks are heavy, so the queue's value is spreading tasks evenly across a worker pool that pulls at its own rate and scales independently.",
+      "Peak-smoothing is the queue's other main use, but traffic here is steady with no spike - that reason applies to a bursty-traffic scenario instead.",
+      "FIFO is just the queue's default ordering property, not why it's added here; image processing doesn't require strict ordering.",
+      "Dedup caching is a cache's job, not the queue's; queues move and distribute tasks, they don't remember results."
+    ],
+    "termDefinitions": [
+      {
+        "term": "worker 池",
+        "fullName": "worker pool",
+        "meaning": "一组从队列拉取任务并处理的计算节点，可独立于生产者扩缩。",
+        "meaningEn": "A worker pool is a group of compute nodes that pull tasks from the queue and process them, scaling independently of producers."
+      }
+    ]
+  },
+  {
+    "id": "sd-in-a-hurry-key-technologies-069",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "search-scaling",
+    "scenario": "Twitter 用 Elasticsearch 做推文全文搜索，索引数据量和查询量持续增长，单集群快扛不住了。",
+    "scenario_en": "Twitter uses Elasticsearch for tweet full-text search; indexed data and query volume keep growing and a single cluster is nearing its limit.",
+    "q": "该怎么扩展这个搜索优化数据库？",
+    "q_en": "How do you scale this search-optimized database?",
+    "options": [
+      "像传统库一样：往集群加节点，把数据分片到各节点",
+      "只能纵向升级单机的 CPU 和内存，加不了节点",
+      "加只读副本能分摊读，但数据量和写扩不了",
+      "搜索引擎无法水平扩展，量大了只能换回关系库"
+    ],
+    "options_en": [
+      "Like a traditional DB: add nodes to the cluster and shard data across them",
+      "Only vertical upgrades of one machine's CPU and RAM - no adding nodes",
+      "Read replicas share reads, but data volume and writes can't scale",
+      "Search engines can't scale horizontally; at scale you must return to a relational DB"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "搜索优化数据库的扩展方式和传统数据库一样：往集群里加节点，把数据分片（shard）到各节点，读写和容量随节点数一起横向扩展。这也是 Elasticsearch 能撑起 Netflix、Uber 规模的原因。",
+    "why_en": "Search-optimized databases scale just like traditional ones: add nodes to the cluster and shard data across them so capacity grows horizontally.",
+    "whenOtherWins": "只有读压力大、数据量和写量都不涨时，加副本分摊读才够用；一旦数据量或写量增长，就必须靠加节点 + 分片。",
+    "tradeoff": "横向扩展（加节点 + 分片，容量随节点涨）vs 纵向扩展（升级单机，很快撞硬件上限）",
+    "tags": [
+      "search",
+      "elasticsearch",
+      "scaling"
+    ],
+    "optionExplanations": [
+      "对，搜索优化数据库和传统库一样靠加节点 + 分片横向扩展，容量和吞吐随节点数增长。",
+      "纵向升级单机很快撞硬件上限，撑不住持续增长的数据量和查询量，不是搜索引擎的主扩展路径。",
+      "只读副本只分摊读压力，数据量和写吞吐还是被单节点卡住，解决不了容量增长。",
+      "Elasticsearch 天生就是分布式、可水平扩展的搜索引擎，\"换回关系库\"方向反了。"
+    ],
+    "optionExplanations_en": [
+      "Right - search-optimized DBs scale like traditional ones via more nodes plus sharding, so capacity and throughput grow with node count.",
+      "Vertical upgrades hit a hardware ceiling fast and can't handle sustained growth in data and queries - not the search engine's main scaling path.",
+      "Read replicas only offload reads; data volume and write throughput stay bottlenecked on one node, so capacity growth isn't solved.",
+      "Elasticsearch is a distributed, horizontally scalable search engine by design; \"returning to a relational DB\" is backwards."
+    ],
+    "termDefinitions": [
+      {
+        "term": "shard",
+        "fullName": "shard (分片)",
+        "meaning": "把数据拆成多份分布到不同节点，让存储和查询横向扩展。",
+        "meaningEn": "A shard is a horizontal slice of the data placed on a different node so storage and queries scale out."
+      },
+      {
+        "term": "Elasticsearch",
+        "meaning": "基于 Apache Lucene 的分布式 RESTful 搜索与分析引擎。",
+        "meaningEn": "Elasticsearch is a distributed RESTful search and analytics engine built on Apache Lucene."
+      }
+    ]
   }
 ]
