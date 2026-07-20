@@ -906,8 +906,8 @@
     "answer": [
       3
     ],
-    "why": "扩容信号看 broker 吞吐是否逼近压测上限、分区数是否过高、consumer lag 是否持续增长，而非消息条数本身。",
-    "why_en": "Scale a queue when broker throughput nears its benchmarked limit, partition count climbs too high, or consumer lag keeps growing.",
+    "why": "扩容单位是 broker：单 broker 吞吐 = 该 broker 上分区数 × 每分区 MB/s，逼近压测上限或 lag 持续增长才加 broker。topic 数与消息条数只是次要成本。",
+    "why_en": "The scaling unit is the broker: its throughput equals partitions on it times MB/s per partition, so you add brokers when that nears the benchmarked ceiling or consumer lag keeps growing.",
     "options_en": [
       "No action needed; message queues have no scaling concept.",
       "Scale whenever the topic count grows.",
@@ -968,8 +968,8 @@
     "answer": [
       0
     ],
-    "why": "单台优化过的应用服务器可维持 100k+ 并发连接，80k 在其内；限制服务器的通常是 CPU，不是连接数或内存。",
-    "why_en": "An optimized application server sustains 100k+ concurrent connections, so 80k fits easily; CPU, not connections, is usually the real limit.",
+    "why": "容量单位是每机并发连接：优化过的单机 ≈ 100k+，机器数 = 80k ÷ 100k < 1，所以一台够。连接本身的内存/fd 只是次要成本，先见顶的是 CPU。",
+    "why_en": "Count capacity per machine in concurrent connections: a tuned server holds roughly 100k+, so 80k divided by that is under one machine; the per-connection memory and file descriptors are a secondary cost, and CPU tops out first.",
     "options_en": [
       "The 100k+ concurrent connection reference covers it, no need to scale out yet.",
       "Application servers typically handle only 1k connections, so scale out now.",
@@ -1020,8 +1020,8 @@
     "answer": [
       2
     ],
-    "why": "CPU 几乎总是应用服务器的第一瓶颈，而非内存。所以别怕用本地缓存、内存计算等吃内存的优化——每台机器其实有大量内存可用。",
-    "why_en": "CPU is almost always the first bottleneck for application servers, not memory.",
+    "why": "扩容单位是核：机器数 = QPS × 每请求 CPU 时间 ÷ 单机核数，CPU 先见顶。内存是次要成本，可放心用本地缓存换 CPU。",
+    "why_en": "The scaling unit is CPU cores: machines equal QPS times CPU time per request divided by cores per box, so CPU saturates first and memory is the secondary cost you can happily spend on local caching.",
     "options_en": [
       "Memory.",
       "Connection count.",
@@ -2090,6 +2090,470 @@
       "mongodb",
       "cockroachdb",
       "clickhouse"
+    ]
+  },
+  {
+    "id": "sd-numbers-038",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "hardware",
+    "scenario": "一个视频平台的原始素材已累计 3PB，每月还在涨 100TB；团队担心「对象存储会不会存不下」，提议自己搭一套分片存储集群。",
+    "scenario_en": "A video platform has accumulated 3PB of raw footage and adds 100TB a month; the team worries object storage cannot hold it and proposes building a sharded storage cluster.",
+    "q": "这条容量事实最支持哪条设计判断？",
+    "q_en": "What design decision does this capacity fact support?",
+    "options": [
+      "对象存储无实际容量上限，3PB 直接放",
+      "对象存储每个桶封顶几十 TB，必须自建分片集群才装得下 3PB 素材",
+      "先把素材压缩到本地磁盘上限之内，再考虑要不要上云",
+      "容量仍是首要约束，应先定期删除旧素材再谈架构"
+    ],
+    "options_en": [
+      "Object storage has no practical ceiling, so just put the 3PB there.",
+      "Each object-storage bucket caps at tens of terabytes, so a self-built sharded cluster is required for 3PB.",
+      "Compress the footage to fit under the local disk ceiling first, then consider the cloud.",
+      "Capacity is still the primary constraint, so purge old footage before designing anything."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "S3 类对象存储实际无容量上限，PB 级部署是常规做法，存储早已不是主要约束；代价是单次读取延迟远高于本地盘，热素材仍需另配缓存或 CDN。",
+    "why_en": "Object storage like S3 is effectively unlimited and petabyte-scale deployments are routine, so capacity should not drive this design; the tradeoff is much higher per-read latency than local disk.",
+    "optionExplanations": [
+      "对，PB 级对象存储是常规部署，容量不该成为架构理由。",
+      "错，把块存储的单卷上限套到了对象存储上，两者容量模型不同。",
+      "错，压缩解决的是成本问题，不是这里根本不存在的容量上限。",
+      "错，删数据是保留策略决策，不该由一个虚构的容量墙倒逼。"
+    ],
+    "optionExplanations_en": [
+      "Right, petabyte-scale object storage is routine, so capacity should not drive the architecture.",
+      "Wrong, this applies a block-volume size limit to object storage; the two have different capacity models.",
+      "Wrong, compression addresses cost, not a capacity ceiling that does not exist here.",
+      "Wrong, deleting data is a retention decision, not something a fictional capacity wall should force."
+    ],
+    "termDefinitions": [
+      {
+        "term": "S3",
+        "meaning": "Simple Storage Service，AWS 的对象存储服务，按对象存取、容量实际无上限。",
+        "meaningEn": "S3 is AWS Simple Storage Service, an object store addressed by key with effectively unlimited capacity.",
+        "fullName": "Simple Storage Service"
+      },
+      {
+        "term": "PB",
+        "meaning": "Petabyte，拍字节，1PB 约等于 1000TB。",
+        "meaningEn": "A petabyte is about a thousand terabytes of data.",
+        "fullName": "Petabyte"
+      },
+      {
+        "term": "对象存储",
+        "meaning": "按 key 存取整个对象（文件）的存储服务，不支持就地随机改写，适合大文件与归档。",
+        "meaningEn": "Object storage stores whole files addressed by key, without in-place random writes, and suits large files and archives."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "hardware",
+      "storage",
+      "object-storage"
+    ]
+  },
+  {
+    "id": "sd-numbers-039",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "network",
+    "scenario": "一个缓存实例内存只用了 300GB（离 1TB 还远），但要撑 150k ops/s，平均每次返回 20KB 的对象；实例是标准规格，网络 25 Gbps。",
+    "scenario_en": "A cache instance uses only 300GB of its 1TB memory but serves 150k ops per second returning 20KB objects on average, on a standard instance with 25 Gbps networking.",
+    "q": "先算出网卡的出口流量，正确判断是？",
+    "q_en": "Compute the egress traffic first — what is the right call?",
+    "options": [
+      "出口约 24 Gbps，已顶满网卡，先扩实例或压小 value",
+      "内存才用了 300GB，离 1TB 上限还很远，这台实例完全不用动",
+      "出口约 3 Gbps，网卡还有近十倍余量，可以继续加流量",
+      "带宽不属于缓存容量规划的范畴，只需要盯内存和 ops/s"
+    ],
+    "options_en": [
+      "Egress is about 24 Gbps, saturating the NIC — split the instance or shrink values.",
+      "Only 300GB of the 1TB memory is used, still far from the ceiling, so leave this instance alone.",
+      "Egress is about 3 Gbps, leaving nearly ten times headroom, so more traffic is fine.",
+      "Bandwidth is outside cache capacity planning; only memory and ops per second matter."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "出口带宽 = 每秒操作数 × 平均对象大小 = 150k × 20KB = 3GB/s ≈ 24 Gbps（Gbps 是每秒千兆比特），已顶满标准实例 25 Gbps；它说明缓存该按带宽而不是内存扩容。",
+    "why_en": "Egress bandwidth equals operations per second times average object size: 150k times 20KB is 3 gigabytes per second, about 24 gigabits, which saturates a standard 25 Gbps instance, so bandwidth drives scaling here, not memory.",
+    "optionExplanations": [
+      "对，带宽先于内存见顶，这才是这台实例真正的瓶颈。",
+      "错，只盯内存用量会漏掉网卡，这正是「内存没满就不用动」的误判。",
+      "错，把 3GB/s 当成了 3Gbps，字节和比特差了 8 倍。",
+      "错，标准实例 25、高性能实例 50-100 Gbps 都是硬指标，必须进估算。"
+    ],
+    "optionExplanations_en": [
+      "Right, bandwidth saturates before memory does, and that is this instance’s real bottleneck.",
+      "Wrong, watching only memory misses the network card — exactly the \"memory is not full so nothing is wrong\" trap.",
+      "Wrong, this reads 3 gigabytes per second as 3 gigabits; bytes and bits differ by a factor of eight.",
+      "Wrong, 25 Gbps standard and 50-100 Gbps high-performance are hard limits that belong in the estimate."
+    ],
+    "termDefinitions": [
+      {
+        "term": "Gbps",
+        "meaning": "Gigabits per second，每秒千兆比特，网络带宽单位；1 GB/s（字节）约等于 8 Gbps。",
+        "meaningEn": "Gbps means gigabits per second, a network bandwidth unit; one gigabyte per second is about eight gigabits per second.",
+        "fullName": "Gigabits per second"
+      },
+      {
+        "term": "ops/s",
+        "meaning": "Operations per second，缓存每秒处理的读写操作次数。",
+        "meaningEn": "Ops per second counts the read and write operations a cache handles each second.",
+        "fullName": "Operations per second"
+      },
+      {
+        "term": "出口带宽 / egress",
+        "meaning": "实例往外发送数据占用的网络带宽，缓存返回的 value 越大它涨得越快。",
+        "meaningEn": "Egress bandwidth is the outbound network capacity an instance consumes, which grows with the size of the values it returns."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "network",
+      "bandwidth",
+      "caching"
+    ]
+  },
+  {
+    "id": "sd-numbers-040",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "caching",
+    "scenario": "一个读缓存挡在主库前面，命中率从 92% 掉到 65%，但内存用量只有 60%、ops/s 也没涨；团队据此认为「内存没满，不用管」。",
+    "scenario_en": "A read cache in front of the primary database sees its hit rate fall from 92% to 65% while memory sits at 60% and ops per second are flat, so the team concludes nothing is wrong.",
+    "q": "命中率跌破 80% 时，系统实际会怎么坏？",
+    "q_en": "When hit rate falls below 80%, how does the system actually break?",
+    "options": [
+      "回源请求翻几倍压到主库，热键刚写入就被换出",
+      "只是少省了一点缓存成本，后端数据库的负载不会有任何变化",
+      "缓存服务会自动扩容把命中率补回来，运维侧不需要介入",
+      "命中率低只影响写入路径的延迟，读请求完全不受影响"
+    ],
+    "options_en": [
+      "Origin traffic multiplies onto the primary database, and hot keys get evicted right after being written.",
+      "It merely saves a little less on cache cost; database load stays exactly the same.",
+      "The cache service auto-scales to restore the hit rate, so operators need not step in.",
+      "A low hit rate only affects write-path latency; reads are entirely unaffected."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "正常时 92% 的读被缓存吃掉；工作集超出可用容量后键刚写入就被换出（churn），命中率跌到 65%，35% 的读全部回源，主库读量翻约 4 倍；恢复靠扩容或缩小工作集，代价是多付一份内存钱。",
+    "why_en": "Normally the cache absorbs 92% of reads; once the working set outgrows capacity, keys are evicted right after being written, the hit rate drops to 65%, and the misses multiply database reads roughly fourfold until you add memory or shrink the working set.",
+    "optionExplanations": [
+      "对，miss 从 8% 涨到 35%，主库要接约 4 倍的读。",
+      "错，把缓存当成纯省钱手段，忽略了它同时是主库的挡板。",
+      "错，命中率不是自动伸缩指标，churn 必须靠人判断扩容或换淘汰策略。",
+      "错，方向搞反了，命中率衡量的是读路径能否绕开数据库。"
+    ],
+    "optionExplanations_en": [
+      "Right, misses climb from 8% to 35%, so the primary absorbs roughly four times the reads.",
+      "Wrong, this treats the cache as pure cost savings and forgets it also shields the primary.",
+      "Wrong, hit rate is not an autoscaling signal; churn needs a human call on capacity or eviction policy.",
+      "Wrong, the direction is backwards — hit rate measures whether reads can bypass the database at all."
+    ],
+    "termDefinitions": [
+      {
+        "term": "命中率 / hit rate",
+        "meaning": "读请求中被缓存直接满足的比例，低于 80% 通常就该查扩容或淘汰策略。",
+        "meaningEn": "Hit rate is the share of reads served directly from cache; below 80% usually warrants a look at capacity or eviction policy."
+      },
+      {
+        "term": "cache churn / thrashing",
+        "meaning": "工作集大于缓存容量时，键刚写入就被淘汰、反复重取，缓存空转不省任何回源。",
+        "meaningEn": "Cache churn or thrashing happens when the working set exceeds capacity, so entries are evicted before reuse and constantly refetched."
+      },
+      {
+        "term": "回源",
+        "meaning": "缓存未命中后请求穿透到后端数据库或服务去取数据。",
+        "meaningEn": "Falling back to origin means a cache miss goes through to the backing database or service to fetch the data."
+      },
+      {
+        "term": "工作集 / working set",
+        "meaning": "一段时间内真正被反复访问的那部分数据，它而不是总数据量决定缓存要多大。",
+        "meaningEn": "The working set is the portion of data actually accessed repeatedly in a window, and it, not total data size, decides how big the cache must be."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "caching",
+      "hit-rate",
+      "scale-trigger"
+    ]
+  },
+  {
+    "id": "sd-numbers-041",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "database",
+    "scenario": "一个下单接口在同一个同步请求里顺序做三次数据库写（订单、扣库存、流水），跑在单节点高性能 Postgres 上，产品给的端到端目标是 p99 < 50ms。",
+    "scenario_en": "A checkout endpoint performs three sequential database writes (order, inventory, ledger) inside one synchronous request on a single-node high-performance Postgres, against a product target of p99 under 50ms.",
+    "q": "把提交延迟加起来后，正确判断是？",
+    "q_en": "After adding up the commit latencies, what is the right call?",
+    "options": [
+      "三次提交占 15-45ms，预算基本被吃光，该合并为一次事务",
+      "写提交是亚毫秒级的操作，三次加起来完全可以忽略，延迟预算很宽裕",
+      "提交延迟只由网络往返决定，跟一个请求里写了几次没有关系",
+      "p99 < 50ms 是公式推导出来的结果，可以按实测情况随时调高"
+    ],
+    "options_en": [
+      "Three commits take 15-45ms, eating the budget — merge them into one transaction.",
+      "Commit latency is sub-millisecond, so three of them are negligible and the latency budget is roomy.",
+      "Commit latency is decided purely by network round trips, unrelated to how many writes a request makes.",
+      "The p99 under 50ms figure is derived from a formula, so it can be raised whenever measurements demand."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "单节点写提交延迟 5-15ms，三次串行就是 15-45ms；p99 < 50ms 是给定的产品 SLO 而非推导结果，它直接逼你把三次写合并成一次提交，代价是事务变大、锁持有时间变长。",
+    "why_en": "Single-node commit latency runs 5-15ms, so three sequential commits cost 15-45ms; the sub-50ms p99 is a given product target, not a derived number, and it forces you to merge the writes into one commit at the cost of a longer-held lock.",
+    "optionExplanations": [
+      "对，提交次数是这里唯一能压的变量，合并后只付一次 5-15ms。",
+      "错，把内存读的量级套到了持久化提交上，提交要等日志落盘。",
+      "错，同机房网络往返是亚毫秒，真正的开销是每次提交的日志刷盘。",
+      "错，SLO 是产品给的输入约束，不是可以随需求反推的输出。"
+    ],
+    "optionExplanations_en": [
+      "Right, the number of commits is the only variable you can compress here; merging pays 5-15ms once.",
+      "Wrong, this applies memory-read latency to a durable commit, which must wait for the log to hit disk.",
+      "Wrong, same-datacenter round trips are sub-millisecond; the real cost is flushing the log on each commit.",
+      "Wrong, an SLO is a given input constraint, not an output you can back-solve to fit the design."
+    ],
+    "termDefinitions": [
+      {
+        "term": "commit latency / 提交延迟",
+        "meaning": "一次写事务从提交到数据库确认持久化所花的时间，单节点高性能配置约 5-15ms。",
+        "meaningEn": "Commit latency is the time from issuing a write transaction to the database confirming durability, about 5-15ms on a tuned single node."
+      },
+      {
+        "term": "SLO",
+        "meaning": "Service Level Objective，服务等级目标，产品或业务给定的延迟/可用性指标，是设计的输入而非推导结果。",
+        "meaningEn": "An SLO, or service level objective, is a latency or availability target given by the product; it is an input to the design, not an output.",
+        "fullName": "Service Level Objective"
+      },
+      {
+        "term": "p99",
+        "meaning": "第 99 百分位延迟，即 99% 的请求都比这个值快，用来衡量尾部体验。",
+        "meaningEn": "p99 is the 99th percentile latency, the value 99 percent of requests come in under, used to judge tail experience."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "database",
+      "latency",
+      "write-path"
+    ]
+  },
+  {
+    "id": "sd-numbers-042",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "app-server",
+    "scenario": "一个无状态 API 服务每个请求都要查一份 2GB 的地理围栏参考表，目前每次都跑一趟远端缓存；实例是标准规格 128GB 内存，CPU 已到 65%，表一天只更新一次。",
+    "scenario_en": "A stateless API service consults a 2GB geofence reference table on every request via a remote cache, running on standard 128GB instances at 65% CPU, with the table refreshed once a day.",
+    "q": "这份参考表最该放在哪里？",
+    "q_en": "Where should this reference table live?",
+    "options": [
+      "放进进程内存做本地缓存，2GB 对这个规格微不足道",
+      "继续走远端缓存，无状态服务原则上不该在本地留任何数据",
+      "必须换成内存优化型的 2TB 高内存机型才装得下这份参考表",
+      "把参考表切片写到本地磁盘上，按请求去读对应的分片文件"
+    ],
+    "options_en": [
+      "Load it into process memory as a local cache; 2GB is trivial at this instance size.",
+      "Keep using the remote cache — a stateless service should never keep data locally on principle.",
+      "Move to a memory-optimized 2TB high-memory instance type, the only way to hold this table.",
+      "Slice the table onto local disk and read the relevant shard file on each request."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "标准应用服务器就有 64-512GB 内存（高内存机型到 2TB），2GB 放本地能省掉每请求一次网络往返；代价是每台实例各存一份副本，更新要靠 TTL 过期或主动推送失效。",
+    "why_en": "Standard app servers carry 64 to 512 gigabytes of memory, up to two terabytes on high-memory types, so keeping a 2GB table local removes a network hop per request at the cost of one copy per instance to invalidate.",
+    "optionExplanations": [
+      "对，无状态指的是不存会话状态，只读副本缓存不破坏这一点。",
+      "错，把「无状态」误读成「本地不能有任何内存」，白白多付一跳。",
+      "错，2TB 机型是为几百 GB 以上的数据集准备的，这里严重超配。",
+      "错，磁盘读比内存慢一到两个数量级，128GB 内存空着不用。"
+    ],
+    "optionExplanations_en": [
+      "Right, stateless means holding no session state; a read-only replica cache does not violate that.",
+      "Wrong, this misreads \"stateless\" as \"no local memory at all\" and pays an extra hop for nothing.",
+      "Wrong, 2TB instance types exist for hundreds of gigabytes of data; this is badly over-provisioned.",
+      "Wrong, disk reads are one to two orders of magnitude slower while 128GB of memory sits idle."
+    ],
+    "tradeoff": "本地内存缓存（省一次网络往返，但每台一份副本要失效） vs 远端共享缓存（一处更新全局生效，但每请求多一跳）",
+    "whenOtherWins": "当参考表频繁变更、且所有实例必须秒级看到同一版本时，远端共享缓存反超——一处写入立即全局生效，不用等每台实例的本地副本过期。",
+    "termDefinitions": [
+      {
+        "term": "无状态服务 / stateless service",
+        "meaning": "不在实例本地保存会话或用户状态的服务，任何实例都能处理任何请求，因此可随意扩缩容。",
+        "meaningEn": "A stateless service keeps no session or user state on the instance, so any instance can serve any request and the fleet scales freely."
+      },
+      {
+        "term": "TTL",
+        "meaning": "Time To Live，缓存条目的存活时间，到期自动失效以便重新加载新版本。",
+        "meaningEn": "TTL, or time to live, is how long a cache entry stays valid before it expires and gets reloaded.",
+        "fullName": "Time To Live"
+      },
+      {
+        "term": "内存优化型实例",
+        "meaning": "内存配比远高于通用型的机型，为数百 GB 到数 TB 的内存数据集准备。",
+        "meaningEn": "Memory-optimized instances carry a far higher memory-to-CPU ratio, built for in-memory datasets from hundreds of gigabytes to several terabytes."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "app-server",
+      "memory",
+      "local-cache"
+    ]
+  },
+  {
+    "id": "sd-numbers-043",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "estimation",
+    "scenario": "候选人引用「单机 Postgres 能扛 20k+ WPS」，断言自己 8k WPS 的系统绝对不需要队列；但这些写是跨 5 张表的事务，表上挂了 12 个索引，同时还有大量并发读。",
+    "scenario_en": "A candidate cites \"a single Postgres handles 20k+ writes per second\" to argue their 8k WPS system needs no queue, but each write is a transaction spanning five tables with twelve indexes, alongside heavy concurrent reads.",
+    "q": "直接套用 20k WPS 这个数字，问题出在哪？",
+    "q_en": "What is wrong with applying the 20k WPS figure directly here?",
+    "options": [
+      "20k 是简单写入的参考值，多表事务与写放大会拉低实际上限",
+      "没问题，20k 是经过验证的硬上限，8k 落在里面就一定安全，可以直接下结论",
+      "索引数量只影响读性能，对写吞吐没有影响，这里唯一该看的是并发读",
+      "任何引用的数字都不可信，安全做法是先无条件加一层消息队列"
+    ],
+    "options_en": [
+      "The 20k figure describes simple writes; multi-table transactions and write amplification lower the real ceiling.",
+      "Nothing is wrong — 20k is a verified hard limit, so 8k sits safely inside it and the conclusion holds.",
+      "Index count only affects read performance, not write throughput; concurrent reads are the only thing to check here.",
+      "No cited number can be trusted, so the safe move is to add a message queue unconditionally."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "这些数字是特定负载下调优良好的参考起点，不是硬上限：跨表事务、索引过多带来的写放大、级联更新、并发读争抢都会压低实际写容量；正确做法是按自己的写模式压测再下结论。",
+    "why_en": "These figures are starting points for well-tuned systems on specific workloads, not hard ceilings — multi-table transactions, write amplification from too many indexes, cascading updates and competing reads all lower real write capacity, so benchmark your own write pattern.",
+    "optionExplanations": [
+      "对，数字随负载、硬件、配置和云厂商更新而变，只能当估算起点。",
+      "错，把「典型值」当成保证值，跳过了对自身写模式的检验。",
+      "错，每多一个索引，一次行写入就要多维护一棵索引结构。",
+      "错，另一个极端：放弃估算直接加基础设施，正是本文批评的过度设计。"
+    ],
+    "optionExplanations_en": [
+      "Right, these numbers shift with workload, hardware, configuration and cloud updates, so they are only a starting point.",
+      "Wrong, this treats a typical value as a guarantee and skips checking the system’s actual write pattern.",
+      "Wrong, every additional index means one more structure to maintain on each row write.",
+      "Wrong, the opposite extreme: skipping estimation and adding infrastructure is exactly the over-engineering being criticised."
+    ],
+    "termDefinitions": [
+      {
+        "term": "WPS",
+        "meaning": "Writes Per Second，每秒写入次数，衡量数据库写吞吐的单位。",
+        "meaningEn": "WPS means writes per second, the unit for a database’s write throughput.",
+        "fullName": "Writes Per Second"
+      },
+      {
+        "term": "写放大 / write amplification",
+        "meaning": "一次逻辑写在底层引发多次物理写，索引越多、级联更新越多，放大越严重。",
+        "meaningEn": "Write amplification is when one logical write triggers several physical writes; more indexes and cascading updates make it worse."
+      },
+      {
+        "term": "级联更新 / cascading update",
+        "meaning": "一次写触发外键或触发器去改动其他表的行，把单次写的成本放大。",
+        "meaningEn": "A cascading update is when one write triggers foreign-key or trigger-driven changes to rows in other tables, multiplying its cost."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "estimation",
+      "write-throughput",
+      "interview-method"
+    ]
+  },
+  {
+    "id": "sd-numbers-044",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "database",
+    "scenario": "一个 12TiB 的单实例数据库，写只有 3k TPS、未命中读也在 4ms 以内，离常说的分片阈值还远；但全量备份已经要跑 9 小时，一次恢复演练要占掉一整天。",
+    "scenario_en": "A 12TiB single-instance database handles only 3k TPS with sub-4ms uncached reads, far from the usual sharding thresholds, yet a full backup now takes nine hours and a restore drill consumes an entire day.",
+    "q": "这算不算真正该拆库的信号？",
+    "q_en": "Is this a genuine signal to split the database?",
+    "options": [
+      "算，备份与恢复窗口已不可运维，这是运维驱动的拆分",
+      "不算，数据量和 TPS 都没到常说的阈值，这种情况下就不该动数据库结构",
+      "不算，备份慢换更快的磁盘就能解决，跟数据库怎么切分毫无关系",
+      "算，因为数据量只要超过 1TiB 就必须立刻分片，这是通用规则"
+    ],
+    "options_en": [
+      "Yes — the backup and restore window is no longer operable, a scaling driver on its own.",
+      "No — neither data volume nor TPS has hit the usual thresholds, so the schema should be left alone.",
+      "No — a slow backup is fixed by faster disks and has nothing to do with how the database is partitioned.",
+      "Yes — any dataset above one tebibyte must be sharded immediately; that is the universal rule."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "真正的极限不只有数据量和 TPS：备份窗口拉到小时级、恢复演练一天做不完，本身就是该拆的信号；代价是拆完要长期维护跨分片查询、再平衡和分布式事务。",
+    "why_en": "Real limits are not only data volume and throughput — a backup window stretching into hours and a restore drill you cannot finish in a day are themselves reasons to split, at the lasting cost of cross-shard queries and rebalancing.",
+    "optionExplanations": [
+      "对，恢复时间目标做不到，可用性风险已经压过结构简单的收益。",
+      "错，把「别过早分片」的正确直觉推到教条，忽略了运维类极限。",
+      "错，更快的盘只能线性改善，12TiB 的全量扫描量本身没有变小。",
+      "错，1TiB 是过时经验值，单实例常见可到 64TiB，Aurora 到 256TiB。"
+    ],
+    "optionExplanations_en": [
+      "Right, the recovery-time objective is unreachable, and that availability risk now outweighs structural simplicity.",
+      "Wrong, this pushes the sound \"do not shard early\" instinct into dogma and ignores operational limits.",
+      "Wrong, faster disks only help linearly; the sheer volume a 12TiB full scan must read does not shrink.",
+      "Wrong, one tebibyte is a stale rule of thumb — single instances commonly reach 64TiB, and Aurora 256TiB."
+    ],
+    "tradeoff": "运维可恢复性（备份/恢复窗口回到可接受范围） vs 单实例的结构简单（无跨分片查询与再平衡）",
+    "whenOtherWins": "若增量快照、在只读副本上跑备份、或按时间做分区表归档能把窗口压回可接受范围，单实例反超——不必背上跨分片查询的长期复杂度。",
+    "termDefinitions": [
+      {
+        "term": "TPS",
+        "meaning": "Transactions Per Second，每秒事务数，衡量数据库吞吐的单位。",
+        "meaningEn": "TPS means transactions per second, the unit for database throughput.",
+        "fullName": "Transactions Per Second"
+      },
+      {
+        "term": "TiB",
+        "meaning": "二进制计量的存储单位，1 TiB 约等于 1.1 TB。",
+        "meaningEn": "A TiB is a binary storage unit, about 1.1 times a decimal terabyte.",
+        "fullName": "Tebibyte"
+      },
+      {
+        "term": "备份窗口 / backup window",
+        "meaning": "跑完一次完整备份所需的时间；它拉长会同时推高恢复时间和数据丢失风险。",
+        "meaningEn": "The backup window is how long one full backup takes; as it stretches, both recovery time and data-loss risk grow."
+      },
+      {
+        "term": "再平衡 / rebalancing",
+        "meaning": "分片后为让各分片数据量与流量均衡而搬迁数据的持续运维工作。",
+        "meaningEn": "Rebalancing is the ongoing work of moving data between shards to keep their size and traffic even."
+      }
+    ],
+    "tags": [
+      "numbers",
+      "database",
+      "sharding",
+      "operations"
     ]
   }
 ]

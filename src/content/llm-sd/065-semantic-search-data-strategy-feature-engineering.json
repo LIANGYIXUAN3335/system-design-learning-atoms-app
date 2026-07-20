@@ -202,28 +202,28 @@
     "atomType": "number",
     "topic": "llm-sd",
     "sub": "dwell-threshold",
-    "scenario": "点击本身分不清用户是否满意:点开 2 秒就跳走 vs 点开读了 60 秒,是完全不同的信号。",
-    "scenario_en": "A click alone cannot tell satisfaction: a 2-second bounce versus a 60-second read are very different signals.",
-    "q": "停留时长常用多少秒做「满意 vs 不满意」的二值化阈值?",
-    "q_en": "What dwell-time threshold is commonly used to binarize satisfied vs unsatisfied clicks?",
-    "why": "约 30 秒是经验阈值(来自内容型场景的行业实践),不是公式推导;它把连续的 dwell time 二值化成满意/不满意标签,下游用来过滤短停留的误点、只留高质量正例。阈值随内容类型可调:新闻文章约 30 秒、商品列表约 10 秒。",
-    "why_en": "About 30 seconds is an empirical threshold, not a derived formula, that binarizes continuous dwell time into satisfied/unsatisfied labels to filter accidental clicks and keep high-quality positives.",
+    "scenario": "语义搜索用点击日志造训练对;内容型场景取经验阈值:dwell ≥30 秒才算满意点击。",
+    "scenario_en": "We build training pairs from search click logs, and for article-style content we take the empirical rule that a click counts as satisfied only if dwell time is at least 30 seconds.",
+    "q": "有了 30 秒阈值,短停留的点击在训练标签里该怎么处理?",
+    "q_en": "Given that 30-second threshold, how should short-dwell clicks be treated when we build training labels?",
+    "why": "30 秒是内容型场景的经验阈值,不是公式推导;短停留点击当负例过滤掉误点,只把长停留留成高质量正例。代价是会误伤本来就该快速读完的短内容。",
+    "why_en": "Thirty seconds is an empirical rule rather than a derived number: short-dwell clicks become negatives so accidental clicks are filtered out and only long dwells stay as high-quality positives, at the cost of penalizing content that is meant to be read quickly.",
     "tags": [
       "llm-sd",
       "semantic-search",
       "dwell-time"
     ],
     "options": [
-      "约 30 秒:超过算满意点击(相关),几秒就跳出算不满意,用来过滤误点",
-      "约 0.5 秒:只要页面加载完就算满意,不看用户是否真的读了内容",
-      "约 10 分钟:必须读满十分钟才算相关,否则一律判为负例样本",
-      "不设阈值:所有点击一律当满意正例,dwell time 完全不参与判定"
+      "低于 30 秒的点击降级为负例或直接丢弃,只留 ≥30 秒的点击当正例",
+      "所有点击照旧当正例,只把 dwell 秒数额外加进排序特征里",
+      "不做正负例划分,直接把 dwell 原始秒数当回归目标来训练",
+      "只丢 dwell 为 0 的点击,其余按点击次数加权算正例样本"
     ],
     "options_en": [
-      "About 30 seconds: above it is a satisfied (relevant) click, a few-second bounce is unsatisfied, filtering accidental clicks.",
-      "About 0.5 seconds: as soon as the page loads it counts as satisfied, regardless of actual reading.",
-      "About 10 minutes: only a full ten-minute read counts as relevant, else it is a negative.",
-      "No threshold: every click is a satisfied positive and dwell time plays no role."
+      "Treat clicks under 30 seconds as negatives or drop them, and keep only clicks at or above 30 seconds as positives.",
+      "Keep every click as a positive and just add dwell seconds as one more ranking feature.",
+      "Skip positive/negative labeling entirely and regress directly on the raw dwell seconds.",
+      "Drop only zero-dwell clicks and weight the rest as positives by click count."
     ],
     "answer": [
       0
@@ -231,14 +231,31 @@
     "termDefinitions": [
       {
         "term": "dwell time / 停留时长",
-        "meaning": "用户点开结果后停留的时长,约 30 秒常作满意/不满意的二值化阈值。",
-        "meaningEn": "Dwell time is time spent on a clicked result; ~30s is a common satisfied/unsatisfied binarization threshold."
+        "meaning": "用户点开结果后停留的时长,内容型场景常用约 30 秒做满意/不满意的二值化阈值。",
+        "meaningEn": "Dwell time is how long a user stays on a clicked result; around 30 seconds is a common satisfied-versus-unsatisfied cutoff."
       },
       {
         "term": "accidental click / 误点",
-        "meaning": "用户点开发现不对就立刻跳走的点击,dwell 过滤要剔除的噪声。",
-        "meaningEn": "An accidental click is one where the user immediately bounces, the noise dwell filtering removes."
+        "meaning": "点开发现不对就立刻跳走的点击,是 dwell 阈值要剔除的噪声。",
+        "meaningEn": "An accidental click is one where the user immediately bounces back, and it is the noise the dwell threshold removes."
+      },
+      {
+        "term": "regression target / 回归目标",
+        "meaning": "模型直接去拟合的连续数值标签,这里指不做二值化、直接预测 dwell 秒数。",
+        "meaningEn": "A regression target is a continuous numeric label the model fits directly, here predicting raw dwell seconds instead of a binary label."
       }
+    ],
+    "optionExplanations": [
+      "对;二值标签干净,短停留当负例后,模型学到的是「读得下去」而不是「点得进去」。",
+      "点击全当正例=把误点噪声原样喂进去,dwell 只做特征救不回错标签。",
+      "回归 dwell 秒数在有充足日志、想排序细粒度满意度时更好;这里目标是干净的相关性标签,秒数方差太大。",
+      "按点击次数加权只会放大高位曝光的热门项,和满意度无关。"
+    ],
+    "optionExplanations_en": [
+      "Correct — binary labels stay clean, and treating short dwells as negatives teaches the model what people actually read, not just what they click.",
+      "Counting every click as positive feeds accidental-click noise straight in; dwell as a feature cannot repair a wrong label.",
+      "Regressing on dwell seconds wins when you have plenty of logs and want fine-grained satisfaction ranking, but here we want clean relevance labels and raw seconds are too noisy.",
+      "Weighting by click count just amplifies popular, high-position results, which says nothing about satisfaction."
     ]
   },
   {

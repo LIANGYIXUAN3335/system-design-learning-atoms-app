@@ -178,7 +178,7 @@
     "atomType": "fact",
     "topic": "low-level-design",
     "sub": "entities",
-    "q": "最终设计中的主要类型有哪些？（多选）",
+    "q": "这个内存文件系统的类设计要落地哪些类型？（多选）",
     "options": [
       "FileSystem",
       "FileSystemEntry",
@@ -225,7 +225,7 @@
         "meaningEn": "A leaf is a tree node that cannot contain further children."
       }
     ],
-    "q_en": "Which are the main types in the final design? (multi-select)",
+    "q_en": "Which types does this in-memory file system actually implement? (multi-select)",
     "optionExplanations": [
       "FileSystem 是持有 root 并对外暴露公共 API 的入口类，属于最终类型清单。",
       "它把 File 和 Folder 共有的 name/parent 字段抽成一个共享基类。",
@@ -239,7 +239,9 @@
       "Folder is the composite container that can hold children — the only type in the tree with a children map.",
       "File is the leaf node, carrying just one extra string content field and no children.",
       "Path was never implemented as a class — it's just a string argument passed into FileSystem's methods."
-    ]
+    ],
+    "scenario": "设计内存文件系统：目录可任意深度嵌套，所有 API 只接收 \"/a/b/c\" 字符串来定位节点。",
+    "scenario_en": "We are designing an in-memory file system: folders nest to any depth, and every API call locates a node with a \"/a/b/c\" string."
   },
   {
     "id": "lld-problem-breakdowns-file-system-005",
@@ -2482,6 +2484,1038 @@
       "Folder.children could always hold any number of files — there was never a limit like that.",
       "This design chose the parent-pointer approach, which by design never stores a full path string.",
       "Uniqueness is only required within one folder — different folders can absolutely share the same file name."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-046",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "error-typing",
+    "scenario": "面试官要求：父目录不存在、目标名已被占用、路径非法这三种失败，调用方要能各自分别处理。",
+    "q": "FileSystem 的失败该怎么报给调用方？",
+    "options": [
+      "统一抛一个通用 Exception，由调用方解析 message 文本自行判断是哪一种失败",
+      "抛 InvalidPath / NotFound / AlreadyExists 三类异常",
+      "失败一律返回 null 或 false，由调用方自己推断原因并决定重试",
+      "内部记日志后静默跳过，保证任何调用都不会抛出异常"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "调用方对三种失败的动作不同：补建父目录、换个名字、还是直接报错；通用异常和 null 都把这个区分丢掉了。",
+    "why_en": "Callers react differently to each failure, so the API throws a distinct exception type per failure mode instead of one generic error.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "error-handling"
+    ],
+    "tradeoff": "具体异常类型让调用方精确分支 vs 类型变多、API 表面更大",
+    "whenOtherWins": "如果所有调用方对失败都只是打日志然后退出，一个通用异常就够，不必造一堆类型。",
+    "options_en": [
+      "Throw one generic Exception and make callers parse the message text to tell the three failures apart.",
+      "Throw three specific types: InvalidPath, NotFound, and AlreadyExists.",
+      "Always return null or false and let the caller guess the cause and decide whether to retry.",
+      "Log internally and silently skip, so no call ever throws."
+    ],
+    "termDefinitions": [
+      {
+        "term": "AlreadyExistsException",
+        "meaning": "目标名字在父目录里已被占用时抛出的异常类型。",
+        "meaningEn": "AlreadyExistsException is thrown when the target name is already taken inside the parent folder."
+      },
+      {
+        "term": "NotFoundException",
+        "meaning": "路径上某一段在树里找不到对应 entry 时抛出的异常类型。",
+        "meaningEn": "NotFoundException is thrown when some component of the path has no matching entry in the tree."
+      }
+    ],
+    "q_en": "How should FileSystem report failures to its callers?",
+    "scenario_en": "The interviewer asks that a missing parent, a taken name, and an invalid path each be handled separately by the caller.",
+    "optionExplanations": [
+      "把类型信息塞进字符串，调用方只能靠字符串匹配分支，改一句文案就断。",
+      "每种失败一个类型，调用方用 catch 分支就能对症处理。",
+      "返回值丢失了失败原因，调用方分不清是路径错还是重名。",
+      "吞掉失败会让调用方以为写成功了，错误延迟到很久之后才暴露。"
+    ],
+    "optionExplanations_en": [
+      "That buries the type in a string, so callers branch on text matching and one wording change breaks them.",
+      "One type per failure mode lets the caller branch on catch blocks and react correctly.",
+      "A bare return value drops the reason, so the caller cannot tell a bad path from a name collision.",
+      "Swallowing the failure makes the caller believe the write succeeded, surfacing the error much later."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-047",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "delete-root",
+    "scenario": "用户调用 delete('/')。root 由 FileSystem 构造时创建，没有 parent，且是所有路径解析的起点。",
+    "q": "delete 收到 '/' 时应该怎么做？",
+    "options": [
+      "照常 resolveParent('/') 拿父目录再 removeChild，root 的父目录当作它自己",
+      "在方法开头直接抛 InvalidPathException，拒绝删除 root",
+      "清空 root.children 但保留 root 对象，等价于把文件系统格式化",
+      "允许删除，下一次路径解析时再惰性重建一个空的 root"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "delete 的机制是'找到父目录再 removeChild'，而 root 根本没有 parent，这条路对它不成立，所以必须在解析前守卫。",
+    "why_en": "Delete works by removing an entry from its parent, and the root has no parent, so the method must reject the root path up front.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "edge-case"
+    ],
+    "tradeoff": "开头显式守卫 root vs 让 resolveParent 抛出更晚更难懂的错误",
+    "whenOtherWins": "如果产品确实需要'清空整个文件系统'，那应该是一个名字明确的独立方法，而不是 delete('/')。",
+    "options_en": [
+      "Just call resolveParent('/') and removeChild as usual, treating the root as its own parent.",
+      "Throw InvalidPathException at the top of the method and refuse to delete the root.",
+      "Clear root.children but keep the root object, effectively formatting the file system.",
+      "Allow it, and lazily rebuild an empty root on the next path resolution."
+    ],
+    "termDefinitions": [
+      {
+        "term": "resolveParent",
+        "meaning": "把路径切成父路径和末段名字、再解析出父 Folder 的私有辅助方法。",
+        "meaningEn": "resolveParent is the private helper that splits a path and resolves the parent folder of its last component."
+      },
+      {
+        "term": "InvalidPathException",
+        "meaning": "路径格式或语义本身不合法时抛出的异常类型。",
+        "meaningEn": "InvalidPathException is thrown when the path itself is malformed or semantically illegal."
+      }
+    ],
+    "q_en": "What should delete do when it receives '/'?",
+    "scenario_en": "A user calls delete('/'). The root is created in the FileSystem constructor, has no parent, and anchors every path resolution.",
+    "optionExplanations": [
+      "root 没有父目录，硬造一个自引用会让树出现环，遍历再也停不下来。",
+      "守卫写在最前面，错误信息直接说明原因，后面的代码可以假定 path 有父目录。",
+      "语义偷换：调用方要的是删除，得到的却是保留对象的清空。",
+      "重建出来的 root 是新对象，所有还持有旧引用的 entry 都指向一棵废弃的树。"
+    ],
+    "optionExplanations_en": [
+      "The root has no parent, and inventing a self-reference creates a cycle that traversal can never terminate on.",
+      "A guard at the top gives a clear message and lets the rest of the method assume the path has a parent.",
+      "That quietly swaps the semantics: the caller asked to delete and got a clear-in-place instead.",
+      "A rebuilt root is a new object, so every entry still holding the old reference points into an abandoned tree."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-048",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "delete-detection",
+    "scenario": "delete('/nonexistent')：resolveParent 顺利返回 root，但 root 的 children 里没有这个名字。",
+    "q": "delete 靠什么发现 entry 根本不存在？",
+    "options": [
+      "先调用 hasChild 检查一次，为 false 就抛 NotFoundException，然后再 removeChild",
+      "看 removeChild 的返回值是不是 null，是就抛 NotFoundException",
+      "由 resolvePath 在遍历完整条路径时先一步抛出 NotFoundException",
+      "让 removeChild 自己抛异常，FileSystem 只负责把它原样透传给调用方"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "removeChild 删成功时返回被删 entry、没找到时返回 null，一次 map 操作同时完成删除和存在性判断。",
+    "why_en": "removeChild returns the removed entry or null, so one map operation does both the delete and the existence check.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "delete"
+    ],
+    "tradeoff": "复用返回值一次哈希操作 vs 先查再删的两次查找、中间还留一个竞态窗口",
+    "whenOtherWins": "如果 removeChild 的契约改成只返回 void，就只能退回先 hasChild 再删的两步写法。",
+    "options_en": [
+      "Call hasChild first, throw NotFoundException when it is false, and only then call removeChild.",
+      "Check whether removeChild returned null, and throw NotFoundException if it did.",
+      "Let resolvePath throw NotFoundException while walking the full path first.",
+      "Let removeChild throw on its own and have FileSystem pass that exception straight through."
+    ],
+    "termDefinitions": [
+      {
+        "term": "removeChild",
+        "meaning": "Folder 上按名字移除子节点的方法，返回被移除的 entry，找不到则返回 null。",
+        "meaningEn": "removeChild removes a child by name from a folder and returns the removed entry, or null if there was none."
+      },
+      {
+        "term": "resolvePath",
+        "meaning": "从 root 逐段下降、把绝对路径转成树节点的核心辅助方法。",
+        "meaningEn": "resolvePath descends from the root component by component to turn an absolute path into a tree node."
+      }
+    ],
+    "q_en": "How does delete detect that the entry does not exist at all?",
+    "scenario_en": "delete('/nonexistent'): resolveParent returns the root fine, but the root's children hold no such name.",
+    "optionExplanations": [
+      "多做一次哈希查找，而且检查与删除之间给并发留了空隙。",
+      "返回值本身就是存在性证据，删除和判断合成一步。",
+      "resolvePath 只走到父目录为止，末段名字压根不在它的遍历范围内。",
+      "让容器类去编造带路径的错误信息，它并不知道调用方传的原始路径。"
+    ],
+    "optionExplanations_en": [
+      "That costs an extra hash lookup and leaves a gap between the check and the removal for concurrency to slip into.",
+      "The return value is itself the proof of existence, folding the check into the removal.",
+      "resolvePath only walks as far as the parent — the last component is never part of its traversal.",
+      "That asks the container class to invent a path-aware message when it never saw the caller's original path."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-049",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "rename-name-validation",
+    "scenario": "调用 rename('/home/user/notes.txt', 'a/b.txt')。Folder.children 以名字为 key，key 里的 '/' 不会被当成层级。",
+    "q": "rename 拿到含 '/' 的新名字该怎么办？",
+    "options": [
+      "把它当相对路径解析，顺手把这个 entry 移动到 a 目录下面去",
+      "抛 InvalidPathException：空名或含 \"/\" 都非法",
+      "先把 '/' 替换成下划线再照常改名，保证这次操作不会失败",
+      "照常写进 map，等以后路径解析时再按 '/' 拆开来处理"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "名字里带 '/' 会让 getPath 拼出的字符串无法再被 resolvePath 正确切分，这个 entry 从此按路径找不回来。",
+    "why_en": "A slash inside a name makes the string built by getPath impossible to split back correctly, so the entry becomes unreachable by path.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "rename",
+      "validation"
+    ],
+    "tradeoff": "rename 只负责改名、移动交给 move vs 让 rename 兼做路径解析、语义变模糊",
+    "whenOtherWins": "如果要像 mv 那样一条命令同时改名和移动，也该由 move 承担——只有它做了环检测。",
+    "options_en": [
+      "Parse it as a relative path and move the entry into the folder 'a' along the way.",
+      "Throw InvalidPathException: an empty name or one with a slash is illegal.",
+      "Replace the slash with an underscore and rename anyway so the call never fails.",
+      "Write it into the map as-is and split it on '/' later during path resolution."
+    ],
+    "termDefinitions": [
+      {
+        "term": "getPath",
+        "meaning": "沿 parent 指针一路走到 root、把沿途名字拼成完整路径的方法。",
+        "meaningEn": "getPath walks up the parent pointers to the root and joins the names along the way into a full path."
+      },
+      {
+        "term": "map key",
+        "meaning": "Folder 用来索引子节点的字符串键，这里就是子节点的名字。",
+        "meaningEn": "The map key is the string a folder indexes its children by — here, the child's own name."
+      }
+    ],
+    "q_en": "What should rename do when the new name contains a slash?",
+    "scenario_en": "rename('/home/user/notes.txt', 'a/b.txt') is called. Folder.children is keyed by name, and a slash in the key is not treated as a level.",
+    "optionExplanations": [
+      "改名和移动是两个操作，混在一起后 rename 也得做环检测，职责就糊了。",
+      "在改动 map 之前先挡住非法名字，树的 key 空间始终保持可解析。",
+      "悄悄改掉用户给的名字，调用方之后按原名字去找会扑空。",
+      "延后处理等于把坏数据写进 map，之后每次解析都要为它打补丁。"
+    ],
+    "optionExplanations_en": [
+      "Renaming and moving are two operations; merging them would force rename to do cycle detection too.",
+      "Blocking the illegal name before touching the map keeps the key space parseable at all times.",
+      "That silently rewrites the user's name, so a later lookup by the original name finds nothing.",
+      "Deferring it writes bad data into the map, and every later parse has to patch around it."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-050",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "move-renames",
+    "scenario": "调用 move('/home/user/notes.txt', '/home/todo.txt')。move 内部先 srcParent.removeChild，再 entry.setName(destName)，最后 destParent.addChild。",
+    "q": "这次 move 对 entry 的名字做了什么？",
+    "options": [
+      "名字保持 notes.txt 不变，只有 parent 指针指向了新的目录",
+      "名字被改成 todo.txt——move 天然同时完成了改名",
+      "名字先被置空，直到调用方再显式调用 rename 才恢复",
+      "抛出异常：move 要求目标路径的末段名字必须和源名字一致"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "move 用 destPath 的末段作为新名字并 setName，所以换目录和换名字走的是同一条代码路径。",
+    "why_en": "Move takes the last component of the destination path as the new name, so relocating and renaming happen on the same code path.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "move",
+      "rename"
+    ],
+    "tradeoff": "move 顺带改名少一次调用 vs rename 仍单独存在、两者职责边界要讲清楚",
+    "whenOtherWins": "同目录内只改名时用 rename 更直白：它不解析第二条路径，也不用做环检测。",
+    "options_en": [
+      "The name stays notes.txt and only the parent pointer now points at the new folder.",
+      "The name becomes todo.txt — move renames as a side effect.",
+      "The name is blanked until the caller explicitly calls rename to restore it.",
+      "It throws: move requires the destination's last component to match the source name."
+    ],
+    "termDefinitions": [
+      {
+        "term": "setName",
+        "meaning": "改写 entry 自身名字字段的方法，不会自动更新父目录里的 map key。",
+        "meaningEn": "setName rewrites the entry's own name field and does not update the key it sits under in its parent's map."
+      },
+      {
+        "term": "destPath / 目标路径",
+        "meaning": "move 的第二个参数，它的末段既指定目标名字、其前缀又指定目标父目录。",
+        "meaningEn": "The destination path is move's second argument: its last component names the entry and its prefix names the target folder."
+      }
+    ],
+    "q_en": "What does this move do to the entry's name?",
+    "scenario_en": "move('/home/user/notes.txt', '/home/todo.txt') runs removeChild on the source parent, then setName, then addChild on the destination parent.",
+    "optionExplanations": [
+      "目标路径末段是 todo.txt，如果不 setName，它会以旧 key 落进新目录。",
+      "setName 在两次容器操作之间执行，新 key 与目标路径完全对齐。",
+      "中途从来没有空名字状态，置空反而会让 addChild 拿不到可用的 key。",
+      "接口没有这条限制，硬加会让'跨目录改名'必须拆成两次调用。"
+    ],
+    "optionExplanations_en": [
+      "The destination's last component is todo.txt; skipping setName would file it under the old key.",
+      "setName runs between the two container operations, so the new key lines up with the destination path.",
+      "There is never a blank-name state; blanking it would leave addChild without a usable key.",
+      "No such restriction exists, and adding it would force a cross-folder rename into two separate calls."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-051",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "resolve-parent",
+    "scenario": "resolveParent('/readme.txt') 用 lastIndexOf('/') 找最后一个斜杠，得到 lastSlash == 0。",
+    "q": "lastSlash 为 0 时 parentPath 应该取什么？",
+    "options": [
+      "取 path.substring(0, 0)，也就是一个空字符串，再交给 resolvePath",
+      "取 '/'，父目录就是 root",
+      "抛 InvalidPathException，因为顶层文件被视为没有父目录",
+      "取整条 path 本身，让 resolvePath 在遍历过程中自己收敛到 root"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "substring(0,0) 得到空串，resolvePath 会把它判成非法路径；lastSlash 为 0 恰恰说明父目录就是 root，必须特判成 '/'。",
+    "why_en": "Slicing to index zero yields an empty string that resolvePath rejects, so a lastSlash of zero must be special-cased to the root path.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "path-helpers"
+    ],
+    "tradeoff": "对 lastSlash==0 做一次特判 vs 直接 substring 导致顶层文件全部创建失败",
+    "whenOtherWins": "如果改成 Windows 那样的多根盘符，这个特判要换成按盘符前缀切分，而不是固定成 '/'。",
+    "options_en": [
+      "Take path.substring(0, 0) — an empty string — and hand that to resolvePath.",
+      "Take '/', so the parent is the root.",
+      "Throw InvalidPathException, treating a top-level file as having no parent.",
+      "Take the whole path and let resolvePath converge on the root while traversing."
+    ],
+    "termDefinitions": [
+      {
+        "term": "lastIndexOf",
+        "meaning": "返回某个字符在字符串中最后一次出现的下标，找不到时返回 -1。",
+        "meaningEn": "lastIndexOf returns the index of the final occurrence of a character in a string, or minus one if absent."
+      },
+      {
+        "term": "extractName",
+        "meaning": "取路径最后一个斜杠之后的部分，也就是末段名字的辅助方法。",
+        "meaningEn": "extractName is the helper that returns everything after the last slash, that is, the final component's name."
+      }
+    ],
+    "q_en": "When lastSlash is zero, what should parentPath be?",
+    "scenario_en": "resolveParent('/readme.txt') uses lastIndexOf('/') to find the final slash and gets lastSlash == 0.",
+    "optionExplanations": [
+      "空串既不以 '/' 开头也不是 '/'，第一道校验就把合法调用打回。",
+      "根下的直接子节点就是这一支，特判让它命中 resolvePath 的 root 分支。",
+      "/readme.txt 是完全合法的顶层文件，拒绝它等于禁止在根下建东西。",
+      "resolvePath 会一路走到 readme.txt 本身，返回的是自己而不是父目录。"
+    ],
+    "optionExplanations_en": [
+      "An empty string neither starts with a slash nor equals one, so the first validation rejects a perfectly legal call.",
+      "This is exactly the direct-child-of-root case, and the special case routes it to resolvePath's root branch.",
+      "/readme.txt is a completely legal top-level file; rejecting it bans creating anything at the root.",
+      "resolvePath would walk all the way to readme.txt itself and return the entry instead of its parent."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-052",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "root-init",
+    "scenario": "有人把 FileSystem 的 root 初始化成 Folder('root')。getPath 的终止条件是 parent 为 null 时直接返回自身的 name。",
+    "q": "root 名字不是 '/' 会让 getPath 输出什么？",
+    "options": [
+      "只有 root 自己的 getPath 返回 'root'，它的子孙节点路径不受任何影响",
+      "整棵树的路径都带上 root 前缀，跟传入的绝对路径对不上",
+      "getPath 找不到递归终止条件，会一直往上走直到栈溢出",
+      "路径本身正常，但 list('/') 会漏掉 root 下的直接子节点"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "getPath 的递归终止值就是 root 的 name，而 parentPath == '/' 那条特判也不再命中，于是每一层拼接都建在错误的地基上。",
+    "why_en": "The recursion bottoms out at the root's own name, so a wrong root name poisons every path the tree builds above it.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "getpath"
+    ],
+    "tradeoff": "构造函数里把 root 定成 Folder('/') vs 把前导斜杠逻辑散落到每个拼接点",
+    "whenOtherWins": "如果 getPath 改成自底向上收集名字、最后统一用 '/' join，根的名字就不再参与拼接。",
+    "options_en": [
+      "Only the root's own getPath returns 'root'; the paths of its descendants are unaffected.",
+      "Every path in the tree carries a 'root' prefix and no longer matches the absolute paths callers pass in.",
+      "getPath never finds its base case and keeps walking upward until the stack overflows.",
+      "Paths come out fine, but list('/') silently misses the root's direct children."
+    ],
+    "termDefinitions": [
+      {
+        "term": "base case / 递归终止条件",
+        "meaning": "递归不再往下调用、直接返回结果的那一层，这里是 parent 为 null 的 root。",
+        "meaningEn": "The base case is the level where recursion stops calling itself and returns directly — here, the root whose parent is null."
+      },
+      {
+        "term": "Folder('/')",
+        "meaning": "把根目录的名字本身设为斜杠的构造写法，getPath 靠它产生正确的前导斜杠。",
+        "meaningEn": "Constructing the root as Folder with the name slash is what lets getPath produce a correct leading slash."
+      }
+    ],
+    "q_en": "If the root is not named '/', what does getPath produce?",
+    "scenario_en": "Someone initializes FileSystem's root as Folder('root'). getPath's base case returns the entry's own name when parent is null.",
+    "optionExplanations": [
+      "每个子孙都要先向上索取父路径，根返回什么，前缀就是什么。",
+      "notes.txt 的路径变成 root/home/user/notes.txt，resolvePath 再也匹配不上。",
+      "parent 为 null 依然会终止递归，深度没变，栈也不会爆。",
+      "list 走的是 children 这张 map，跟名字怎么拼路径没有关系。"
+    ],
+    "optionExplanations_en": [
+      "Every descendant first asks its parent for a path, so whatever the root returns becomes the prefix.",
+      "notes.txt now resolves to root/home/user/notes.txt, which resolvePath can never match.",
+      "A null parent still ends the recursion — the depth is unchanged and the stack is fine.",
+      "list reads the children map directly and has nothing to do with how names are joined into paths."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "getpath-memo",
+    "scenario": "目录树深约 20 层，界面每次刷新都要为上千个 entry 调 getPath()，每次都从叶子沿 parent 指针递归到 root。",
+    "q": "怎么把 getPath 的 O(depth) 重复开销降下来？",
+    "options": [
+      "改回每个 entry 都存一份 full path 字符串，读取变成 O(1)",
+      "缓存 getPath 的结果，move/rename 时让子树的缓存失效",
+      "把目录树压平成两层结构，让 depth 恒定为 1",
+      "让 getPath 只返回自己的 name，路径由调用方自己去拼"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "memoize 把重复递归换成一次哈希读；但 move/rename 后祖先变了，必须清掉整棵子树的缓存——代价从读路径挪到了写路径。",
+    "why_en": "Memoizing turns the repeated walk into one cached read, but move and rename must then invalidate the whole subtree's cached paths.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "optimization",
+      "cache"
+    ],
+    "tradeoff": "缓存路径串降低读放大 vs move/rename 时要做子树缓存失效",
+    "whenOtherWins": "如果写远多于读（大量 move），失效开销会盖过收益，每次老实递归反而更省。",
+    "options_en": [
+      "Go back to storing a full path string on every entry so reads become constant time.",
+      "Cache the getPath result and invalidate the subtree's cache on move or rename.",
+      "Flatten the directory tree to two levels so the depth is always one.",
+      "Have getPath return only the entry's own name and let callers assemble the path."
+    ],
+    "termDefinitions": [
+      {
+        "term": "memoize / 记忆化",
+        "meaning": "把纯计算的结果存下来，下次同样输入直接返回缓存值。",
+        "meaningEn": "Memoizing means storing the result of a pure computation so the same input returns the cached value next time."
+      },
+      {
+        "term": "invalidation / 缓存失效",
+        "meaning": "底层状态变化后主动作废已缓存结果，避免读到过期数据。",
+        "meaningEn": "Invalidation is actively discarding cached results after the underlying state changes so stale data is never read."
+      }
+    ],
+    "q_en": "How do you cut getPath's repeated O(depth) cost?",
+    "scenario_en": "The tree is about 20 levels deep and each UI refresh calls getPath() on a thousand entries, each walking parent pointers up to the root.",
+    "optionExplanations": [
+      "这正是被否决的方案：rename 一个目录要改写全部后代的字符串。",
+      "缓存是派生数据，随时可以丢掉重算，正确性只依赖失效做对。",
+      "为了省一次遍历去改变数据模型，目录层级本身是需求给的。",
+      "拼接逻辑被复制到每个调用方，正是引入 FileSystem 门面要消除的重复。"
+    ],
+    "optionExplanations_en": [
+      "That is the rejected design: renaming one folder forces rewriting the string on every descendant.",
+      "The cache is derived data that can be dropped and recomputed, so correctness rides only on invalidating it.",
+      "That reshapes the data model to save one walk, but the nesting depth is what the requirements asked for.",
+      "The joining logic gets copied into every caller — exactly the duplication the facade was introduced to remove."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-054",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "layered-errors",
+    "scenario": "Folder.addChild 撞上重名时返回 false；而 FileSystem.createFile 撞上重名时抛 AlreadyExistsException。",
+    "q": "为什么同一件事在两层用了不同的失败表达？",
+    "options": [
+      "内层用返回值表达'没加成'，外层 API 才把它翻译成异常",
+      "抛异常在热路径上开销大，所以内层一律用返回码来规避",
+      "两层其实完全等价，只是写代码时风格没统一，应该改成一致",
+      "Folder 不知道完整路径，没法生成异常消息，所以只能返回 false"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "Folder 只负责容器自身的不变量、不知道调用上下文；把'重名'升级成异常是编排层的职责，只有那里握着路径和用户意图。",
+    "why_en": "The folder only guards its own container invariant, while the orchestration layer owns the path and the user intent, so it is the one that raises the exception.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "error-handling",
+      "layering"
+    ],
+    "tradeoff": "内层返回值 + 外层异常的分层错误处理 vs 两层都抛异常、内层被迫编造上下文",
+    "whenOtherWins": "如果 Folder 本身就是对外暴露的公共 API，它就该自己抛出带上下文的异常。",
+    "options_en": [
+      "The inner layer signals 'not added' with a return value, and only the outer API turns that into an exception.",
+      "Throwing is expensive on hot paths, so the inner layer uses return codes to avoid it entirely.",
+      "The two layers are genuinely equivalent — it is just inconsistent style that should be unified.",
+      "Folder does not know the full path, so it cannot build a message and has no choice but to return false."
+    ],
+    "termDefinitions": [
+      {
+        "term": "addChild",
+        "meaning": "Folder 上加入子节点的方法，重名时返回 false，成功时顺带设置 parent 指针。",
+        "meaningEn": "addChild inserts a child into a folder, returning false on a name clash and setting the parent pointer on success."
+      },
+      {
+        "term": "orchestration layer / 编排层",
+        "meaning": "这里指 FileSystem，负责解析路径、校验并调度下层对象完成操作。",
+        "meaningEn": "The orchestration layer is FileSystem, which parses paths, validates, and drives the lower-level objects."
+      }
+    ],
+    "q_en": "Why do the two layers express the same failure differently?",
+    "scenario_en": "Folder.addChild returns false on a name clash, while FileSystem.createFile throws AlreadyExistsException for the same clash.",
+    "optionExplanations": [
+      "每层只表达它知道的东西，翻译发生在掌握上下文的那一层。",
+      "性能不是分界线；真正的分界是谁掌握调用意图和路径。",
+      "把它们拉平会丢掉分层：要么外层无法阻断，要么内层被迫伪造上下文。",
+      "反过来了——正因为不掌握上下文，它才只报事实、不定性为错误。"
+    ],
+    "optionExplanations_en": [
+      "Each layer reports only what it knows, and the translation happens where the context lives.",
+      "Performance is not the dividing line; the real line is which layer knows the caller's intent and path.",
+      "Flattening them loses the layering: either the outer layer cannot halt, or the inner one fakes context.",
+      "It is the reverse — precisely because it lacks context, it reports a fact instead of declaring an error."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-055",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "api-clarity",
+    "scenario": "有人提议把 createFile(path, content) 和 createFolder(path) 合并成 create(path, isDirectory, content) 一个方法。",
+    "q": "该不该合并成一个带布尔 flag 的方法？",
+    "options": [
+      "该合并：方法数变少，重复的路径解析逻辑也只用写一遍",
+      "不合并：两个具名方法读起来更清楚，重复逻辑抽 helper 就行",
+      "该合并，并把 content 设成可空参数，创建文件夹时传 null 进去",
+      "该合并，并让 File 和 Folder 各自覆写 create 来区分具体行为"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "重复的路径解析交给 resolveParent、extractName 这类私有 helper 消除即可；用布尔 flag 换掉方法名后，调用点 create(p, true, null) 读不出意图。",
+    "why_en": "Shared path parsing belongs in private helpers, and a boolean flag buys a smaller surface at the cost of a call site nobody can read.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "api-design"
+    ],
+    "tradeoff": "两个具名方法可读性高 vs 一个 flag 方法接口更小但调用点含义模糊",
+    "whenOtherWins": "如果调用方常常运行时才知道要建文件还是目录，一个带类型枚举的方法能省掉外部分支。",
+    "options_en": [
+      "Merge them: fewer methods, and the duplicated path-parsing logic gets written only once.",
+      "Keep them apart: two named methods read far better, and helpers remove the duplication.",
+      "Merge them and make content nullable, passing null when creating a folder.",
+      "Merge them and let File and Folder each override create to supply the differing behavior."
+    ],
+    "termDefinitions": [
+      {
+        "term": "boolean flag parameter / 布尔标志参数",
+        "meaning": "用 true/false 切换方法行为的参数，会让调用点看不出实际做了什么。",
+        "meaningEn": "A boolean flag parameter switches a method's behavior with true or false, hiding what the call site actually does."
+      },
+      {
+        "term": "helper method / 辅助方法",
+        "meaning": "抽出公共步骤的私有方法，用来消除重复而不改变对外接口形状。",
+        "meaningEn": "A helper method is a private routine that factors out shared steps without changing the public interface's shape."
+      }
+    ],
+    "q_en": "Should the two create methods be merged behind a boolean flag?",
+    "scenario_en": "Someone proposes replacing createFile(path, content) and createFolder(path) with a single create(path, isDirectory, content).",
+    "optionExplanations": [
+      "消除重复不需要牺牲方法名，抽私有 helper 就同时拿到两者。",
+      "接口小一点换来的是每个调用点都要回头查参数含义，不划算。",
+      "可空参数把'这个参数何时有意义'的规则挪到了文档里，编译器管不住。",
+      "创建时对象还不存在，没有实例可以分派，这个多态点根本不成立。"
+    ],
+    "optionExplanations_en": [
+      "Removing duplication does not require giving up the method names — a private helper buys both.",
+      "The smaller surface costs every call site a trip back to the signature to decode the arguments.",
+      "A nullable parameter pushes 'when does this argument matter' into prose the compiler cannot enforce.",
+      "At creation time the object does not exist yet, so there is no instance to dispatch on."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-056",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "race-outcome",
+    "scenario": "两个线程都通过了 hasChild('notes.txt') 检查，随后各自对同一个 Folder 调 addChild，children 是普通的非线程安全 map。",
+    "q": "这一步之后 children 会落到什么状态？",
+    "options": [
+      "两个 File 都进了 map，同一个 key 在里面出现了两次",
+      "要么一个写静默覆盖另一个，要么 map 内部结构被破坏",
+      "第二次 addChild 会看到重名并返回 false，数据不会丢",
+      "map 会自动串行化两次写入，两个文件都能安全落地"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "map 的 key 唯一，覆盖会让先写的那个文件无声消失；非线程安全实现下并发写还可能破坏内部桶结构，具体后果取决于 map 实现。",
+    "why_en": "Because keys are unique, one write silently overwrites the other, and on a non-thread-safe map the concurrent writes can corrupt the internal structure outright.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "concurrency",
+      "race-condition"
+    ],
+    "tradeoff": "把 hasChild 和 addChild 一起锁住保证原子 vs 依赖 map 自身、后果不确定",
+    "whenOtherWins": "如果 children 换成并发 map 并改用 putIfAbsent，这一步就能靠单条原子操作自己挡住重名。",
+    "options_en": [
+      "Both File objects land in the map and the same key appears in it twice.",
+      "Either one write silently overwrites the other, or the map's internals get corrupted.",
+      "The second addChild sees the clash, returns false, and no data is lost.",
+      "The map serializes the two writes automatically and both files land safely."
+    ],
+    "termDefinitions": [
+      {
+        "term": "putIfAbsent",
+        "meaning": "并发 map 上的原子写入：键不存在时才写入并返回结果，天然把检查和写合成一步。",
+        "meaningEn": "putIfAbsent is an atomic map write that inserts only when the key is absent, fusing the check and the write into one step."
+      },
+      {
+        "term": "silent data loss / 静默数据丢失",
+        "meaning": "写入被覆盖但没有任何错误上报，调用方以为自己成功了。",
+        "meaningEn": "Silent data loss means a write is overwritten with no error reported, so the caller still believes it succeeded."
+      }
+    ],
+    "q_en": "What state do the children end up in after this step?",
+    "scenario_en": "Two threads both pass the hasChild('notes.txt') check, then each call addChild on the same folder whose children map is not thread-safe.",
+    "optionExplanations": [
+      "map 的键本来就唯一，重复 key 这种状态存不出来。",
+      "两个线程都以为自己创建成功，其中一个的内容却已经不在树上了。",
+      "两次 addChild 的检查发生在各自线程里，谁也没看见对方的写入。",
+      "普通 map 不提供任何同步保证，串行化只有加锁或并发容器才能带来。"
+    ],
+    "optionExplanations_en": [
+      "Map keys are unique by construction, so a duplicated key is not a state the structure can even hold.",
+      "Both threads believe they created the file, yet one of the two contents is already gone from the tree.",
+      "Each addChild's own check runs in its own thread and neither one ever observes the other's write.",
+      "A plain map offers no synchronization at all; serialization only comes from explicit mutual exclusion or a concurrent container."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-057",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "fine-lock-limits",
+    "scenario": "改成一个 Folder 一把锁的细粒度锁：createFile 先不加锁地 resolveParent 走完整条路径，再只锁住最后拿到的 parent。",
+    "q": "这个细粒度方案还漏掉了什么？",
+    "options": [
+      "什么都没漏，只锁住最后拿到的 parent 已经足够保证正确性",
+      "路径遍历本身没被保护，中途某层可能已被别的线程删掉或移走",
+      "细粒度锁一定比粗粒度慢，因为要多次获取和释放锁",
+      "细粒度锁挡不住同一目录内的重名，仍然必须回到全局锁"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "锁只覆盖最后一步的父目录，resolveParent 走过的中间节点在拿到锁之前无人保护——拿到锁时它可能已经不在树上了。",
+    "why_en": "The lock only covers the final parent folder, so every intermediate node resolveParent walked can be deleted or moved before the lock is taken.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "concurrency",
+      "locking"
+    ],
+    "tradeoff": "细粒度锁提高并行度 vs 引入路径遍历竞态和 move 的死锁风险",
+    "whenOtherWins": "面试范围里粗粒度锁（整个 FileSystem 一把锁）通常够用，简单、正确，也没有这些边界。",
+    "options_en": [
+      "Nothing is missing at all — locking just the final parent folder already guarantees correctness.",
+      "The path traversal itself is unprotected, so a level along the way may already be deleted or moved.",
+      "Fine-grained locking is always slower because it acquires and releases more locks.",
+      "Fine-grained locks cannot stop name clashes inside one folder, so a global lock is still required."
+    ],
+    "termDefinitions": [
+      {
+        "term": "fine-grained locking / 细粒度锁",
+        "meaning": "每个数据单元（这里是每个 Folder）各持一把锁，只锁住真正要改的那部分。",
+        "meaningEn": "Fine-grained locking gives each unit of data, here each folder, its own lock so only the part being modified is held."
+      },
+      {
+        "term": "coarse-grained locking / 粗粒度锁",
+        "meaning": "整个 FileSystem 共用一把锁，任意时刻只有一个线程能执行公共方法。",
+        "meaningEn": "Coarse-grained locking puts one lock on the whole file system so only one thread runs any public method at a time."
+      }
+    ],
+    "q_en": "What does this fine-grained locking scheme still miss?",
+    "scenario_en": "With one lock per folder, createFile resolves the whole path without holding any lock, then locks only the parent it ended up with.",
+    "optionExplanations": [
+      "正确性缺口出现在拿锁之前的那段遍历，而不是拿锁之后。",
+      "线程可能往一个已经被移出树的目录里成功写入，写完就无人可见。",
+      "在不同目录并行的场景下它更快；变慢只是竞争集中时的一种可能。",
+      "锁住同一个 parent 恰好能把同目录重名串行化，这一点它做得到。"
+    ],
+    "optionExplanations_en": [
+      "The correctness hole sits in the traversal before the lock is taken, not in what happens after.",
+      "A thread can successfully write into a folder already detached from the tree, and nobody will ever see it.",
+      "It is faster when threads touch different folders; slowdown only appears under concentrated contention.",
+      "Holding the same parent lock is exactly what serializes same-folder clashes, so that part does work."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-058",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "wildcard-search",
+    "scenario": "已经有一个按名字精确匹配的 nameIndex；现在要支持 '*.txt' 这类通配搜索，树里有数万 entry。",
+    "q": "'*.txt' 这种模式该怎么支持？",
+    "options": [
+      "把 nameIndex 换成 trie，前缀树本身就能处理后缀匹配",
+      "按扩展名再建一个二级索引，复杂 glob 才回退到遍历匹配",
+      "对每个 entry 预先生成它能匹配的所有通配模式并写进索引",
+      "把全部名字拼成一个大字符串，每次查询用正则整串扫描一次"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "'*.txt' 只在扩展名这一维上变化，用扩展名做 key 就能 O(1) 命中；任意 glob 建不出 key，只能遍历树逐节点匹配。",
+    "why_en": "A star-dot-txt pattern varies only by extension, so an extension index answers it in constant time while arbitrary globs fall back to a full walk.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "search",
+      "index"
+    ],
+    "tradeoff": "为高频模式建专用二级索引 vs 通用 glob 回退遍历、查得慢但不用维护索引",
+    "whenOtherWins": "如果通配搜索很少发生，直接遍历就够，省掉每次写操作都要维护第二个索引的成本。",
+    "options_en": [
+      "Swap nameIndex for a trie — a prefix tree handles suffix matching on its own.",
+      "Add a secondary index keyed by extension, and fall back to traversal for complex globs.",
+      "Precompute every wildcard pattern each entry could match and store them all in the index.",
+      "Concatenate all names into one big string and scan it with a regular expression per query."
+    ],
+    "termDefinitions": [
+      {
+        "term": "glob",
+        "meaning": "用 * 和 ? 等通配符表达文件名模式的匹配语法，如 *.txt。",
+        "meaningEn": "A glob is a filename pattern syntax using wildcards like star and question mark, for example star-dot-txt."
+      },
+      {
+        "term": "trie / 前缀树",
+        "meaning": "按字符逐层展开的树，擅长前缀查询，但对后缀模式没有天然优势。",
+        "meaningEn": "A trie is a tree expanded character by character; it excels at prefix queries but has no natural edge on suffixes."
+      },
+      {
+        "term": "secondary index / 二级索引",
+        "meaning": "在主索引之外，按另一个字段（这里是扩展名）再建一份查找结构。",
+        "meaningEn": "A secondary index is an extra lookup structure built on another field, here the file extension."
+      }
+    ],
+    "q_en": "How should a '*.txt' style pattern be supported?",
+    "scenario_en": "An exact-match nameIndex already exists; now wildcard search like '*.txt' is needed across tens of thousands of entries.",
+    "optionExplanations": [
+      "trie 从名字开头往下分叉，*.txt 的通配部分正好在开头，帮不上忙。",
+      "扩展名是有限且稳定的，做 key 既便宜又能覆盖最常见的一类模式。",
+      "模式空间是无限的，预生成会让索引体积和写入成本双双失控。",
+      "拼成一整串后丢失了名字与 entry 的对应关系，还得再扫一遍才能定位。"
+    ],
+    "optionExplanations_en": [
+      "A trie branches from the start of the name, and the wildcard here sits exactly at the start, so it does not help.",
+      "Extensions form a small, stable key space, making this index cheap and covering the most common pattern class.",
+      "The space of patterns is unbounded, so precomputing blows up both index size and write cost.",
+      "Concatenating loses the mapping from name back to entry, forcing a second pass just to locate matches."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-059",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "scoping-concurrency",
+    "scenario": "实现环节只剩十分钟，面试官要求 create/delete/move/rename 跑通；线程安全属于后面 extensibility 环节的 what-if。",
+    "q": "动手写实现之前该怎么处理并发这件事？",
+    "options": [
+      "先给每一个公共方法都加上 synchronized，多一层保护总没有坏处",
+      "口头声明'这一版先假设单线程'，把线程安全留到 extensibility",
+      "先不提并发，等面试官真的问到的时候再临时想办法",
+      "先把细粒度锁实现出来，用它展示自己对锁粒度的理解"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "显式说出假设，既让面试官知道你看见了这个风险，又不用在主线时间里背上锁的复杂度；沉默则会被读成没想到。",
+    "why_en": "Stating the single-threaded assumption out loud shows you saw the risk without spending core implementation time on locking.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "interview-signals",
+      "scoping"
+    ],
+    "tradeoff": "先声明单线程假设换实现时间 vs 一上来加锁、把主线时间花在并发细节上",
+    "whenOtherWins": "如果面试官一开始就把线程安全写进需求，它就是主线，必须在实现代码里直接体现。",
+    "options_en": [
+      "Put synchronized on every single public method up front — an extra layer of safety never hurts.",
+      "Say out loud that this version assumes a single thread, and defer thread safety to extensibility.",
+      "Skip concurrency entirely and improvise if the interviewer happens to raise it.",
+      "Implement fine-grained locking first to showcase your grasp of lock granularity."
+    ],
+    "termDefinitions": [
+      {
+        "term": "extensibility 环节",
+        "meaning": "面试后段的 what-if 讨论，问设计如何演进，通常包括线程安全和搜索扩展。",
+        "meaningEn": "The extensibility phase is the late what-if discussion about how the design evolves, typically covering thread safety and search."
+      },
+      {
+        "term": "synchronized",
+        "meaning": "把方法或代码块整体锁住、同一时刻只允许一个线程进入的关键字。",
+        "meaningEn": "Synchronized is the keyword that locks a whole method or block so only one thread may enter at a time."
+      }
+    ],
+    "q_en": "How should you handle concurrency before starting the implementation?",
+    "scenario_en": "Ten minutes remain and the interviewer wants create, delete, move, and rename working; thread safety belongs to the later what-if phase.",
+    "optionExplanations": [
+      "锁会渗进每个方法的写法，在最紧张的十分钟里换来一堆解释成本。",
+      "假设一旦说出口，它就成了共识；后面被追问时可以直接在其上加锁。",
+      "不说就没有信号，面试官只能默认你没意识到 check-then-act 的风险。",
+      "把最难的一层放在最前面，主线功能大概率写不完。"
+    ],
+    "optionExplanations_en": [
+      "Locks seep into how every method is written, buying explanation overhead in the tightest ten minutes.",
+      "Once the assumption is spoken it becomes shared ground, and you can layer locking on top when pushed.",
+      "Silence carries no signal, so the interviewer can only assume you never saw the check-then-act risk.",
+      "Putting the hardest layer first usually means the core operations never get finished."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-060",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "junior-expectations",
+    "scenario": "面试官按 Junior 标准评估一份内存文件系统的回答，重点看基本功能是否跑得通，而不是深挖。",
+    "q": "Junior 级文件系统回答被判达标要做到哪些？（多选）",
+    "options": [
+      "识别出 FileSystem 作为入口，File 和 Folder 作为树上的节点",
+      "create/delete 等基本操作配上能用的路径解析",
+      "基本错误处理：拒绝不存在的路径、拦住同目录重名",
+      "知道要能按名字查子节点（Map 最理想，List 也接受）",
+      "被提示后能说出 File 和 Folder 共享 name 和 parent",
+      "不用任何提示就主动实现 move 的 cycle detection"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "Junior 的门槛是树建对、操作跑通、错误不崩；共享抽象允许被提示后再想到，而主动的环检测属于更高层级的信号。",
+    "why_en": "At junior level the bar is a correct tree with working operations and basic error handling, with the shared abstraction allowed to come after a hint.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "interview-signals"
+    ],
+    "options_en": [
+      "Identifying FileSystem as the entry point with File and Folder as the tree's nodes.",
+      "Basic operations like create and delete backed by working path parsing.",
+      "Basic error handling: rejecting missing paths and blocking duplicate names in a folder.",
+      "Knowing children must be looked up by name (a map is ideal, a list is accepted).",
+      "Naming the shared name and parent fields on File and Folder once prompted.",
+      "Implementing cycle detection in move entirely unprompted."
+    ],
+    "termDefinitions": [
+      {
+        "term": "cycle detection / 环检测",
+        "meaning": "move 前从目标父目录沿 parent 往上走，确认没走回被移动的那个目录。",
+        "meaningEn": "Cycle detection walks up from the destination parent before a move to confirm it never reaches the entry being moved."
+      }
+    ],
+    "q_en": "What must a junior-level file system answer get right to pass? (multi-select)",
+    "scenario_en": "An interviewer grades an in-memory file system answer against the junior bar, checking that the basics work rather than probing deep.",
+    "optionExplanations": [
+      "三个类各自的职责能说清，说明候选人建立了正确的心智模型。",
+      "能跑通的操作是底线，路径解析写不对的话后面全都谈不上。",
+      "错误路径上不崩、不写脏数据，是初级也要守住的正确性。",
+      "只要知道查找需要按名字定位就够，数据结构选择可以再优化。",
+      "共享抽象在这一级是被提示后的加分项，不是硬门槛。",
+      "自发的环检测是资深信号，缺了它并不影响 Junior 判定达标。"
+    ],
+    "optionExplanations_en": [
+      "Being able to state each class's responsibility shows the candidate built the right mental model.",
+      "Working operations are the floor; if path parsing is wrong, nothing above it can hold.",
+      "Not crashing and not writing garbage on the error path is correctness even a junior must hold.",
+      "Knowing lookups must go by name is enough here; the exact structure can be refined later.",
+      "The shared abstraction is a bonus after a hint at this level, not a hard requirement.",
+      "Unprompted cycle detection is a senior signal, and its absence does not sink a junior verdict."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-061",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "low-level-design",
+    "sub": "mid-expectations",
+    "scenario": "面试官按 Mid-level 标准评估同一份内存文件系统回答，看的是主动性和职责划分，而不只是能不能跑。",
+    "q": "Mid-level 文件系统回答被期待做到哪些？（多选）",
+    "options": [
+      "主动抽出 FileSystemEntry 作为共享基类或接口",
+      "路径解析和编排留在 FileSystem，节点只管自己的状态",
+      "答得出'rename 一个有上千后代的目录会怎样'",
+      "move 时正确更新源和目标两侧的 parent 指针",
+      "cycle detection 允许被提示之后再干净地实现出来",
+      "必须主动给出细粒度锁加 lock ordering 的完整方案"
+    ],
+    "answer": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "Mid 的分水岭是主动看见重复并抽象、讲清 parent 指针为何胜过存路径；环检测允许被提示，完整的锁设计是 Senior 才要求的。",
+    "why_en": "The mid-level line is spotting the duplication and abstracting it unprompted, while cycle detection may follow a hint and full locking design belongs to senior.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "interview-signals"
+    ],
+    "options_en": [
+      "Extracting FileSystemEntry as a shared base class or interface without being asked.",
+      "Keeping path parsing and orchestration in FileSystem while nodes manage only their own state.",
+      "Answering what happens when you rename a folder with thousands of descendants.",
+      "Updating the parent pointers on both the source and destination side during a move.",
+      "Implementing cycle detection cleanly after a hint rather than unprompted.",
+      "Producing a complete fine-grained locking and lock-ordering scheme unprompted."
+    ],
+    "termDefinitions": [
+      {
+        "term": "lock ordering / 加锁顺序",
+        "meaning": "所有线程按同一个固定顺序（如路径字典序）获取多把锁，消除循环等待。",
+        "meaningEn": "Lock ordering means every thread acquires multiple locks in one fixed order, such as alphabetical path, so no circular wait forms."
+      },
+      {
+        "term": "FileSystemEntry",
+        "meaning": "File 与 Folder 共同继承的抽象基类，承载 name、parent 和 getPath。",
+        "meaningEn": "FileSystemEntry is the abstract base that File and Folder share, holding name, parent, and getPath."
+      }
+    ],
+    "q_en": "What is expected of a mid-level file system answer? (multi-select)",
+    "scenario_en": "The same answer is graded against the mid-level bar, which weighs initiative and separation of concerns rather than mere working code.",
+    "optionExplanations": [
+      "看见 name/parent/getPath 三处重复就动手抽象，是这一级的核心动作。",
+      "编排和状态分开，才能让后续加锁、加索引都有明确的落点。",
+      "这道追问考的是有没有真正理解存路径方案的级联更新代价。",
+      "两侧指针只要漏一边，getPath 就会给出一个已经不成立的位置。",
+      "环检测在这一级属于'提示后要能干净实现'，不要求自发想到。",
+      "完整锁方案是 Senior 的期待，压到 Mid 上属于抬高判据。"
+    ],
+    "optionExplanations_en": [
+      "Spotting the duplicated name, parent, and getPath and acting on it is the defining move at this level.",
+      "Separating orchestration from state is what gives later locking and indexing a clear place to live.",
+      "That follow-up tests whether the cascading-update cost of stored paths is genuinely understood.",
+      "Miss either side's pointer and getPath reports a location that is no longer true.",
+      "At this level cycle detection is 'implement it cleanly after a hint', not something you must foresee.",
+      "A complete locking scheme is the senior expectation; requiring it here raises the bar unfairly."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-file-system-062",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "implementation-depth",
+    "scenario": "类设计讲完进入实现环节，白板上有 createFile、delete、rename、move 四个方法要写，只剩十分钟。",
+    "q": "动笔写第一行之前该先做什么？",
+    "options": [
+      "直接开始写完整可编译的代码，实现细节最能体现工程功底",
+      "先问面试官要伪代码、可运行代码还是口头讲逻辑",
+      "先把四个方法的签名抄到白板上，再问要不要逐个展开",
+      "挑最难的 move 写完整实现，其余三个口头一句带过"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "三种深度对十分钟的消耗差好几倍；先对齐期望，才不会把时间花在面试官根本不看的语法细节上。",
+    "why_en": "The three levels of detail cost wildly different amounts of the remaining ten minutes, so align on expectations before writing anything.",
+    "tags": [
+      "low-level-design",
+      "file-system",
+      "interview-signals",
+      "scoping"
+    ],
+    "tradeoff": "一句确认换来粒度对齐 vs 直接开写、可能在错误的深度上耗尽时间",
+    "whenOtherWins": "如果面试官一开始就说明了要可运行代码，就不必再问，直接按那个粒度写下去。",
+    "options_en": [
+      "Just start writing full compilable code — the implementation details show off real engineering depth.",
+      "Ask the interviewer whether they want pseudocode, running code, or a spoken walkthrough.",
+      "Copy the four method signatures onto the board first, then ask whether to expand each one.",
+      "Fully implement the hardest one, move, and cover the other three in a single spoken sentence."
+    ],
+    "termDefinitions": [
+      {
+        "term": "pseudocode / 伪代码",
+        "meaning": "省略语法细节、只表达步骤和分支的代码写法，用来讲清逻辑。",
+        "meaningEn": "Pseudocode drops syntax details and expresses only the steps and branches, so the logic stays the focus."
+      },
+      {
+        "term": "implementation 环节",
+        "meaning": "面试中把类设计落成方法体的阶段，通常十分钟左右。",
+        "meaningEn": "The implementation phase is where the class design is turned into method bodies, usually about ten minutes."
+      }
+    ],
+    "q_en": "What should you do before writing the first line?",
+    "scenario_en": "Class design is done and four methods — createFile, delete, rename, move — are on the board with ten minutes left.",
+    "optionExplanations": [
+      "语法开销可能吃掉一半时间，而面试官想看的往往是分支和边界。",
+      "一句话就把接下来十分钟的粒度定死，双方不再各想各的。",
+      "签名在类设计阶段已经定过，抄一遍不新增信息，只是消耗时间。",
+      "只写一个方法会让路径解析和错误处理这些共用逻辑完全没机会展示。"
+    ],
+    "optionExplanations_en": [
+      "Syntax overhead can eat half the time, while what the interviewer wants is usually the branches and edge cases.",
+      "One sentence locks in the granularity for the next ten minutes so you are not guessing at each other.",
+      "The signatures were already settled during class design, so recopying them adds nothing but burns time.",
+      "Writing only one method leaves the shared path parsing and error handling with no chance to show up."
     ]
   }
 ]

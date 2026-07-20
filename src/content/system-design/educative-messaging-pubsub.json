@@ -55,7 +55,9 @@
       "A slow consumer just lets messages pile up in the queue instead of stalling producers.",
       "A queue only delivers messages; cross-object transaction guarantees still need a database or app protocol.",
       "Consumers can pull at whatever rate they can handle, not the producer's pace."
-    ]
+    ],
+    "scenario": "订单服务每秒 5000 单，下游库存和发票处理慢；先界定队列能承诺什么、不能承诺什么。",
+    "scenario_en": "An order service takes 5k orders per second while inventory and invoicing lag behind, so you first pin down what a queue does and does not promise."
   },
   {
     "id": "sd-educative-messaging-pubsub-002",
@@ -68,14 +70,14 @@
     "q": "这条路径默认应怎么连接？",
     "q_en": "How should this path be connected by default?",
     "options": [
-      "注册接口同步调用邮件服务并等待完成",
-      "注册接口写入消息队列，由邮件 worker 异步发送",
+      "注册接口同步调用邮件服务，等发送成功再返回",
+      "注册接口写队列，邮件 worker 异步发送",
       "注册接口把邮件正文直接写到用户表",
       "浏览器轮询邮件服务直到发送成功"
     ],
     "options_en": [
-      "The sign-up API synchronously calls the email service and waits.",
-      "The sign-up API writes to a queue, and email workers send asynchronously.",
+      "The sign-up API calls the email service synchronously and waits for success.",
+      "The sign-up API writes to a queue and email workers send asynchronously.",
       "The sign-up API stores the email body directly in the users table.",
       "The browser polls the email service until sending succeeds."
     ],
@@ -392,15 +394,15 @@
     "q": "优先级调度该怎么说更稳？",
     "q_en": "How should priority scheduling be described safely?",
     "options": [
-      "永远只消费高优先级队列",
-      "用权重或老化机制提升高优先级，同时给低优先级保底",
-      "把低优先级消息直接删除",
+      "永远只消费高优先级队列，低优先级排队等待",
+      "用权重或老化机制兼顾高低优先级",
+      "把低优先级消息直接删除以腾出容量",
       "让生产者自己睡眠来模拟优先级"
     ],
     "options_en": [
-      "Always consume only the high-priority queue.",
-      "Use weighting or aging to favor high priority while reserving capacity for low priority.",
-      "Delete all low-priority messages.",
+      "Always drain the high-priority queue first and leave low priority waiting.",
+      "Use weighting or aging so high priority wins without starving low priority.",
+      "Delete low-priority messages outright to free capacity.",
       "Make producers sleep to simulate priority."
     ],
     "answer": [
@@ -498,7 +500,8 @@
       "Keeping messages only in consumer memory means a restart or crash just erases unprocessed order events.",
       "Turning off acknowledgments saves a little latency but also removes the basis for retrying after failure.",
       "Locking the queue size behind one global mutex only caps throughput — it has nothing to do with durability."
-    ]
+    ],
+    "diagram": "flowchart LR\n  P[\"Producer 写完退出\"] --> B[\"Broker 持久化 + 副本\"]\n  B --> X[\"Broker 崩溃\"]\n  X --> R[\"从副本恢复未消费消息\"]\n  R --> C[\"Consumer 一分钟后上线读取\"]"
   },
   {
     "id": "sd-educative-messaging-pubsub-010",
@@ -655,8 +658,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "strict-ordering",
-    "scenario": "聊天消息必须按用户真实发送顺序展示；网络延迟可能让较早消息晚到 broker。",
-    "scenario_en": "Chat messages must appear in the user's true send order; network latency may make an earlier message arrive late at the broker.",
+    "scenario": "聊天消息必须按发送者真实先后展示；网络延迟可能让较早消息晚到 broker。",
+    "scenario_en": "Chat messages must appear in the true send order of the sender, but network latency can make an earlier message reach the broker late.",
     "q": "哪个机制最适合支撑严格顺序？",
     "q_en": "Which mechanism best supports strict ordering?",
     "options": [
@@ -1092,7 +1095,9 @@
       "AuthN/AuthZ decides whether this caller may touch this queue — core control-plane work at the entry layer.",
       "Looking up metadata to forward the request is exactly the frontend's routing job.",
       "The frontend is routing and control plane; brokers own message persistence, so this is outside its scope."
-    ]
+    ],
+    "scenario": "队列 frontend 每秒接 10 万次 send，必须在请求碰到 broker 之前挡掉非法和越权调用。",
+    "scenario_en": "The queue frontend takes 100k sends per second and has to block malformed or unauthorized calls before they ever reach a broker."
   },
   {
     "id": "sd-educative-messaging-pubsub-023",
@@ -1105,14 +1110,14 @@
     "q": "frontend 应如何降低重复入队风险？",
     "q_en": "How should the frontend reduce duplicate enqueue risk?",
     "options": [
-      "用 requestId 或消息 hash 查去重存储，再决定是否入队",
-      "把所有超时后的生产者重试都当成全新业务消息",
+      "按 requestId 查去重存储再决定入队",
+      "把超时后的生产者重试都当成全新业务消息",
       "要求消费者永远不崩溃来避免重复写入",
       "只按消息正文长度判断重复并直接丢弃"
     ],
     "options_en": [
-      "Check a dedup store by requestId or message hash before enqueueing.",
-      "Treat every producer retry after timeout as a brand-new business message.",
+      "Check a dedup store by requestId before enqueueing.",
+      "Treat every producer retry after a timeout as a brand-new business message.",
       "Require consumers to never crash in order to avoid duplicate writes.",
       "Deduplicate only by message-body length and discard matches."
     ],
@@ -1453,14 +1458,14 @@
     "q": "哪种删除模型更合适？",
     "q_en": "Which deletion model fits best?",
     "options": [
-      "保留日志并让每个消费者保存自己的 offset",
-      "第一个消费者读到就立刻全局删除",
+      "保留日志，消费者各存 offset",
+      "第一个消费者读到就立刻全局删除该消息",
       "只把消息存在消费者内存",
       "不给消费者任何读取位置"
     ],
     "options_en": [
-      "Retain the log and let each consumer store its own offset.",
-      "Globally delete the message as soon as the first consumer reads it.",
+      "Retain the log and let each consumer keep its own offset.",
+      "Globally delete a message as soon as the first consumer reads it.",
       "Store messages only in consumer memory.",
       "Give consumers no read position."
     ],
@@ -1631,14 +1636,14 @@
     "q": "扩缩容策略应优先考虑什么？",
     "q_en": "What should the scaling policy prioritize?",
     "options": [
-      "按消息量和队列量水平扩展，并隔离热点队列",
-      "把所有队列固定在同一台机器",
+      "按消息量水平扩展并隔离热点队列",
+      "把所有队列固定在同一台机器上",
       "关闭元数据服务减少组件",
       "只要求消费者少读一点"
     ],
     "options_en": [
-      "Scale horizontally by message volume and queue count, while isolating hot queues.",
-      "Pin every queue to the same machine.",
+      "Scale horizontally with message volume and isolate hot queues.",
+      "Pin every queue to the same single machine.",
       "Disable the metadata service to reduce components.",
       "Only ask consumers to read less."
     ],
@@ -1678,14 +1683,14 @@
     "q": "最关键的可用性手段是什么？",
     "q_en": "What is the most important availability mechanism?",
     "options": [
-      "把消息和元数据复制到不同故障域，并让路由绕开坏节点",
-      "只给 broker 换更大的硬盘",
+      "跨故障域复制消息与元数据，路由绕开坏节点",
+      "给 broker 换更大的硬盘扩容",
       "要求所有生产者本地缓存永久消息",
       "禁用负载均衡避免切换"
     ],
     "options_en": [
-      "Replicate messages and metadata across failure domains and route around failed nodes.",
-      "Only give brokers larger disks.",
+      "Replicate messages and metadata across failure domains and route around dead nodes.",
+      "Just give brokers bigger disks.",
       "Require all producers to cache messages forever locally.",
       "Disable load balancing to avoid failover."
     ],
@@ -1725,13 +1730,13 @@
     "q": "最佳回答是什么？",
     "q_en": "What is the best answer?",
     "options": [
-      "弱化顺序能减少等待和协调，换更高吞吐与更低延迟",
+      "弱化顺序减少协调等待，换更高吞吐",
       "严格顺序完全不可能实现",
       "弱顺序会自动让消息更耐久",
       "跨分区严格顺序不需要任何额外状态"
     ],
     "options_en": [
-      "Weaker ordering reduces waiting and coordination, trading for higher throughput and lower latency.",
+      "Weaker ordering cuts coordination and waiting, buying throughput.",
       "Strict ordering is completely impossible.",
       "Weaker ordering automatically makes messages more durable.",
       "Strict cross-partition ordering needs no extra state."
@@ -1859,7 +1864,9 @@
       "A subscriber that subscribes to a topic keeps receiving messages published there.",
       "A topic is the abstraction for a class of events or a message stream that decouples publishers from subscribers.",
       "That's the point-to-point rule where one message goes to one consumer, a different thing from pub-sub's default one-to-many fanout."
-    ]
+    ],
+    "scenario": "订单事件要被库存、风控、分析三个下游各自独立读一遍，彼此进度互不影响。",
+    "scenario_en": "One order event has to be read independently by inventory, risk, and analytics, and none of them should block the others."
   },
   {
     "id": "sd-educative-messaging-pubsub-038",
@@ -1920,13 +1927,13 @@
     "q": "pub-sub 带来的架构收益是什么？",
     "q_en": "What architectural benefit does pub-sub provide?",
     "options": [
-      "新增消费者可订阅已有 topic，减少对生产者的改动",
+      "新消费者订阅已有 topic，不动生产者",
       "所有服务必须共享同一个数据库事务",
       "生产者必须知道每个消费者的部署地址",
       "消费者失败会强制生产者回滚业务写入"
     ],
     "options_en": [
-      "A new consumer can subscribe to an existing topic with less producer change.",
+      "A new consumer just subscribes to the existing topic, leaving the producer untouched.",
       "All services must share one database transaction.",
       "The producer must know every consumer's deployment address.",
       "Consumer failure forces the producer to roll back its business write."
@@ -2007,7 +2014,9 @@
       "The same monitoring event needing independent delivery to multiple alerting apps is a textbook one-to-many fanout case.",
       "Asynchronously replicating leader state to followers or caches is itself one write reaching many subscribers.",
       "Needing the caller to get every result synchronously in one local function is a request-reply ask, a different direction from pub-sub's async fanout."
-    ]
+    ],
+    "scenario": "一份事件常有多个独立下游要读；但有些调用必须在同一次请求里拿到结果。",
+    "scenario_en": "One event often has several independent downstream readers, while some calls still have to return their result inside the same request."
   },
   {
     "id": "sd-educative-messaging-pubsub-041",
@@ -2020,13 +2029,13 @@
     "q": "这条数据摄取路径应怎么设计？",
     "q_en": "How should this ingestion path be designed?",
     "options": [
-      "App 后端把事件发布到 topic，分析消费者异步读取",
+      "后端把事件发布到 topic，消费者异步读",
       "每次点击都同步写完分析数据库再返回",
       "把所有事件存在用户手机直到月末",
       "只在日志量小时才创建 topic"
     ],
     "options_en": [
-      "The app backend publishes events to a topic, and analytics consumers read asynchronously.",
+      "The app backend publishes events to a topic and analytics consumers read asynchronously.",
       "Every click synchronously writes the analytics database before returning.",
       "Store all events on the user's phone until month end.",
       "Create a topic only when log volume is small."
@@ -2133,7 +2142,8 @@
         "meaning": "retention 是消息在系统里保留多久，过期后可被清理。",
         "meaningEn": "Retention is how long messages remain available before they can be deleted."
       }
-    ]
+    ],
+    "diagram": "flowchart LR\n  A[\"create topic\"] --> B[\"publish message\"]\n  B --> C[\"subscribe / unsubscribe\"]\n  C --> D[\"read message\"]\n  D --> E[\"retention 到期后删除\"]"
   },
   {
     "id": "sd-educative-messaging-pubsub-044",
@@ -2256,13 +2266,13 @@
     "q": "哪组基础组件最贴合？",
     "q_en": "Which set of building blocks fits best?",
     "options": [
-      "数据库存订阅元数据；消息队列/日志缓冲消息；key-value store 存消费状态",
+      "数据库存订阅、日志存消息、KV 存消费 offset",
       "只用一个浏览器 localStorage 保存订阅、消息和 offset",
       "只用负载均衡器保存所有消息并执行 fanout",
       "只用 DNS 记录表达订阅关系和消费进度"
     ],
     "options_en": [
-      "A database for subscription metadata, a queue/log for messages, and a key-value store for consumer state.",
+      "A database for subscriptions, a log for messages, and a key-value store for consumer offsets.",
       "Use only browser localStorage for subscriptions, messages, and offsets.",
       "Use only a load balancer to store all messages and perform fanout.",
       "Use only DNS records to model subscriptions and consumer progress."
@@ -2422,8 +2432,8 @@
     "answer": [
       0
     ],
-    "why": "每个订阅者一条队列会把 fanout 成本提前物化成存储和元数据。百万级订阅者下，一条消息可能变成百万份副本，这就是 storage amplification。",
-    "why_en": "Per-subscriber queues materialize fanout as storage amplification, which explodes for millions of subscribers.",
+    "why": "每订阅者一条队列把 fanout 成本提前物化：1 条消息 × 500 万订阅者 = 500 万份副本。元数据条目也同步线性增长。",
+    "why_en": "Per-subscriber queues materialize fanout as storage: one message times five million subscribers is five million stored copies.",
     "whenOtherWins": "如果订阅者很少且每个都需要独立队列隔离，这个设计可以先用。",
     "tradeoff": "实现直观隔离 vs 存储放大",
     "tags": [
@@ -2540,13 +2550,13 @@
     "q": "生产者应如何分配分区？",
     "q_en": "How should producers assign partitions?",
     "options": [
-      "用 round robin 或加权 round robin 在分区间分摊",
+      "用 round robin 在分区间轮流写",
       "永远写同一个 partition，让单盘继续承受全部写入",
       "让消费者在读取时决定每条消息应该写到哪里",
       "把消息体越大越写到更旧的 segment 来避开新文件"
     ],
     "options_en": [
-      "Use round robin or weighted round robin across partitions.",
+      "Use round robin across partitions to spread writes.",
       "Always write to one partition and keep all writes on one disk.",
       "Let consumers decide where each message should have been written.",
       "Write larger messages to older segments to avoid newer files."
@@ -2600,13 +2610,13 @@
     "q": "partition key 应怎么选？",
     "q_en": "How should the partition key be chosen?",
     "options": [
-      "用 orderId 分区，让同一订单落到同一 partition",
+      "按 orderId 分区，保证单订单有序",
       "完全随机分区每条订单事件以追求均匀写入",
       "按消息大小分区，让大消息和小消息分离",
       "按消费者机器名分区，把路由绑到实例"
     ],
     "options_en": [
-      "Partition by orderId so one order lands in one partition.",
+      "Partition by orderId so each order stays ordered.",
       "Randomly partition each order event to chase even writes.",
       "Partition by message size to separate large and small records.",
       "Partition by consumer machine name and bind routing to instances."
@@ -2647,13 +2657,13 @@
     "q": "哪种复制策略最贴近？",
     "q_en": "Which replication strategy fits best?",
     "options": [
-      "leader-follower，每个 partition 保持多个副本并在失败时选新 leader",
+      "leader-follower 多副本，失败时选新 leader",
       "所有消息只写 leader 内存，不同步到其他 broker",
       "每个消费者复制一份 broker 二进制文件来假装有副本",
       "只在 metadata DB 里记录消息长度，不保存消息内容"
     ],
     "options_en": [
-      "Leader-follower replication with multiple replicas per partition and leader election on failure.",
+      "Leader-follower replication with multiple replicas and leader election on failure.",
       "Write every message only to leader memory with no broker replica.",
       "Every consumer copies the broker binary and treats that as replication.",
       "Record only message length in the metadata database, not the message."
@@ -2726,7 +2736,10 @@
       "Monitoring broker health and triggering leader election on failure is the control plane's failure-response job.",
       "Deciding where replicas live and how they replicate across brokers is also cluster-manager orchestration work.",
       "Consumer business callback code always runs in the consumer service — the cluster manager shouldn't execute it instead."
-    ]
+    ],
+    "scenario": "broker 集群有 200 台机器、上千 partition；某个 leader 宕机后要在秒级恢复读写。",
+    "scenario_en": "The broker cluster runs 200 machines and thousands of partitions, and when a leader dies reads and writes must come back within seconds.",
+    "diagram": "flowchart TB\n  CM[\"Cluster manager 控制面\"] --> R[\"broker/topic 注册信息\"]\n  CM --> H[\"健康监控与选主\"]\n  CM --> P[\"副本放置与复制关系\"]\n  BR[\"Broker 数据面\"] --> L[\"topic log 读写\"]\n  CS[\"Consumer 服务\"] --> BIZ[\"业务回调代码\"]"
   },
   {
     "id": "sd-educative-messaging-pubsub-056",
@@ -2771,7 +2784,9 @@
       "Blocking reads past the retention window keeps consumers from reading data that should already be gone.",
       "Storing or coordinating a consumer's offset state is what lets it know where it left off.",
       "Durable topic-log storage is always the broker's job; this layer only owns read permission, retention boundaries, and progress — it shouldn't replace the log itself."
-    ]
+    ],
+    "scenario": "多个消费者读同一 topic 且进度不同，超过 7 天保留期的消息不能再被读到。",
+    "scenario_en": "Several consumers read the same topic at different progress points, and messages older than the seven-day retention window must no longer be readable."
   },
   {
     "id": "sd-educative-messaging-pubsub-057",
@@ -3016,13 +3031,13 @@
     "q": "应使用什么消费模型？",
     "q_en": "Which consumption model should be used?",
     "options": [
-      "consumer group，让组内实例分摊 partition 所有权",
+      "consumer group：组内分摊 partition",
       "让 4 个实例都独立订阅并重复处理每条消息",
       "让生产者同步调用 4 个实例并等待全部返回",
       "把所有 partition 合成一个全局锁来降低并行度"
     ],
     "options_en": [
-      "A consumer group where instances share partition ownership.",
+      "A consumer group where instances split partition ownership.",
       "Let all 4 instances subscribe independently and duplicate every message.",
       "Make the producer synchronously call all 4 instances and wait for all.",
       "Merge all partitions behind one global lock and reduce parallelism."
@@ -3247,13 +3262,13 @@
       "端到端只生效一次很难只靠队列保证，更稳的做法是接受可能重复投递，再用 chargeId 这类幂等键在业务层挡住重复扣款。",
       "队列标榜 exactly-once 不代表业务就不需要唯一键，跨数据库和外部网关的失败恢复仍可能产生重复调用。",
       "改成最多一次投递、失败静默丢弃，会让本该成功的扣款请求直接消失，风险比重复更大。",
-      "让消费者随机决定是否扣款没有任何正确性依据，无法保证扣款按用户真实意图执行。"
+      "让消费者随机决定是否扣款没有任何正确性依据，扣款结果就跟真实交易意图脱钩了。"
     ],
     "optionExplanations_en": [
       "A queue alone rarely guarantees a one-time effect end to end; the sturdier move is to accept possible redelivery and let a chargeId-style key block the duplicate charge in business logic.",
       "A queue claiming exactly-once doesn't remove the need for a unique key — failure recovery across databases and an external gateway can still duplicate calls.",
       "Switching to at-most-once and silently dropping failures makes a request that should have succeeded just vanish, riskier than a duplicate.",
-      "Letting the consumer randomly decide whether to charge has no correctness basis and can't guarantee the charge matches user intent."
+      "Letting the consumer randomly decide whether to charge has no correctness basis and detaches the outcome from the real transaction intent."
     ]
   },
   {
@@ -3267,13 +3282,13 @@
     "q": "应优先考虑哪种隔离手段？",
     "q_en": "Which isolation mechanism should be considered first?",
     "options": [
-      "把热门队列拆分或迁移到独立 broker/partition 资源",
+      "把热点队列迁到独立 broker 资源",
       "把所有队列合并到一个更大的锁里并共享瓶颈",
       "关闭低流量队列的监控来隐藏邻居影响",
       "让消费者忽略延迟并继续堆积未处理消息"
     ],
     "options_en": [
-      "Split or move the hot queue onto dedicated broker or partition resources.",
+      "Move the hot queue onto dedicated broker resources.",
       "Merge all queues behind one larger lock and share the bottleneck.",
       "Disable monitoring for low-traffic queues to hide neighbor impact.",
       "Ask consumers to ignore latency while backlog keeps growing."
@@ -3321,7 +3336,7 @@
     "q": "磁盘布局应偏向哪种形式？",
     "q_en": "What disk layout should the broker prefer?",
     "options": [
-      "append-only log segment",
+      "append-only 日志分段",
       "每条消息随机覆盖同一行",
       "每个消费者一个 Excel 文件",
       "只存在进程堆内存"

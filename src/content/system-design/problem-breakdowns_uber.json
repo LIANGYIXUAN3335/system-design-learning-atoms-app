@@ -76,7 +76,7 @@
       1,
       2
     ],
-    "why": "核心三条：估价、按估价请求乘车、匹配并由司机接受导航；互评/预约/车型属于 below the line。划线是**时间盒**：面试只有 30-45 分钟设计不完全部，挑 3-4 条核心放 above the line 重点设计、其余认领但不展开——既显示你会抓重点（资深信号），又不在次要功能上耗时间。",
+    "why": "核心三条：估价、按估价请求乘车、匹配并由司机接受导航；互评/预约/车型划到 below the line。划线是时间盒：30-45 分钟只够深挖 3-4 条。",
     "why_en": "The three core requirements are fare estimate, requesting a ride, and matching with a driver who accepts and navigates; rating/scheduling/car-tiers are below the line. Drawing the line is time-boxing: a 30-45 min interview can't design everything, so you design only the 3-4 core (above the line) and explicitly park the rest — signaling you can prioritize.",
     "tags": [
       "requirements",
@@ -349,7 +349,7 @@
       2,
       3
     ],
-    "why": "五个核心实体：Rider、Driver、Fare、Ride、Location。Location 单列——高频更新、要按地理就近查询，访问模式和规模跟 driver 档案完全不同；Payment 不列——支付通常交给第三方，金额已由 Fare 承载。",
+    "why": "五个核心实体：Rider、Driver、Fare、Ride、Location。Location 单列是因为高频更新且要按地理就近查；Payment 不列，金额已由 Fare 承载。",
     "why_en": "Location is a separate entity because it updates every few seconds and is queried by proximity, so it needs a geo index, not a driver field. Payment is out of scope: below the line, delegated to a third party, with the amount already on Fare.",
     "tags": [
       "core-entities",
@@ -511,7 +511,41 @@
       "Limiting it to pickup-through-dropoff misses the earlier requested, matched, and en-route states.",
       "A driver's whole online session can span many trips, so it can't be squeezed into one Ride record.",
       "An app session is unrelated to a specific trip — a rider can have the app open with no active Ride at all."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "行程阶段",
+        "Ride 状态",
+        "谁写状态",
+        "阶段结束后"
+      ],
+      "rows": [
+        [
+          "确认 fare 发起",
+          "requested",
+          "乘客端请求",
+          "超时未匹配作废"
+        ],
+        [
+          "匹配到司机",
+          "matched",
+          "派单服务",
+          "派单锁 TTL 过期"
+        ],
+        [
+          "司机赶往接客",
+          "en_route",
+          "司机端上报",
+          "轨迹点不长期留存"
+        ],
+        [
+          "上车到完成",
+          "completed",
+          "司机端结束",
+          "最终费用落库归档"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-uber-011",
@@ -1207,7 +1241,7 @@
     "answer": [
       3
     ],
-    "why": "推派单要能叫醒一个可能在后台 / 息屏的司机 App。WebSocket 长连接在 App 切后台或手机休眠时会被系统杀掉，达不到；APNs(iOS)/FCM(Android) 是系统级推送通道，能唤醒后台 App、还省电省连接。WebSocket 只适合前台实时场景（如行程中给乘客推司机位置）。",
+    "why": "派单要叫醒可能息屏或在后台的司机 App，而 WebSocket 一切后台就被系统杀掉。APNs/FCM 是系统级推送通道，能唤醒后台 App 且省电省连接。",
     "why_en": "Dispatch must wake a driver app that may be backgrounded or asleep — a WebSocket dies when the app backgrounds, so it can't. APNs (iOS) / FCM (Android) are OS-level push channels that wake the app efficiently. WebSocket only fits foreground real-time cases like live trip tracking.",
     "tags": [
       "notification-service",
@@ -1562,7 +1596,7 @@
     "answer": [
       2
     ],
-    "why": "批处理不是把不同司机合成一条——是把很多条**不同**的写打成一包、一次往返/一次提交发出（每个司机还是各自的 key）。省的是每条写的固定开销（网络往返 / commit / WAL flush / 锁）：逐条 200 万次往返 → 攒批后砍几个数量级。",
+    "why": "批处理是把很多条不同的写打成一包、一次往返一次提交发出，省掉的是每条写的固定开销（网络往返、commit、WAL flush、锁）。",
     "why_en": "Batching doesn't merge different drivers — it packs many separate writes (each driver keeps its own key) into one round-trip/commit, amortizing the fixed per-write cost (round-trip, commit, WAL flush, locks). 2M individual writes become far fewer batched round-trips.",
     "whenOtherWins": "如果匹配质量要求位置始终实时最新，批量窗口带来的陈旧不可接受，应直接上 Redis 实时地理索引。",
     "tags": [
@@ -1723,7 +1757,7 @@
     "answer": [
       1
     ],
-    "why": "地理查询 Postgres 不原生支持，要装 PostGIS 扩展（空间类型+空间索引+邻近函数）。而且 B-tree 是一维有序、做不了 2D 就近查询；PostGIS 的空间索引用的是 GiST(R-tree)，不是 B-tree。省掉一个独立地理库。",
+    "why": "Postgres 不原生支持地理查询，要装 PostGIS 扩展才有空间类型与邻近函数。B-tree 一维有序做不了 2D 就近查，PostGIS 用的是 GiST(R-tree)。",
     "why_en": "Postgres has no native geo support — you install the PostGIS extension (spatial types + spatial index + proximity functions). A B-tree is 1-D and cannot do 2-D proximity; PostGIS uses a GiST (R-tree) spatial index, not a B-tree. This saves running a separate geo database.",
     "tags": [
       "postgis",
@@ -1990,7 +2024,41 @@
       "ZADD sorts by a numeric score, but a single one-dimensional score can't encode two-dimensional proximity.",
       "Right, GEOADD writes lat/long and GEOSEARCH does radius queries sorted by distance — two commands cover both reporting and matching.",
       "SADD/SINTER only compute set intersections, with no notion of distance or coordinates at all."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "命令组合",
+        "二维就近",
+        "排序依据",
+        "何时选它"
+      ],
+      "rows": [
+        [
+          "GEOADD+GEOSEARCH",
+          "支持",
+          "球面距离",
+          "半径内找候选司机"
+        ],
+        [
+          "ZADD+ZRANGEBYSCORE",
+          "不支持",
+          "一维分值",
+          "按时间戳清离线司机"
+        ],
+        [
+          "SET+GET",
+          "不支持",
+          "无",
+          "只存单个坐标快照"
+        ],
+        [
+          "SADD+SINTER",
+          "不支持",
+          "无",
+          "按标签集合求交"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-uber-039",
@@ -2011,7 +2079,7 @@
     "answer": [
       3
     ],
-    "why": "GEOSEARCH 在 Redis 6.2 加入，统一并增强老的 GEORADIUS 系。中心可传坐标(FROMLONLAT)或已有成员(FROMMEMBER)；形状可按半径(BYRADIUS)或矩形(BYBOX)；还能 WITHDIST/WITHCOORD/COUNT/排序。",
+    "why": "旧的 GEORADIUS 系按坐标查和按成员查是两条命令，6.2 起合并成一条：中心可选 FROMLONLAT 或 FROMMEMBER，形状可选 BYRADIUS 或 BYBOX。",
     "why_en": "GEOSEARCH (Redis 6.2) unifies and extends the old GEORADIUS commands: center by coordinate (FROMLONLAT) or existing member (FROMMEMBER); shape by radius (BYRADIUS) or rectangle (BYBOX); plus WITHDIST/WITHCOORD/COUNT/sort.",
     "tags": [
       "redis",
@@ -2816,7 +2884,7 @@
     "answer": [
       1
     ],
-    "why": "新增依赖：派单正确性现在靠 Redis 锁存储在线且够快，需监控+故障转移。但锁只有 10 秒 TTL、数据短命，Redis 挂了锁自然过期重建、恢复很容易——依赖真实但廉价，划算。防重派靠下游 ride 状态校验/fencing，不是锁本身。",
+    "why": "新增依赖：派单正确性现在靠 Redis 锁存储在线且够快。但锁只有 10 秒 TTL，Redis 挂了锁自然过期重建，依赖真实但廉价。",
     "why_en": "The new dependency is that dispatch correctness now needs the Redis lock store up and fast (monitor + failover). But locks are ephemeral (10s TTL), so a failure self-heals as locks expire and re-form — a real but cheap dependency. Actual duplicate prevention comes from downstream ride-status checks / fencing, not the lock itself.",
     "tags": [
       "distributed-lock",
@@ -3500,7 +3568,7 @@
     "answer": [
       1
     ],
-    "why": "延迟消息=那个「计时器」：派单时就投一条 10 秒后可见的消息（没有别的时钟会告诉你超时，所以要提前投）。到期它只是触发器，worker 先查 ride 状态：已接受→丢弃(幂等无害)；仍未分配→顺延下一位并续投。热状态放 Redis 查得快，最终分配落 DB。",
+    "why": "延迟消息就是那个计时器：派单时先投一条 10 秒后可见的消息。到期后 worker 查 ride 状态——已接受就丢弃（幂等无害），仍未分配则顺延下一位并续投。",
     "why_en": "The delayed message is the timer — schedule it at offer time, not after. When it fires it just triggers a check: if the ride is already taken, discard it (idempotent); if not, offer the next driver and reschedule. Keep the hot status in Redis, persist the assignment in the DB.",
     "whenOtherWins": "流程更复杂或不容出错时，用 Temporal/Step Functions 这类持久执行框架，内建超时重试与状态管理，比手工管理延迟消息更稳。",
     "tags": [
@@ -3710,7 +3778,41 @@
       "Keeping state in the service instance's own in-memory object means a crash wipes the workflow state with it, failing the \"must never lose flow state\" requirement.",
       "Right, Temporal/Step Functions persist the entire workflow state inside the framework, so a crash and restart resumes right from the checkpoint, with timeout and escalation as built-in primitives.",
       "Storing flow state in plaintext on the driver's phone is fragile — the driver could uninstall the app or switch devices, losing or corrupting that state."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "状态存哪",
+        "崩溃后",
+        "运维成本"
+      ],
+      "rows": [
+        [
+          "Temporal 工作流",
+          "框架持久化存储",
+          "从断点自动续跑",
+          "需运维集群"
+        ],
+        [
+          "SQS 延迟消息",
+          "应用代码与队列",
+          "要自己写补偿",
+          "低"
+        ],
+        [
+          "进程内状态机",
+          "实例内存",
+          "状态随进程丢失",
+          "最低"
+        ],
+        [
+          "司机手机本地",
+          "客户端存储",
+          "换设备即丢失",
+          "低但不可信"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-uber-069",
@@ -4042,7 +4144,7 @@
     "answer": [
       3
     ],
-    "why": "scatter-gather = 一个查询单片答不完，要「撒(scatter)」到多个分片各算一部分、再「聚(gather)」合并结果——慢(等最慢的分片 + 合并)。地理分片后绝大多数就近查询只落一个分片，省掉了 scatter-gather；只有搜索半径跨分片边界时才需要扇出多片再合并。",
+    "why": "scatter-gather = 单片答不完的查询要撒到多片各算一部分再聚合，慢在等最慢的分片。地理分片后就近查询多数只落一片，只有半径跨边界才需扇出。",
     "why_en": "Scatter-gather fans a query out to many shards for partial results and merges them — slow. Geo-sharding keeps most proximity searches inside one shard; you only scatter-gather when a search radius crosses a shard boundary.",
     "tags": [
       "scatter-gather",

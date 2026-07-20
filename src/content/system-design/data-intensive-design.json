@@ -91,12 +91,12 @@
     "why_en": "Derived views can drift from the source, so designs need a replayable change path and visible repair process.",
     "optionExplanations": [
       "成本高低是采购问题，不是这里的设计风险——它不会让读路径突然看到错误数据。",
-      "缓存和索引都是主数据的派生视图，任何一步同步失败都可能让它们和源数据分叉，读到旧值或漏值。",
+      "订单已经提交成功，缓存里却还是旧价、索引里搜不到这单；两边一旦分叉，只能靠重放补回来。",
       "派生数据本身不限制主库的写入能力，主库该怎么强一致写还是怎么写，问题出在派生副本追不上。"
     ],
     "optionExplanations_en": [
       "Cost is a procurement concern, not the risk that makes stale data show up in the read path.",
-      "Cache and search index are both derived views of the source, so any sync failure can let them drift and serve stale or missing data.",
+      "The order commits, yet the cache still shows the old price and the index cannot find it; once they diverge only a replay closes the gap.",
       "Having derived copies does not limit the primary's write consistency; the risk is that the copies fall behind, not that primary writes get weaker."
     ]
   },
@@ -1068,13 +1068,13 @@
     "scenario": "电商页面会并行调用 20 个后端；平均响应正常，但少数慢调用会拖慢整页。",
     "scenario_en": "An ecommerce page calls 20 backends in parallel; average latency looks fine, but a few slow calls delay the whole page.",
     "options": [
-      "只盯平均值",
-      "盯 p95/p99 这类高百分位",
-      "只盯最快请求"
+      "只盯平均值，忽略长尾",
+      "盯 p95/p99 尾延迟",
+      "只盯最快那批请求"
     ],
     "options_en": [
-      "Only the mean.",
-      "High percentiles such as p95 or p99.",
+      "Only the mean, ignoring the long tail.",
+      "Tail latency at p95 and p99.",
       "Only the fastest requests."
     ],
     "answer": [
@@ -1124,14 +1124,14 @@
     "scenario": "服务器一次只能并行处理少量请求；几个慢请求占住 worker 后，后面的快请求也在队列里等。",
     "scenario_en": "A server can process only a few requests in parallel; a few slow requests occupy workers, so later fast requests wait in the queue.",
     "options": [
-      "head-of-line blocking 拉高尾延迟",
-      "缓存命中率会因为等待而自动提高",
-      "平均请求体大小会因为排队而下降"
+      "队头阻塞抬高尾延迟",
+      "请求排队反而抬高缓存命中率",
+      "排队会让平均请求体积变小"
     ],
     "options_en": [
       "Head-of-line blocking raises tail latency.",
-      "Cache hit rate automatically improves because requests wait.",
-      "Average request body size decreases because of queueing."
+      "Queueing somehow raises the cache hit rate.",
+      "Queueing makes the average request body smaller."
     ],
     "answer": [
       0
@@ -1270,14 +1270,14 @@
     "scenario": "单机数据库接近容量上限；团队可买更强机器，也可把负载分到多台。",
     "scenario_en": "A single-node database is near capacity; the team can buy a bigger machine or split load across machines.",
     "options": [
-      "scale up 简化系统但机器更贵，scale out 增加分布式复杂度",
-      "scale out 一定更简单且不会增加协调成本",
-      "scale up 会自动获得跨机器容灾和弹性"
+      "scale up 省复杂度，scale out 省单机成本",
+      "scale out 一定更简单，不增加协调成本",
+      "scale up 自动带来跨机容灾和弹性扩容"
     ],
     "options_en": [
-      "Scale up keeps the system simpler but can get expensive; scale out adds distributed complexity.",
-      "Scale out is always simpler and adds no coordination cost.",
-      "Scale up automatically gives cross-machine disaster tolerance and elasticity."
+      "Scaling up buys simplicity; scaling out buys cheaper capacity.",
+      "Scaling out is always simpler and adds no coordination cost.",
+      "Scaling up automatically gives cross-machine failover and elasticity."
     ],
     "answer": [
       0
@@ -1434,8 +1434,8 @@
       "capacity"
     ],
     "tradeoff": "总吞吐量 vs 请求形状",
-    "why": "总字节率相同也可能有完全不同瓶颈：小请求看并发和调度，大对象看分片上传和持久化。负载参数要保留形状。",
-    "why_en": "Equal byte throughput can hide different bottlenecks; small requests stress concurrency, while huge objects stress upload and storage paths.",
+    "why": "总字节率相同也可能有完全不同瓶颈：同样约 100 MB/s，可以是 10万×1KB，也可以是 3×2GB/分钟。前者压并发和调度，后者压分片上传和持久化。",
+    "why_en": "The same roughly 100 MB/s can be 100k x 1KB requests or 3 x 2GB uploads a minute — one stresses concurrency, the other stresses multipart upload and durability.",
     "whenOtherWins": "若请求大小和并发形状也相同，总吞吐才可能作为主要容量指标。",
     "optionExplanations": [
       "十万次 1KB 小请求考验的是并发连接和调度，三次 2GB 大文件考验的是分片上传和持久化，请求形状不同，路径也完全不同。",
@@ -1869,12 +1869,12 @@
     "whenOtherWins": "若一种数据库自然覆盖所有访问模式，单系统会减少同步和运维成本。",
     "optionExplanations": [
       "只用一个工具覆盖事务、全文搜索和路径查询，等于逼一个引擎同时擅长三件互相冲突的事，通常做不到。",
-      "按访问模式把事务放数据库、正文交给搜索引擎、关系交给图存储，这正是 polyglot persistence——不同压力配不同工具。",
+      "事务走 OLTP 库、正文走倒排索引、关系走图存储，三种访问模式各自吃到对应的索引结构。",
       "把所有查询搬到客户端循环，等于放弃了每个存储引擎本该做的索引和优化工作，效率会大幅下降。"
     ],
     "optionExplanations_en": [
       "Using one tool for transactions, full-text search, and path queries forces a single engine to be great at three conflicting jobs at once, which rarely works.",
-      "Routing each access pattern to its own store — transactions to a database, text to a search engine, relations to a graph store — is exactly polyglot persistence.",
+      "Transactions go to the OLTP store, body text to an inverted index, relationships to a graph store — each pattern gets the index it needs.",
       "Moving every query into client-side loops throws away the indexing and optimization each storage engine is built to do, and performance suffers badly."
     ]
   },
@@ -2074,14 +2074,14 @@
     "scenario": "简历系统后来把公司、学校、推荐人都做成独立实体，并要展示它们的最新信息。",
     "scenario_en": "A resume system later turns companies, schools, and recommenders into separate entities and must show their latest information.",
     "options": [
-      "多对多引用需要应用层 join 或反规范化",
-      "一对多嵌套会完全消失",
-      "所有字段必须变成字符串"
+      "多对多引用要在应用层 join",
+      "一对多嵌套在文档里会完全消失",
+      "所有字段都必须退化成字符串"
     ],
     "options_en": [
-      "Many-to-many references need application-side joins or denormalization.",
-      "One-to-many nesting disappears completely.",
-      "All fields must become strings."
+      "Many-to-many references force joins in application code.",
+      "One-to-many nesting disappears entirely in documents.",
+      "Every field has to degrade into a string."
     ],
     "answer": [
       0
@@ -2104,7 +2104,29 @@
       "Entities like company, school, and referrer that many resumes share have no server-side join, so the app has to stitch them together itself, or duplicate the data.",
       "One-to-many nesting doesn't disappear just because shared entities were added; the two relationship shapes coexist, and only the many-to-many part needs extra handling.",
       "Whether a field is a number or a string has nothing to do with entities being many-to-many; this claim has no basis."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "模型",
+        "多对多",
+        "改共享实体",
+        "读整棵树"
+      ],
+      "rows": [
+        [
+          "文档模型",
+          "应用层 join",
+          "要改每份副本",
+          "一次读到底"
+        ],
+        [
+          "关系模型",
+          "数据库 join",
+          "改一处即可",
+          "要多表 join"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch02-010",
@@ -2209,14 +2231,14 @@
     "scenario": "一个系统既有用户资料树，也有公司、学校、推荐关系等共享实体。",
     "scenario_en": "A system has profile-shaped trees plus shared entities such as companies, schools, and recommendations.",
     "options": [
-      "文档强调局部树，关系强调 join 和共享引用",
-      "关系模型不能存嵌套数据",
-      "文档模型自动解决多对多"
+      "文档偏局部树，关系偏共享引用",
+      "关系模型完全不能存储嵌套数据",
+      "文档模型能自动解决多对多关系"
     ],
     "options_en": [
-      "Documents emphasize local trees; relational models emphasize joins and shared references.",
-      "Relational models cannot store nested data.",
-      "Document models automatically solve many-to-many relationships."
+      "Documents favor local trees; relational favors shared references.",
+      "Relational models cannot store nested data at all.",
+      "Document models solve many-to-many automatically."
     ],
     "answer": [
       0
@@ -2278,14 +2300,14 @@
     "scenario": "事件数据来自多个外部合作方，字段经常变化；核心订单表则必须每行结构一致。",
     "scenario_en": "Event data comes from multiple partners and changes often; the core orders table must have a consistent structure.",
     "options": [
-      "外部异构事件偏 schema-on-read，核心订单偏 schema-on-write",
-      "所有数据都应该无 schema，并把错误留到读取时处理",
-      "所有数据都必须先全量迁移，再允许任何旧记录读取"
+      "外部事件 schema-on-read，核心订单 schema-on-write",
+      "所有数据都用 schema-on-read，错误留到读取时处理",
+      "所有数据都用 schema-on-write，旧记录必须先全量迁移"
     ],
     "options_en": [
-      "Use schema-on-read for heterogeneous external events, and schema-on-write for core orders.",
-      "All data should be schemaless and leave errors for read time.",
-      "All data must be fully migrated before any old record can be read."
+      "Schema-on-read for external events, schema-on-write for core orders.",
+      "Make everything schema-on-read and leave errors for read time.",
+      "Make everything schema-on-write and migrate every old record first."
     ],
     "answer": [
       0
@@ -2405,12 +2427,12 @@
     "whenOtherWins": "若记录结构统一且写错代价高，schema-on-write 更能保护数据质量。",
     "optionExplanations": [
       "要求每种设备先建独立关系表才能写入，等于要求外部厂商先配合你的 schema，现实里很难做到。",
-      "设备厂商随时加字段，写入端很难先统一结构，schema-on-read 接受这种变化，只是消费端要处理缺字段和版本差异。",
+      "新型号今天多报一个字段、明天少报一个，写入端不用改表；解析代码给缺失字段兜个默认值就行。",
       "拒绝所有未知字段、要求厂商先同步 schema，实际上会挡住大量正常上报的数据，不现实。"
     ],
     "optionExplanations_en": [
       "Requiring every device type to have its own relational table before it can write means external vendors must conform to your schema first, which rarely happens in practice.",
-      "Since vendors add fields anytime, forcing a uniform structure at write time is impractical; schema-on-read accepts the variation, but consumers must handle missing fields and version drift.",
+      "A new device model adds a field today and drops one tomorrow; nothing is migrated, the parser just defaults whatever is missing.",
       "Rejecting every unknown field and requiring vendors to sync the schema first would block a large share of normal incoming reports."
     ]
   },
@@ -2949,16 +2971,16 @@
     "why": "property graph 同时描述实体和关系；边不只是外键，还能表达关系类型和关系属性。它不要求所有数据挂在同一个根下面。",
     "why_en": "A property graph models both entities and relationships directly; edges can have labels and properties.",
     "optionExplanations": [
-      "vertex 上挂的属性，比如一个人的姓名、出生日期，是 property graph 里一等的实体数据。",
+      "vertex 上挂的属性，比如姓名、出生日期，在图模型里是一等的实体数据。",
       "每条 edge 都明确记录它连接的起点和终点 vertex，这是图能被遍历的基础。",
       "edge 不只是一条连线，还能带标签（比如 marriedTo）和自己的属性（比如结婚日期），这也是一等结构。",
-      "property graph 不要求所有数据挂在同一个全局根节点下，这点跟层级树模型不同。"
+      "任何一个 vertex 都能当查询起点，不必像 XML 那样从唯一的根往下钻。"
     ],
     "optionExplanations_en": [
       "Properties attached to a vertex, like a person's name or birth date, are first-class entity data in a property graph.",
       "Every edge explicitly records the start and end vertices it connects, which is what makes the graph traversable at all.",
       "An edge is more than a line — it can carry a label (like marriedTo) and its own properties (like a marriage date), also first-class structure.",
-      "A property graph does not require every piece of data to hang off one global root, unlike a hierarchical tree model."
+      "Any vertex can be a query entry point; you never have to drill down from one root the way XML forces you to."
     ]
   },
   {
@@ -2972,14 +2994,14 @@
     "scenario": "查询经常从某个人出发找所有关系，也会从某个城市反查出生或居住的人。",
     "scenario_en": "Queries often start from a person and follow relationships, and also start from a city to find people born or living there.",
     "options": [
-      "只按 edge_id 排序，并靠边编号定位",
-      "按 tail_vertex 和 head_vertex 分别索引",
-      "只给 label 建全文索引，再按关系名过滤"
+      "只按 edge_id 排序，靠边编号定位两个端点",
+      "按 tail_vertex 和 head_vertex 各建索引",
+      "只给 label 建全文索引，再按关系名过滤两端"
     ],
     "options_en": [
-      "Sort only by edge_id and locate edges by edge number.",
-      "Index both tail_vertex and head_vertex.",
-      "Create only a full-text index on label and filter by relationship name."
+      "Sort by edge_id only and locate both endpoints by edge number.",
+      "Index tail_vertex and head_vertex separately.",
+      "Index only label with full text, then filter both ends by relationship name."
     ],
     "answer": [
       1
@@ -3015,14 +3037,14 @@
     "scenario": "社交产品后来要给用户加食物过敏、活动签到、地点层级等新关系。",
     "scenario_en": "A social product later adds food allergies, event check-ins, and location hierarchies as new relationships.",
     "options": [
-      "可添加新类型 vertex/edge 而不重写旧关系",
-      "所有查询都会自动 O(1)",
-      "它禁止不同实体类型共存"
+      "能加新 vertex/edge 类型而不重写旧关系",
+      "所有关系查询都会自动变成 O(1)",
+      "它禁止不同实体类型共存于同一张图里"
     ],
     "options_en": [
       "New vertex and edge types can be added without rewriting old relationships.",
-      "Every query automatically becomes O(1).",
-      "It forbids different entity types from coexisting."
+      "Every relationship query automatically becomes O(1).",
+      "It forbids different entity types from living in one graph."
     ],
     "answer": [
       0
@@ -3086,12 +3108,12 @@
     "why_en": "Cypher is useful because it declares graph patterns while the engine chooses how to execute the traversal.",
     "whenOtherWins": "若只是固定表连接且没有路径语义，SQL join 会更自然。",
     "optionExplanations": [
-      "用路径模式声明要匹配的关系，Cypher 把“出生在美国、住在欧洲”写成一条图形化的路径语法，优化器再决定从哪个点开始找。",
+      "你只写 (p)-[:BORN_IN]->()-[:WITHIN*0..]->(us) 这种模式，跳几层由 *0.. 决定。",
       "要求应用手写每一层循环，正是 Cypher 想避免的事，跟它的声明式优势正相反。",
       "Cypher 并不限制只能查两跳，它可以用可变长度路径表达任意多跳的关系。"
     ],
     "optionExplanations_en": [
-      "Declaring the relationship pattern to match is Cypher's strength — it writes born-in-the-US, living-in-Europe as a graph-shaped path, letting the engine decide where to start.",
+      "You only write the pattern (p)-[:BORN_IN]->()-[:WITHIN*0..]->(us), and *0.. decides how many hops to take.",
       "Requiring the app to hand-code every traversal loop is exactly what Cypher avoids, the opposite of its declarative advantage.",
       "Cypher isn't limited to two-hop paths at all — it can express arbitrarily many hops with variable-length path syntax."
     ]
@@ -3150,14 +3172,14 @@
     "scenario": "同一个多跳地点查询可以用 SQL recursive CTE 写，也可以用图查询语言写。",
     "scenario_en": "The same multi-hop location query can be written with SQL recursive CTEs or with a graph query language.",
     "options": [
-      "SQL recursive CTE 可表达但更啰嗦，图语言更贴近路径",
-      "SQL 完全不能表达递归路径查询或多跳关系",
-      "图语言不能使用索引，只能从所有点全图扫描"
+      "SQL 递归 CTE 能写但啰嗦，图语言更贴路径",
+      "SQL 完全不能表达递归路径或多跳关系",
+      "图语言用不了索引，只能全图扫描起步"
     ],
     "options_en": [
-      "SQL recursive CTEs can express it but are verbose; graph languages fit paths more directly.",
-      "SQL cannot express recursive path queries or multi-hop relationships at all.",
-      "Graph languages cannot use indexes and must start by scanning every node."
+      "Recursive CTEs in SQL work but read verbosely; graph languages fit paths directly.",
+      "SQL cannot express recursive paths or multi-hop relationships at all.",
+      "Graph languages cannot use indexes and must start from a full scan."
     ],
     "answer": [
       0
@@ -3398,13 +3420,13 @@
     "scenario_en": "A knowledge graph stores location hierarchy as RDF triples; queries must follow within for any number of hops to reach a country.",
     "options": [
       "SPARQL property path",
-      "固定两表 join",
-      "全文搜索分词"
+      "固定深度的两表 join 逐层展开",
+      "全文搜索分词后做模糊匹配"
     ],
     "options_en": [
       "A SPARQL property path.",
-      "A fixed two-table join.",
-      "Full-text tokenization."
+      "A fixed-depth two-table join expanded level by level.",
+      "Full-text tokenization with fuzzy matching."
     ],
     "answer": [
       0
@@ -3684,13 +3706,13 @@
     "scenario": "一个产品要在用户资料树、订单表和社交关系网络之间选主要存储模型。",
     "scenario_en": "A product is choosing primary storage models for profile trees, order tables, and a social relationship network.",
     "options": [
-      "资料树用文档，订单共享实体用关系，关系网络用图",
-      "所有场景都强制文档",
+      "资料树用文档，订单用关系，人脉用图",
+      "所有场景都强制用文档模型",
       "所有场景都手写指针访问路径"
     ],
     "options_en": [
-      "Documents for profile trees, relational for shared order entities, graph for relationship networks.",
-      "Force documents for every scenario.",
+      "Documents for profile trees, relational for orders, graph for social networks.",
+      "Force the document model on every scenario.",
       "Hand-write pointer access paths for every scenario."
     ],
     "answer": [
@@ -4071,13 +4093,13 @@
     "scenario_en": "The query needs to say a person's birthplace follows within for any number of hops to the United States; the goal is recognizing graph path syntax.",
     "options": [
       "(person)-[:BORN_IN]->()-[:WITHIN*0..]->(us)",
-      "SELECT * FROM people ORDER BY name",
-      "for row in rows: follow(row.parent)"
+      "SELECT * FROM people ORDER BY name LIMIT 10",
+      "for row in rows: follow(row.parent_id)"
     ],
     "options_en": [
       "(person)-[:BORN_IN]->()-[:WITHIN*0..]->(us)",
-      "SELECT * FROM people ORDER BY name",
-      "for row in rows: follow(row.parent)"
+      "SELECT * FROM people ORDER BY name LIMIT 10",
+      "for row in rows: follow(row.parent_id)"
     ],
     "answer": [
       0
@@ -4107,12 +4129,12 @@
     "why_en": "Cypher uses node-and-edge patterns, and *0.. marks a variable-length traversal instead of a hand-written loop.",
     "whenOtherWins": "若目标是表格聚合而非图路径，SQL 片段会更合适。",
     "optionExplanations": [
-      "括号表示点、箭头表示边，*0.. 表示可变长度路径，这条语句正是 Cypher 用模式表达「出生地沿 within 走到 US」的写法。",
+      "读法是：从 person 走一条 BORN_IN 边，再沿 WITHIN 向上跳 0 到多次，最后落在 us 上。",
       "这是标准 SQL 的 SELECT 语句，按 name 排序取全部人，跟图路径遍历完全是两种查询形式。",
       "这是手写的命令式循环，逐行 follow 父节点，跟 Cypher 那种声明式路径模式语法正相反。"
     ],
     "optionExplanations_en": [
-      "Parentheses mark nodes, arrows mark edges, and *0.. marks a variable-length path — this is exactly how Cypher expresses born-in following within hops to the US.",
+      "Read it as: leave person by a BORN_IN edge, hop up WITHIN zero or more times, and land on us.",
       "This is a standard SQL SELECT statement ordering everyone by name, a completely different query style from graph path traversal.",
       "This is a hand-written imperative loop that follows the parent row by row, the opposite of Cypher's declarative path-pattern syntax."
     ]
@@ -4280,14 +4302,14 @@
     "scenario": "播放计数服务有大量更新，但不同视频 key 的数量可控；value 可以从磁盘读取。",
     "scenario_en": "A play-count service has many updates, but the number of distinct video keys is controlled; values can be read from disk.",
     "options": [
-      "key 全在 RAM 的日志型 hash 索引",
-      "只能用列式数据仓库",
-      "必须用图数据库遍历"
+      "key 索引常驻内存的追加日志",
+      "只能用列式数据仓库做全表扫描和聚合",
+      "必须用图数据库做多跳邻居关系遍历"
     ],
     "options_en": [
-      "A log-structured hash index with all keys in RAM.",
-      "Only a columnar data warehouse.",
-      "A graph database traversal is required."
+      "An append-only log with the key index kept in RAM.",
+      "Only a columnar warehouse doing full scans and aggregation.",
+      "A graph database doing multi-hop neighbor traversal."
     ],
     "answer": [
       0
@@ -4315,12 +4337,12 @@
     "why_en": "A log-structured hash index works well for many updates per key as long as the key directory fits in RAM.",
     "whenOtherWins": "若 key 空间巨大且很少重复更新，内存 hash 目录会成为瓶颈。",
     "optionExplanations": [
-      "更新频繁、但不同 key 数量可控时，追加日志加内存 key 索引正好合适——写入顺序化，读取靠内存里的偏移直接取值。",
+      "写只是在文件末尾追加一条；读时用内存里 key→字节偏移的映射，一次 seek 就拿到 value。",
       "列式数据仓库是为大规模分析扫描设计的，跟这里高频按 key 更新的负载完全不匹配。",
       "图数据库遍历是为多跳关系查询设计的，这里没有关系遍历需求，用不上。"
     ],
     "optionExplanations_en": [
-      "With frequent updates but a manageable number of distinct keys, a log-structured hash index fits — writes stay sequential and reads jump straight to the offset in memory.",
+      "A write just appends to the end of the file; a read uses the in-memory key-to-offset map and one seek gets the value.",
       "A columnar data warehouse is built for large-scale analytic scans, which doesn't match this high-frequency per-key update workload at all.",
       "Graph database traversal is for multi-hop relationship queries; there's no relationship traversal need here."
     ]
@@ -4644,14 +4666,14 @@
     "scenario": "多个段文件都按 key 排序；后台要合并它们并保留每个 key 的最新值。",
     "scenario_en": "Several segment files are sorted by key; the background job must merge them and keep the newest value per key.",
     "options": [
-      "可像 merge sort 一样顺序合并",
-      "必须把全部数据放进内存",
-      "每次读都要随机访问所有块"
+      "能像 merge sort 一样顺序合并",
+      "必须把全部数据都放进内存才能查",
+      "每次读都要随机访问所有 segment"
     ],
     "options_en": [
-      "They can be merged sequentially like merge sort.",
-      "All data must be loaded into memory.",
-      "Every read must randomly access all blocks."
+      "Segments can be merged sequentially like merge sort.",
+      "All data must fit in memory before it can be queried.",
+      "Every read randomly accesses every segment."
     ],
     "answer": [
       0
@@ -4947,12 +4969,12 @@
     "why_en": "A Bloom filter can rule out SSTables that definitely do not contain a key, reducing disk reads for misses.",
     "whenOtherWins": "若几乎没有 miss 或过滤器内存太紧，Bloom filter 收益会变小。",
     "optionExplanations": [
-      "Bloom filter 能快速判断某个 SSTable 段肯定不含这个 key，从而跳过那次磁盘读取，只在可能命中时才真的去查。",
+      "查询先问 filter：答 no 就直接跳过这个段，答 maybe 才真去读盘，误报只多花一次读。",
       "随机 sleep 只会让查询变慢，不会减少任何一次不必要的磁盘读取。",
       "改 SSTable 的文件名不会改变它包不包含目标 key，跟减少无效读取没有关系。"
     ],
     "optionExplanations_en": [
-      "A Bloom filter can quickly rule out an SSTable that definitely doesn't hold the key, letting the lookup skip that disk read entirely and only check segments that might have a hit.",
+      "Ask the filter first: a no skips the segment outright, a maybe costs one real disk read, and a false positive costs only that.",
       "Randomly sleeping only slows the query down; it doesn't cut a single unnecessary disk read.",
       "Renaming SSTables doesn't change whether they contain the target key, so it has nothing to do with reducing wasted reads."
     ]
@@ -5126,12 +5148,12 @@
     "why": "B-tree 原地覆盖多个页，中途崩溃会留下不一致引用。WAL 先记录修改意图，重启后可 redo 到一致状态。",
     "why_en": "A WAL protects multi-page in-place updates by replaying logged changes after a crash.",
     "optionExplanations": [
-      "B-tree 插入会覆盖写多个页，中途崩溃可能只写完一部分；WAL 先记录修改意图，重启后可以按日志把树 redo 回一致状态。",
+      "顺序是先 fsync 日志再改页面；重启时重做日志尾部，半写完的页分裂就能被补齐。",
       "WAL 跟把 B-tree 改造成列式存储完全是两回事，它解决的是崩溃恢复问题，不是存储布局问题。",
       "WAL 不是为了避免页面写入，它本身也要写日志，只是让崩溃后的恢复有据可依。"
     ],
     "optionExplanations_en": [
-      "A B-tree insert can overwrite several pages, and a crash mid-write can leave only some of them updated; the WAL logs the intended change first so a restart can redo it back to a consistent state.",
+      "The order is fsync the log first, then touch the pages; on restart the tail is redone so a half-finished page split gets completed.",
       "A WAL has nothing to do with turning a B-tree into columnar storage; it solves crash recovery, not storage layout.",
       "A WAL isn't meant to avoid page writes at all — it writes its own log — it just gives recovery something reliable to replay after a crash."
     ]
@@ -5169,12 +5191,12 @@
     "why_en": "Copy-on-write writes modified pages elsewhere and links parents to the new version, which helps snapshots at the cost of extra writes.",
     "whenOtherWins": "若写放大和空间回收比快照读更重要，传统 WAL 覆盖页可能更合适。",
     "optionExplanations": [
-      "copy-on-write 把被改动的页写到新位置，再更新父链指向新页，旧页保持不变，正好能让旧读事务继续看到未修改的旧版本树。",
+      "父链一路改到根，最后一次原子写换掉根指针；换根前开始的读事务仍指着旧根。",
       "删除所有父指针会让树完全无法从根导航到叶子，跟“避免原地覆盖”这个目标毫无关系。",
       "把页大小改成 1 字节只会让页数量暴增、管理开销爆炸，不解决原地覆盖或旧版本可见性的问题。"
     ],
     "optionExplanations_en": [
-      "Copy-on-write writes a modified page to a new location and updates the parent chain to point at it, leaving the old page untouched — exactly what lets an old read transaction keep seeing the unmodified tree.",
+      "The parent chain is rewritten up to the root and swapped in one atomic write; readers that started earlier still point at the old root.",
       "Deleting all parent pointers would make the tree impossible to navigate from root to leaf at all, which has nothing to do with avoiding in-place overwrites.",
       "Shrinking the page size to one byte would just explode the page count and management overhead, without addressing in-place overwrites or old-version visibility."
     ]
@@ -5275,12 +5297,12 @@
     "why_en": "An LSM-tree often fits high random-write throughput because it turns writes into buffered sequential flushes.",
     "whenOtherWins": "若读延迟可预测性和事务范围锁更重要，B-tree 往往更稳。",
     "optionExplanations": [
-      "高吞吐随机写正是 LSM-tree 的强项，它把随机写变成内存缓冲和顺序刷盘，读多层的代价靠后台 compaction 摊平。",
+      "写先进 memtable，满了整段顺序 flush 成 SSTable，磁盘上几乎没有随机写。",
       "只读数据立方体是分析场景的预聚合结构，处理不了持续的高吞吐随机写入。",
       "无索引堆文件没有任何加速读取的结构，写入虽然简单，但完全没利用到排序或索引带来的读取优势。"
     ],
     "optionExplanations_en": [
-      "High-throughput random writes are exactly what an LSM-tree is built for — it turns random writes into buffered, sequential flushes and amortizes multi-level reads through background compaction.",
+      "Writes land in a memtable and flush as whole sorted segments, so the disk sees almost no random writes.",
       "A read-only data cube is a pre-aggregated analytics structure; it can't absorb sustained high-throughput random writes at all.",
       "An unindexed heap file has no structure to speed up reads at all — writes are simple, but there's no benefit from sorting or indexing."
     ]
@@ -5421,12 +5443,12 @@
     "why_en": "A secondary index often maps a non-unique value to many row IDs, making joins and filters efficient.",
     "optionExplanations": [
       "多个订单可以共享同一个 customer_id，所以二级索引的 key 允许重复，这正是它和主键索引最直接的区别。",
-      "二级索引照样可以用 B-tree 实现，只是要处理 key 重复，比如把行 ID 拼进 key 让组合键唯一。",
+      "实现上仍是 B-tree，只是叶子挂的是一串行 ID 列表（postings），而不是单条记录。",
       "二级索引和主键索引一样可以持久化到磁盘，并不要求只能存在内存里。"
     ],
     "optionExplanations_en": [
       "Many orders can share the same customer_id, so secondary-index keys are allowed to repeat — that's exactly the direct difference from a primary-key index.",
-      "A secondary index can absolutely use a B-tree too; it just has to handle repeated keys, for example by appending a row ID to make the combined key unique.",
+      "It is still a B-tree; the leaf just holds a postings list of row IDs instead of a single record.",
       "A secondary index can be persisted to disk just like a primary index; it isn't required to live only in memory."
     ]
   },
@@ -5441,14 +5463,14 @@
     "scenario": "表有多个二级索引；读路径常从索引找到行，再去取完整记录。",
     "scenario_en": "A table has several secondary indexes; reads often use an index to find a row and then fetch the full record.",
     "options": [
-      "heap 避免多索引复制行，clustered 把行放进主索引减少额外跳转",
-      "clustered index 不存行数据，只保存指针",
-      "heap file 会自动按主键排序并支持范围扫描"
+      "heap 不复制行，clustered 把行放进主索引",
+      "clustered index 不存行数据，只保存行指针",
+      "heap file 会自动按主键排序支持范围扫描"
     ],
     "options_en": [
-      "A heap avoids copying rows into many indexes; a clustered index stores rows in the primary index to reduce extra hops.",
-      "A clustered index stores no row data and only keeps pointers.",
-      "A heap file is automatically sorted by primary key and supports range scans."
+      "A heap avoids copying rows; a clustered index keeps rows in the primary index.",
+      "A clustered index stores no row data and only keeps row pointers.",
+      "A heap file is automatically sorted by primary key for range scans."
     ],
     "answer": [
       0
@@ -5481,12 +5503,12 @@
     "why": "heap 把行存一处，多个索引只存引用；clustered index 把行数据和主索引放一起，点读更少跳。代价是复制和更新路径不同。",
     "why_en": "A heap stores rows once and indexes point to them, while a clustered index stores row data in the primary index for faster primary-key reads.",
     "optionExplanations": [
-      "heap 把行数据只存一份，多个索引都只保存指向它的引用，省去重复存储；clustered index 把行数据直接放进主索引，命中后不用再多跳一次去取行。",
-      "clustered index 恰恰是把完整行数据存进主索引本身，而不是只存指针，这个说法说反了。",
+      "多个二级索引只存指向同一行的指针；clustered 少一次随机 I/O，但行变长时会页分裂。",
+      "恰恰相反，clustered 索引把完整行数据存进主索引本身，而不是只存指针。",
       "heap file 本身没有天然顺序，不会自动按主键排序，想按范围扫描还是要靠额外的索引。"
     ],
     "optionExplanations_en": [
-      "A heap stores row data once and lets multiple indexes just point to it, avoiding duplication; a clustered index stores the row data directly in the primary index, so a hit skips the extra hop to fetch the row.",
+      "Several secondary indexes just store pointers to the same row; a clustered index saves one random I/O but splits pages when a row grows.",
       "A clustered index is precisely the one that stores the full row data inside the primary index itself, not just pointers — this option has it backwards.",
       "A heap file has no inherent order and isn't automatically sorted by primary key; range scans still need a separate index."
     ]
@@ -5532,12 +5554,12 @@
     "why_en": "A covering index answers a query from the index alone, trading faster reads for larger indexes and write maintenance.",
     "whenOtherWins": "若查询总要读完整行且写很多，普通索引加回表可能更省。",
     "optionExplanations": [
-      "查询需要的 order_id、status、updated_at 已经全在索引里，命中索引后不用再跳回主表取完整行，省掉了这一次额外的 I/O。",
-      "covering index 只是多存了几列数据，跟删除主表毫无关系，主表照样存在。",
+      "执行计划里会显示 index only scan，完全不碰主表；代价是这几列在索引里又存了一份。",
+      "它只是把几列数据多存了一份，跟删除主表毫无关系，主表照样存在。",
       "写入这些被索引覆盖的列时，索引也要跟着更新，写入并不是无成本的。"
     ],
     "optionExplanations_en": [
-      "Since order_id, status, and updated_at are already all in the index, a hit can answer the query without jumping back to the base table for the full row, saving that extra I/O.",
+      "The plan shows an index-only scan that never touches the table; the price is a second copy of those columns.",
       "A covering index just stores a few extra columns; it has nothing to do with deleting the base table, which still exists.",
       "Writing to the columns the index covers still has to update the index too, so writes are not free."
     ]
@@ -5574,12 +5596,12 @@
     "why": "(last_name, first_name) 先按姓分组，再在同姓内按名排序。没有姓条件时，所有姓里同名的人分散在各处。",
     "why_en": "A concatenated index is useful by its leading fields; without last_name, first_name values are scattered across the index.",
     "optionExplanations": [
-      "(last_name, first_name) 先按姓分组、姓内再按名排序；没给姓条件时，同名的人分散在各个姓氏区间里，索引找不到连续范围。",
+      "查 first_name='John' 时只能全扫：John 分散在 Smith、Lee、Wang 各个区间，没有连续范围可 seek。",
       "B-tree 本身完全能存字符串 key，这个说法跟索引帮不上忙的原因没有关系。",
       "索引不仅能排序，也能用来过滤，只是这里过滤条件没用上索引的最左前缀，这个说法把索引的能力说错了。"
     ],
     "optionExplanations_en": [
-      "The concatenated index (last_name, first_name) groups by last_name first and sorts first_name within each group; without a last_name condition, matching first_name rows are scattered across every last-name group instead of sitting in one contiguous range.",
+      "Searching first_name='John' can only scan: the Johns sit inside the Smith, Lee, and Wang ranges, so there is no contiguous range to seek.",
       "A B-tree can absolutely store string keys; that's unrelated to why this particular index doesn't help here.",
       "Indexes can filter as well as sort — the real issue is that the filter here skips the leftmost prefix, so this option mischaracterizes what indexes can do."
     ]
@@ -5695,14 +5717,14 @@
     "scenario": "服务希望读写都从内存数据结构完成，但重启后不能丢掉已确认写入。",
     "scenario_en": "A service wants reads and writes to use in-memory structures, but acknowledged writes must survive restart.",
     "options": [
-      "写变更日志或快照，并在重启时加载",
-      "只相信进程内变量",
-      "禁止任何备份"
+      "写变更日志或快照，重启时加载",
+      "只相信进程内变量，不落盘",
+      "禁止任何备份和快照"
     ],
     "options_en": [
-      "Write a change log or snapshots and reload on restart.",
-      "Trust only process-local variables.",
-      "Forbid all backups."
+      "Write a change log or snapshots and reload them on restart.",
+      "Trust only in-process variables and never persist.",
+      "Forbid all backups and snapshots."
     ],
     "answer": [
       0
@@ -5847,7 +5869,7 @@
     "why_en": "Anti-caching lets an in-memory database evict cold records to disk and fetch them back when needed.",
     "whenOtherWins": "若数据必须全部常驻且内存充足，anti-caching 的复杂度不值得。",
     "optionExplanations": [
-      "anti-caching 让数据库按记录粒度把冷数据换到磁盘，热点记录留在内存服务，需要时再把冷数据拉回来，正好对应这里的场景。",
+      "冷记录被换出到磁盘、热记录留在内存直接服务，命中冷记录时再按记录粒度拉回来。",
       "删除二级索引跟“把冷数据换到磁盘、热数据留内存”完全是两回事，也会直接损害查询性能。",
       "全表随机排序不会区分冷热数据，也不会腾出内存空间，跟这里的需求毫无关系。"
     ],
@@ -5868,14 +5890,14 @@
     "scenario": "客户下单路径要低延迟读写少量记录；分析师报表要扫描多年订单并聚合。",
     "scenario_en": "The order path needs low-latency reads and writes of a few records; analysts scan years of orders and aggregate.",
     "options": [
-      "OLTP 面向当前状态小读写，OLAP 面向历史大扫描聚合",
-      "OLAP 只能处理单条主键读取",
-      "OLTP 的数据一定比 OLAP 大"
+      "OLTP 读写当前状态，OLAP 扫描聚合历史",
+      "OLAP 只能做单条主键点查读取",
+      "OLTP 的数据量一定比 OLAP 更大"
     ],
     "options_en": [
-      "OLTP handles small current-state reads and writes; OLAP scans and aggregates history.",
-      "OLAP can only handle single primary-key reads.",
-      "OLTP data is always larger than OLAP data."
+      "OLTP does small reads and writes on current state; OLAP scans and aggregates history.",
+      "OLAP can only do single-key point lookups.",
+      "OLTP always holds more data than OLAP."
     ],
     "answer": [
       0
@@ -6132,14 +6154,14 @@
     "scenario": "产品维度可把品牌和类别拆成独立表，也可直接放在产品维度里。分析师更重视易用性。",
     "scenario_en": "A product dimension could split brand and category into separate tables or keep them directly on the product dimension; analysts value ease of use.",
     "options": [
-      "star 更反规范化易用，snowflake 更规范化但 join 更多",
-      "snowflake 永远更快且不需要额外 join",
-      "star schema 不能有维度表，只能放事实"
+      "star 更反规范化，snowflake 规范化但 join 多",
+      "snowflake 永远更快，且不需要任何额外 join",
+      "star schema 不能有维度表，只能存事实行"
     ],
     "options_en": [
-      "Star is more denormalized and easier; snowflake is more normalized but needs more joins.",
-      "Snowflake is always faster and needs no extra joins.",
-      "A star schema cannot have dimension tables and can only store facts."
+      "Star is more denormalized; snowflake is normalized but needs more joins.",
+      "Snowflake is always faster and never needs an extra join.",
+      "A star schema cannot have dimension tables, only fact rows."
     ],
     "answer": [
       0
@@ -6194,13 +6216,13 @@
     "scenario_en": "A fact table has hundreds of columns, but an analytic query reads only date, product, and quantity across many rows.",
     "options": [
       "column-oriented storage",
-      "每行所有列连续存储",
-      "只建主键 hash 表"
+      "行式存储，每行的所有列连续存放",
+      "只建主键 hash 表，逐行读取"
     ],
     "options_en": [
       "Column-oriented storage.",
-      "Store all columns of each row together.",
-      "Only build a primary-key hash table."
+      "Row storage: all columns of a row kept together.",
+      "Only a primary-key hash table, read row by row."
     ],
     "answer": [
       0
@@ -6292,14 +6314,14 @@
     "scenario": "仓库列 product_sk 有十万种可能值，但事实表有数十亿行；很多查询按少量商品过滤。",
     "scenario_en": "A warehouse column product_sk has 100k possible values but billions of fact rows; many queries filter on a few products.",
     "options": [
-      "每个取值一个 bitmap，并用 run-length encoding 压缩",
-      "把整行 JSON 存成一个大字符串再逐行解析",
-      "删除 product_sk 列，避免任何商品维度过滤"
+      "每个取值一个 bitmap，再做 run-length 压缩",
+      "把整行 JSON 存成一个大字符串，再逐行解析",
+      "删掉 product_sk 列，彻底避免商品维度过滤"
     ],
     "options_en": [
-      "A bitmap per value, compressed with run-length encoding.",
-      "Store each row as one large JSON string and parse it row by row.",
-      "Delete the product_sk column and avoid any product-dimension filtering."
+      "One bitmap per value, then compressed with run-length encoding.",
+      "Store each row as one big JSON string and parse it row by row.",
+      "Drop the product_sk column and avoid product-dimension filtering entirely."
     ],
     "answer": [
       0
@@ -6322,7 +6344,7 @@
     "why_en": "Bitmaps work well for filter-heavy warehouse columns because predicates become fast bit operations on compressed columns.",
     "whenOtherWins": "若列基数极高且过滤很少，bitmap 维护和存储收益会下降。",
     "optionExplanations": [
-      "取值种类不算太多、又经常按少量商品过滤时，给每个取值建一个 bitmap 并用 run-length encoding 压缩，过滤就变成快速的位运算。",
+      "取值种类不多时，每个取值一个 bitmap，过滤就变成位运算；稀疏位图再压一层游程编码。",
       "把整行存成大 JSON 字符串再逐行解析，等于放弃了列式和位图带来的所有过滤加速，回到最慢的逐行处理。",
       "删掉 product_sk 列直接砍掉了按商品过滤的能力，跟场景里“按少量商品过滤”的需求正相反。"
     ],
@@ -6343,14 +6365,14 @@
     "scenario": "分析查询要找 product in (30,68,69) 且 store=3 的销售行。",
     "scenario_en": "An analytic query needs sales rows where product is in (30, 68, 69) and store equals 3.",
     "options": [
-      "对商品 bitmap 做 OR，再和门店 bitmap 做 AND",
-      "逐行解析所有列，再比较商品和门店字符串",
-      "为每个结果行单独请求 OLTP 库再过滤"
+      "商品 bitmap 做 OR，再与门店 bitmap 做 AND",
+      "逐行解析所有列，再逐行比较商品和门店字符串",
+      "为每个候选结果行单独查一次 OLTP 库，再逐行过滤"
     ],
     "options_en": [
       "OR the product bitmaps, then AND with the store bitmap.",
       "Parse every column row by row, then compare product and store strings.",
-      "Send one OLTP request per result row and filter afterward."
+      "Issue one OLTP query per candidate row and filter afterward."
     ],
     "answer": [
       0
@@ -6456,14 +6478,14 @@
     "scenario": "数据仓库常按最近一个月过滤，再按商品分组；事实表巨大。",
     "scenario_en": "A warehouse often filters by the last month and then groups by product; the fact table is huge.",
     "options": [
-      "先按 date，再按 product",
-      "每列独立按自身排序",
-      "随机打散所有行"
+      "先按 date 再按 product 排序",
+      "每列都按自己的取值各自独立排序",
+      "把所有行随机打散再写入文件"
     ],
     "options_en": [
-      "Sort rows by date first, then product.",
-      "Sort each column independently by itself.",
-      "Randomly shuffle all rows."
+      "Sort by date first, then by product.",
+      "Sort each column independently by its own values.",
+      "Shuffle all rows randomly before writing them out."
     ],
     "answer": [
       0
@@ -6543,13 +6565,13 @@
     "scenario_en": "A columnar warehouse is sorted and compressed for reads, but it must accept ongoing inserts; in-place insertion would rewrite many column files.",
     "options": [
       "先写内存结构，再批量 merge 到列文件",
-      "每次插入都重写全表",
-      "禁止所有新数据"
+      "每次插入都重写整张表的所有列文件",
+      "禁止任何新数据写进这张列式表"
     ],
     "options_en": [
-      "Write into an in-memory structure first, then merge into column files in bulk.",
-      "Rewrite the whole table on every insert.",
-      "Forbid all new data."
+      "Write into an in-memory structure, then merge into column files in bulk.",
+      "Rewrite every column file of the whole table on each insert.",
+      "Forbid any new data from entering this columnar table."
     ],
     "answer": [
       0
@@ -6800,14 +6822,14 @@
     "scenario": "一个用户写入在底层可能先写 WAL，再写数据页，或在 LSM 中被多轮 compaction 重写。",
     "scenario_en": "One user write may write a WAL and data page, or be rewritten through several LSM compactions.",
     "options": [
-      "一次逻辑写会变成多次物理写，影响吞吐和 SSD 寿命",
-      "写入只会发生一次",
-      "它只影响 SELECT 语句语法"
+      "一次逻辑写变成多次物理写，影响吞吐和寿命",
+      "一次逻辑写在磁盘上也只发生一次",
+      "它只影响 SELECT 语句的语法与解析速度"
     ],
     "options_en": [
-      "One logical write can become many physical writes, affecting throughput and SSD lifetime.",
-      "A write always happens exactly once.",
-      "It only affects SELECT syntax."
+      "One logical write becomes many physical writes, costing throughput and SSD life.",
+      "A logical write happens exactly once on disk too.",
+      "It only affects how SELECT statements are parsed."
     ],
     "answer": [
       0
@@ -6842,7 +6864,7 @@
     "optionExplanations": [
       "一次逻辑写在底层可能先写 WAL、再写数据页，或者在 LSM 里被多轮 compaction 重写，实际落盘的字节数会远超这一次逻辑写本身，影响吞吐和 SSD 寿命。",
       "实际情况正相反，一次逻辑写常常触发多次物理写，说写入只发生一次忽略了 WAL 和 compaction 带来的放大。",
-      "write amplification 影响的是底层存储的写入次数和寿命，跟 SELECT 语句的语法完全无关。"
+      "它影响的是底层存储的写入次数和硬件寿命，跟 SELECT 语句的语法完全无关。"
     ],
     "optionExplanations_en": [
       "A single logical write can trigger a WAL write, a data-page write, and multiple rounds of LSM compaction underneath, so the actual bytes hitting disk can far exceed that one logical write, affecting throughput and SSD lifetime.",
@@ -7334,16 +7356,16 @@
     "scenario": "移动端和服务端滚动升级，旧客户端还会读到新服务写出的用户资料记录。",
     "scenario_en": "Mobile clients and servers upgrade gradually, and old clients may read user profile records written by new servers.",
     "options": [
-      "使用新 tag，并让字段可选或有默认值",
-      "复用已删除字段的 tag",
-      "把新字段设成必填",
-      "先改字段名再改 tag"
+      "用新 tag，并让字段可选或有默认值",
+      "复用一个已删除字段的 tag 编号",
+      "把新字段设成必填并立即上线",
+      "先改字段名，再改它的 tag"
     ],
     "options_en": [
-      "Use a new tag and make it optional or defaulted",
-      "Reuse a deleted field tag",
-      "Make the new field required",
-      "Rename the field and change its tag"
+      "Use a new tag and make the field optional or defaulted.",
+      "Reuse the tag number of a deleted field.",
+      "Make the new field required and ship it immediately.",
+      "Rename the field first, then change its tag."
     ],
     "answer": [
       0
@@ -7416,17 +7438,19 @@
       }
     ],
     "optionExplanations": [
-      "删掉字段不会抹掉世界上已经写出去的旧消息，保留 tag 就是告诉未来的 schema：这个编号已经有历史含义，别拿去给新字段用，避免误解释旧字节。",
+      "旧消息还躺在磁盘和队列里；tag 5 一旦被新字段复用，那些旧字节就会被解释成另一个含义。",
       "删除字段跟旧客户端崩不崩溃没有直接关系，保留 tag 本身不会主动让任何客户端崩溃。",
       "保留一个不再使用的 tag 不会让新消息变短，它只是在 schema 里占位提醒，不影响新消息的实际编码。",
       "保留 tag 是 schema 层面的约定，不会强制数据库去删除任何列，两者不是一回事。"
     ],
     "optionExplanations_en": [
-      "Removing a field doesn't erase old messages already written out there; reserving the tag tells any future schema that this number already has a history, so nothing new should claim it and misread old bytes.",
+      "Old messages still sit on disk and in queues; if tag 5 gets reused by a new field, those old bytes decode as something else.",
       "Removing a field has no direct bearing on whether old clients crash; reserving the tag by itself doesn't actively crash anything.",
       "Reserving an unused tag doesn't shorten new messages — it's just a placeholder note in the schema and doesn't affect how new messages are actually encoded.",
       "Reserving a tag is a schema-level convention; it doesn't force the database to drop any column, the two are unrelated."
-    ]
+    ],
+    "whenOtherWins": "只有当这套 schema 从未发布给外部、且所有旧数据都已重写过时，tag 编号才可以安全回收。",
+    "whenOtherWins_en": "Only when the schema was never published outside the team and every old record has been rewritten is it safe to recycle the tag number."
   },
   {
     "id": "ddia-ch04-009",
@@ -7579,7 +7603,7 @@
       ]
     },
     "optionExplanations": [
-      "Protobuf 的 repeated 字段能让旧的单值数据被读成只有 0 或 1 个元素的列表，从单值平滑过渡到多值，旧代码也不会直接报错。",
+      "旧写入的单值会被读成只有 0 或 1 个元素的列表，从单值过渡到多值时旧代码不会报错。",
       "Thrift 把标量直接改成 list，是一次不兼容的类型变更，旧代码按标量解析新写入的列表数据会直接出错。",
       "CSV 单列塞逗号列表完全没有类型约束，逗号本身可能出现在标签文本里，解析歧义很大。",
       "JSON 字段随意换类型意味着同一个字段有时是字符串有时是数组，消费方要自己猜测和兼容，风险全靠约定。"
@@ -7609,16 +7633,16 @@
     "scenario": "数据湖里一批 Avro 文件只有紧凑字节，没有给每个字段写 tag 或类型标记。",
     "scenario_en": "A data lake stores compact Avro bytes without field tags or type markers per field.",
     "options": [
-      "按 writer schema 顺序解析字节",
-      "从字段 tag 推断名字",
-      "靠 JSON 字段名逐个查找",
-      "让客户端猜测字段类型"
+      "按 writer schema 的顺序解析字节",
+      "从每个字段的 tag 推断字段名",
+      "靠 JSON 里的字段名逐个查找",
+      "让客户端根据取值猜字段类型"
     ],
     "options_en": [
-      "Decode bytes using the writer schema order",
-      "Infer names from field tags",
-      "Look up JSON field names",
-      "Let clients guess field types"
+      "Decode the bytes in writer-schema order.",
+      "Infer field names from each field's tag.",
+      "Look up field names inside the JSON.",
+      "Let the client guess types from the values."
     ],
     "answer": [
       0
@@ -7809,7 +7833,35 @@
       "Repeating the full schema per record would balloon the otherwise compact binary encoding with schema text over and over, eating away the compression benefit.",
       "Hard-coding the schema only in consumer code means the moment the producer's schema changes, the consumer has no idea and misreads the data.",
       "Putting the schema in the filename can carry at most a vague version tag; it can't actually convey field types and order, so the parser still can't work."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "携带方式",
+        "空间开销",
+        "混版本",
+        "额外依赖"
+      ],
+      "rows": [
+        [
+          "文件头一次",
+          "整文件一份",
+          "同文件需同版",
+          "无"
+        ],
+        [
+          "逐条重复",
+          "每条都带",
+          "逐条可不同",
+          "无"
+        ],
+        [
+          "记录带 ID",
+          "几字节 ID",
+          "逐条可不同",
+          "需 registry"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch04-015",
@@ -7829,16 +7881,16 @@
     "scenario": "用户库里的记录由不同年代的服务写入，不能假设整张表都使用同一个 writer schema。",
     "scenario_en": "User records were written by services from different eras, so the table cannot assume one writer schema.",
     "options": [
-      "记录带 schema 版本，读取时查 schema 库",
-      "每次读都扫描全表推断 schema",
-      "只保留最新 reader schema",
-      "把所有旧记录先删掉"
+      "记录带 schema 版本号，读取时查 schema 库",
+      "每次读都扫描全表来推断 schema",
+      "只保留最新的 reader schema，旧记录丢弃",
+      "先把所有旧记录删掉再上线新版本"
     ],
     "options_en": [
-      "Store a schema version and look it up on read",
-      "Infer the schema by scanning the table",
-      "Keep only the latest reader schema",
-      "Delete all old records first"
+      "Store a schema version with the record and look it up on read.",
+      "Scan the whole table on every read to infer the schema.",
+      "Keep only the newest reader schema and drop old records.",
+      "Delete every old record before shipping the new version."
     ],
     "answer": [
       0
@@ -7854,9 +7906,9 @@
     ],
     "diagram": "flowchart LR\n  R[record bytes + schema id] --> S[schema registry]\n  S --> W[writer schema]\n  W --> D[decode with reader schema]",
     "optionExplanations": [
-      "每条记录带一个 schema 版本号，读取时拿这个版本号去 schema 库里查出对应的 writer schema，就算表里混着不同年代写入的记录，也能各自解码正确。",
+      "每条记录带一个 schema 版本号，读取时按版本号去注册表取回当年那份写入结构。",
       "每次读都扫全表推断 schema 既慢又不可靠，不同年代的记录本来就该有不同 schema，推断不出唯一答案。",
-      "只保留最新 reader schema 解决不了历史数据用旧 writer schema 写入的问题，旧记录该怎么解码还是没答案。",
+      "只保留最新的 reader schema 解决不了旧记录当年用别的结构写入的问题。",
       "删掉所有旧记录是丢数据，不是解码方案，跟“怎么正确读出旧记录”这个问题背道而驰。"
     ],
     "optionExplanations_en": [
@@ -7984,7 +8036,7 @@
       }
     ],
     "optionExplanations": [
-      "Avro 没有字段 tag，字段靠名字匹配，导出脚本可以直接把数据库列名映射成 Avro 字段名，列新增删除时不用人工维护一张编号表。",
+      "字段靠名字匹配，导出脚本能把数据库列名直接映射成 Avro 字段名，列增删不用维护编号表。",
       "要求给每列手写永久 tag 正是 Avro 想避免的负担，这属于 Protobuf/Thrift 那类需要编号表的格式。",
       "Avro 的 schema 是独立描述的数据结构，不要求导出成固定的 Java 类，这个说法把它的能力说小了。",
       "Avro 是它自己的一套二进制格式和 schema 语言，不是只能输出 XML Schema，这个说法不成立。"
@@ -8700,16 +8752,16 @@
     "scenario": "同一组织内的推荐服务和特征服务部署在同一地区，调用频繁，双方能共同维护 schema 和客户端库。",
     "scenario_en": "A recommender and feature service run in one region, call each other frequently, and can share schemas and client libraries.",
     "options": [
-      "使用 schema 化 RPC，并显式处理超时重试",
-      "公开一个无版本 JSON 接口",
-      "把数据库文件直接共享",
-      "用 CSV 轮询目录"
+      "用 schema 化 RPC，并显式处理超时重试",
+      "公开一个无版本、无 schema 的 JSON 接口",
+      "把数据库文件直接共享给调用方",
+      "轮询共享目录里的 CSV 文件"
     ],
     "options_en": [
-      "Use schema-based RPC and handle timeouts explicitly",
-      "Expose an unversioned JSON interface",
-      "Share database files directly",
-      "Poll a directory of CSV files"
+      "Use a schema-based RPC and handle timeouts and retries explicitly.",
+      "Expose an unversioned, schemaless JSON interface.",
+      "Share the database files directly with the caller.",
+      "Poll a shared directory of CSV files."
     ],
     "answer": [
       0
@@ -9216,7 +9268,29 @@
       "A registry only handles schema-level compatibility; it doesn't replace the business-logic correctness that unit tests are meant to cover.",
       "A registry can block an incompatible schema change, but it can't resolve conflicts in business meaning — that's outside its scope.",
       "A registry manages schema versions; it doesn't turn asynchronous messaging into synchronous calls, which is an unrelated dimension."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "版本可见性",
+        "兼容拦截",
+        "运维成本"
+      ],
+      "rows": [
+        [
+          "schema registry",
+          "集中可查",
+          "发布前拦住",
+          "要跑一套服务"
+        ],
+        [
+          "本地 schema 文件",
+          "各仓库自查",
+          "靠人评审",
+          "几乎为零"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch04-038",
@@ -9331,13 +9405,13 @@
       }
     ],
     "optionExplanations": [
-      "JSON 只是数字字面量，不保证每种语言都能精确表示 64 位大整数，JavaScript 这类语言在这个范围会丢精度，把 ID 改成字符串能避开这个问题。",
+      "JavaScript 的 Number 只有 53 位安全整数，超过就静默丢精度，ID 改成字符串就避开了。",
       "JSON 本身没有 int64 这种类型概念，也不会自动替你选择用哪种整数宽度，这个说法不成立。",
       "HTTP 是传输协议，不会校验 JSON body 里数字的精度范围，这不是它的职责。",
       "TLS 只负责加密传输通道，跟应用层数字精度问题完全无关。"
     ],
     "optionExplanations_en": [
-      "JSON only gives a numeric literal with no guarantee every language can represent a 64-bit integer exactly, and JavaScript in particular can lose precision at that range, so returning IDs as strings sidesteps the problem.",
+      "JavaScript's Number is only safe up to 53 bits and silently loses precision past that, so sending the ID as a string avoids it.",
       "JSON has no concept of an int64 type and doesn't automatically pick a numeric width for you, so this claim doesn't hold.",
       "HTTP is a transport protocol; it doesn't validate the precision range of numbers inside a JSON body, that's not its job.",
       "TLS only encrypts the transport channel; it has nothing to do with application-level numeric precision."
@@ -9361,16 +9435,16 @@
     "scenario": "财务系统用 CSV 交换账单，字段里有日期、金额、空值和带逗号的说明文本。",
     "scenario_en": "A finance system exchanges bills in CSV with dates, amounts, nulls, and text that may contain commas.",
     "options": [
-      "明确类型、转义和 schema 约定",
-      "天然的嵌套对象模型",
-      "内置的服务发现",
-      "自动的副本一致性"
+      "明确的类型、转义和 schema 约定",
+      "天然的嵌套对象与数组表达能力",
+      "内置的服务发现与地址路由",
+      "自动的跨副本一致性保证"
     ],
     "options_en": [
-      "Explicit type, escaping, and schema conventions",
-      "A native nested object model",
-      "Built-in service discovery",
-      "Automatic replica consistency"
+      "Explicit type, escaping, and schema conventions.",
+      "A native way to express nested objects and arrays.",
+      "Built-in service discovery and address routing.",
+      "Automatic consistency across replicas."
     ],
     "answer": [
       0
@@ -9471,16 +9545,16 @@
     "scenario": "公开 API 必须同时支持 v1 和 v2，客户端有浏览器、curl、移动端和合作方后端。",
     "scenario_en": "A public API must support v1 and v2 for browsers, curl, mobile clients, and partner backends.",
     "options": [
-      "URL 路径或 Accept header 中显式选择",
-      "只写在服务器环境变量里",
-      "让 JSON body 第一项猜版本",
-      "根据客户端 IP 推断版本"
+      "写在 URL 路径或 Accept header 里",
+      "只写在服务器进程的环境变量里，不进请求",
+      "从 JSON body 的第一个字段猜版本号",
+      "根据客户端 IP 网段来推断版本号"
     ],
     "options_en": [
-      "Choose explicitly in the URL path or Accept header",
-      "Store it only in a server environment variable",
-      "Guess from the first JSON body field",
-      "Infer it from client IP"
+      "Put it in the URL path or the Accept header.",
+      "Keep it only in a server environment variable, never in the request.",
+      "Guess the version from the first field of the JSON body.",
+      "Infer the version from the client's IP range."
     ],
     "answer": [
       0
@@ -10499,8 +10573,8 @@
     "tradeoff": "复制灵活性 vs 写入开销/可靠性",
     "optionExplanations": [
       "只同步少数表的部分字段、还要自定义过滤改写逻辑，这种灵活性正是 trigger-based replication 的强项，代价是它会拖慢写入、也更容易出 bug。",
-      "追求最低延迟的全库物理复制恰恰是 trigger-based replication 最不擅长的场景，触发器本身就会增加写入开销。",
-      "trigger-based replication 就是靠在数据库里运行应用代码（触发器）实现的，这个说法直接否定了它的实现方式，不成立。",
+      "追求最低延迟的全库物理复制正是触发器最不擅长的场景，触发器本身就会拖慢每次写入。",
+      "它就是靠在数据库里运行应用代码（触发器）实现的，这个说法直接否定了它的实现方式。",
       "这里说的是可以接受触发器带来的开销，而不是要求所有写入都必须避开触发器，这个说法把条件说反了。"
     ],
     "optionExplanations_en": [
@@ -10647,16 +10721,16 @@
     "scenario": "协作产品里用户可能编辑很多对象；如果所有对象都读 leader，读扩展基本失效。",
     "scenario_en": "In a collaboration product, users may edit many objects; reading all of them from the leader would kill read scaling.",
     "options": [
-      "记录最近写入时间，只在窗口内读 leader 或等新副本",
-      "永久把该用户所有读都打到 leader",
-      "忽略 lag 让用户刷新",
-      "把 follower 删除"
+      "写后一小段时间内读 leader，之后走副本",
+      "永久把这个用户的所有读都打到 leader",
+      "忽略 lag，让用户自己刷新",
+      "把这些 follower 直接删掉"
     ],
     "options_en": [
-      "Track recent write time and use leader or fresh replicas only within a window",
-      "Send all reads for that user to the leader forever",
-      "Ignore lag and ask users to refresh",
-      "Delete the followers"
+      "Read the leader only for a short window after that user's write, then use replicas.",
+      "Send all of that user's reads to the leader forever.",
+      "Ignore the lag and let the user refresh.",
+      "Just remove those followers."
     ],
     "answer": [
       0
@@ -10790,8 +10864,8 @@
     "sub": "monotonic-reads",
     "q": "如何避免同一用户读到时间倒退？",
     "q_en": "How do you avoid one user seeing time go backward?",
-    "why": "monotonic reads 不要求最新，只要求同一用户别从新状态退回旧状态；粘性路由能做到这一点。",
-    "why_en": "Monotonic reads do not require the latest value, only that one user does not move backward.",
+    "why": "monotonic reads 不要求最新，只要求同一用户别从新状态退回旧状态。路由单位 = 用户而不是请求：hash(user_id) → 固定副本。",
+    "why_en": "Monotonic reads do not demand the newest value, only that one user never goes backwards; you route per user, not per request, by hashing the user id to a replica.",
     "tags": [
       "ddia",
       "ch05",
@@ -11240,8 +11314,8 @@
     "sub": "conflict-avoidance",
     "q": "能按用户归属路由写入时怎么降低多主冲突？",
     "q_en": "How can user-home routing reduce multi-leader conflicts?",
-    "why": "把一个记录的写集中到一个 home leader，就把多主问题局部退化成单主；迁移 home 时才需要格外小心。",
-    "why_en": "Routing a record's writes to one home leader locally turns multi-leader into single-leader behavior.",
+    "why": "把一个记录的写集中到一个 home leader，多主问题就局部退化成单主。归属单位 = 用户 → 一个 leader；跨用户的写仍然是多主。",
+    "why_en": "Pinning each record's writes to one home leader degenerates multi-leader into single-leader for that record; the unit you pin is the user, not the datacenter.",
     "tags": [
       "ddia",
       "ch05",
@@ -11436,7 +11510,7 @@
     },
     "optionExplanations": [
       "on read 可以把两个并发版本都原样交给应用或用户，让人来判断该保留哪个内容，适合需要业务判断的场景。",
-      "on write 处理器在后台跑，追求的是快速自动处理，没办法在那个时刻弹窗让用户当场选择。",
+      "后台自动处理追求的是快，冲突发生那一刻没有用户在场，弹窗让人当场选根本做不到。",
       "on read 恰恰需要把冲突的多个版本都存下来，才能在读的时候暴露给应用或用户挑选，这个说法说反了。",
       "两者都只是冲突处理的时机选择，本身不理解具体业务语义，业务判断还是要靠应用代码或用户来做。"
     ],
@@ -12182,7 +12256,7 @@
       "read repair 只在有人读这个 key 时才触发，几乎没人读的历史订单副本一旦漏掉了一次更新，可能长期没人发现，也没有其它机制主动去修它。",
       "read repair 是被动触发的，不是每次后台自动扫描修复，冷 key 没人读就不会被立刻发现和修复。",
       "quorum 公式只是判断读写集合有没有交集，它不会主动删除任何旧值，这个说法不成立。",
-      "客户端并不知道某个副本落后了多久，没有 anti-entropy 兜底时，staleness 的上限其实很难给出保证。"
+      "客户端不知道某个副本落后了多久；缺少后台比对修复机制时，staleness 上限给不出保证。"
     ],
     "optionExplanations_en": [
       "Read repair only fires when someone reads that key, so a historical order replica that almost never gets read can miss an update and stay stale for a long time with nothing else to catch it.",
@@ -12238,10 +12312,10 @@
       }
     ],
     "optionExplanations": [
-      "够不到 home 副本组时，sloppy quorum 允许把写临时放到集群里还能连上的其它节点，先把写保住，而不是因为够不到固定的几个节点就直接失败。",
-      "要求强制等待 home 节点恢复正是 sloppy quorum 想避免的，那样分区期间就完全没法接写了。",
-      "sloppy quorum 讨论的是无主架构里写去哪存的问题，跟把读写路由到某个 leader 不是一回事。",
-      "sloppy quorum 只是临时放宽了写去哪个节点的限制，并不是删除副本数量或分布这些规则本身。"
+      "够不到 home 副本组时，写被临时放到还连得上的其它节点，先把写保住而不是直接失败。",
+      "强制等 home 节点恢复正是这个机制想避免的，那样分区期间就完全没法接写了。",
+      "它讨论的是无主架构里写去哪存，跟把读写路由到某个 leader 不是一回事。",
+      "它只是临时放宽写落在哪个节点，并没有改动副本数量或分布这些规则本身。"
     ],
     "optionExplanations_en": [
       "When the home replica group is unreachable, sloppy quorum lets the write land temporarily on whatever cluster nodes are still reachable, so the write gets saved instead of failing just because the usual few nodes can't be reached.",
@@ -12522,7 +12596,7 @@
     ],
     "optionExplanations": [
       "删除也必须留下一个带版本的记号参与合并，不然合并逻辑根本不知道这件商品曾经被删过，只会把它当成另一个副本里还存在的正常商品。",
-      "直接物理删除不留痕的话，另一个 sibling 里那份还没删除的旧记录在做并集合并时会让这件商品重新出现，跟删除的意图相反。",
+      "物理删除不留痕的话，并集合并时另一份副本里那件旧商品会重新出现，跟删除意图相反。",
       "LWW 只按时间戳留一个赢家，遇到并集合并这种场景时并不天然保证删除操作被保留下来。",
       "read repair 只是把落后副本补齐到最新状态，它不理解购物车加减商品这种业务语义，不会替你判断该不该保留某次删除。"
     ],
@@ -12589,7 +12663,7 @@
       "每个副本各自维护一个计数器，合起来就能表达“这次写看到了哪些副本上的哪些历史”，服务器靠比较这些计数器判断谁覆盖了谁、谁是并发的 siblings。",
       "全局墙钟时间戳本身可能有偏差，也没法表达“这次写是否见过另一次写”这种因果关系，只能给出一个不可靠的顺序。",
       "让客户端永远只读一个副本回避了问题，不是解决因果追踪的机制，而且会牺牲多副本带来的可用性好处。",
-      "把所有并发写交给 LWW 是丢弃信息来强制排出一个顺序，跟 version vector 想保留因果信息、区分覆盖与并发的目标正相反。"
+      "把所有并发写交给 LWW 是丢弃信息来强排顺序，跟保留因果、区分覆盖与并发的目标正相反。"
     ],
     "optionExplanations_en": [
       "Each replica maintains its own counter, and together they express which replicas' histories a given write has seen, letting the server tell overwrites apart from concurrent siblings.",
@@ -12680,8 +12754,8 @@
     "sub": "replication-choice",
     "q": "购物车可离线编辑且不能丢添加项时怎么选冲突策略？",
     "q_en": "How should a cart handle offline edits without losing added items?",
-    "why": "购物车的业务意图是合并多端操作，不是选一个赢家；siblings/CRDT 能保留并发添加，删除用 tombstone 表达。",
-    "why_en": "A cart should merge intent rather than pick one winner; siblings or CRDTs preserve concurrent adds and tombstones preserve deletes.",
+    "why": "购物车的业务意图是合并多端操作，不是选一个赢家。合并单位 = 每个商品条目，不是整个购物车对象；删除用 tombstone 表达。",
+    "why_en": "A cart wants both sides merged rather than one winner, so the merge unit is each line item, not the whole cart object, and deletes need a tombstone.",
     "tags": [
       "ddia",
       "ch05",
@@ -12856,8 +12930,8 @@
     "sub": "key-range",
     "q": "什么时候 key range 分区很合适？",
     "q_en": "When is key-range partitioning a good fit?",
-    "why": "range 分区保留排序，连续范围查询能落到少量相邻分区；代价是相邻热门 key 可能形成 hot spot。",
-    "why_en": "Range partitioning preserves order so range scans hit a small set of adjacent partitions, at the risk of hot spots.",
+    "why": "range 分区保留排序，一小时的连续查询 ≈ 落到 1-2 个相邻分区；代价是相邻热门 key 可能形成 hot spot。",
+    "why_en": "Range partitioning keeps the sort order, so a one-hour scan touches roughly one or two adjacent partitions, at the risk of a hot spot on neighbouring popular keys.",
     "tags": [
       "ddia",
       "ch06",
@@ -12867,15 +12941,15 @@
     "scenario_en": "Sensor queries often scan by device and time range, such as one device's last hour of readings.",
     "options": [
       "按有序 key range 分区并在分区内排序",
-      "对完整 key 做随机 hash",
-      "每条记录随机放节点",
-      "只用全局二级索引"
+      "对完整 key 做随机 hash 分区",
+      "每条记录随机放到任意节点",
+      "只依赖全局二级索引查时间"
     ],
     "options_en": [
-      "Partition by ordered key ranges and keep keys sorted inside partitions",
-      "Hash the whole key randomly",
-      "Place each record randomly",
-      "Use only a global secondary index"
+      "Partition by sorted key range and keep each partition sorted.",
+      "Hash the whole key randomly into partitions.",
+      "Place each record on a random node.",
+      "Rely only on a global secondary index for time."
     ],
     "answer": [
       0
@@ -13183,8 +13257,8 @@
     "optionExplanations": [
       "consistent hashing 这个词里的 consistent 指的是节点增减时 key 到节点的映射变动很小，是一种负载和重平衡技术，跟读写要不要一致、能不能读到最新值是两回事。",
       "它跟 ACID 里的 consistency 是完全不同层面的概念，不能划等号。",
-      "split brain 是复制和选主层面的问题，consistent hashing 只管 key 怎么映射到节点，解决不了这个问题。",
-      "consistent hashing 不要求所有查询都经过某个 leader，它本身跟有没有 leader 无关。"
+      "split brain 是复制和选主层面的问题，这个哈希方案只管 key 怎么映射到节点。",
+      "它跟集群里有没有 leader 无关，也不要求查询都经过某个固定节点。"
     ],
     "optionExplanations_en": [
       "The consistent in consistent hashing refers to key-to-node mapping changing minimally as nodes come and go — it's a load and rebalancing technique, a completely different thing from read-write consistency or getting the freshest value.",
@@ -13201,8 +13275,8 @@
     "sub": "cassandra-compound-key",
     "q": "Cassandra 复合主键的折中点是什么？",
     "q_en": "What compromise does Cassandra's compound key make?",
-    "why": "第一列决定数据在哪个 partition，后续列保留局部排序；这让单用户时间范围查询高效。",
-    "why_en": "The first column chooses the partition, while later columns keep local order for efficient per-user time scans.",
+    "why": "第一列决定数据落在哪个 partition，后续列保留分区内排序：单分区 ≈ 一个用户的全部动态按时间有序。",
+    "why_en": "The first column picks the partition and the rest keep the order inside it, so one partition holds roughly one user's whole timeline in time order.",
     "tags": [
       "ddia",
       "ch06",
@@ -13261,8 +13335,8 @@
     "sub": "hot-key-splitting",
     "q": "单个热 key 压垮分区时怎么办？",
     "q_en": "What can you do when one hot key overloads a partition?",
-    "why": "相同 key 的 hash 永远相同，换 hash 不会分散单 key；人为拆成多个子 key 才能把写摊开。",
-    "why_en": "The same key always hashes to one place, so splitting it into subkeys is what spreads the writes.",
+    "why": "相同 key 的 hash 永远相同，换 hash 不会分散单 key。拆分单位 = 热 key × N 个后缀，读时要 fan-out N 次再合并。",
+    "why_en": "The same key always hashes the same way, so only splitting it into N suffixed sub-keys spreads the writes — and reads then fan out to all N and merge.",
     "tags": [
       "ddia",
       "ch06",
@@ -13272,15 +13346,15 @@
     "scenario_en": "After a celebrity posts, all comments write to one activity_id, and hashing still sends them to one partition.",
     "options": [
       "给热 key 加少量随机 shard 后缀",
-      "换一个加密更强的 hash",
-      "按节点数取模",
-      "删除 follower"
+      "换一个更强的加密 hash 函数",
+      "直接按当前节点数取模分配",
+      "把这个分区的 follower 删掉"
     ],
     "options_en": [
-      "Add a small random shard suffix to the hot key",
-      "Use a more cryptographic hash",
-      "Use modulo node count",
-      "Remove followers"
+      "Add a small random shard suffix to the hot key.",
+      "Switch to a stronger cryptographic hash function.",
+      "Just take the key modulo the current node count.",
+      "Delete the followers of that partition."
     ],
     "answer": [
       0
@@ -13618,15 +13692,15 @@
     "scenario_en": "A car search supports price ranges and exact color filters, and the index itself must be partitioned.",
     "options": [
       "按 term 值利于范围查，按 hash 更均匀",
-      "按 hash 能保留所有范围顺序",
-      "按 term 值一定无热点",
-      "两者对写路径完全一样"
+      "按 term hash 分区能保留范围顺序",
+      "按 term 值分区一定不会有热点",
+      "两种分法对写路径完全一样"
     ],
     "options_en": [
-      "Term value helps range scans, while term hash spreads load",
-      "Hashing preserves all range order",
-      "Term value always avoids hot spots",
-      "They make writes identical"
+      "Partitioning by term value helps range queries; hashing spreads load more evenly.",
+      "Hashing the term still preserves range order.",
+      "Partitioning by term value never creates a hot spot.",
+      "Both choices behave identically on the write path."
     ],
     "answer": [
       0
@@ -13849,7 +13923,7 @@
     "whenOtherWins": "key range 分区且数据分布未知时，动态 split/merge 更自然。",
     "tradeoff": "稳定映射 vs 初始容量规划",
     "optionExplanations": [
-      "key 到 partition 的映射本身没变，扩容只是把某些整个 partition 从旧节点挪到新节点上，不用重新计算每个 key 该落在哪个 partition。",
+      "扩容只是把整个 partition 从旧节点挪到新节点，每个 key 该落哪个 partition 不用重算。",
       "重新计算每个 key 的节点正是 hash mod N 那种方案的做法，恰恰是固定 partition 数想要避免的大规模搬迁。",
       "把 partition 数改成节点数意味着每次扩容都要重新划分 partition 边界，这不是固定 partition 数的做法。",
       "迁移期间请求仍然可以按旧的 partition 归属继续服务，不需要让所有写停下来等迁移结束。"
@@ -13859,7 +13933,35 @@
       "Recomputing every key's node is exactly what a hash-mod-N scheme does, precisely the large-scale reshuffling that a fixed partition count is meant to avoid.",
       "Setting partition count equal to node count would mean redrawing partition boundaries on every scale-out, which isn't how a fixed partition count works.",
       "Requests can keep being served against the old partition ownership during migration; writes don't need to halt until the migration finishes."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "扩容搬迁量",
+        "映射稳定性",
+        "初始规划"
+      ],
+      "rows": [
+        [
+          "固定分区数",
+          "少量整段",
+          "key→分区不变",
+          "要先估上限"
+        ],
+        [
+          "hash mod 节点",
+          "接近全量",
+          "每次都变",
+          "无需规划"
+        ],
+        [
+          "动态 split",
+          "按需分裂",
+          "随时变动",
+          "无需规划"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch06-022",
@@ -13905,7 +14007,35 @@
       "More partitions aren't free — the management overhead grows with them, so it isn't true that more is always better.",
       "Fewer partitions doesn't guarantee even data distribution; balance depends on the data itself and the partition key, so this claim doesn't hold.",
       "Picking a partition count doesn't eliminate the need for later rebalancing — partition-to-node ownership still needs to move as nodes change."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "分区数",
+        "扩展上限",
+        "元数据开销",
+        "单分区大小"
+      ],
+      "rows": [
+        [
+          "偏少",
+          "很快用尽",
+          "低",
+          "偏大难搬"
+        ],
+        [
+          "适中",
+          "留有余量",
+          "中",
+          "适中"
+        ],
+        [
+          "偏多",
+          "长期富余",
+          "高",
+          "偏小而碎"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch06-023",
@@ -14174,7 +14304,35 @@
       "A dedicated routing tier holds the partition map centrally, accepting requests and forwarding them to the right node, keeping routing logic in one place.",
       "A partition-aware client keeps its own copy of the map and connects directly to the target node, skipping an extra forwarding hop.",
       "Broadcasting to every machine on the public internet is neither realistic nor safe, and isn't a common way to solve routing."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "方案",
+        "映射持有者",
+        "客户端复杂度",
+        "额外跳数"
+      ],
+      "rows": [
+        [
+          "任意节点转发",
+          "每个节点",
+          "最低",
+          "可能多一跳"
+        ],
+        [
+          "routing tier",
+          "路由层",
+          "低",
+          "固定一跳"
+        ],
+        [
+          "分区感知客户端",
+          "客户端自己",
+          "最高",
+          "零跳"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch06-028",
@@ -14195,15 +14353,15 @@
     "scenario_en": "The cluster adds nodes and moves partitions, and the routing tier must know where each key range currently lives.",
     "options": [
       "用 ZooKeeper 保存权威映射并通知订阅者",
-      "让每个客户端靠缓存永不更新",
-      "把映射写进应用代码",
-      "只依赖 DNS 解析 key"
+      "让每个客户端只用本地缓存，永不更新",
+      "把 partition 映射硬编码进应用代码",
+      "只依赖 DNS 解析 key 找到节点"
     ],
     "options_en": [
-      "Store the authoritative map in ZooKeeper and notify subscribers",
-      "Let clients cache forever",
-      "Hard-code the map in application code",
-      "Use DNS to resolve keys"
+      "Keep the authoritative mapping in ZooKeeper and notify subscribers.",
+      "Let each client keep a local cache that never refreshes.",
+      "Hard-code the partition mapping into application code.",
+      "Rely on DNS alone to resolve a key to a node."
     ],
     "answer": [
       0
@@ -14234,7 +14392,41 @@
       "Letting clients cache the map forever means every rebalance leaves them routing requests to the wrong, now-outdated node, directly conflicting with the premise that the mapping changes frequently.",
       "Hard-coding the map into application code would require a redeploy every time a partition moves, far too slow to keep up with frequent changes.",
       "DNS is good at resolving a handful of relatively stable service entrypoints; it can't express fine-grained, fast-changing ownership of every key range down to the node."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "映射来源",
+        "变更传播",
+        "陈旧风险",
+        "外部依赖"
+      ],
+      "rows": [
+        [
+          "协调服务",
+          "订阅即时推",
+          "低",
+          "要 ZooKeeper"
+        ],
+        [
+          "客户端缓存",
+          "从不更新",
+          "高",
+          "无"
+        ],
+        [
+          "硬编码",
+          "改代码发布",
+          "很高",
+          "无"
+        ],
+        [
+          "DNS",
+          "按 TTL 过期",
+          "中",
+          "DNS 基础设施"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch06-029",
@@ -14375,7 +14567,29 @@
       "A DNS record maps a hostname to an IP; it has no way to express something as fine-grained as which partition a specific key belongs to.",
       "Partition ownership does change often as nodes come and go and rebalancing happens, so claiming it never changes doesn't hold.",
       "It is itself a service and still needs an address to be found by clients, so this claim does not hold up."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "查找目标",
+        "变更频率",
+        "粒度",
+        "承载方"
+      ],
+      "rows": [
+        [
+          "服务入口地址",
+          "小时到天",
+          "主机名",
+          "DNS"
+        ],
+        [
+          "key 归属节点",
+          "秒级",
+          "每个分区",
+          "集群元数据"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch06-031",
@@ -15035,7 +15249,36 @@
       "How many replicas must acknowledge a commit determines durability strength and write latency, another boundary worth clarifying behind the ACID compliant label.",
       "Who checks business invariants determines whether cross-row rules like a balance never going negative are enforced by database constraints or left entirely to application code, which directly shapes the design.",
       "Full-text index query support is a query capability, unrelated to transaction safety, isolation level, or durability strategy, so it doesn't belong in this question."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "追问项",
+        "它决定什么",
+        "不问的后果"
+      ],
+      "rows": [
+        [
+          "默认隔离级别",
+          "会出哪些并发异常",
+          "以为防住了写偏斜"
+        ],
+        [
+          "提交等几份副本",
+          "故障丢失窗口",
+          "以为提交就不会丢"
+        ],
+        [
+          "不变量谁检查",
+          "超卖错误归谁",
+          "以为数据库替你挡"
+        ],
+        [
+          "有无全文索引",
+          "查询能力",
+          "与事务安全无关"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch07-008",
@@ -15242,16 +15485,16 @@
     "q": "脏写为什么危险？",
     "q_en": "Why are dirty writes dangerous?",
     "options": [
-      "会把并发写的结果拼成没人真正提交过的状态",
-      "只会让读请求慢一点",
-      "只影响只读备份",
-      "只在没有索引时发生"
+      "把并发写拼成没人提交过的状态",
+      "只会让读请求变慢一点",
+      "只影响只读备份的内容",
+      "只在没有二级索引时发生"
     ],
     "options_en": [
-      "They can combine concurrent writes into a state nobody actually committed",
-      "They only make reads slower",
-      "They only affect read-only backups",
-      "They happen only without indexes"
+      "It stitches concurrent writes into a state nobody actually committed.",
+      "It only makes reads a little slower.",
+      "It only affects read-only backups.",
+      "It only happens without a secondary index."
     ],
     "answer": [
       0
@@ -15479,16 +15722,16 @@
     "q": "读已提交和快照隔离差别在哪？",
     "q_en": "How do read committed and snapshot isolation differ?",
     "options": [
-      "读已提交两次可能不同，快照隔离同一事务内稳定",
-      "两者都保证可串行化",
-      "快照隔离一定阻塞所有写",
-      "读已提交能防写偏斜"
+      "读已提交每次读都会变，快照隔离全程稳定",
+      "两者都保证完整的可串行化",
+      "快照隔离一定会阻塞所有写",
+      "读已提交就能防住写偏斜"
     ],
     "options_en": [
-      "Read committed may change between reads; snapshot isolation is stable within the transaction",
-      "Both guarantee serializability",
-      "Snapshot isolation always blocks all writes",
-      "Read committed prevents write skew"
+      "Read committed can change between reads; snapshot isolation stays stable all transaction long.",
+      "Both of them guarantee full serializability.",
+      "Snapshot isolation always blocks every write.",
+      "Read committed already prevents write skew."
     ],
     "answer": [
       0
@@ -15961,16 +16204,16 @@
     "q": "这里的幻读风险是什么？",
     "q_en": "What is the phantom risk here?",
     "options": [
-      "被查的记录一开始不存在，所以行锁没东西可锁",
-      "提交日志可能重复写入",
-      "单行更新会自动失败",
-      "读副本会变得线性化"
+      "要锁的行还不存在，行锁无从下手",
+      "提交日志可能被重复写入",
+      "单行更新会自动失败回滚",
+      "读副本会变得线性化一致"
     ],
     "options_en": [
-      "The searched row does not exist yet, so there is no row to lock",
-      "The commit log may be written twice",
-      "Single-row updates will automatically fail",
-      "Read replicas become linearizable"
+      "The rows to lock do not exist yet, so row locks have nothing to hold.",
+      "The commit log may be written twice.",
+      "Single-row updates automatically fail and roll back.",
+      "Read replicas become linearizable."
     ],
     "answer": [
       0
@@ -16173,15 +16416,15 @@
     "q_en": "When is actual serial execution feasible?",
     "options": [
       "事务短、数据在内存、分区能限制热点",
-      "事务常等人工审批",
-      "每个事务跨所有分区",
-      "每个查询都扫冷数据"
+      "事务中途常要等人工审批",
+      "每个事务都要跨所有分区",
+      "每个查询都要扫描冷数据"
     ],
     "options_en": [
-      "Transactions are short, data is in memory, and partitioning limits hotspots",
-      "Transactions often wait for human approval",
-      "Every transaction spans all partitions",
-      "Every query scans cold data"
+      "Transactions are short, data fits in memory, and partitioning caps the hot spots.",
+      "Transactions often wait for a human approval step.",
+      "Every transaction spans all partitions.",
+      "Every query scans cold data."
     ],
     "answer": [
       0
@@ -16219,16 +16462,16 @@
     "q": "为什么不适合交互式多轮事务？",
     "q_en": "Why is it a poor fit for interactive multi-round transactions?",
     "options": [
-      "事务等待客户端时会堵住后面所有事务",
-      "它无法写入内存数据",
-      "它天然不支持索引",
-      "它会让日志不可恢复"
+      "事务等客户端时会堵住后面所有事务",
+      "它无法写入内存里的数据",
+      "它天然不支持任何索引",
+      "它会让事务日志不可恢复"
     ],
     "options_en": [
-      "Waiting for the client would block all later transactions",
-      "It cannot write in-memory data",
-      "It naturally cannot use indexes",
-      "It makes the log unrecoverable"
+      "While a transaction waits on the client, everything behind it stalls.",
+      "It cannot write data held in memory.",
+      "It inherently supports no indexes.",
+      "It makes the transaction log unrecoverable."
     ],
     "answer": [
       0
@@ -16319,16 +16562,16 @@
     "q": "2PL 与 MVCC 的关键差别是什么？",
     "q_en": "What is the key difference between 2PL and MVCC?",
     "options": [
-      "2PL 冲突时等待，MVCC 常让读者读旧版本",
-      "MVCC 禁止任何并发写",
-      "2PL 不支持写事务",
-      "两者都只能读未提交"
+      "2PL 冲突就等待，MVCC 让读者读旧版本",
+      "MVCC 会彻底禁止任何并发写入",
+      "2PL 完全不支持写事务并发",
+      "两者都只能读到未提交的数据"
     ],
     "options_en": [
-      "2PL waits on conflicts, while MVCC often lets readers use old versions",
-      "MVCC forbids any concurrent writes",
-      "2PL does not support writes",
-      "Both only allow dirty reads"
+      "2PL makes conflicting transactions wait; MVCC lets readers read an older version.",
+      "MVCC forbids concurrent writes entirely.",
+      "2PL cannot run write transactions concurrently at all.",
+      "Both can only read uncommitted data."
     ],
     "answer": [
       0
@@ -16495,16 +16738,16 @@
     "q": "索引范围锁为什么常用？",
     "q_en": "Why are index-range locks commonly used?",
     "options": [
-      "比谓词锁粗一些，但实现和执行更便宜",
-      "它完全不需要索引",
-      "它只保护单行主键",
+      "比谓词锁粗一些，但执行更便宜",
+      "它完全不需要任何索引",
+      "它只保护单行主键记录",
       "它把写入变成异步复制"
     ],
     "options_en": [
-      "They are coarser than predicate locks but cheaper to implement and run",
-      "They require no index at all",
-      "They only protect a single primary-key row",
-      "They turn writes into asynchronous replication"
+      "It is coarser than a predicate lock but much cheaper to run.",
+      "It needs no index at all.",
+      "It only protects a single primary-key row.",
+      "It turns writes into asynchronous replication."
     ],
     "answer": [
       0
@@ -16684,16 +16927,16 @@
     "q": "SSI 为什么要跟踪读集合？",
     "q_en": "Why does SSI track read sets?",
     "options": [
-      "为了知道后续写入是否让先前读结论失效",
-      "为了把读请求都发到副本",
-      "为了压缩 WAL",
-      "为了选择缓存过期时间"
+      "为了知道后续写入是否让先前读失效",
+      "为了把读请求都发到只读副本",
+      "为了压缩 WAL 日志体积",
+      "为了选择缓存的过期时间"
     ],
     "options_en": [
-      "To know whether later writes invalidate an earlier read decision",
-      "To send all reads to replicas",
-      "To compress the WAL",
-      "To choose cache TTLs"
+      "So it can tell whether a later write invalidated what this transaction read.",
+      "So reads can be sent to read-only replicas.",
+      "So the WAL can be compressed.",
+      "So cache expiry times can be chosen."
     ],
     "answer": [
       0
@@ -17044,16 +17287,16 @@
     "q": "为什么单节点丢失更新技巧不够？",
     "q_en": "Why are single-node lost-update techniques insufficient?",
     "options": [
-      "不同副本可能并发接受写入，后来才发现冲突",
-      "所有副本共享同一行锁",
-      "读已提交自动跨地区串行化",
-      "WAL 会自动合并业务语义"
+      "不同副本会并发接受写，事后才发现冲突",
+      "所有副本共享同一把行锁",
+      "读已提交能自动跨地区串行化",
+      "WAL 会自动合并业务语义冲突"
     ],
     "options_en": [
-      "Different replicas may accept writes concurrently and discover conflict later",
-      "All replicas share the same row lock",
-      "Read committed automatically serializes across regions",
-      "The WAL automatically merges business meaning"
+      "Different replicas accept writes concurrently and only discover the conflict later.",
+      "All replicas share one row lock.",
+      "Read committed serializes across regions automatically.",
+      "The WAL merges business-level conflicts by itself."
     ],
     "answer": [
       0
@@ -17482,16 +17725,16 @@
     "q": "跨 3 个分区的事务成本怎么估？",
     "q_en": "How should you estimate the cost of touching 3 shards?",
     "options": [
-      "扇出=触达分区数=3，延迟、锁时间和失败面都变大",
-      "分区数不影响等待时间",
-      "3 个分区会自动把事务变成只读",
-      "协调者可以忽略最慢参与者"
+      "扇出 = 触达分区数 = 3",
+      "分区数完全不影响等待时间",
+      "3 个分区会让事务自动变成只读",
+      "协调者可以直接忽略最慢参与者"
     ],
     "options_en": [
-      "fanout = touched shards = 3, so latency, lock time, and failure surface grow",
-      "Shard count does not affect waiting time",
-      "Three shards automatically make the transaction read-only",
-      "The coordinator can ignore the slowest participant"
+      "Fan-out = partitions touched = 3.",
+      "The partition count does not affect wait time.",
+      "Three partitions make the transaction read-only.",
+      "The coordinator can just ignore the slowest participant."
     ],
     "answer": [
       0
@@ -17640,16 +17883,16 @@
     "q": "这段 SQL 为什么比读后写安全？",
     "q_en": "Why is this SQL safer than read-then-write?",
     "options": [
-      "加法在数据库内原子执行，避免覆盖并发增量",
-      "它绕过所有锁",
-      "它让副本立即同步",
-      "它禁用事务日志"
+      "加法在数据库内原子完成",
+      "它绕过了数据库所有的锁",
+      "它让所有副本立即同步",
+      "它禁用了事务日志写入"
     ],
     "options_en": [
-      "The addition runs atomically inside the database, avoiding overwritten increments",
-      "It bypasses all locks",
-      "It makes replicas immediately synchronized",
-      "It disables the transaction log"
+      "The addition happens atomically inside the database.",
+      "It bypasses every database lock.",
+      "It makes all replicas sync immediately.",
+      "It disables transaction log writes."
     ],
     "answer": [
       0
@@ -17825,16 +18068,16 @@
     "q": "最好的开场是什么？",
     "q_en": "What is the best opening answer?",
     "options": [
-      "先说不变量，再选约束、锁或可串行化保护提交路径",
-      "先说把缓存调大",
-      "先说所有数据库都默认安全",
-      "先说用更多 Web 服务器"
+      "先说不变量，再选保护提交路径的手段",
+      "先说把缓存和连接池调大",
+      "先说所有数据库默认就安全",
+      "先说加更多 Web 服务器"
     ],
     "options_en": [
-      "State the invariant, then choose constraints, locks, or serializable protection on the commit path",
-      "Start by increasing cache size",
-      "Say all databases are safe by default",
-      "Add more web servers"
+      "Name the invariant first, then pick what protects the commit path.",
+      "Start by enlarging the cache and connection pool.",
+      "Start by saying databases are safe by default.",
+      "Start by adding more web servers."
     ],
     "answer": [
       0
@@ -18711,16 +18954,16 @@
     "q": "最大风险是什么？",
     "q_en": "What is the biggest risk?",
     "options": [
-      "快时钟节点的旧业务写可能覆盖真实较新的写",
-      "所有冲突都会被保留",
-      "写入吞吐会降为零",
-      "网络分区会自动修复"
+      "快时钟节点的旧写会覆盖较新的写",
+      "所有冲突都会被完整保留",
+      "写入吞吐会直接降为零",
+      "网络分区会自动被修复"
     ],
     "options_en": [
-      "A stale business write from a fast-clock node may overwrite a truly newer write",
-      "All conflicts are preserved",
-      "Write throughput drops to zero",
-      "Network partitions repair themselves"
+      "A node with a fast clock can overwrite a genuinely newer write.",
+      "Every conflict is preserved in full.",
+      "Write throughput drops straight to zero.",
+      "Network partitions heal automatically."
     ],
     "answer": [
       0
@@ -18856,16 +19099,16 @@
     "q": "提交前为什么可能要等待？",
     "q_en": "Why might it wait before commit is visible?",
     "options": [
-      "等时钟不确定区间过去，避免后来的事务被排到前面",
-      "等缓存 TTL 过期以省内存",
-      "等客户端关闭连接",
-      "等所有旧日志删除"
+      "等时钟不确定区间过去再提交",
+      "等缓存 TTL 过期好省下内存",
+      "等客户端主动关闭连接",
+      "等所有旧日志被删除"
     ],
     "options_en": [
-      "To wait out clock uncertainty so a later transaction cannot be ordered before it",
-      "To let cache TTLs expire and save memory",
-      "To wait for the client connection to close",
-      "To delete all old logs"
+      "Wait out the clock uncertainty window before committing.",
+      "Wait for the cache TTL to expire and free memory.",
+      "Wait for the client to close the connection.",
+      "Wait until all old logs are deleted."
     ],
     "answer": [
       0
@@ -18903,16 +19146,16 @@
     "q": "这会造成什么风险？",
     "q_en": "What risk does this create?",
     "options": [
-      "旧持有者在被替换后继续写，形成双主效果",
-      "GC 会自动续约所有锁",
+      "旧持有者被替换后继续写，形成双主",
+      "GC 暂停会自动续约所有锁",
       "其他节点会知道它只是暂停",
-      "网络协议会回滚旧写"
+      "网络协议会自动回滚旧写"
     ],
     "options_en": [
-      "The old holder may keep writing after replacement, acting like a second leader",
-      "GC automatically renews all locks",
-      "Other nodes know it was only paused",
-      "The network protocol rolls back stale writes"
+      "The old holder keeps writing after being replaced, acting like a second leader.",
+      "A GC pause automatically renews every lock.",
+      "Other nodes can tell it is merely paused.",
+      "The network protocol rolls back the stale writes."
     ],
     "answer": [
       0
@@ -19053,16 +19296,16 @@
     "q": "这个假设有什么问题？",
     "q_en": "What is wrong with this assumption?",
     "options": [
-      "普通环境不是硬实时，调度、GC、缺页都可能暂停",
-      "TCP 会强制进程准时运行",
-      "NTP 能阻止 GC",
+      "普通环境不是硬实时，随时可能暂停",
+      "TCP 会强制进程准时被调度",
+      "NTP 校时能阻止 GC 暂停",
       "多数派投票能消除本机暂停"
     ],
     "options_en": [
-      "Ordinary environments are not hard real-time; scheduling, GC, and page faults can pause",
-      "TCP forces the process to run on time",
-      "NTP prevents garbage collection",
-      "Majority voting removes local pauses"
+      "An ordinary environment is not hard real-time; it can pause at any moment.",
+      "TCP forces the process to be scheduled on time.",
+      "NTP time sync prevents GC pauses.",
+      "Majority voting removes local pauses."
     ],
     "answer": [
       0
@@ -19333,16 +19576,16 @@
     "q": "为什么用多数派？",
     "q_en": "Why use a majority quorum?",
     "options": [
-      "任意两个多数派必然相交，能看到彼此的决定",
-      "多数派让网络延迟为零",
-      "少数派能单独覆盖多数派",
-      "它避免所有节点崩溃"
+      "任意两个多数派必然相交，能看到彼此",
+      "多数派能让网络延迟降为零",
+      "少数派可以单独覆盖多数派",
+      "它能避免所有节点同时崩溃"
     ],
     "options_en": [
-      "Any two majorities overlap, so decisions can see each other",
-      "A majority makes network delay zero",
-      "A minority can override the majority",
-      "It prevents all node crashes"
+      "Any two majorities must overlap, so they see each other's decision.",
+      "A majority drives network latency to zero.",
+      "A minority can override a majority on its own.",
+      "It prevents all nodes from crashing at once."
     ],
     "answer": [
       0
@@ -19652,16 +19895,16 @@
     "q": "你该怀疑什么？",
     "q_en": "What should you suspect?",
     "options": [
-      "完全异步模型没有可靠时间界限，超时无法证明死亡",
-      "完全异步模型自带全局时钟",
-      "超时越短证明越强",
+      "异步模型没有时间界限，超时证明不了死亡",
+      "完全异步模型自带一个全局时钟",
+      "超时设得越短证明力越强",
       "节点死亡会自动广播给所有人"
     ],
     "options_en": [
-      "A fully asynchronous model has no reliable timing bounds, so timeout cannot prove death",
-      "A fully asynchronous model includes a global clock",
-      "Shorter timeouts prove more",
-      "Node death is automatically broadcast to everyone"
+      "An asynchronous model has no timing bound, so a timeout cannot prove death.",
+      "A fully asynchronous model comes with a global clock.",
+      "The shorter the timeout, the stronger the proof.",
+      "Node death is broadcast to everyone automatically."
     ],
     "answer": [
       0
@@ -20095,16 +20338,16 @@
     "q": "它适合什么环境？",
     "q_en": "What environment does it fit?",
     "options": [
-      "有硬延迟上界的同步模型或专用实时系统",
-      "普通互联网服务",
-      "跨洲移动网络",
-      "无监控的多租户云"
+      "有硬延迟上界的同步/实时系统",
+      "普通公网上的互联网服务",
+      "跨洲的移动蜂窝网络",
+      "没有监控的多租户云"
     ],
     "options_en": [
-      "A synchronous model or dedicated real-time system with hard delay bounds",
-      "A normal internet service",
-      "Cross-continent mobile networks",
-      "An unmonitored multi-tenant cloud"
+      "A synchronous or real-time system with a hard latency bound.",
+      "An ordinary internet service on the public network.",
+      "A cross-continent mobile cellular network.",
+      "An unmonitored multi-tenant cloud."
     ],
     "answer": [
       0
@@ -20142,16 +20385,16 @@
     "q": "系统会出现什么症状？",
     "q_en": "What symptom can appear?",
     "options": [
-      "频繁选主，系统把时间花在协调而非处理请求",
-      "数据自动更线性化",
-      "所有请求延迟变成零",
-      "磁盘空间立刻释放"
+      "频繁选主，时间花在协调而非请求",
+      "数据会自动变得更线性化",
+      "所有请求的延迟变成零",
+      "磁盘空间会立刻被释放"
     ],
     "options_en": [
-      "Frequent elections; the system spends time coordinating instead of serving requests",
-      "Data automatically becomes more linearizable",
-      "All request latency becomes zero",
-      "Disk space is immediately freed"
+      "Constant leader elections, with time spent coordinating instead of serving requests.",
+      "The data automatically becomes more linearizable.",
+      "Every request's latency drops to zero.",
+      "Disk space is freed immediately."
     ],
     "answer": [
       0
@@ -20350,10 +20593,10 @@
       "rdma-shared-nothing"
     ],
     "optionExplanations": [
-      "shared-nothing 假设机器之间只能靠发送网络请求通信，排除了一台机器直接读写另一台机器内存或磁盘这种共享物理资源的能力。",
-      "通过 RPC 发送消息正是 shared-nothing 假设下机器互相通信的标准方式，不是被排除的能力。",
-      "服务通过负载均衡接收请求同样是常规的网络通信方式，符合 shared-nothing 的假设。",
-      "每个节点有自己的本地磁盘正是 shared-nothing 的典型特征，不是被排除的能力。"
+      "无共享架构假设机器之间只能发网络请求，排除了直接读写另一台机器内存或磁盘的能力。",
+      "通过 RPC 发消息正是这个假设下机器互相通信的标准方式，不是被排除的能力。",
+      "服务经负载均衡接收请求同样是常规的网络通信方式，符合这个假设。",
+      "每个节点有自己的本地磁盘正是这类架构的典型特征，不是被排除的能力。"
     ],
     "optionExplanations_en": [
       "Shared-nothing assumes machines can only communicate through network requests, ruling out the ability of one machine to directly read or write another machine's memory or disk as a shared physical resource.",
@@ -20372,16 +20615,16 @@
     "q": "应该补什么工程实践？",
     "q_en": "What practice should be added?",
     "options": [
-      "故障注入和混沌测试，验证协议实际行为",
-      "只写更长 README",
-      "把所有超时改成无穷大",
-      "关闭监控减少噪声"
+      "故障注入和混沌测试验证真实行为",
+      "只写一份更长的 README",
+      "把所有超时都改成无穷大",
+      "关掉监控以减少告警噪声"
     ],
     "options_en": [
-      "Fault injection and chaos testing to verify behavior",
-      "Only write a longer README",
-      "Set all timeouts to infinity",
-      "Turn off monitoring to reduce noise"
+      "Fault injection and chaos testing to see how the protocol really behaves.",
+      "Just write a longer README.",
+      "Set every timeout to infinity.",
+      "Turn monitoring off to cut alert noise."
     ],
     "answer": [
       0
@@ -20519,16 +20762,16 @@
     "q": "eventual consistency 真正承诺什么？",
     "q_en": "What does eventual consistency actually promise?",
     "options": [
-      "没有新写入且故障修复后，副本最终收敛",
-      "每次读都看到最新写",
+      "没有新写入时副本最终会收敛",
+      "每次读都能看到最新的写",
       "所有写都按全局顺序提交",
-      "网络分区时仍线性化"
+      "网络分区时仍然线性化"
     ],
     "options_en": [
-      "If no new writes occur and faults heal, replicas eventually converge",
-      "Every read sees the latest write",
-      "All writes commit in one global order",
-      "Reads remain linearizable during partitions"
+      "With no new writes, the replicas eventually converge.",
+      "Every read sees the latest write.",
+      "All writes commit in one global order.",
+      "It stays linearizable during a partition."
     ],
     "answer": [
       0
@@ -20618,16 +20861,16 @@
     "q": "这违反了什么直觉？",
     "q_en": "What intuition is violated?",
     "options": [
-      "Bob 的后续读应至少和 Alice 看到的一样新",
-      "两个同时刷新必须完全相同",
+      "Bob 后来的读不该比 Alice 更旧",
+      "两个人同时刷新必须完全相同",
       "Bob 的手机必须连同一个副本",
-      "最终一致保证毫秒级收敛"
+      "最终一致保证毫秒级就收敛"
     ],
     "options_en": [
-      "Bob’s later read should be at least as fresh as Alice’s observed result",
-      "Two simultaneous refreshes must be identical",
-      "Bob’s phone must hit the same replica",
-      "Eventual consistency converges within milliseconds"
+      "Bob's later read should not be older than what Alice already saw.",
+      "Two simultaneous refreshes must return identical results.",
+      "Bob's phone must hit the same replica.",
+      "Eventual consistency guarantees millisecond convergence."
     ],
     "answer": [
       0
@@ -20989,16 +21232,16 @@
     "q": "什么时候可能线性化？",
     "q_en": "When can it be linearizable?",
     "options": [
-      "读也从确认的 leader 或同步 follower 读取",
+      "读也走已确认的 leader 或同步副本",
       "读总是从任意异步 follower 读取",
-      "允许两个 leader 同时写",
-      "leader 身份永不需要确认"
+      "允许两个 leader 同时接受写",
+      "leader 身份永远不需要确认"
     ],
     "options_en": [
-      "Reads also go to the confirmed leader or synchronously updated followers",
-      "Reads always go to any asynchronous follower",
-      "Two leaders may write concurrently",
-      "Leader identity never needs confirmation"
+      "Reads also go to a confirmed leader or a synchronous follower.",
+      "Reads always go to any asynchronous follower.",
+      "Two leaders are allowed to accept writes at once.",
+      "Leadership never has to be confirmed."
     ],
     "answer": [
       0
@@ -21366,16 +21609,16 @@
     "q": "读写一致性应怎样分层？",
     "q_en": "How should consistency be split?",
     "options": [
-      "页面读可最终一致；提交路径用强约束或线性化",
+      "展示读可最终一致，提交路径强约束",
       "页面读和提交都走任意副本",
-      "所有读写都离线批处理",
-      "提交路径只相信 CDN"
+      "所有读写都改成离线批处理",
+      "提交路径只相信 CDN 缓存"
     ],
     "options_en": [
-      "Page reads can be eventual; checkout uses strong constraints or linearizability",
-      "Both page reads and checkout use any replica",
-      "All reads and writes are offline batch jobs",
-      "Checkout trusts only the CDN"
+      "Display reads can be eventually consistent; the commit path needs a strong constraint.",
+      "Send both page reads and commits to any replica.",
+      "Move every read and write into offline batch jobs.",
+      "Let the commit path trust the CDN cache."
     ],
     "answer": [
       0
@@ -22057,16 +22300,16 @@
     "q": "参与者为什么不能自己放弃？",
     "q_en": "Why can’t the participant unilaterally abort?",
     "options": [
-      "它已经承诺服从协调者决定，否则会和其他参与者分裂",
+      "它已承诺服从协调者，自作主张会分裂",
       "yes 票只是一条日志注释",
       "参与者没有任何本地状态",
-      "网络会自动通知所有人"
+      "网络会自动通知所有人结果"
     ],
     "options_en": [
-      "It has promised to follow the coordinator, otherwise participants may split",
-      "A yes vote is only a log comment",
-      "The participant has no local state",
-      "The network automatically informs everyone"
+      "It already promised to follow the coordinator, so deciding alone would split the outcome.",
+      "A yes vote is just a log comment.",
+      "Participants hold no local state.",
+      "The network tells everyone the outcome automatically."
     ],
     "answer": [
       0
@@ -22216,16 +22459,16 @@
     "q": "为什么单参与者不需要 2PC？",
     "q_en": "Why does one participant not need 2PC?",
     "options": [
-      "没有跨参与者一致决定，只需本地提交日志",
-      "单参与者不能回滚",
+      "没有跨参与者决定，本地日志就够",
+      "单参与者不能回滚事务",
       "单参与者没有崩溃风险",
-      "2PC 只能用于缓存"
+      "2PC 只能用在缓存上"
     ],
     "options_en": [
-      "There is no cross-participant decision; the local commit log is enough",
-      "A single participant cannot roll back",
-      "A single participant has no crash risk",
-      "2PC only applies to caches"
+      "There is no cross-participant decision, so the local commit log is enough.",
+      "A single participant cannot roll back.",
+      "A single participant cannot crash.",
+      "2PC only works for caches."
     ],
     "answer": [
       0
@@ -22358,16 +22601,16 @@
     "q": "常见替代 2PC 的设计是什么？",
     "q_en": "What is a common alternative to 2PC?",
     "options": [
-      "本地事务写 order 和 outbox，再异步发布消息",
-      "直接跨 DB 和 Kafka 做 XA",
-      "先发 Kafka 再写库且不重试",
-      "只把消息存在进程内队列"
+      "本地事务同时写 order 和 outbox",
+      "直接跨 DB 和 Kafka 做 XA 事务",
+      "先发 Kafka 再写库，且不重试",
+      "只把消息放进进程内队列"
     ],
     "options_en": [
-      "Write order and outbox in one local transaction, then publish asynchronously",
-      "Use XA across the DB and Kafka directly",
-      "Publish to Kafka first, write DB later, and never retry",
-      "Store the message only in process memory"
+      "Write the order and an outbox row in one local transaction, then publish asynchronously.",
+      "Run an XA transaction across the DB and Kafka.",
+      "Publish to Kafka first, write the DB after, and never retry.",
+      "Keep the message in an in-process queue only."
     ],
     "answer": [
       0
@@ -22460,16 +22703,16 @@
     "q": "更准确的理解是什么？",
     "q_en": "What is the more accurate reading?",
     "options": [
-      "完全异步且可能崩溃时，确定性算法不能保证终止",
-      "任何真实系统都不能选主",
-      "多数派投票没有意义",
+      "异步且可能崩溃时不保证终止",
+      "任何真实系统都不可能选主",
+      "多数派投票其实没有意义",
       "物理时钟可以完美解决全部问题"
     ],
     "options_en": [
-      "In a fully asynchronous crash-prone model, deterministic algorithms cannot guarantee termination",
-      "No real system can elect a leader",
-      "Majority voting is meaningless",
-      "Physical clocks perfectly solve everything"
+      "In a fully asynchronous, crash-prone model, no deterministic algorithm is guaranteed to terminate.",
+      "No real system can ever elect a leader.",
+      "Majority voting is pointless.",
+      "Physical clocks solve the whole problem perfectly."
     ],
     "answer": [
       0
@@ -22597,16 +22840,16 @@
     "q": "这个编号解决什么？",
     "q_en": "What does the number solve?",
     "options": [
-      "区分新旧 leader，旧任期请求可被拒绝",
-      "让网络延迟变成常数",
-      "让磁盘写入不用 fsync",
-      "保证没有节点崩溃"
+      "区分新旧 leader，旧任期被拒绝",
+      "让网络延迟变成一个常数",
+      "让磁盘写入不再需要 fsync",
+      "保证集群里没有节点崩溃"
     ],
     "options_en": [
-      "It distinguishes old and new leaders so old-term requests can be rejected",
-      "It makes network latency constant",
-      "It removes the need for fsync",
-      "It guarantees nodes never crash"
+      "It separates old from new leaders so stale-term requests get rejected.",
+      "It makes network latency constant.",
+      "It removes the need for fsync on disk writes.",
+      "It guarantees no node in the cluster crashes."
     ],
     "answer": [
       0
@@ -22706,16 +22949,16 @@
     "q": "它应怎样确认？",
     "q_en": "How should it confirm?",
     "options": [
-      "向多数派复制/确认该提议，并检查没有更高任期",
-      "只看自己的本地时钟",
-      "问任意一个 follower",
-      "相信上次心跳成功"
+      "向多数派确认，并检查没有更高任期",
+      "只看自己节点的本地时钟",
+      "随便问任意一个 follower",
+      "相信上一次心跳成功过"
     ],
     "options_en": [
-      "Replicate/confirm the proposal with a majority and check for no higher term",
-      "Look only at its local clock",
-      "Ask any one follower",
-      "Trust the last successful heartbeat"
+      "Confirm with a majority and check that no higher term exists.",
+      "Just read its own local clock.",
+      "Ask any single follower.",
+      "Trust that the last heartbeat succeeded."
     ],
     "answer": [
       0
@@ -23345,16 +23588,16 @@
     "q": "协调服务的哪个能力有用？",
     "q_en": "Which coordination-service feature helps?",
     "options": [
-      "watch/notification 机制",
-      "只读副本的随机延迟",
-      "离线压缩任务",
-      "客户端浏览器缓存"
+      "watch 通知机制",
+      "只读副本上的随机读延迟",
+      "离线的日志压缩任务",
+      "客户端浏览器本地缓存"
     ],
     "options_en": [
-      "Watch/notification mechanisms",
-      "Random delay from read replicas",
-      "Offline compaction jobs",
-      "Browser cache"
+      "A watch/notification mechanism.",
+      "Random read latency on read-only replicas.",
+      "An offline log compaction job.",
+      "The client browser's local cache."
     ],
     "answer": [
       0
@@ -23399,16 +23642,16 @@
     "q": "服务发现一定要共识吗？",
     "q_en": "Does service discovery necessarily require consensus?",
     "options": [
-      "不一定，DNS 或最终一致注册表可能够用",
-      "一定需要线性化写读",
-      "必须用 2PC",
-      "必须每次请求选主"
+      "不一定，最终一致的注册表够用",
+      "一定需要线性化的写和读",
+      "必须用 2PC 保证一致",
+      "必须每次请求都重新选主"
     ],
     "options_en": [
-      "Not necessarily; DNS or an eventually consistent registry may be enough",
-      "It always needs linearizable reads and writes",
-      "It must use 2PC",
-      "It must elect a leader per request"
+      "Not necessarily — DNS or an eventually consistent registry can be enough.",
+      "It always needs linearizable reads and writes.",
+      "It must use 2PC to stay consistent.",
+      "It must elect a leader on every request."
     ],
     "answer": [
       0
@@ -23434,7 +23677,29 @@
       "Requiring linearizable reads and writes would needlessly upgrade this low-stakes service-discovery need into an expensive operation.",
       "2PC solves cross-resource atomic commit, unrelated to a service-discovery need like finding a few healthy instances.",
       "Electing a leader per request is prohibitively expensive, and service discovery's correctness requirement is nowhere near strict enough to need that."
-    ]
+    ],
+    "table": {
+      "headers": [
+        "发现目标",
+        "能否读旧值",
+        "实现",
+        "代价"
+      ],
+      "rows": [
+        [
+          "一批健康实例",
+          "可以，靠重试",
+          "DNS 或注册表",
+          "偶发无效重试"
+        ],
+        [
+          "唯一 leader 地址",
+          "不可以",
+          "共识系统",
+          "写延迟更高"
+        ]
+      ]
+    }
   },
   {
     "id": "ddia-ch09-049",
@@ -23446,16 +23711,16 @@
     "q": "为什么成员关系常和共识绑在一起？",
     "q_en": "Why is membership often tied to consensus?",
     "options": [
-      "节点死亡判断会影响分配，必须让多数派同意同一视图",
-      "成员列表只影响日志格式",
-      "每个节点本地猜测就足够",
-      "NTP 能直接给出活跃集合"
+      "死活判断影响分配，需多数派同一视图",
+      "成员列表只影响日志的格式",
+      "每个节点自己本地猜测就够",
+      "NTP 校时能直接给出活跃集合"
     ],
     "options_en": [
-      "Failure judgments affect assignment, so a majority must agree on one view",
-      "Membership only affects log formatting",
-      "Each node’s local guess is enough",
-      "NTP directly gives the active set"
+      "Liveness calls drive assignment, so a majority must agree on one view.",
+      "The member list only affects the log format.",
+      "Each node guessing locally is good enough.",
+      "NTP time sync hands you the active set directly."
     ],
     "answer": [
       0
@@ -23555,15 +23820,15 @@
     "q_en": "What is a reasonable choice?",
     "options": [
       "使用 ZooKeeper/etcd 这类成熟协调服务",
-      "自己从 UDP 心跳手写共识",
-      "把 leader 写进每台机器本地文件",
-      "让客户端轮流指定 leader"
+      "自己用 UDP 心跳手写一套共识",
+      "把 leader 写进每台机器的本地文件",
+      "让客户端轮流指定谁是 leader"
     ],
     "options_en": [
-      "Use a mature coordination service such as ZooKeeper or etcd",
-      "Hand-roll consensus from UDP heartbeats",
-      "Write the leader into each machine’s local file",
-      "Let clients rotate the leader"
+      "Use a mature coordination service such as ZooKeeper or etcd.",
+      "Hand-roll consensus on top of UDP heartbeats.",
+      "Write the leader into a local file on every machine.",
+      "Let clients take turns naming the leader."
     ],
     "answer": [
       0
@@ -23782,16 +24047,16 @@
     "q": "更好的追问是什么？",
     "q_en": "What is the better follow-up?",
     "options": [
-      "分区时哪些操作继续可用，哪些操作必须保持线性化？",
-      "少数派分区是否可以继续接受写入？",
-      "读请求是否允许返回旧缓存值？",
-      "是否能通过重试消除网络分区？"
+      "分区时哪些操作可用，哪些必须线性化？",
+      "少数派分区里是否可以继续接受写入？",
+      "读请求是否允许返回旧的缓存值？",
+      "是否能靠重试直接消除网络分区？"
     ],
     "options_en": [
-      "During a partition, which operations stay available and which must remain linearizable?",
-      "May the minority partition continue accepting writes?",
-      "Are reads allowed to return stale cached values?",
-      "Can retries eliminate a network partition?"
+      "During a partition, which operations stay available and which must stay linearizable?",
+      "Can the minority side keep accepting writes?",
+      "Are reads allowed to return a stale cached value?",
+      "Can retries make the network partition go away?"
     ],
     "answer": [
       0
@@ -24034,15 +24299,15 @@
     "q_en": "What guarantee does CAS need for correct leader election?",
     "options": [
       "线性化 compare-and-set",
-      "最终一致读缓存",
-      "客户端本地时钟排序",
-      "异步批处理"
+      "最终一致的读缓存 + 客户端重试",
+      "按客户端本地时钟决定先后",
+      "把两次请求排进异步批处理"
     ],
     "options_en": [
-      "Linearizable compare-and-set",
-      "Eventually consistent read cache",
-      "Client-local clock ordering",
-      "Asynchronous batch processing"
+      "A linearizable compare-and-set.",
+      "An eventually consistent read cache plus client retries.",
+      "Ordering by each client's local clock.",
+      "Batching both requests asynchronously."
     ],
     "answer": [
       0
@@ -24708,7 +24973,7 @@
     ],
     "optionExplanations": [
       "在线请求服务要求实时响应用户请求，跟这里“输入昨天冻结的日志、结果几小时后上线”完全不匹配。",
-      "输入的时间边界是固定的、输出也不需要立刻返回给用户，正是批处理作业的典型形状。",
+      "输入边界固定、结果几小时后才上线也可以接受，这正是批处理作业的典型形状。",
       "低延迟流处理是为了尽快处理持续到来的事件，跟这里“每天重算一次”的节奏不符。",
       "同步 RPC 聚合要求调用方等待结果立刻返回，跟这里允许几小时后才上线的宽松时限不匹配。"
     ],
@@ -25090,16 +25355,16 @@
     "q": "为什么选 HDFS 这类共享无关文件系统？",
     "q_en": "Why choose an HDFS-style shared-nothing filesystem?",
     "options": [
-      "它把文件块复制到多台普通机器，计算可贴近数据运行",
-      "它让所有节点同时写同一个本地磁盘",
-      "它把每个查询都变成单机 SQL",
-      "它保证每条记录都有跨表事务"
+      "它把文件块复制到多台普通机器，计算可贴近数据",
+      "它让所有节点同时写同一块本地磁盘",
+      "它把每个查询都变成单机 SQL 扫描",
+      "它保证每条记录都有跨表事务语义"
     ],
     "options_en": [
-      "It replicates file blocks across commodity machines and can run compute near the data",
-      "It lets every node write the same local disk simultaneously",
-      "It turns every query into single-node SQL",
-      "It gives every record cross-table transactions"
+      "It replicates file blocks across commodity machines so computation can run next to the data.",
+      "It lets every node write the same local disk at once.",
+      "It turns every query into a single-machine SQL scan.",
+      "It gives every record cross-table transaction semantics."
     ],
     "answer": [
       0
@@ -25455,15 +25720,15 @@
     "q_en": "What is the safest default join strategy?",
     "options": [
       "reduce-side sort-merge join",
-      "broadcast hash join",
-      "每条事件远程查用户库",
-      "在浏览器里做 join"
+      "broadcast hash join 广播小表",
+      "每条事件都远程查一次用户库",
+      "在浏览器里做这个 join"
     ],
     "options_en": [
-      "Reduce-side sort-merge join",
-      "Broadcast hash join",
-      "Remote profile lookup for every event",
-      "Join in the browser"
+      "A reduce-side sort-merge join.",
+      "A broadcast hash join that ships the small side everywhere.",
+      "One remote lookup into the user database per event.",
+      "Doing the join in the browser."
     ],
     "answer": [
       0
@@ -25728,7 +25993,7 @@
       "broadcast"
     ],
     "optionExplanations": [
-      "5MB 的国家代码维表小到可以完整复制进每个 mapper 的本地哈希表，80TB 的事件流只需要顺序扫描一遍，边扫边查本地哈希表补上国家名称，完全不用为这个 join 走大规模 shuffle。",
+      "5MB 的国家维表可以整份复制到每个任务内存里，80TB 事件流顺序扫一遍边扫边查，不用 shuffle。",
       "reduce-side sort-merge join 是给两边都很大时用的稳健方案，这里小表只有 5MB，用它反而浪费了排序和 shuffle 的开销。",
       "table-table stream join 是给两个持续更新的流之间做 join 的场景准备的，跟这里一张静态小维表配一个批量事件流不匹配。",
       "每条事件都查一次远程 SQL，在 80TB 规模下会产生天文数字的查询请求，完全不现实。"
@@ -25893,10 +26158,10 @@
       "assumptions"
     ],
     "optionExplanations": [
-      "要用 map-side join 省掉 shuffle，首先得确认小表能不能真的塞进每个任务的内存或本地索引，塞不下这条路就走不通。",
-      "map-side join 依赖两边已经按同一个 key 分好区，没有这个前提就没法保证同一 key 的记录会落在同一个任务上处理。",
+      "要省掉 shuffle，先得确认小表真塞得进每个任务的内存或本地索引，塞不下这条路就走不通。",
+      "它依赖两边已经按同一个 key 分好区，否则同一 key 的记录不会落到同一个任务上处理。",
       "利用有序性做归并连接，同样需要先确认输入是不是真的已经按 join key 排好序，不然归并逻辑本身就是错的。",
-      "reducer 并不能自动修复分区分错的数据，分区不对，map-side join 会静默产出漏 join 或错误的结果，这不是它具备的能力。"
+      "reducer 不会自动修复分错的分区；分区不对时会静默产出漏掉记录的结果，这不是它的能力。"
     ],
     "optionExplanations_en": [
       "To save a shuffle with a map-side join, you first need to confirm the small side actually fits in each task's memory or local index — without that, this path simply doesn't work.",
@@ -26126,16 +26391,16 @@
     "q": "为什么把批输出当不可变数据集发布？",
     "q_en": "Why publish batch output as an immutable dataset?",
     "options": [
-      "读者能按版本复现结果，生产者也不必知道所有消费者",
+      "读者按版本复现，生产者无需知道消费者",
       "它让所有消费者自动获得强事务",
       "它允许下游直接修改上游文件",
-      "它保证数据永远不需要删除"
+      "它保证数据永远不需要被删除"
     ],
     "options_en": [
-      "Readers can reproduce results by version, and producers need not know all consumers",
-      "It automatically gives all consumers strong transactions",
-      "It lets downstream jobs modify upstream files directly",
-      "It guarantees data never needs deletion"
+      "Readers can reproduce results by version, and the producer need not know its consumers.",
+      "It gives every consumer strong transactions automatically.",
+      "It lets downstream jobs edit the upstream files.",
+      "It guarantees data never has to be deleted."
     ],
     "answer": [
       0
@@ -26238,7 +26503,7 @@
       "mpp"
     ],
     "optionExplanations": [
-      "MapReduce 血统的系统能直接吃进原始日志、图片元数据这些非结构化数据，还能跑任意自定义代码，这份宽容度正是它相对结构化 MPP 数据库的优势所在。",
+      "它能直接吃进原始日志、图片元数据这些非结构化数据，还能跑任意自定义代码。",
       "结构化报表这类 SQL 工作负载通常还是 MPP 数据库跑得更顺、延迟更低，说 MapReduce 总是延迟更低正好说反了。",
       "MapReduce 系统本身不是为 OLTP 场景设计的，不会自动提供完整的事务语义，这跟它的定位不符。",
       "数据治理该做的事一点没少，格式、血缘、权限这些问题在灵活的原始数据场景里反而更需要认真管理。"
@@ -26291,10 +26556,10 @@
       "schema"
     ],
     "optionExplanations": [
-      "schema-on-read 先老老实实把原始数据存下来，等真正要读取或加工的时候，每个团队按自己的理解方式去解释这份原始事件，留出了多视图探索的空间。",
-      "要求写入时就拒绝所有未知字段正是 schema-on-write 的做法，跟 schema-on-read 先接受原始数据的思路正相反。",
-      "数据质量问题不会因为 schema-on-read 而自动消失，反而是把解释和校验的负担转移到了每个读取作业身上。",
-      "schema-on-read 广泛用于分布式数据湖这种多机场景，不是只适合单机 CSV 文件这种小规模用法。"
+      "先老老实实把原始事件存下来，等真要读取加工时，每个团队按自己的理解去解释它。",
+      "写入时就拒绝未知字段是 schema-on-write 的做法，跟先接受原始数据的思路正相反。",
+      "数据质量问题不会自动消失，只是把解释和校验的负担挪到了每个读取作业身上。",
+      "它广泛用于分布式数据湖这种多机场景，不是只适合单机 CSV 文件的小规模用法。"
     ],
     "optionExplanations_en": [
       "Schema-on-read honestly keeps the raw data first, and only when it's actually being read or processed does each team apply its own interpretation to the same raw events, leaving room for multiple views.",
@@ -26700,7 +26965,7 @@
       "避免不必要的排序是 dataflow engine 常见的加速来源，只在真正需要的地方才付排序的代价。",
       "让下游 operator 更早开始，靠的是管道化执行，不用等上一步全部写完中间态才能开始下一步。",
       "把中间状态保存在内存或本地磁盘，省掉了写多副本 HDFS 的开销，这也是常见的速度提升来源。",
-      "dataflow engine 不会自动理解任意用户函数在做什么，更不会把它们自动变成 SQL，这个说法过度神化了它的能力。"
+      "它不会自动理解任意用户函数在做什么，更不会把它们变成 SQL，这个说法过度神化了。"
     ],
     "optionExplanations_en": [
       "Avoiding unnecessary sorting is a common source of speedup in a dataflow engine, only paying the sorting cost where it's genuinely required.",
@@ -26874,16 +27139,16 @@
     "q": "排序为什么会打断流水线？",
     "q_en": "Why does sorting break pipelining?",
     "options": [
-      "它可能要看到最后一条记录才能确定第一条输出",
-      "它只能在浏览器里执行",
+      "可能要看到最后一条才能输出第一条",
+      "它只能在单台浏览器里执行",
       "它不需要任何内存或磁盘状态",
-      "它会让所有 key 自动均匀"
+      "它会让所有 key 自动变均匀"
     ],
     "options_en": [
-      "It may need to see the last input record before knowing the first output record",
-      "It can only run in a browser",
-      "It needs no memory or disk state",
-      "It automatically balances all keys"
+      "It may need the last input record before it can emit the first output.",
+      "It can only run inside a single browser.",
+      "It needs no memory or disk state at all.",
+      "It automatically evens out every key."
     ],
     "answer": [
       0
@@ -27344,7 +27609,7 @@
       "productivity"
     ],
     "optionExplanations": [
-      "用 filter、join、groupBy 这类关系式算子来表达常见处理逻辑，写起来比手写底层回调短得多，也让优化器有空间去挑选更好的执行计划，数据科学家能更快地反复迭代试验。",
+      "用关系式算子表达常见处理逻辑，比手写底层回调短得多，优化器也有空间挑执行计划。",
       "强迫所有逻辑写成底层 mapper/reducer 回调正是高层 API 想要摆脱的负担，跟“提升效率”这个目标相反。",
       "高层 API 恰恰是为了支持更快的交互式探索而设计的，不是要禁止它。",
       "高层 API 提升的是开发和优化效率，不会替你自动证明业务指标本身对不对，这仍然需要人去判断。"
@@ -27846,16 +28111,16 @@
     "q": "为什么推送式事件通知更合适？",
     "q_en": "Why is push-based event notification a better fit?",
     "options": [
-      "变更发生时通知消费者，减少空轮询和同步延迟",
-      "它让消费者不需要处理失败",
-      "它保证搜索索引永远强一致",
+      "变更发生时才通知，减少空轮询",
+      "它让消费者不需要处理任何失败",
+      "它能保证搜索索引永远强一致",
       "它把所有变更都变成浏览器缓存"
     ],
     "options_en": [
-      "It notifies consumers when changes happen, reducing empty polling and sync delay",
-      "It means consumers need no failure handling",
-      "It guarantees the search index is always strongly consistent",
-      "It turns all changes into browser cache"
+      "Consumers are notified when a change happens, which cuts empty polls and lag.",
+      "It frees consumers from handling failures.",
+      "It keeps the search index strongly consistent forever.",
+      "It turns every change into a browser cache entry."
     ],
     "answer": [
       0
@@ -28010,16 +28275,16 @@
     "q": "direct messaging 和 broker 最大差异是什么？",
     "q_en": "What is the biggest difference between direct messaging and a broker?",
     "options": [
-      "broker 集中缓冲和重投递，direct 更轻但消费者离线风险高",
-      "direct 一定持久保存所有历史消息",
-      "broker 禁止多个消费者订阅",
-      "direct 自动提供分区日志 offset"
+      "broker 集中缓冲重投递，direct 更轻",
+      "direct 一定会持久保存所有历史消息",
+      "broker 禁止多个消费者同时订阅",
+      "direct 自动提供分区日志的 offset"
     ],
     "options_en": [
-      "A broker centralizes buffering and redelivery; direct messaging is lighter but risks offline consumers",
-      "Direct messaging always durably stores all history",
-      "A broker forbids multiple consumers",
-      "Direct messaging automatically provides partition-log offsets"
+      "A broker buffers and redelivers centrally; direct messaging is lighter but riskier when a consumer is offline.",
+      "Direct messaging always keeps every historical message durably.",
+      "A broker forbids multiple consumers from subscribing.",
+      "Direct messaging gives you partitioned-log offsets for free."
     ],
     "answer": [
       0
@@ -28063,9 +28328,9 @@
     ],
     "optionExplanations": [
       "broker 把消息集中缓冲起来、还能重投递，适合消费者可能离线的场景；direct messaging 少一跳、更轻量，但消费者掉线时消息就直接没人接住了。",
-      "direct messaging 恰恰不天然持久保存历史消息，它更接近即时传递，消息一旦发出接不住就没了。",
+      "点对点直发恰恰不天然持久保存历史，消息发出去接不住就没了。",
       "broker 完全可以支持多个消费者订阅同一份消息，这个说法把它的能力说反了。",
-      "direct messaging 是点对点的即时传递，不天然带有分区日志这种带 offset 的持久结构。"
+      "它是点对点的即时传递，不天然带有分区日志这种带 offset 的持久结构。"
     ],
     "optionExplanations_en": [
       "A broker centrally buffers messages and can redeliver them, fitting a scenario where consumers might go offline; direct messaging skips a hop and stays lighter, but the message has nowhere to land if the consumer is down.",
@@ -28140,16 +28405,16 @@
     "q": "传统 message broker 与数据库的边界在哪里？",
     "q_en": "Where is the boundary between a traditional broker and a database?",
     "options": [
-      "broker 优先投递和确认，数据库优先查询和长期状态管理",
-      "broker 天然支持任意二级索引",
-      "数据库不能保存历史记录",
-      "broker 一定比数据库事务更强"
+      "broker 重投递确认，数据库重查询与状态",
+      "broker 天然支持任意二级索引查询",
+      "数据库不能长期保存历史记录",
+      "broker 的事务一定比数据库更强"
     ],
     "options_en": [
-      "A broker prioritizes delivery and acknowledgement; a database prioritizes querying and long-term state",
-      "A broker naturally supports arbitrary secondary indexes",
-      "A database cannot store history",
-      "A broker always has stronger transactions than a database"
+      "A broker optimizes delivery and acknowledgement; a database optimizes querying and long-lived state.",
+      "Brokers support arbitrary secondary-index queries natively.",
+      "Databases cannot keep historical records for long.",
+      "Broker transactions are always stronger than database ones."
     ],
     "answer": [
       0
@@ -28446,16 +28711,16 @@
     "q": "为什么 partitioned log 比传统队列更合适？",
     "q_en": "Why is a partitioned log a better fit than a traditional queue?",
     "options": [
-      "日志保留已处理消息，消费者可按 offset 回放",
-      "日志确认后立刻删除所有消息",
-      "日志禁止多个消费者组读取",
-      "日志只能保存单分区数据"
+      "日志保留消息，可按 offset 回放",
+      "日志在确认后立刻删除所有消息",
+      "日志禁止多个消费者组同时读取",
+      "日志只能保存单个分区的数据"
     ],
     "options_en": [
-      "The log retains processed messages so consumers can replay by offset",
-      "The log deletes every message right after acknowledgement",
-      "The log forbids multiple consumer groups",
-      "The log can only store one partition"
+      "The log keeps messages, so a consumer can replay from any offset.",
+      "The log deletes every message as soon as it is acknowledged.",
+      "The log forbids several consumer groups from reading it.",
+      "The log can only hold one partition's data."
     ],
     "answer": [
       0
@@ -28674,16 +28939,16 @@
     "q": "分区日志如何降低修复成本？",
     "q_en": "How does a partitioned log reduce repair cost?",
     "options": [
-      "修复代码后从旧 offset 回放事件重建索引",
-      "只能手工修改每条索引记录",
+      "修好代码后从旧 offset 回放重建索引",
+      "只能手工逐条修改每条索引记录",
       "必须让订单服务重新产生历史事件",
-      "只能放弃历史错误"
+      "只能放弃这三天的历史错误"
     ],
     "options_en": [
-      "Fix the code and replay events from an old offset to rebuild the index",
-      "Manually edit every indexed record",
-      "Make the order service regenerate historical events",
-      "Give up on historical errors"
+      "Fix the code, then replay from the old offset to rebuild the index.",
+      "Hand-edit every affected index record.",
+      "Make the order service re-emit three days of history.",
+      "Just write off the three days of bad data."
     ],
     "answer": [
       0
@@ -28875,16 +29140,16 @@
     "q": "CDC 异步复制需要补什么？",
     "q_en": "What should asynchronous CDC add?",
     "options": [
-      "监控同步延迟，并在读路径上定义可接受旧数据窗口",
-      "假装搜索结果永远强一致",
-      "删除主数据库，只保留索引",
-      "禁止所有下游重放"
+      "监控同步延迟，定义可接受的旧数据窗口",
+      "假装搜索结果永远是强一致的",
+      "删掉主数据库，只保留搜索索引",
+      "禁止所有下游重放历史事件"
     ],
     "options_en": [
-      "Monitor replication lag and define the acceptable staleness window on reads",
-      "Pretend search results are always strongly consistent",
-      "Delete the primary database and keep only the index",
-      "Forbid all downstream replay"
+      "Monitor the replication lag and define how stale a read is allowed to be.",
+      "Pretend the search results are always strongly consistent.",
+      "Drop the primary database and keep only the index.",
+      "Forbid downstream systems from replaying history."
     ],
     "answer": [
       0
@@ -28942,8 +29207,8 @@
     "answer": [
       0
     ],
-    "why": "compacted log 像可回放的最新状态表，适合重建缓存或索引。代价是它不再保留完整历史审计，只保留每个 key 的最后状态。",
-    "why_en": "A compacted log acts like a replayable latest-state table, useful for rebuilding caches or indexes but not full history audit.",
+    "why": "compacted log 像可回放的最新状态表，磁盘 ≈ 用户数 × 单条大小，而不是更新次数。代价是只剩每个 key 的最后状态，没有完整审计历史。",
+    "why_en": "A compacted log behaves like a replayable latest-state table sized by number of users times record size, not by number of updates — but only the last value per key survives.",
     "whenOtherWins": "如果你必须保留每一次变更用于审计，就不能只依赖 compacted log。",
     "tradeoff": "可重建最新状态 vs 完整历史",
     "termDefinitions": [
@@ -29123,16 +29388,16 @@
     "q": "command 和 event 应如何区分？",
     "q_en": "How should command and event be distinguished?",
     "options": [
-      "command 可被验证或拒绝，event 是已经发生的事实",
+      "command 可被拒绝，event 是既成事实",
       "event 可以被任意消费者拒绝并撤回",
-      "command 必须写入审计日志后不能校验",
-      "二者只是字段名不同"
+      "command 写入审计日志后就不能再校验",
+      "二者只是字段命名不同"
     ],
     "options_en": [
-      "A command may be validated or rejected; an event is a fact that already happened",
-      "Any consumer may reject and undo an event",
-      "A command must be logged before validation and cannot be checked",
-      "They only differ in field names"
+      "A command can be validated or rejected; an event is something that already happened.",
+      "Any consumer can reject an event and take it back.",
+      "Once a command is logged for audit it can no longer be validated.",
+      "They only differ in field naming."
     ],
     "answer": [
       0
@@ -29264,16 +29529,16 @@
     "q": "event sourcing 中 snapshot 的作用是什么？",
     "q_en": "What is the role of snapshots in event sourcing?",
     "options": [
-      "在 offset 存派生状态，只重放增量",
-      "替代事件日志并删除所有历史",
-      "让事件可以任意乱序应用",
-      "保证外部邮件只发送一次"
+      "存某个 offset 的状态，只重放增量",
+      "它替代事件日志并删除所有历史",
+      "它让事件可以任意乱序应用",
+      "它保证外部邮件只发送一次"
     ],
     "options_en": [
-      "Store derived state at an offset and replay only increments",
-      "Replace the event log and delete all history",
-      "Allow events to be applied in arbitrary order",
-      "Guarantee external emails are sent once"
+      "Store the derived state at an offset and replay only what came after.",
+      "It replaces the event log and lets you delete history.",
+      "It lets events be applied in any order.",
+      "It guarantees an external email is sent exactly once."
     ],
     "answer": [
       0
@@ -29612,7 +29877,7 @@
       "fraud"
     ],
     "optionExplanations": [
-      "要检测的是跨越多次登录、多个国家、有先后关系的一整套事件序列，这正是 CEP 规则匹配擅长的：在持续到来的事件流上匹配跨事件、跨时间的模式。",
+      "要检测的是跨越多次登录、多个国家、有先后关系的一整套序列，正是规则匹配引擎的强项。",
       "每晚跑一次全量 MapReduce 排序意味着要等到第二天才能发现这种模式，跟风控需要及时拦截的场景完全不匹配。",
       "只做单条消息无状态转发看不到跨多条事件的组合关系，识别不出这种需要关联多次登录和一次支付的复杂模式。",
       "把所有事件同步写入 cookie 既不是服务端能依赖的可靠存储，也没有能力去做跨事件的模式匹配。"
@@ -29690,16 +29955,16 @@
     "q": "流处理在这里维护什么？",
     "q_en": "What is stream processing maintaining here?",
     "options": [
-      "由变更流驱动的 materialized views",
-      "只包含原始 SQL 的冷归档",
-      "每次用户请求临时 join 的结果",
-      "浏览器里的短期本地变量"
+      "变更流驱动的 materialized views",
+      "只装原始 SQL 语句的冷归档表",
+      "每次用户请求临时 join 出来的结果",
+      "浏览器里的短期本地变量副本"
     ],
     "options_en": [
-      "Materialized views driven by the change stream",
-      "A cold archive containing only raw SQL",
-      "A temporary join result computed on every user request",
-      "Short-lived local variables in the browser"
+      "Materialized views kept up to date by the change stream.",
+      "A cold archive table holding only raw SQL statements.",
+      "A join computed on the fly for each user request.",
+      "A short-lived copy in browser-local variables."
     ],
     "answer": [
       0
@@ -29913,15 +30178,15 @@
     "q_en": "How should late events be handled?",
     "options": [
       "按 watermark 出初版，晚到再修正",
-      "窗口结束后永久拒绝晚到事件",
-      "永远等待直到没有任何晚到",
-      "改用处理时间并声称等价"
+      "窗口结束后永久拒绝所有晚到事件",
+      "永远等到确认没有任何晚到为止",
+      "改用处理时间并声称两者等价"
     ],
     "options_en": [
-      "Emit at the watermark and correct late arrivals",
-      "Permanently reject late events after window close",
-      "Wait forever until no late event is possible",
-      "Use processing time and claim equivalence"
+      "Emit a first result at the watermark and correct it when late events arrive.",
+      "Reject every late event once the window closes.",
+      "Wait forever until no late event can arrive.",
+      "Switch to processing time and call it equivalent."
     ],
     "answer": [
       0
@@ -29970,16 +30235,16 @@
     "q": "为什么要记录多个时间戳？",
     "q_en": "Why record multiple timestamps?",
     "options": [
-      "用设备事件时间、设备发送时间和服务器接收时间估计时钟偏移",
+      "用设备事件、发送和服务器接收时间估偏移",
       "服务器接收时间总能代表用户行为时间",
       "多个时间戳能让网络延迟变成零",
       "只记录处理时间更便于业务分析"
     ],
     "options_en": [
-      "Use device event time, device send time, and server receive time to estimate clock offset",
-      "Server receive time always represents user action time",
-      "Multiple timestamps make network delay zero",
-      "Recording only processing time is better for business analysis"
+      "Use device event time, device send time, and server receive time to estimate the clock skew.",
+      "Server receive time always represents when the user acted.",
+      "Extra timestamps drive network latency to zero.",
+      "Recording only processing time is better for analysis."
     ],
     "answer": [
       0
@@ -30040,8 +30305,8 @@
       2,
       3
     ],
-    "why": "窗口选择决定状态大小、重复计入和业务含义。面试里先说清楚“边界固定、是否重叠、是否按用户空闲结束”。",
-    "why_en": "Window choice defines state size, double-counting, and business meaning, so name the boundary and overlap rules first.",
+    "why": "窗口选择决定状态大小、重复计入和业务含义：状态量级 ≈ 活跃 key 数 × 每个 key 同时存活的窗口数。",
+    "why_en": "The window type decides state size, double counting, and meaning; state scales roughly as active keys times how many windows a key lives in at once.",
     "termDefinitions": [
       {
         "term": "tumbling window",
@@ -30108,8 +30373,8 @@
     "answer": [
       0
     ],
-    "why": "固定、不重叠的分钟桶就是 tumbling window。它简单清楚，但边界附近的尖峰不会被平滑。",
-    "why_en": "Fixed, non-overlapping minute buckets are tumbling windows, simple but not smoothed across boundaries.",
+    "why": "固定、不重叠的分钟桶就是 tumbling window：每条事件只进 1 个窗口，状态 = 活跃 key 数 × 1。边界附近的尖峰不会被平滑。",
+    "why_en": "Fixed non-overlapping minute buckets are a tumbling window: each event lands in exactly one window, so state is just active keys times one, but spikes at the boundary are not smoothed.",
     "whenOtherWins": "如果 dashboard 需要平滑趋势，hopping window 更合适。",
     "tradeoff": "清晰互斥桶 vs 平滑趋势",
     "termDefinitions": [
@@ -30126,7 +30391,7 @@
       "tumbling"
     ],
     "optionExplanations": [
-      "10:03:00 到 10:03:59 的事件只落进 10:03 这一个固定、不重叠的格子里，这正是 tumbling window 的定义。",
+      "10:03:00 到 10:03:59 的事件只落进 10:03 这一个格子，格子之间不重叠也不留缝。",
       "hopping window 会让窗口之间有重叠，一条事件可能被算进多个格子，跟这里“只计入 10:03 这一格”的要求不符。",
       "sliding window 关心的是事件之间的相对时间间隔，不是这种固定分钟边界，不符合场景描述。",
       "session window 按用户活跃间隔切分，没有固定的分钟边界，跟这里明确的 10:03 整分钟格子不匹配。"
@@ -30163,8 +30428,8 @@
     "answer": [
       0
     ],
-    "why": "5 分钟长度、1 分钟 hop 会产生重叠窗口，适合平滑滚动指标。代价是同一事件会参与多个窗口，计算和状态更多。",
-    "why_en": "A five-minute window with a one-minute hop gives overlapping windows for smoother rolling metrics, with more state and repeated counting.",
+    "why": "5 分钟长度配 1 分钟 hop = 每条事件同时进 5 个窗口，曲线更平滑，但计算和状态也 ×5。",
+    "why_en": "A five-minute window hopping every minute puts each event into five windows at once — smoother curves, but five times the state and compute.",
     "whenOtherWins": "如果每条事件只能归属一个账单周期，tumbling window 更合适。",
     "tradeoff": "平滑滚动视图 vs 重复计入和更多状态",
     "termDefinitions": [
@@ -30229,7 +30494,7 @@
       "sliding"
     ],
     "optionExplanations": [
-      "这个条件关心的是两次失败登录之间相隔了多久这种相对时间关系，跟固定的墙钟分钟边界没有关系，sliding window 正是为这种按事件间隔匹配的场景设计的。",
+      "它关心的是两次失败登录相隔多久这种相对关系，跟固定的墙钟分钟边界没有关系。",
       "tumbling window 按固定分钟切分，两次失败登录如果恰好跨了整分钟边界，反而会被错误地拆到两个窗口里判断不出真实间隔。",
       "每日批窗口的粒度太粗，等到第二天才能发现 30 秒内的异常登录，完全来不及做反作弊拦截。",
       "只按 offset 分组只是消息在日志里的位置信息，不携带事件之间真实的时间间隔关系，判断不出 30 秒这个条件。"
@@ -30356,16 +30621,16 @@
     "q": "哪种 join 策略更合适？",
     "q_en": "Which join strategy fits better?",
     "options": [
-      "stream-table join，本地画像副本由 CDC 更新",
-      "每条事件远程查主库",
-      "把画像表每天批量 join 一次即可",
+      "stream-table join + CDC 更新本地副本",
+      "每条事件都远程查一次主库",
+      "把画像表每天批量 join 一次就够",
       "table-table join 只输出画像变化"
     ],
     "options_en": [
-      "Stream-table join with a local profile copy updated by CDC",
-      "Remote primary-database lookup for every event",
-      "A daily batch join is enough",
-      "A table-table join that only emits profile changes"
+      "A stream-table join against a local profile copy that CDC keeps fresh.",
+      "One remote lookup into the primary database per event.",
+      "A daily batch join against the profile table is enough.",
+      "A table-table join that only emits profile changes."
     ],
     "answer": [
       0
@@ -30466,16 +30731,16 @@
     "q": "stream join 的时间依赖风险是什么？",
     "q_en": "What is the time-dependence risk in stream joins?",
     "options": [
-      "不同交错顺序会让同一事件 join 到旧状态或新状态，结果不确定",
-      "所有分区天然共享一个全局顺序",
-      "join 只要用了 offset 就一定确定",
+      "交错顺序不同，会 join 到旧或新状态",
+      "所有分区天然共享同一个全局顺序",
+      "join 只要带上 offset 结果就一定确定",
       "乱序只影响 UI，不影响派生数据"
     ],
     "options_en": [
-      "Different interleavings can join the same event with old or new state, making results nondeterministic",
-      "All partitions naturally share one global order",
-      "Using offsets always makes the join deterministic",
-      "Disorder only affects UI, not derived data"
+      "Different interleavings join the same event against old or new state, so the result is nondeterministic.",
+      "All partitions naturally share one global order.",
+      "As long as the join carries an offset the result is deterministic.",
+      "Reordering only affects the UI, not derived data."
     ],
     "answer": [
       0
@@ -30812,16 +31077,16 @@
     "q": "offset 去重如何让外部写幂等？",
     "q_en": "How does offset dedupe make external writes idempotent?",
     "options": [
-      "把 partition+offset 与结果一起 upsert，已应用则跳过",
+      "结果与 offset 一起 upsert 去重",
       "每次重放都无条件 increment 外部计数器",
       "先提交 offset，再写外部数据库",
-      "只在进程内存里记住最近处理过的 offset"
+      "只在进程内存里记住最近的 offset"
     ],
     "options_en": [
-      "Upsert the result with partition+offset and skip if already applied",
-      "Unconditionally increment the external counter on every replay",
-      "Commit the offset before writing the external database",
-      "Remember recent offsets only in process memory"
+      "Upsert the result together with its partition and offset, skipping what is already applied.",
+      "Increment the external counter unconditionally on every replay.",
+      "Commit the offset first, then write the external database.",
+      "Remember the last processed offset in process memory only."
     ],
     "answer": [
       0
@@ -30895,7 +31160,7 @@
       ]
     },
     "optionExplanations": [
-      "把 partition+offset 作为去重键跟结果一起写进外部数据库，重放同一段数据时，数据库能查出这个 offset 是否已经应用过，已经应用过就跳过，没有就正常写入，天然幂等。",
+      "去重键跟结果一起写进外部库，重放时先查这个 offset 是否已应用，应用过就跳过。",
       "无条件对外部计数器做 increment，重放同一段数据时会把同样的结果再加一遍，造成重复计数。",
       "先提交 offset、再写外部数据库，一旦写库这一步失败，offset 已经往前走了，这次更新就永久丢失了，跟幂等无关还制造了新问题。",
       "只在进程内存里记住最近处理过的 offset，进程一旦崩溃重启，这份记忆就没了，挡不住任务重跑带来的重复写入。"
@@ -30918,16 +31183,16 @@
     "q": "大状态流处理故障后优先怎样恢复？",
     "q_en": "How should a large stateful stream job recover after failure?",
     "options": [
-      "从 checkpoint 或 changelog 恢复本地状态",
-      "从最早输入 offset 全量重放所有历史",
-      "每条事件都远程查询共享状态库",
-      "丢弃状态，从故障后新事件重新开始"
+      "从 checkpoint 恢复本地状态",
+      "从最早的输入 offset 全量重放历史",
+      "每条事件都远程查询共享状态服务",
+      "丢弃状态，从故障后的新事件重来"
     ],
     "options_en": [
-      "Restore local state from a checkpoint or changelog",
-      "Replay all history from the earliest input offset",
-      "Query a shared remote state store for every event",
-      "Drop state and start fresh from post-failure events"
+      "Restore the local state from a checkpoint or changelog.",
+      "Replay the entire history from the earliest input offset.",
+      "Query a shared state service remotely for every event.",
+      "Throw the state away and start from events after the failure."
     ],
     "answer": [
       0
@@ -30997,7 +31262,7 @@
       ]
     },
     "optionExplanations": [
-      "30 分钟窗口计数和本地 join 索引都是活在内存里的大状态，靠周期性保存下来的 checkpoint 或 changelog 恢复，能把恢复时间控制在一个相对可预期的范围内，不用从头重来。",
+      "窗口计数和 join 索引都活在内存里，靠周期性保存的快照恢复，能把恢复时间压到可预期范围。",
       "从最早的输入 offset 全量重放所有历史虽然理论上也能恢复出同样的状态，但对 30 分钟窗口这种规模的状态来说，重放时间会长得多，不是优先选择。",
       "每条事件都远程查询共享状态库，会给正常处理路径背上持续的额外网络开销，不是故障恢复该走的路径。",
       "直接丢弃状态、从故障后的新事件重新开始，会让这台节点丢失过去 30 分钟窗口内已经处理过的信息，得到错误或不完整的统计结果。"

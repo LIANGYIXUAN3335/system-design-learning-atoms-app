@@ -5,6 +5,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "requirements",
+    "scenario": "为对外开放的公开 API 设计限流器：判断必须在请求路径上同步做完，不能拖慢响应。",
+    "scenario_en": "You're designing a rate limiter for a public API, and the decision has to happen synchronously on the request path without slowing responses.",
     "q": "分布式 Rate Limiter 的核心功能需求包括哪些？（多选）",
     "q_en": "Which are core functional requirements for a distributed rate limiter? (multi-select)",
     "options": [
@@ -62,6 +64,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "requirements",
+    "scenario": "限流器挡在 1M requests/sec 的 API 入口，每次检查只有几毫秒预算，它挂了也不能拖垮 API。",
+    "scenario_en": "The limiter sits in front of an API doing about a million requests a second; each check gets only a few milliseconds, and the limiter must not take the API down with it.",
     "q": "本题的核心非功能需求有哪些？（多选）",
     "q_en": "Which are the core non-functional requirements for this design? (multi-select)",
     "options": [
@@ -223,10 +227,10 @@
     "q": "最合适的限流接口返回形态是什么？",
     "q_en": "What should the rate-limit interface return?",
     "options": [
-      "getAllTrafficLogs(startTime, endTime) -> Log[]",
+      "getTrafficLogs(clientId, startTime, endTime) -> { logs, cursor }",
       "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
-      "setUserPassword(userId, newPassword) -> boolean",
-      "renderTimeline(userId, page, pageSize) -> Post[]"
+      "updateRateLimitRule(ruleId, limit, windowSeconds) -> boolean",
+      "renderTimeline(userId, page, pageSize) -> { posts, nextPage }"
     ],
     "answer": [
       1
@@ -243,22 +247,22 @@
       "headers"
     ],
     "options_en": [
-      "getAllTrafficLogs(startTime, endTime) -> Log[]",
+      "getTrafficLogs(clientId, startTime, endTime) -> { logs, cursor }",
       "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
-      "setUserPassword(userId, newPassword) -> boolean",
-      "renderTimeline(userId, page, pageSize) -> Post[]"
+      "updateRateLimitRule(ruleId, limit, windowSeconds) -> boolean",
+      "renderTimeline(userId, page, pageSize) -> { posts, nextPage }"
     ],
     "optionExplanations": [
-      "批量拉日志是离线分析接口，回答不了单次请求该不该放行这个在线问题。",
+      "分页拉历史日志是离线分析接口，答不了「这一次请求现在该不该放行」。",
       "passes 直接给出放行/拒绝，remaining 和 resetTime 正好对应 429 响应要用到的 headers 字段。",
-      "改密码是账户管理操作，跟限流判断完全是两码事。",
-      "渲染时间线是内容展示逻辑，跟这次请求该不该被限流毫无关系。"
+      "改规则是控制面接口，一天调用几次；在线路径要问的是本次请求过不过。",
+      "渲染时间线是业务读接口，跟这次请求是否被限流毫无关系。"
     ],
     "optionExplanations_en": [
-      "Fetching a batch of logs is an offline-analytics interface — it doesn't answer whether this single request should be allowed right now.",
+      "Paging through historical logs is an offline-analytics call; it cannot answer whether this one request should be allowed right now.",
       "passes gives the allow/deny call directly, and remaining plus resetTime map straight onto the fields a 429 response needs.",
-      "Changing a password is an account-management action, unrelated to a rate-limit decision.",
-      "Rendering a timeline is content-display logic, with nothing to do with whether this request should be throttled."
+      "Updating a rule is a control-plane call made a few times a day; the online path needs to ask whether this request passes.",
+      "Rendering a timeline is a product read path, unrelated to whether this request gets throttled."
     ],
     "termDefinitions": [
       {
@@ -292,10 +296,10 @@
     "q": "这种 in-process rate limiter 的主要问题是什么？",
     "q_en": "What is the main problem with this in-process rate limiter?",
     "options": [
-      "它一定比 Redis 慢",
-      "它无法识别请求里的 IP",
-      "每台服务器只看到本机流量，无法精确执行全局限额",
-      "它会自动产生跨实例强一致"
+      "它每次判断都比 Redis 方案更慢",
+      "它读不到请求里的 IP 和 API key",
+      "每台服务器只看到本机流量，全局限额只能是近似",
+      "它天然保证跨实例的强一致计数"
     ],
     "answer": [
       2
@@ -310,10 +314,10 @@
       "in-process"
     ],
     "options_en": [
-      "It is always slower than Redis",
-      "It cannot read the IP address from a request",
-      "Each server only sees its own traffic, so global limits become approximate",
-      "It automatically gives strong cross-instance consistency"
+      "It is slower on every decision than a Redis-based limiter",
+      "It cannot read the IP or API key off the request",
+      "Each server sees only its own traffic, so the global limit is approximate",
+      "It inherently gives strongly consistent counting across instances"
     ],
     "table": {
       "headers": [
@@ -374,10 +378,10 @@
     "q": "哪种部署形态最灵活？",
     "q_en": "Which deployment shape is most flexible?",
     "options": [
-      "每个客户端本地各自限流",
-      "只用 CDN 缓存",
-      "把限流写进数据库触发器",
-      "专用 Rate Limiting Service"
+      "让每个客户端在本地自行限流",
+      "只靠 CDN 边缘缓存挡住重复请求",
+      "在数据库触发器里实现限流逻辑",
+      "独立部署的专用限流服务"
     ],
     "answer": [
       3
@@ -393,10 +397,10 @@
     ],
     "diagram": "flowchart LR\nClient[Client] --> Gateway[API Gateway]\nGateway --> Limiter[Rate Limiter]\nLimiter --> Redis[(Redis)]\nGateway --> App[Backend API]",
     "options_en": [
-      "Each client rate-limits itself locally",
-      "Rely on CDN caching alone",
-      "Implement limiting inside a database trigger",
-      "A dedicated rate-limiting service"
+      "Let every client rate-limit itself locally",
+      "Rely on CDN edge caching to absorb repeat requests",
+      "Implement the limiting logic inside a database trigger",
+      "A separately deployed, dedicated rate-limiting service"
     ],
     "table": {
       "headers": [
@@ -528,6 +532,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "identity",
+    "scenario": "API Gateway 要在转发前认出调用方，每个请求只有 1-2ms 预算，不能为此多做一次网络往返。",
+    "scenario_en": "The API gateway must identify the caller before forwarding, with only a millisecond or two of budget and no room for an extra network round trip.",
     "q": "API Gateway 可用于识别 client 的常见标识有哪些？（多选）",
     "q_en": "Which identifiers can an API Gateway use to identify a client? (multi-select)",
     "options": [
@@ -591,6 +597,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "rules",
+    "scenario": "一个公开 API 既要防单个用户刷量，也要防整体过载，而写 endpoint 的成本远高于读。",
+    "scenario_en": "A public API has to stop any single user from hammering it and also protect total capacity, and its write endpoints cost far more than its reads.",
     "q": "真实系统通常会叠加哪些限流规则？（多选）",
     "q_en": "Which rate-limit rules do real systems typically layer together? (multi-select)",
     "options": [
@@ -710,6 +718,8 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "algorithms",
+    "scenario": "限额是每分钟 100 次，攻击者可以自由挑选发请求的时刻。",
+    "scenario_en": "The limit is 100 requests per minute, and the attacker gets to pick exactly when to send them.",
     "q": "Fixed Window Counter 的主要缺陷是什么？",
     "q_en": "What is the main flaw of the Fixed Window Counter algorithm?",
     "options": [
@@ -789,13 +799,15 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "algorithms",
+    "scenario": "限流要精确到不允许任何边界超发，但热点 client 每分钟有上万次请求要记。",
+    "scenario_en": "The limit must be exact with no burst at window boundaries, but a hot client sends tens of thousands of requests a minute.",
     "q": "Sliding Window Log 的优点和代价是什么？",
     "q_en": "What are the benefit and cost of the Sliding Window Log algorithm?",
     "options": [
-      "只需两个整数，但很不准确",
-      "支持突发流量，但不限制长期速率",
-      "完全不需要存储任何状态",
-      "精确统计滑动窗口请求，但要存大量 timestamp"
+      "只需两个整数计数器，但精度很差",
+      "允许短时突发，但管不住长期平均速率",
+      "完全无状态，不需要存任何东西",
+      "计数精确，但要存大量 timestamp"
     ],
     "answer": [
       3
@@ -809,10 +821,10 @@
       "sliding-log"
     ],
     "options_en": [
-      "Only needs two integers, but is very inaccurate",
-      "Allows bursts, but does not cap sustained rate",
-      "Needs no stored state at all",
-      "Exact per-request count, but stores many timestamps"
+      "Needs only two integer counters, but accuracy is poor",
+      "Allows short bursts, but does not cap the sustained average rate",
+      "Completely stateless — nothing needs to be stored",
+      "Counts are exact, but it stores a lot of timestamps"
     ],
     "table": {
       "headers": [
@@ -867,10 +879,12 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "algorithms",
+    "scenario": "要比固定窗口更平滑，但每个 client 只肯给两个计数器的内存预算。",
+    "scenario_en": "You need something smoother than a fixed window, but each client only gets the memory budget of two counters.",
     "q": "Sliding Window Counter 如何在成本和准确性之间折中？",
     "q_en": "How does the Sliding Window Counter trade off cost against accuracy?",
     "options": [
-      "维护当前窗口和上一窗口两个计数器，按时间进度加权估算",
+      "两个窗口计数器，按时间进度加权估算",
       "保存所有请求的精确 timestamp",
       "完全忽略上一窗口的数据",
       "让 Redis 每秒重启清空状态"
@@ -887,10 +901,10 @@
       "sliding-counter"
     ],
     "options_en": [
-      "Keep current and previous window counters, weighted by elapsed time",
-      "Store the exact timestamp of every request",
+      "Two window counters, weighted by how far the window has elapsed",
+      "Store the exact timestamp of every single request",
       "Ignore the previous window entirely",
-      "Restart Redis every second to clear state"
+      "Restart Redis every second to wipe the state"
     ],
     "table": {
       "headers": [
@@ -1147,9 +1161,9 @@
     "q": "哪条 Redis 命令最贴合这个读取？",
     "q_en": "Which Redis command best fits this read?",
     "options": [
-      "KEYS alice:bucket:*",
-      "BLPOP alice:bucket 0",
-      "PUBLISH alice:bucket check",
+      "KEYS alice:bucket:* 再逐个 HGET",
+      "BLPOP alice:bucket 0 取下一个 token",
+      "PUBLISH alice:bucket check-tokens",
       "HMGET alice:bucket tokens last_refill"
     ],
     "answer": [
@@ -1167,9 +1181,9 @@
       "code"
     ],
     "options_en": [
-      "KEYS alice:bucket:*",
-      "BLPOP alice:bucket 0",
-      "PUBLISH alice:bucket check",
+      "KEYS alice:bucket:* then HGET each one",
+      "BLPOP alice:bucket 0 to take the next token",
+      "PUBLISH alice:bucket check-tokens",
       "HMGET alice:bucket tokens last_refill"
     ],
     "optionExplanations": [
@@ -1191,11 +1205,13 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "atomicity",
+    "scenario": "两个 gateway 同时处理同一用户：各自先 HMGET 读 bucket，再 MULTI/HSET/EXEC 写回。",
+    "scenario_en": "Two gateways handle the same user at once; each reads the bucket with HMGET first, then writes it back inside MULTI/HSET/EXEC.",
     "q": "为什么 HMGET 后再 MULTI/HSET/EXEC 仍可能有竞态？",
     "q_en": "Why can a race condition still occur even after wrapping the write in MULTI/EXEC?",
     "options": [
-      "读操作在事务外，两个 gateway 可能都读到旧值并放行",
-      "MULTI/EXEC 从不真正执行写入",
+      "读发生在事务外，两个 gateway 可能都读到旧值",
+      "MULTI/EXEC 里的写入根本不会真正执行",
       "Redis hash 里存不了时间戳",
       "EXPIRE 会把所有用户一起删掉"
     ],
@@ -1210,8 +1226,8 @@
       "atomicity"
     ],
     "options_en": [
-      "The read happens outside the transaction, so two gateways can both read a stale value and allow",
-      "MULTI/EXEC never actually performs the write",
+      "The read happens outside the transaction, so two gateways can both see a stale value",
+      "Writes inside MULTI/EXEC never actually get executed",
       "A Redis hash cannot store a timestamp",
       "EXPIRE deletes every user's data at once"
     ],
@@ -1352,6 +1368,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "redis",
+    "scenario": "限流状态是每个 client 一个小 bucket，读写极频繁、几分钟就过期，检查要在 10ms 内完成。",
+    "scenario_en": "Rate-limit state is one small bucket per client, read and written constantly, expiring in minutes, and every check must finish within ten milliseconds.",
     "q": "Redis 适合限流状态的原因有哪些？（多选）",
     "q_en": "Why does Redis fit rate-limit state well? (multi-select)",
     "options": [
@@ -1423,10 +1441,10 @@
     "q": "超限请求应该如何处理？",
     "q_en": "How should an over-limit request be handled?",
     "options": [
-      "排队到窗口重置后再处理",
-      "静默丢弃无响应",
-      "fail fast，立即返回 HTTP 429",
-      "把请求写入长期数据库等待人工处理"
+      "把请求排队，等窗口重置后再处理",
+      "静默丢弃请求，不给任何响应",
+      "fail fast，立刻返回 429",
+      "写入数据库排队，等人工审核放行"
     ],
     "answer": [
       2
@@ -1441,10 +1459,10 @@
       "fail-fast"
     ],
     "options_en": [
-      "Queue the request until the window resets",
-      "Silently drop it with no response",
-      "Fail fast and return HTTP 429 immediately",
-      "Write it to a long-term database for manual review"
+      "Queue the request and process it after the window resets",
+      "Silently drop the request and return nothing at all",
+      "Fail fast and return a 429 right away",
+      "Park it in a database queue for a human to review"
     ],
     "optionExplanations": [
       "把超限请求挂起等窗口重置，等待时间不可控，还会占着连接和内存，交互式场景等不起。",
@@ -1465,6 +1483,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "headers",
+    "scenario": "客户端被限流后仍在盲目重试，你希望它自己退避，而不是继续硬打 API。",
+    "scenario_en": "A throttled client keeps blindly retrying, and you want it to back off on its own instead of hammering the API.",
     "q": "HTTP 429 响应中常见的有用 headers 有哪些？（多选）",
     "q_en": "Which headers are commonly useful on an HTTP 429 response? (multi-select)",
     "options": [
@@ -1745,7 +1765,7 @@
       "继续用单实例，靠升级硬件解决",
       "关闭一部分限流规则来降低压力",
       "按 client key 分片到约 10 个实例",
-      "把所有数据复制到每个节点本地判断"
+      "把全部限流状态复制到每个节点本地判断"
     ],
     "answer": [
       2
@@ -1761,7 +1781,7 @@
       "Keep a single instance and just upgrade hardware",
       "Turn off some rate-limit rules to reduce load",
       "Shard state by client key across about ten instances",
-      "Copy all data to every node and decide locally"
+      "Replicate all rate-limit state to every node and decide locally"
     ],
     "optionExplanations": [
       "硬件升级能小幅提升单实例的吞吐上限，但离 10 倍差距还差得远，量级上解决不了问题。",
@@ -1813,6 +1833,8 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "failure-mode",
+    "scenario": "Redis 挂了，gateway 拿不到任何 bucket 状态，必须立刻决定这批请求怎么办。",
+    "scenario_en": "Redis is down, the gateway can't read any bucket state, and it has to decide right now what to do with incoming requests.",
     "q": "fail-closed 的含义是什么？",
     "q_en": "What does fail-closed mean?",
     "options": [
@@ -1876,13 +1898,15 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "failure-mode",
+    "scenario": "Redis 在流量高峰时不可用，gateway 选择照常放行所有请求。",
+    "scenario_en": "Redis becomes unavailable during a traffic spike, and the gateway chooses to let every request through.",
     "q": "fail-open 的主要风险是什么？",
     "q_en": "What is the main risk of fail-open?",
     "options": [
-      "Redis 不可用时流量直通后端，高峰可能引发级联故障",
+      "Redis 挂掉后流量直通后端，高峰易级联故障",
       "它会把所有健康请求也一起拒绝掉",
       "它反而让限流判断更加精确",
-      "它要求每个客户端自己实现 Lua 脚本"
+      "它要求每个客户端自己实现 Lua 限流脚本"
     ],
     "answer": [
       0
@@ -1896,10 +1920,10 @@
       "fail-open"
     ],
     "options_en": [
-      "When Redis is unavailable, all traffic passes straight through and can cascade during a spike",
+      "With Redis down, traffic passes straight to the backend and can cascade in a spike",
       "It rejects every healthy request as well",
       "It makes rate-limit decisions more precise",
-      "It requires every client to implement Lua itself"
+      "It requires every client to write its own Lua limiting script"
     ],
     "table": {
       "headers": [
@@ -2069,6 +2093,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "observability",
+    "scenario": "限流器挡在所有 API 流量入口，它一旦异常，API 要么被误杀要么裸奔。",
+    "scenario_en": "The limiter sits in front of all API traffic, so when it misbehaves the API either blocks good users or runs completely unprotected.",
     "q": "限流系统应监控哪些指标？（多选）",
     "q_en": "Which metrics should a rate-limiting system monitor? (multi-select)",
     "options": [
@@ -2214,6 +2240,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "latency",
+    "scenario": "每次限流检查都要访问 Redis，端到端只有 10ms 预算，你想再压掉网络往返成本。",
+    "scenario_en": "Every rate-limit check hits Redis inside a ten-millisecond end-to-end budget, and you want to squeeze more cost out of the round trips.",
     "q": "除连接池和地理部署外，文章提到哪些可选优化？（多选）",
     "q_en": "Besides connection pooling and geographic deployment, which optional optimizations does the article mention? (multi-select)",
     "options": [
@@ -2259,6 +2287,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "hot-keys",
+    "scenario": "限流状态按 client key 分片，监控发现某一个 shard 的 CPU 远高于其他 shard。",
+    "scenario_en": "Rate-limit state is sharded by client key, and monitoring shows one shard running far hotter than all the others.",
     "q": "Rate Limiter 中的 hot key 通常意味着什么？",
     "q_en": "What does a hot key usually mean in a rate limiter?",
     "options": [
@@ -2310,6 +2340,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "hot-keys",
+    "scenario": "某企业客户流量极大但完全合法，你要保住 shard，又不想赶走这个付费客户。",
+    "scenario_en": "One enterprise customer sends huge but entirely legitimate traffic; you need to protect the shard without driving away a paying customer.",
     "q": "对合法高流量 client，文章建议哪些处理方式？（多选）",
     "q_en": "For legitimate high-volume clients, which approaches does the article recommend? (multi-select)",
     "options": [
@@ -2355,6 +2387,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "abuse",
+    "scenario": "有 client 持续以攻击级速率打你的 API，而且部分流量来自共享 NAT 出口 IP。",
+    "scenario_en": "A client keeps hitting your API at attack-level rates, and some of that traffic comes from a shared NAT egress IP.",
     "q": "对滥用或攻击流量，哪些策略合理？（多选）",
     "q_en": "For abusive or attack traffic, which strategies are reasonable? (multi-select)",
     "options": [
@@ -2400,12 +2434,14 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "client-side",
+    "scenario": "你已经在自家 SDK 里加了客户端限流，但攻击者可以直接用 curl 绕开 SDK。",
+    "scenario_en": "You've built client-side limiting into your own SDK, but an attacker can just bypass the SDK with curl.",
     "q": "client-side rate limiting 在本设计中的定位是什么？",
     "q_en": "What role does client-side rate limiting play in this design?",
     "options": [
       "完全替代服务端限流",
       "只用于数据库内部",
-      "有价值的补充，可平滑好公民流量，但不能作为安全边界",
+      "有价值的补充，但不能当安全边界",
       "会让 HTTP 429 不再需要"
     ],
     "answer": [
@@ -2422,7 +2458,7 @@
     "options_en": [
       "A full replacement for server-side rate limiting",
       "Something only used inside the database",
-      "A valuable complement that smooths well-behaved traffic, but not a security boundary",
+      "A useful complement, but never the security boundary",
       "Something that makes HTTP 429 unnecessary"
     ],
     "optionExplanations": [
@@ -2449,10 +2485,10 @@
     "q": "最常见的动态配置方案是什么？",
     "q_en": "What is the most common approach for dynamic configuration?",
     "options": [
-      "每个请求都触发重新部署 gateway",
+      "每次改限额都要重新部署所有 gateway",
       "把规则直接写进客户端代码里",
       "只靠人工 SSH 登录改内存",
-      "配置库存规则，gateway 定期 polling 并缓存"
+      "规则存配置库，gateway 定期 polling"
     ],
     "answer": [
       3
@@ -2468,10 +2504,10 @@
     ],
     "diagram": "flowchart LR\nAdmin[Admin config] --> Store[Config store]\nStore --> Watch[Watch or poll]\nWatch --> Gateway[Gateway cache]\nGateway --> Checks[Limiter checks]",
     "options_en": [
-      "Redeploy the gateway on every single request",
+      "Redeploy every gateway whenever a limit changes",
       "Hard-code the rules directly into client code",
       "Only change memory by hand over SSH",
-      "Store rules in a config store; gateways poll and cache them"
+      "Rules live in a config store that gateways poll periodically"
     ],
     "optionExplanations": [
       "每个请求都触发一次重新部署，部署本身要几十秒到几分钟，这比要改的限额生效速度慢了好几个数量级。",
@@ -2511,8 +2547,8 @@
     "q": "应考虑哪种配置分发？",
     "q_en": "Which configuration-distribution approach should be considered?",
     "options": [
-      "用 ZooKeeper/Pub-Sub 做 push 配置通知",
-      "每天定时人工重启所有 gateway 才生效",
+      "ZooKeeper/Pub-Sub push 配置变更",
+      "每天定点人工重启所有 gateway 让配置生效",
       "把规则直接写死在部署镜像里",
       "只手动更新其中一台 gateway"
     ],
@@ -2529,8 +2565,8 @@
       "zookeeper"
     ],
     "options_en": [
-      "Push-based notification via ZooKeeper or Pub/Sub",
-      "Restart every gateway by hand on a daily schedule",
+      "Push config changes out via ZooKeeper or Pub/Sub",
+      "Restart every gateway by hand at a fixed time each day",
       "Bake the rules directly into the deployment image",
       "Manually update just one single gateway"
     ],
@@ -2621,6 +2657,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "level-expectations",
+    "scenario": "45 分钟的系统设计面试，中级候选人只来得及把限流器的主路径讲清楚。",
+    "scenario_en": "In a 45-minute system design interview, a mid-level candidate only has time to get the rate limiter’s main path right.",
     "q": "中级候选人在这题里至少应讲清楚什么？",
     "q_en": "What should a mid-level candidate clearly cover at minimum in this question?",
     "options": [
@@ -2752,6 +2790,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "level-expectations",
+    "scenario": "同样 45 分钟的限流题，Staff+ 候选人被期待比中级多讲出一层东西。",
+    "scenario_en": "Same 45-minute rate-limiter question, but a Staff+ candidate is expected to go one level deeper than mid-level.",
     "q": "Staff+ 答案通常应体现什么？",
     "q_en": "What should a Staff+ answer typically demonstrate?",
     "options": [
@@ -2795,6 +2835,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "final-design",
+    "scenario": "限流决策在 1M requests/sec 的请求路径上同步发生，多一跳就吃掉延迟预算。",
+    "scenario_en": "The rate-limit decision happens synchronously on a request path doing a million requests a second, where any extra hop eats the latency budget.",
     "q": "最终 rate limiter 设计的关键组成包括哪些？（多选）",
     "q_en": "Which are the key components of the final rate limiter design? (multi-select)",
     "options": [

@@ -53,7 +53,9 @@
         "meaning": "系统必须始终保持为真的业务规则，比如一个座位只能有一个 owner。",
         "meaningEn": "An invariant is a rule that must always stay true, like a seat having exactly one owner."
       }
-    ]
+    ],
+    "scenario": "订票系统多线程共享 seat_owners 字典，QPS 不高，但同一座位绝不能卖两次。",
+    "scenario_en": "A booking service shares one seat map across threads; traffic is modest, but a seat must never be sold twice."
   },
   {
     "id": "lld-concurrency-correctness-002",
@@ -64,10 +66,10 @@
     "scenario": "Alice 和 Bob 同时订 7A；代码先检查 seat_owners 是否包含 7A，再写入 owner。",
     "q": "这里真正需要原子化的是哪一段？",
     "options": [
-      "只原子化网络请求",
-      "只原子化错误消息生成",
-      "检查座位可用和写入 owner 两步一起",
-      "只原子化类构造函数"
+      "只把发确认邮件的网络请求原子化",
+      "只把错误提示消息的拼接原子化",
+      "检查可用与写入 owner 合成一步",
+      "只把座位对象的构造函数原子化"
     ],
     "answer": [
       2
@@ -82,24 +84,24 @@
     ],
     "diagram": "sequenceDiagram\n  participant T1\n  participant State\n  participant T2\n  T1->>State: check free\n  T2->>State: check free\n  T1->>State: mark used\n  T2->>State: mark used",
     "optionExplanations": [
-      "只原子化网络请求无法解决座位订购的竞争问题。",
-      "错误消息生成不是关键路径。",
+      "把网络请求原子化不影响 seat_owners 的检查窗口，双订照旧发生。",
+      "错误消息拼接不碰共享状态，锁住它没有任何保护作用。",
       "检查座位可用和写入 owner 两步必须原子化，否则中间窗口会导致双订。",
-      "类构造函数与解决双订问题无关。"
+      "构造函数只创建对象，双订发生在对象之后被读写的路径上。"
     ],
     "optionExplanations_en": [
-      "Atomizing just the network request does not fix the booking race.",
-      "Error message generation is not on the critical path.",
+      "Making the network call atomic leaves the seat_owners check window open, so double booking still happens.",
+      "Error-message formatting touches no shared state, so locking it protects nothing.",
       "Checking availability and writing the owner must be atomic together to close the race window.",
-      "Class constructor atomicity does not address the booking issue."
+      "The constructor only creates the object; the double booking happens on later read-write paths."
     ],
     "scenario_en": "Alice and Bob both try to book seat 7A at the same time; the code first checks whether seat_owners contains 7A, then writes the owner.",
     "q_en": "Which part actually needs to be atomic here?",
     "options_en": [
-      "Only make the network request atomic.",
-      "Only make error-message generation atomic.",
-      "Make the availability check and the owner write atomic together.",
-      "Only make the class constructor atomic."
+      "Only make the confirmation-email network call atomic.",
+      "Only make error-message formatting atomic.",
+      "Make the availability check and the owner write one atomic step.",
+      "Only make the seat object's constructor atomic."
     ],
     "tradeoff": "检查和写入合并成一个临界区 vs 缩短持锁时间分开执行",
     "termDefinitions": [
@@ -184,10 +186,10 @@
     "sub": "coarse-locking",
     "q": "粗粒度锁最大的性能代价是什么？",
     "options": [
-      "不同资源上的独立操作也会被串行化",
-      "每次都会自动死锁",
-      "它无法保护字典",
-      "它只能用于读操作"
+      "无关资源上的操作也被串行化",
+      "每次获取锁都必然发生死锁",
+      "它无法保护字典这类结构",
+      "它只在只读路径上才有效"
     ],
     "answer": [
       0
@@ -201,22 +203,22 @@
     ],
     "optionExplanations": [
       "粗锁不知道两个操作是否冲突，所以把本不冲突的独立操作也串行化了，限制吞吐。",
-      "粗锁不会自动导致死锁。",
-      "粗锁可以保护字典。",
-      "粗锁同样保护读和写操作。"
+      "单把锁不存在循环等待，死锁通常来自多把锁获取顺序不一致。",
+      "粗锁能保护字典，粒度太大不等于保护不了。",
+      "粗锁读写都能保护，代价是把读写一起串行化。"
     ],
     "optionExplanations_en": [
       "A coarse lock serializes even independent operations because it cannot distinguish conflicts.",
-      "Coarse locks do not automatically cause deadlock.",
-      "Coarse locks can protect dictionaries.",
-      "Coarse locks protect both read and write operations equally."
+      "A single lock has no circular wait; deadlock comes from inconsistent ordering of multiple locks.",
+      "A coarse lock can protect a dictionary; being too coarse is not the same as not protecting.",
+      "A coarse lock protects reads and writes alike — the cost is serializing both."
     ],
     "q_en": "What is the biggest performance cost of a coarse-grained lock?",
     "options_en": [
-      "Independent operations on different resources also get serialized.",
-      "It automatically causes a deadlock every time.",
-      "It cannot protect a dictionary.",
-      "It only works for read operations."
+      "Operations on unrelated resources also get serialized.",
+      "Acquiring it always ends in a deadlock.",
+      "It cannot protect structures like dictionaries.",
+      "It only works on read-only paths."
     ],
     "termDefinitions": [
       {
@@ -229,7 +231,9 @@
         "meaning": "本可以并行的操作被迫排队依次执行。",
         "meaningEn": "Serializing means operations that could run in parallel are forced to run one after another."
       }
-    ]
+    ],
+    "scenario": "订票系统用一把全局锁保护整张座位表，高峰每秒上千次下单，且座位互不相关。",
+    "scenario_en": "A booking service guards the whole seat table with one global lock; at peak, thousands of orders a second hit unrelated seats."
   },
   {
     "id": "lld-concurrency-correctness-005",
@@ -396,7 +400,9 @@
         "meaning": "把相关操作都框在同一把锁或同一临界区内，形成互斥的边界。",
         "meaningEn": "A synchronization boundary is the scope that groups related operations under the same lock so they exclude each other."
       }
-    ]
+    ],
+    "scenario": "座位可用性检查和写 owner 分在两个方法里，团队想各自加一把锁提高并发。",
+    "scenario_en": "The availability check and the owner write sit in two methods, and the team wants to give each its own lock for more concurrency."
   },
   {
     "id": "lld-concurrency-correctness-008",
@@ -511,7 +517,9 @@
         "meaning": "允许多个读线程并发持有共享读锁、但写线程需要独占写锁的同步原语。",
         "meaningEn": "A read-write lock lets many readers hold a shared lock at once, but a writer must hold an exclusive lock alone."
       }
-    ]
+    ],
+    "scenario": "座位查询是写入的 20 倍，团队想在 Python 里用读写锁把读吞吐提上去。",
+    "scenario_en": "Seat lookups outnumber writes twenty to one, and the team wants a read-write lock in Python to raise read throughput."
   },
   {
     "id": "lld-concurrency-correctness-010",
@@ -577,10 +585,10 @@
     "sub": "fine-grained-locking",
     "q": "细粒度锁最容易引入的复杂性是什么？",
     "options": [
-      "锁对象生命周期、保护范围和多锁顺序都要管理",
-      "它永远比粗锁慢",
-      "它不能保护同一个资源",
-      "它自动删除不变量"
+      "锁归属、保护范围和获取顺序都要管",
+      "它一定比一把粗锁更慢",
+      "它无法保护同一个资源对象",
+      "它会自动消除不变量约束"
     ],
     "answer": [
       0
@@ -594,22 +602,22 @@
     ],
     "optionExplanations": [
       "细粒度锁引入了管理多把锁、它们的生命周期、保护范围以及获取顺序的复杂性。",
-      "细粒度锁在合理设计下可能比粗锁快。",
+      "冲突少时细粒度锁更快，慢只出现在锁本身开销盖过并行收益时。",
       "细粒度锁可以保护同一资源，只是换了粒度。",
-      "细粒度锁不会删除不变量。"
+      "不变量由代码定义，锁粒度只决定它在哪个边界内被维持。"
     ],
     "optionExplanations_en": [
       "Fine-grained locking requires managing multiple locks, their lifetimes, scopes, and acquisition order.",
-      "Fine-grained locks can be faster than coarse locks when well-designed.",
+      "With few conflicts it is faster; it only loses when lock overhead exceeds the parallelism gained.",
       "Fine-grained locks can protect the same resource at a different granularity.",
-      "Fine-grained locks do not eliminate invariants."
+      "The invariant is defined by the code; lock granularity only sets the boundary where it holds."
     ],
     "q_en": "What complexity does fine-grained locking most easily introduce?",
     "options_en": [
-      "You must manage lock object lifetime, scope, and multi-lock ordering.",
-      "It is always slower than a coarse lock.",
-      "It cannot protect the same resource.",
-      "It automatically deletes invariants."
+      "You must manage which lock owns what, its scope, and the acquisition order.",
+      "It is always slower than a single coarse lock.",
+      "It cannot protect the same resource object.",
+      "It automatically removes the invariant."
     ],
     "termDefinitions": [
       {
@@ -617,7 +625,41 @@
         "meaning": "所有线程按统一的全局顺序获取多把锁，避免循环等待。",
         "meaningEn": "Lock ordering means every thread acquires multiple locks in the same global order to avoid circular waiting."
       }
-    ]
+    ],
+    "scenario": "订票系统把全局锁拆成每个座位一把锁，一次下单可能同时锁住多个座位。",
+    "scenario_en": "The booking service splits its global lock into one lock per seat, and a single order can hold several seat locks at once.",
+    "table": {
+      "headers": [
+        "方案",
+        "锁数量",
+        "冲突判断",
+        "状态归属",
+        "额外风险"
+      ],
+      "rows": [
+        [
+          "单把全局锁",
+          "1 把",
+          "不区分资源",
+          "整张座位表",
+          "无关操作互相排队"
+        ],
+        [
+          "每座位一把锁",
+          "N 把",
+          "只挡真冲突",
+          "每个座位自己",
+          "获取顺序不一致会死锁"
+        ],
+        [
+          "分段锁",
+          "分段数",
+          "按段划分",
+          "一段座位",
+          "同段内仍会排队"
+        ]
+      ]
+    }
   },
   {
     "id": "lld-concurrency-correctness-012",
@@ -847,10 +889,10 @@
     "sub": "cas",
     "q": "CAS（compare-and-swap）的基本语义是什么？",
     "options": [
-      "只有当前位置仍等于预期值时，才把它改成新值",
-      "无条件覆盖变量",
-      "比较两个对象后都删除",
-      "把锁从写模式切到读模式"
+      "当前值仍等于预期值才写入新值",
+      "无条件覆盖变量的当前值",
+      "比较两个对象后同时删除",
+      "把锁从写模式切成读模式"
     ],
     "answer": [
       0
@@ -864,20 +906,20 @@
     ],
     "optionExplanations": [
       "CAS 的语义是条件性更新：只有当前位置仍等于预期值时才改为新值。",
-      "无条件覆盖是普通赋值，不是 CAS。",
-      "比较后删除不是 CAS 的语义。",
-      "CAS 与锁模式转换无关。"
+      "无条件覆盖是普通赋值，它检测不到别人已经改过。",
+      "比较后删除是集合操作，与原子更新语义无关。",
+      "锁模式切换属于读写锁的用法，不涉及“值是否被改过”的判断。"
     ],
     "optionExplanations_en": [
       "CAS only updates if the current value still matches the expected value.",
-      "Unconditional overwrite is simple assignment, not CAS.",
-      "Comparing then deleting is not CAS semantics.",
-      "CAS has nothing to do with lock mode transitions."
+      "Unconditional overwrite is plain assignment; it cannot detect that someone else already changed the value.",
+      "Compare-then-delete is a collection operation, unrelated to atomic update semantics.",
+      "Switching lock modes belongs to read-write locks and never checks whether a value changed."
     ],
     "q_en": "What is the basic semantics of CAS (compare-and-swap)?",
     "options_en": [
-      "Update the value to the new one only if it currently still equals the expected value.",
-      "Overwrite the variable unconditionally.",
+      "Write the new value only if the current value still equals the expected one.",
+      "Overwrite the variable's current value unconditionally.",
       "Compare two objects and then delete both.",
       "Switch a lock from write mode to read mode."
     ],
@@ -890,7 +932,9 @@
       }
     ],
     "codeSample": "int prev = max.get();\nboolean ok = max.compareAndSet(prev, newValue);  // only if still == prev\nif (!ok) {\n    // someone else changed it first; re-read and retry\n}",
-    "lang": "java"
+    "lang": "java",
+    "scenario": "无锁更新座位版本号：冲突很少，但每次写回都必须确认没人在中间改过。",
+    "scenario_en": "You update a seat version field without locks; conflicts are rare, but every write-back must confirm nobody changed it in between."
   },
   {
     "id": "lld-concurrency-correctness-017",
@@ -1011,7 +1055,9 @@
         "meaning": "必须让好几个字段同时保持一致的业务规则，比如计数和座位表要对得上。",
         "meaningEn": "A multi-field invariant is a rule that requires several fields to stay consistent together, like a count matching an owner map."
       }
-    ]
+    ],
+    "scenario": "booked_count 和 seat_owners 必须永远一致，团队想用原子变量替掉那把锁。",
+    "scenario_en": "booked_count and seat_owners must always agree, and the team wants atomic variables instead of the lock."
   },
   {
     "id": "lld-concurrency-correctness-019",
@@ -1186,7 +1232,37 @@
         "meaning": "把数据按 key 或范围拆成互不重叠的子集，分别处理。",
         "meaningEn": "A partition is a disjoint subset of data that is handled independently."
       }
-    ]
+    ],
+    "scenario": "订票服务按座位区把状态分给各线程独占，但偶尔有订单要一次订两个区的座位。",
+    "scenario_en": "The booking service shards seat state so each thread owns one section, but some orders need seats in two sections at once.",
+    "table": {
+      "headers": [
+        "方案",
+        "状态归属",
+        "跨边界操作",
+        "主要代价"
+      ],
+      "rows": [
+        [
+          "共享状态加锁",
+          "所有线程共享",
+          "直接读写",
+          "锁争用与临界区管理"
+        ],
+        [
+          "线程封闭分区",
+          "每线程独占一段",
+          "要路由或消息传递",
+          "热点分区负载不均"
+        ],
+        [
+          "不可变快照",
+          "各线程持有副本",
+          "合并时再协调",
+          "每次写要重建对象"
+        ]
+      ]
+    }
   },
   {
     "id": "lld-concurrency-correctness-022",
@@ -1259,7 +1335,9 @@
         "meaning": "先检查某个条件、再基于这个检查结果去执行动作的模式；如果检查和动作之间可以被别的线程打断就会出 bug。",
         "meaningEn": "Check-then-act reads a condition and then acts on it, and it breaks if another thread can change the condition in between."
       }
-    ]
+    ],
+    "scenario": "review 一段订票代码：先 if 判断座位可用，写一行日志，再写入 owner。",
+    "scenario_en": "You are reviewing booking code that checks whether a seat is free, writes a log line, then writes the owner."
   },
   {
     "id": "lld-concurrency-correctness-023",
@@ -1317,7 +1395,9 @@
         "meaning": "淘汰最久没被访问条目的缓存策略。",
         "meaningEn": "LRU is a cache eviction policy that removes the entry that has gone the longest without being accessed."
       }
-    ]
+    ],
+    "scenario": "排查共享资源池里的竞态：连接池、LRU 缓存、下载管理器都被多线程同时调用。",
+    "scenario_en": "You are hunting races in shared resource pools — a connection pool, an LRU cache, and a download manager, all called by many threads."
   },
   {
     "id": "lld-concurrency-correctness-024",
@@ -1423,10 +1503,10 @@
     "sub": "read-modify-write",
     "q": "Read-modify-write 与 check-then-act 的主要差别是什么？",
     "options": [
-      "没有条件分支，读当前值→计算→写回，风险是丢更新",
-      "这种模式只会发生在数据库内部",
-      "它完全不涉及任何共享状态",
-      "只能靠条件变量来修复，不能这样解决"
+      "无条件分支：读旧值→算→写回，丢更新",
+      "这种模式只会发生在数据库引擎内部",
+      "它完全不涉及任何共享可变状态",
+      "只能靠条件变量修复，加锁没用"
     ],
     "answer": [
       0
@@ -1476,10 +1556,10 @@
     ],
     "q_en": "What is the main difference between read-modify-write and check-then-act?",
     "options_en": [
-      "No conditional branch — read the current value, compute, write it back; the risk is a lost update.",
-      "This pattern only happens inside a database.",
-      "It doesn't involve any shared state at all.",
-      "It can only be fixed with a condition variable."
+      "No conditional branch — read the old value, compute, write back; the risk is a lost update.",
+      "This pattern only happens inside the database engine.",
+      "It does not involve any shared mutable state.",
+      "Only a condition variable can fix it; locking will not."
     ],
     "tradeoff": "check-then-act 的窗口在检查之后 vs read-modify-write 的窗口在计算之后",
     "termDefinitions": [
@@ -1498,7 +1578,9 @@
         "meaning": "线程用来等待某个条件成立、并在条件满足时被唤醒的同步原语。",
         "meaningEn": "A condition variable lets a thread wait for some condition to become true and be woken up when it does."
       }
-    ]
+    ],
+    "scenario": "同一份订票代码里既有“先查库存再扣减”，也有“读计数加一再写回”两段。",
+    "scenario_en": "The same booking code has both a check-stock-then-deduct block and a read-count-add-one-write-back block."
   },
   {
     "id": "lld-concurrency-correctness-027",
@@ -1511,10 +1593,10 @@
     "codeSample": "class RequestCounterBroken:\n    def __init__(self):\n        self._request_count = 0\n\n    def on_request(self):\n        self._request_count += 1",
     "lang": "python",
     "options": [
-      "它会拆成读、加、写，两个线程可能写回同一个新值",
-      "它每次都会把计数加 2",
-      "Python 禁止类字段递增",
-      "它只会影响局部变量"
+      "它拆成读、加、写，中间会被插入",
+      "它每次都会把计数加成 2",
+      "Python 禁止对类字段做递增",
+      "它只影响函数内的局部变量"
     ],
     "answer": [
       0
@@ -1529,23 +1611,23 @@
     ],
     "optionExplanations": [
       "+= 1 拆成读、加、写，两个线程读到同一个值并各自写回相同结果，丢失一次更新。",
-      "+= 1 不会每次加 2。",
-      "Python 允许类字段递增。",
-      "影响的是共享字段，不是局部变量。"
+      "每次只加 1，问题是这一次加法被另一个线程的写覆盖掉。",
+      "Python 允许类字段递增，语法合法，只是不保证原子。",
+      "它改的是实例上的共享字段，局部变量不会被别的线程看到。"
     ],
     "optionExplanations_en": [
       "The += is broken into read-add-write; two threads see 5 and both write 6, losing one increment.",
-      "It does not increment by 2 each time.",
-      "Python allows instance field increment.",
-      "It affects the shared field, not locals."
+      "It always adds 1 — the problem is that one add gets overwritten by another thread.",
+      "Python allows the increment; it is valid syntax, just not atomic.",
+      "It mutates a shared field on the instance; a true local would be invisible to other threads."
     ],
     "scenario_en": "Multiple request threads call a page-view counter's on_request at the same time.",
     "q_en": "Why isn't `+= 1` safe for concurrent counting?",
     "options_en": [
-      "It breaks into read, add, and write, so two threads can both write back the same new value.",
-      "It always adds 2 to the count instead of 1.",
+      "It splits into read, add, write, and another thread can slip in between.",
+      "It always increments the count by 2.",
       "Python forbids incrementing a class field.",
-      "It only affects a local variable."
+      "It only affects a local variable inside the function."
     ],
     "tradeoff": "免锁的简单写法 vs 保证递增不丢的原子/加锁方案",
     "termDefinitions": [
@@ -1677,7 +1759,9 @@
         "meaning": "两个线程基于同一个旧值计算，后写的覆盖了先写的，其中一次更新凭空消失。",
         "meaningEn": "A lost update happens when two threads compute from the same old value and the later write silently overwrites the earlier one."
       }
-    ]
+    ],
+    "scenario": "多线程分别更新浏览量、账户余额和响应时间统计，都是先读旧值再写回。",
+    "scenario_en": "Threads update a view count, an account balance, and a response-time stat, each reading the old value before writing back."
   },
   {
     "id": "lld-concurrency-correctness-030",
@@ -1687,7 +1771,7 @@
     "sub": "bug-shapes",
     "q": "库存“最后一件商品被两个用户购买”通常混合了哪两类 bug 形状？",
     "options": [
-      "check-then-act 和 read-modify-write 两种都有",
+      "既有 check-then-act 也有丢更新",
       "这其实只是前端页面渲染层的显示问题，和并发无关",
       "这只是代码里观察者模式的通知顺序设计问题",
       "这里只会出现死锁僵局，不会有数据被写错或丢失"
@@ -1716,7 +1800,7 @@
     ],
     "q_en": "What two bug shapes usually combine when \"the last item gets bought by two users at once\"?",
     "options_en": [
-      "Both check-then-act and read-modify-write.",
+      "Both a check-then-act race and a lost update.",
       "This is really just a front-end rendering display issue, unrelated to concurrency.",
       "This is just a notification-ordering design flaw in the observer pattern.",
       "This can only be deadlock — no data actually gets corrupted."
@@ -1738,7 +1822,9 @@
         "meaning": "对象状态变化时通知所有订阅者的设计模式。",
         "meaningEn": "The observer pattern notifies all subscribers when an object's state changes."
       }
-    ]
+    ],
+    "scenario": "秒杀库存只剩最后 1 件，两个用户同时下单，代码先判断 stock>0 再 stock-=1。",
+    "scenario_en": "One unit of stock is left and two users order at the same time; the code checks stock > 0 and then decrements it."
   },
   {
     "id": "lld-concurrency-correctness-031",
@@ -1841,7 +1927,9 @@
         "meaning": "同一把锁必须是同一个对象实例，不同实例之间没有互斥关系。",
         "meaningEn": "A lock object must be the same instance for mutual exclusion; different lock instances do not coordinate with each other."
       }
-    ]
+    ],
+    "scenario": "订票代码里 is_available() 用 lock1、mark_booked() 用 lock2，两者都碰 seat_owners。",
+    "scenario_en": "In the booking code is_available() takes lock1 and mark_booked() takes lock2, and both touch seat_owners."
   },
   {
     "id": "lld-concurrency-correctness-033",
@@ -1852,10 +1940,10 @@
     "scenario": "连接池每秒处理大量数据库请求，不同连接之间互不冲突；全局锁开始让吞吐下降。",
     "q": "为什么连接池比停车场更可能需要细粒度并发设计？",
     "options": [
-      "连接池是机器流量，高频操作更容易放大全局锁等待",
-      "连接池没有共享状态",
-      "停车场永远不能加锁",
-      "连接池只能用继承实现"
+      "机器高频流量放大全局锁等待",
+      "连接池内部并没有共享状态",
+      "停车场模型永远不能加锁",
+      "连接池只能用继承来实现"
     ],
     "answer": [
       0
@@ -1870,23 +1958,23 @@
     ],
     "optionExplanations": [
       "连接池是机器流量，高频操作放大了全局锁成本，特别容易触发吞吐瓶颈。",
-      "连接池维护共享连接列表。",
-      "停车场也可以加锁。",
-      "连接池可以用多种方式实现。"
+      "连接池维护共享的空闲连接列表，本身就是共享可变状态。",
+      "停车场同样可以加锁，只是人工触发频率低，粗锁就够用。",
+      "实现方式与并发粒度无关，组合和池化同样能实现。"
     ],
     "optionExplanations_en": [
-      "Connection pool is machine-generated high-QPS traffic, making a global lock a real bottleneck.",
-      "Connection pools manage shared connection lists.",
-      "Parking lots can be locked too.",
-      "Connection pools can be implemented various ways."
+      "A connection pool sees machine-generated high-QPS traffic, which makes a global lock a real bottleneck.",
+      "A connection pool keeps a shared free-connection list, which is shared mutable state.",
+      "A parking lot can be locked too; human-paced traffic just makes a coarse lock good enough.",
+      "Implementation style is unrelated to lock granularity; composition and pooling work as well."
     ],
     "scenario_en": "A connection pool handles a large volume of database requests per second; different connections never conflict with each other, and a global lock is starting to hurt throughput.",
     "q_en": "Why is a connection pool more likely to need fine-grained concurrency design than a parking lot?",
     "options_en": [
-      "A connection pool sees machine-generated traffic, so high-frequency operations amplify global-lock wait time.",
-      "A connection pool has no shared state at all.",
-      "A parking lot can never be locked.",
-      "A connection pool can only be implemented with inheritance."
+      "Machine-generated high-frequency traffic amplifies global-lock waiting.",
+      "A connection pool has no shared state inside it.",
+      "A parking-lot model can never be locked.",
+      "A connection pool can only be built with inheritance."
     ],
     "tradeoff": "机器高频流量下细粒度锁换吞吐 vs 人工触发场景粗锁已经够用",
     "termDefinitions": [
@@ -1998,10 +2086,10 @@
     "scenario": "临界区里有一次很慢的外部 API 调用和一次共享状态检查更新；你想减少锁占用。",
     "q": "正确的重构方向是什么？",
     "options": [
-      "把不依赖共享不变量的慢外部调用移出锁，但检查和状态更新仍同锁",
+      "慢的外部调用移出锁，检查和更新仍同锁",
       "只把外部 API 调用这一步锁起来就够了",
       "干脆把所有代码都挪到锁外面执行",
-      "检查和更新分别用两把不同的锁来保护"
+      "检查和更新分别用两把不同的锁保护"
     ],
     "answer": [
       0
@@ -2029,7 +2117,7 @@
     "scenario_en": "The critical section holds one slow external API call and one shared-state check-and-update; you want to reduce how long the lock is held.",
     "q_en": "What is the right refactor direction here?",
     "options_en": [
-      "Move the slow external call that doesn't touch the shared invariant outside the lock, but keep the check and state update under the same lock.",
+      "Move the slow external call out of the lock, but keep the check and the update under the same lock.",
       "Just lock the external API call by itself.",
       "Move all the code outside the lock entirely.",
       "Use two different locks to protect the check and the update separately."
@@ -2103,7 +2191,9 @@
         "meaning": "所有线程按统一的全局顺序获取多把锁，避免循环等待。",
         "meaningEn": "Lock ordering means every thread acquires multiple locks in the same global order to avoid circular waiting."
       }
-    ]
+    ],
+    "scenario": "review 一个多线程订票模块：它有多把锁，多个方法共同维护同一条座位不变量。",
+    "scenario_en": "You are reviewing a multithreaded booking module with several locks and several methods maintaining the same seat invariant."
   },
   {
     "id": "lld-concurrency-correctness-038",
@@ -2173,10 +2263,10 @@
     "scenario": "你既要增加 booked_count，又要写 seat_owners，并且二者必须永远一致。",
     "q": "为什么“booked_count 用 atomic，seat_owners 用普通写”仍可能不够？",
     "options": [
-      "两个状态没有共同原子边界，可能出现计数和映射不一致",
-      "atomic 变量不能递增",
-      "字典写入永远线程安全且一致",
-      "count 不属于业务规则"
+      "两者没有共同原子边界，可能不一致",
+      "atomic 变量本身不能递增",
+      "字典写入本来就线程安全且一致",
+      "count 只是统计，不属于业务规则"
     ],
     "answer": [
       0
@@ -2191,23 +2281,23 @@
     ],
     "optionExplanations": [
       "两个状态之间无共同原子边界，所以可能计数和映射脱离。",
-      "原子变量可以递增。",
-      "字典写入不一定线程安全。",
-      "count 是业务规则的一部分。"
+      "atomic 变量支持原子递增，这正是它最典型的用法。",
+      "字典写入不保证与另一个字段同步，跨字段一致性它管不了。",
+      "count 与 seat_owners 一起构成不变量，本身就是业务规则的一部分。"
     ],
     "optionExplanations_en": [
-      "Two states lack a common atomic boundary, allowing the count and map to diverge.",
-      "Atomic variables can increment.",
-      "Dictionary writes are not necessarily thread-safe.",
-      "Count is part of the business rule."
+      "The two pieces of state lack a common atomic boundary, so the count and the map can diverge.",
+      "Atomic variables do support atomic increment — that is their most typical use.",
+      "A dictionary write is not synchronized with another field, so it cannot hold a cross-field invariant.",
+      "count together with seat_owners forms the invariant, so it is part of the business rule."
     ],
     "scenario_en": "You increment booked_count and write seat_owners, and the two must always stay consistent with each other.",
     "q_en": "Why might \"atomic booked_count, plain write for seat_owners\" still not be enough?",
     "options_en": [
-      "The two pieces of state share no common atomic boundary, so the count and the map can drift apart.",
-      "Atomic variables cannot be incremented.",
-      "Dictionary writes are always thread-safe and consistent.",
-      "Count is not really part of the business rule."
+      "The two share no common atomic boundary, so they can drift out of sync.",
+      "An atomic variable itself cannot be incremented.",
+      "Dictionary writes are thread-safe and consistent by default.",
+      "count is only a statistic, not part of the business rule."
     ],
     "tradeoff": "各自轻量的原子更新 vs 跨字段一致性需要一个共同的锁/事务边界",
     "termDefinitions": [
@@ -2290,6 +2380,34 @@
         "meaning": "给状态的每个子部分分别配一把锁，只让真正冲突的线程互相等待。",
         "meaningEn": "Fine-grained locking assigns a separate lock to each piece of state so only truly conflicting threads wait on each other."
       }
-    ]
+    ],
+    "table": {
+      "headers": [
+        "压力形态",
+        "首选机制",
+        "保护范围",
+        "何时升级"
+      ],
+      "rows": [
+        [
+          "多字段不变量",
+          "一把锁包住临界区",
+          "整段检查加更新",
+          "锁竞争成为瓶颈时"
+        ],
+        [
+          "单个独立计数",
+          "原子变量",
+          "单个变量",
+          "涉及第二个字段时"
+        ],
+        [
+          "高并发独立资源",
+          "细粒度锁或线程封闭",
+          "每资源或每线程",
+          "跨分区协调变多时"
+        ]
+      ]
+    }
   }
 ]
