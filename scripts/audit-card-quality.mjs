@@ -359,6 +359,13 @@ function auditCard(card, rel) {
       (isStrictLongest && correct.length > secondLongest + 6 && correct.length > avg + 8)
     ) {
       add(issues, 'answer_cue.longest_option', 2, `correct option is ${correct.length} chars (distractor avg ${Math.round(avg)}, 2nd-longest ${secondLongest}); length telegraphs the answer — balance lengths and don't let the correct option be the longest`);
+    } else if (isStrictLongest && correct.length > secondLongest + 2) {
+      // The thresholds above only catch conspicuous cases. Measured across the library, the
+      // correct option was the longest on 75% of single-answer MCQs (random baseline for 4
+      // options is 25%) — a learner who always picks the longest scores far above chance without
+      // knowing anything, and their practice accuracy stops reflecting real mastery. So flag the
+      // milder cue too: being longest by more than a rounding margin is itself the tell.
+      add(issues, 'answer_cue.longest_option_mild', 1, `correct option is the longest (${correct.length} vs 2nd ${secondLongest}); across many cards this trains "pick the longest" — trim it or lengthen a distractor so the answer is not the longest`);
     }
   }
 
