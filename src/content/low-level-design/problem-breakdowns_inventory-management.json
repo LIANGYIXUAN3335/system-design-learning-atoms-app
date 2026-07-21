@@ -330,15 +330,15 @@
     "q": "alertConfigs 为什么设计成 productId -> List<AlertConfig>？",
     "q_en": "Why is alertConfigs modeled as productId to List<AlertConfig>?",
     "options": [
-      "因为每个产品只能有一个告警",
-      "为了替代库存数量本身",
-      "为了把仓库 ID 存成 list",
+      "因为每个产品的库存阈值只会有一个，不需要用 list",
+      "为了给同一产品的每个仓库分别记录各自的阈值",
+      "为了把这个产品分布在哪些仓库的 ID 存成列表",
       "支持同一产品配置多个阈值和 listener"
     ],
     "options_en": [
-      "Because each product can only have one alert.",
-      "To replace the stock quantity itself.",
-      "To store warehouse IDs as a list.",
+      "Because each product only ever has one threshold, so a list isn't needed.",
+      "To record a separate threshold for the product in each warehouse.",
+      "To store the IDs of every warehouse that carries this product.",
       "To support multiple thresholds and listeners per product."
     ],
     "answer": [
@@ -356,15 +356,15 @@
       }
     ],
     "optionExplanations": [
-      "场景里一个产品同时有预警和紧急两级告警，说明一个产品显然可以有不止一条规则。",
-      "库存数量存在 inventory map 里，alertConfigs 管的是告警规则，两者职责不重叠。",
-      "这个 map 的 value 是 AlertConfig 列表，不是仓库 ID，跟仓库标识毫无关系。",
+      "场景本身就写了同一产品同时有预警和紧急两级阈值，说明阈值显然不止一个，这个假设直接被场景推翻。",
+      "alertConfigs 的 key 已经是 productId，list 里装的是同一产品下的多条阈值配置，不是按仓库拆分的记录；库存才是按仓库分开存储的另一个结构。",
+      "这个 map 的 value 类型是 AlertConfig 列表，装的是阈值和 listener，不是仓库标识；产品分布在哪些仓库属于 inventory 的信息，不归 alertConfigs 管。",
       "同一产品要支持不同阈值对应不同通知渠道，list 让多条规则可以并存而不用并行数组。"
     ],
     "optionExplanations_en": [
-      "The scenario itself pairs one product with both a warning and an urgent alert, which already proves a product can carry more than a single rule.",
-      "Stock quantity lives in the inventory map; alertConfigs governs alert rules, a separate concern entirely.",
-      "This map's value is a list of AlertConfig, not warehouse IDs — it has nothing to do with warehouse identity.",
+      "The scenario itself pairs one product with both a warning and an urgent alert, which already proves a product can carry more than one threshold — this assumption is contradicted outright.",
+      "alertConfigs is already keyed by productId; the list holds multiple threshold rules for that one product, not per-warehouse records — inventory quantity is tracked separately, per warehouse.",
+      "This map's value type is a list of AlertConfig holding thresholds and listeners, not warehouse identity — which warehouses carry a product is inventory information, not something alertConfigs owns.",
       "Letting a single product carry more than one alert rule, each wired to its own channel, needs a list instead of parallel arrays."
     ]
   },
@@ -496,16 +496,16 @@
     "q": "InventoryManager 应如何实现该方法？",
     "q_en": "How should InventoryManager implement this availability lookup?",
     "options": [
-      "只检查列表里第一个仓库的库存就直接返回结果",
+      "只检查仓库列表里第一个 Warehouse 有没有货就直接返回",
       "遍历每个 Warehouse，收集能满足数量的 ID",
-      "把所有仓库的库存直接相加后只返回一个 ID",
-      "先把库存扣减掉，再统计剩下的数量并返回"
+      "把所有仓库的库存直接加总，只要够就返回任意一个 ID",
+      "先把对应数量的库存真的扣减掉，再看剩下数量够不够"
     ],
     "options_en": [
-      "Check only the first warehouse in the list and return right away.",
+      "Check only whether the first Warehouse in the list has stock and return immediately.",
       "Iterate every Warehouse and collect the IDs that can fulfill the quantity.",
-      "Sum stock across every warehouse and hand back just one ID.",
-      "Deduct the stock first, then count and return whatever is left."
+      "Sum the stock across every warehouse and return any single warehouse ID once the total is enough.",
+      "Actually deduct the requested quantity first, then check whether what's left is still enough."
     ],
     "answer": [
       1
@@ -515,16 +515,16 @@
     "whenOtherWins": "如果需求变成跨仓拆单 fulfill，则要返回一个组合方案而不只是单仓库列表。",
     "tradeoff": "逐仓库独立判断 vs 系统总量聚合",
     "optionExplanations": [
-      "只看第一个仓库会漏掉后面明明能满足数量的仓库，跟需求“哪些仓库各自能凑够”不符。",
+      "只看列表里第一个仓库就返回，后面明明能满足数量的仓库全被跳过，跟需求“哪些仓库各自能凑够”不符。",
       "需求问的是每个仓库各自能不能凑够数量，只有逐个检查再收集满足条件的 ID 才能给出这个答案。",
-      "把库存加总只能回答系统总量够不够，答不出具体是哪个仓库这个问题。",
-      "这只是一个只读查询，真的去扣库存会产生副作用，完全偏离了查询本身的语义。"
+      "库存加总只能回答系统总量够不够，答不出具体是哪些仓库能各自凑够；而且这里还只返回一个 ID，把其余同样满足条件的仓库漏掉了。",
+      "这只是一个只读查询，真的去扣库存会产生副作用，还用扣减后的剩余量做判断依据，完全偏离了查询本身的语义。"
     ],
     "optionExplanations_en": [
       "Stopping at the first warehouse misses others that could genuinely cover the requested amount, missing what the query actually asks.",
       "The question is which warehouses can each cover the amount by themselves, so checking every one and collecting the qualifying IDs is the only way to answer it.",
-      "Summing stock only tells you whether the system total is enough, not which specific warehouse can do it.",
-      "This is meant to be a read-only lookup; actually deducting stock introduces a side effect the query was never supposed to have."
+      "Summing stock only tells you whether the system total is enough, not which warehouses can each cover it — and returning just one ID drops every other qualifying warehouse.",
+      "This is meant to be a read-only lookup; actually deducting stock introduces a side effect, and judging by what's left over is the wrong basis entirely."
     ]
   },
   {
@@ -582,15 +582,15 @@
     "codeSample": "synchronized (this) {\n  if (quantity <= 0) return false;\n  int cur = inventory.getOrDefault(id, 0);\n  if (cur < quantity) return false;\n  inventory.put(id, cur - quantity);\n  toFire = getAlertsToFire(id, cur, cur - quantity);\n}\n// fire alerts AFTER the lock is released\nfor (AlertListener l : toFire) l.onLowStock(...);",
     "lang": "java",
     "options": [
-      "允许库存直接变成负数，以换取更高吞吐",
-      "先触发低库存告警，再去执行库存扣减",
-      "这个仓库里每个产品都共用同一把全局锁",
+      "允许库存直接变成负数，先扣减了再靠事后对账把账拉平",
+      "低库存告警在扣减库存之前就先触发，通知先于实际变化",
+      "这个仓库里所有产品的读写都共用同一把仓库级全局锁",
       "检查和扣减在同一把锁内完成，告警在锁外触发"
     ],
     "options_en": [
-      "Allow the quantity to go negative outright in exchange for more throughput.",
-      "Fire the low-stock alert first, then go execute the deduction.",
-      "Every product in this warehouse shares the exact same global lock.",
+      "Let stock go negative outright, then reconcile the books after the fact for more throughput.",
+      "Fire the low-stock alert before the deduction happens, so the notification precedes the actual change.",
+      "Every product in this warehouse shares the same single warehouse-level global lock.",
       "Check and deduct inside one lock; fire alerts after releasing it."
     ],
     "answer": [
@@ -609,15 +609,15 @@
       }
     ],
     "optionExplanations": [
-      "允许负库存直接违反不变量，用它换吞吐是拿正确性做交易，不可取。",
+      "允许负库存再靠事后对账拉平，意味着别的线程在对账完成前一直能看到错误状态，用正确性换吞吐不可取。",
       "先通知再扣库存意味着通知发出时库存其实还没变，读者看到的状态跟通知内容对不上。",
-      "每个产品都用全局锁等于所有产品共用一把锁，退化成了最粗粒度的串行化，不是这段代码的做法。",
+      "所有产品共用同一把仓库级全局锁，粒度最粗，退化成了完全串行化，不是这段代码按调用本身划分锁范围的做法。",
       "校验和扣减放在同一把锁里保证不会被并发穿插，收集完待触发的告警再在锁外调用，慢 I/O 不会拖住库存操作。"
     ],
     "optionExplanations_en": [
-      "Allowing negative stock breaks the invariant outright — trading correctness for throughput is not an option here.",
+      "Allowing negative stock and reconciling afterward means other threads keep seeing a broken state until that reconciliation lands — trading correctness for throughput.",
       "Firing the notification before deducting means the alert goes out while the count hasn't actually changed yet.",
-      "A single global lock shared by every product collapses concurrency to the coarsest possible serialization, not what this code does.",
+      "Sharing one warehouse-level lock across every product is the coarsest possible granularity, collapsing to full serialization — not what this code's locking does.",
       "Checking the balance and writing the new value share a single lock so no concurrent update can interleave, while the collected alerts fire only after that lock releases so slow I/O never blocks inventory work."
     ]
   },
@@ -916,15 +916,15 @@
     "q": "更细粒度的优化方案是什么？",
     "q_en": "What is the finer-grained locking optimization?",
     "options": [
-      "彻底去掉所有锁，完全靠调用方自己保证操作顺序",
+      "彻底去掉所有锁，完全靠调用方自己保证操作顺序不出错",
       "只给 AlertListener 这一个对象本身单独加锁",
-      "把每一个产品都拆分成一个独立的 Warehouse",
+      "把每一个产品都拆成一个独立的 Warehouse，用仓库粒度模拟锁粒度",
       "为每个 productId 配一把独立锁，配合线程安全 map"
     ],
     "options_en": [
-      "Remove every lock entirely and trust callers alone to order operations correctly.",
+      "Remove every lock entirely and trust callers alone to keep operations correctly ordered.",
       "Only put a lock on the AlertListener object itself, nothing else.",
-      "Split every single product out into its own separate Warehouse.",
+      "Split every single product into its own separate Warehouse, using warehouse granularity to fake lock granularity.",
       "Keep one lock per productId alongside a thread-safe map for the shared state."
     ],
     "answer": [
@@ -942,15 +942,15 @@
       }
     ],
     "optionExplanations": [
-      "完全去掉锁只会把竞态条件的责任甩给调用方，并不能真正解决瓶颈问题。",
+      "完全去掉锁只是把竞态条件的责任甩给调用方，调用方并没有共享状态的可见性，并不能真正解决瓶颈问题。",
       "AlertListener 只是通知回调，真正的竞争点在库存 map 的读写，锁错了对象。",
-      "把产品拆成独立仓库会让库存概念本身失真，产品和仓库是两个维度，不能互相替代。",
+      "把产品拆成独立仓库是想用仓库粒度冒充锁粒度，但仓库和产品是两个维度，这样做会让库存归属本身失真。",
       "给每个 productId 配独立锁，配合线程安全的 map，能让不同产品的操作真正并行，只是要多管理锁的生命周期和顺序。"
     ],
     "optionExplanations_en": [
-      "Removing locking entirely just hands the race condition to callers instead of actually solving the bottleneck.",
+      "Removing locking entirely just hands the race condition to callers who have no visibility into the shared state — it never actually solves the bottleneck.",
       "AlertListener is only the notification callback; the real contention is on reading and writing the inventory map, so this locks the wrong thing.",
-      "Splitting every product into its own warehouse distorts what a warehouse even means — product and warehouse are different dimensions.",
+      "Splitting every product into its own warehouse tries to fake lock granularity with warehouse granularity — product and warehouse are different dimensions, and this distorts what a warehouse means.",
       "A lock per productId plus a thread-safe map lets different products run truly in parallel, at the cost of extra bookkeeping for when each lock gets created, held, and released in order."
     ]
   },
@@ -998,15 +998,15 @@
     "q_en": "What is the best base implementation for atomic transfer?",
     "options": [
       "按稳定顺序同时锁两个 Warehouse，再 remove/add",
-      "先执行 remove，晚点再执行 add，全程不锁目标仓库",
+      "先执行 remove，晚点才执行 add，全程都不给目标仓库加锁",
       "只检查一遍 availability，但完全不真正扣减库存",
-      "先把库存加到目标仓库，再回头检查源仓库够不够"
+      "先把库存加到目标仓库，等加完才回头检查源仓库是否真的够"
     ],
     "options_en": [
       "Lock both warehouses in a stable order, then remove from source and add to destination.",
-      "Remove first, add much later, and never lock the destination at all.",
+      "Run remove first, run add much later, and never lock the destination warehouse at all.",
       "Only run an availability check without ever actually deducting stock.",
-      "Add to the destination warehouse first, then go back and check the source."
+      "Add to the destination first, and only go back to check the source once the add is already done."
     ],
     "answer": [
       0
@@ -1042,15 +1042,15 @@
     },
     "optionExplanations": [
       "两把锁一起拿住，观察者就不会在中途看到库存从两边同时消失；加锁顺序固定下来，两个方向的转账也不会互相卡住对方等待的锁。",
-      "不锁目标仓库意味着别的线程能在 remove 和 add 之间看到货物凭空消失的窗口。",
+      "不锁目标仓库意味着别的线程能在 remove 和 add 之间的整个窗口里看到货物凭空消失，加锁的缺失贯穿了整个转移过程。",
       "只检查不扣减根本没有真正转移库存，跟需求要求的原子转移完全不是一回事。",
-      "先加后查会让目标仓库先出现凭空多出来的库存，顺序反了会制造幻影数量。"
+      "先加后查意味着目标仓库会先出现凭空多出来的库存，等真正检查源仓库时才发现根本不够，顺序完全反了。"
     ],
     "optionExplanations_en": [
       "Holding the locks on each warehouse at the same time means no outside observer ever sees stock missing from both sides, and a fixed lock order stops two opposite-direction transfers from deadlocking each other.",
-      "Not locking the destination leaves a window where another thread can see the stock vanish between the remove and the add.",
+      "Not locking the destination leaves a window spanning the entire remove-to-add gap where another thread can see the stock vanish.",
       "Only checking availability without actually deducting never moves any stock at all — that's not a transfer.",
-      "Adding to the destination before checking the source conjures phantom stock there first, the wrong order entirely."
+      "Adding to the destination before checking the source conjures phantom stock there first, only discovering the shortfall afterward — the order is exactly backwards."
     ]
   },
   {
@@ -1066,16 +1066,16 @@
     "codeSample": "String first = min(fromId, toId);\nString second = max(fromId, toId);\nsynchronized (warehouses.get(first)) {\n  synchronized (warehouses.get(second)) {\n    if (!from.removeStock(pid, qty)) return false;\n    to.addStock(pid, qty);\n    return true;\n  }\n}",
     "lang": "java",
     "options": [
-      "让字典序更好看",
+      "只是为了让打印出来的仓库 ID 字典序看着更整齐",
       "防止两个相反方向的 transfer 形成循环等待死锁",
-      "保证 EAST 永远是源仓库",
-      "让 removeStock 可以忽略库存不足"
+      "保证字典序更靠前的仓库永远被当成源仓库",
+      "让 removeStock 在库存不够时也直接忽略不返回 false"
     ],
     "options_en": [
-      "To make the lexical order look nicer.",
+      "It only makes the printed warehouse IDs look nicer in lexical order.",
       "To prevent two opposite-direction transfers from forming a circular-wait deadlock.",
-      "To guarantee EAST is always the source warehouse.",
-      "To let removeStock ignore insufficient stock."
+      "It guarantees whichever warehouse sorts first lexically is always treated as the source.",
+      "It lets removeStock skip the insufficient-stock check and never return false."
     ],
     "answer": [
       1
@@ -1085,15 +1085,15 @@
     "whenOtherWins": "如果只用数据库事务，锁顺序交给数据库和隔离级别处理，但应用层仍要理解死锁风险。",
     "tradeoff": "全局锁顺序防死锁 vs 各自随意加锁更简单但会死锁",
     "optionExplanations": [
-      "排序不是为了好看，而是给所有线程一个统一、可预测的加锁顺序。",
+      "排序不是为了打印好看，而是给所有线程一个统一、可预测的加锁顺序，跟展示效果毫无关系。",
       "只要每个线程抢锁的先后次序统一，就永远不会出现 A 攥着 EAST 干等 WEST、同时 B 攥着 WEST 干等 EAST 这种谁也让不了谁的死局。",
-      "排序结果取决于两个 ID 的字典序，谁是 source 谁是 target 由业务参数决定，跟这个无关。",
-      "锁的顺序只影响谁先拿到锁，不会改变 removeStock 内部对库存是否足够的判断逻辑。"
+      "排序结果只决定谁先被拿来加锁，source 和 target 是 transfer 调用参数决定的业务角色，跟字典序谁在前无关。",
+      "锁的顺序只影响谁先拿到锁，不会改变 removeStock 内部对库存是否足够的判断逻辑，这个说法把两件事强行绑在一起。"
     ],
     "optionExplanations_en": [
-      "Sorting isn't about looking tidy — it gives every thread the same predictable lock order.",
+      "Sorting isn't about a nicer printed order — it gives every thread the same predictable lock order.",
       "When every thread acquires locks in the same global order, you can never get A holding EAST while waiting on WEST and B holding WEST while waiting on EAST — that circular wait is exactly what deadlock needs.",
-      "Which ID sorts first depends on lexical order; which warehouse is actually the source comes from the call arguments, unrelated to this.",
+      "Which ID sorts first only decides lock order; which warehouse is the source comes from the call arguments, unrelated to lexical order.",
       "Lock order only decides who gets the lock first — it doesn't touch removeStock's own check for whether enough stock exists."
     ]
   },
@@ -1109,15 +1109,15 @@
     "q_en": "Why does this atomic transfer design require reentrant locks?",
     "options": [
       "reentrant locks 会在后台自动创建出新的库存",
-      "非重入锁天生执行速度更快，所以整个系统都必须使用它",
+      "非重入锁获取开销更小、执行速度更快，所以整个系统都该统一改用它",
       "已经持有 Warehouse 锁时再调用同锁的方法会再次获取同一把锁",
-      "只有 reentrant locks 这种锁才能用来比较字符串"
+      "在所有锁类型里，只有 reentrant locks 这种能拿来比较字符串"
     ],
     "options_en": [
       "Reentrant locks quietly create new inventory in the background on their own.",
-      "Non-reentrant locks are inherently faster, so the whole system has to use them.",
+      "Non-reentrant locks have lower acquisition overhead and run faster, so the whole system should switch to them.",
       "While already holding the Warehouse lock, calling its own synchronized method acquires that same lock again.",
-      "Only reentrant locks, out of every lock type, can be used to compare strings."
+      "Out of every lock type, only reentrant locks can be used to compare strings."
     ],
     "answer": [
       2
@@ -1134,15 +1134,15 @@
     ],
     "optionExplanations": [
       "锁的可重入性跟库存会不会被自动创建毫无关系，这个说法是无中生有。",
-      "这里选可重入锁不是为了追求速度，而是为了让嵌套加锁不至于自己把自己卡死。",
+      "这里选可重入锁不是为了追求速度，非重入锁的获取开销也不天然更小，把性能当理由本身就站不住脚，真正的原因是嵌套加锁不能自己把自己卡死。",
       "transfer 已经拿着 Warehouse 锁，又调用同样加了锁的 removeStock/addStock，等于同一线程要对同一把锁再取一次，非重入锁会在这里自锁。",
-      "字符串比较是普通逻辑运算，跟锁是否可重入完全不搭边。"
+      "字符串比较是普通逻辑运算，跟锁是不是可重入完全不搭边，这个说法把两个无关的概念强行拉到一起。"
     ],
     "optionExplanations_en": [
       "Whether a lock is reentrant has nothing to do with inventory getting created automatically — that's just made up.",
-      "Reentrant locking isn't chosen here for speed; it's chosen so nested locking doesn't lock the thread out of its own lock.",
+      "Reentrant locking isn't chosen for speed — non-reentrant locks don't inherently have lower overhead either; the real reason is that nested locking shouldn't lock the thread out of its own lock.",
       "transfer already holds the Warehouse lock, then calls removeStock/addStock, which synchronize on that same lock — the same thread needs to acquire it again, which a non-reentrant lock would refuse.",
-      "String comparison is plain logic unrelated to whether a lock happens to be reentrant."
+      "String comparison is plain logic completely unrelated to whether a lock happens to be reentrant."
     ]
   },
   {
@@ -1288,16 +1288,16 @@
     "q": "为什么 checkAvailability 也要同步？",
     "q_en": "Why should checkAvailability be synchronized too?",
     "options": [
-      "让查询变慢才算正确",
+      "只要故意拖慢查询本身，就能避免读到脏数据",
       "保证读到一致的库存并具有正确的内存可见性",
-      "因为它会修改库存",
-      "因为 listener 要求同步"
+      "因为 checkAvailability 内部顺手改了库存数量",
+      "因为 AlertListener 的回调要求调用方持锁运行"
     ],
     "options_en": [
-      "Slowing the query down is what makes it correct.",
+      "Deliberately slowing the query down is what avoids reading dirty data.",
       "It guarantees a consistent read with correct memory visibility.",
-      "Because it mutates the inventory.",
-      "Because the listener requires synchronization."
+      "Because checkAvailability quietly mutates the inventory count too.",
+      "Because the AlertListener callback itself requires the caller to hold the lock while running."
     ],
     "answer": [
       1
@@ -1307,16 +1307,16 @@
     "whenOtherWins": "读多写少的场景可以用读写锁优化，但仍要有明确的同步策略。",
     "tradeoff": "全部同步保证一致性 vs 读写锁换更高读并发",
     "optionExplanations": [
-      "查询变慢本身不能带来正确性，同步的目的是可见性，不是故意拖慢。",
+      "故意拖慢查询本身不会带来正确性，同步的目的是可见性和一致性，不是靠延迟凑巧避开脏读。",
       "没同步的读可能拿到别的线程写到一半的中间状态；跟写方法遵守同一套同步规则，才能保证读到的是一致、最新的值。",
-      "checkAvailability 只读不写，它需要同步的原因跟修不修改库存无关。",
-      "listener 只在告警触发时才会被调用，跟这个方法是否要同步完全不搭边。"
+      "checkAvailability 只读取库存 map，并不写入任何值；它需要同步的原因跟会不会修改库存无关。",
+      "listener 只在告警触发时才被 Warehouse 自己调用，跟这次读操作是否要同步完全是两件事。"
     ],
     "optionExplanations_en": [
-      "Being slower doesn't make a query correct; synchronization exists for visibility, not to intentionally slow things down.",
+      "Deliberately slowing the query down doesn't make it correct; synchronization exists for visibility and consistency, not to dodge dirty reads through delay.",
       "A read taken outside any lock can catch another thread's half-finished write; following the same locking rule as writers guarantees a consistent, up-to-date value.",
-      "checkAvailability only reads, never mutates — the reason it needs synchronization has nothing to do with mutation.",
-      "The listener is only invoked when an alert fires, unrelated to whether checkAvailability itself needs to synchronize."
+      "checkAvailability only reads the inventory map and never writes to it — the reason it needs synchronization has nothing to do with mutation.",
+      "The listener is only invoked by Warehouse itself when an alert fires, a completely separate concern from whether this read needs to synchronize."
     ]
   },
   {
@@ -1385,13 +1385,13 @@
     "q_en": "What mechanism should be added to prevent this oversell window?",
     "options": [
       "只在用户支付成功之后，才真正去检查库存是否够",
-      "先把库存直接扣成负数，事后再异步补偿差额",
+      "先把库存直接扣成负数，靠后台异步任务事后把差额补偿回来",
       "直接把这件商品永久锁死，谁都不能再下单购买它",
       "加入 reservation 机制：先预占再确认或释放"
     ],
     "options_en": [
       "Only actually check whether inventory is enough after the user's payment already succeeds.",
-      "Deduct the stock straight into negative first, then compensate the gap asynchronously later.",
+      "Let the stock go negative right away, then have an async background job compensate the gap later.",
       "Lock this product down permanently so that nobody can ever place an order for it again.",
       "Add a reservation mechanism: hold stock first, then confirm or release it."
     ],
@@ -1405,13 +1405,13 @@
     "diagram": "flowchart TD\nA[\"checkout starts\"] --> B{\"available = inventory - reserved\"}\nB -->|enough| C[\"create Reservation\"]\nC --> D[\"increase reserved\"]\nD --> E{\"payment result\"}\nE -->|success| F[\"confirm: reduce inventory and reserved\"]\nE -->|timeout/cancel| G[\"release: reduce reserved\"]",
     "optionExplanations": [
       "结账开始时不预占，两个用户都能看到还有货，等到都付款成功才发现只有一件，超卖已经发生了。",
-      "先让库存变负再补偿，意味着系统在补偿完成前一直处于错误状态，跟场景要求的正确性不符。",
+      "先扣成负数再靠后台异步补偿，意味着系统在补偿完成之前一直处于超卖的错误状态，跟场景要求的正确性不符。",
       "把商品永久锁死连正常售卖都做不了，跟结账期间临时占用完全不是同一个诉求。",
       "结账开始就先占用这部分可售数量，付款成功才真正扣减，超时或取消则释放，两个用户不会同时看到同一件货能买。"
     ],
     "optionExplanations_en": [
       "Not holding anything at checkout start lets two users both see the last unit as available, and overselling only surfaces after both payments succeed.",
-      "Letting stock go negative and compensating afterward means the system stays wrong the whole time until that compensation lands, which is not what this scenario needs.",
+      "Letting stock go negative and having an async job compensate later means the system stays oversold the whole time until that compensation lands, which is not what this scenario needs.",
       "Locking the product permanently blocks normal selling entirely, a very different ask from just holding it during one checkout.",
       "Holding the available quantity the moment checkout starts, deducting for real only on payment success, and releasing on timeout or cancel keeps two users from ever seeing the same unit as buyable at once."
     ]
@@ -1809,14 +1809,14 @@
     "options": [
       "Manager 从架构设计上就完全不能访问任何一个仓库",
       "告警是某仓库某产品的库存状态规则，Warehouse 拥有相关数量变化",
-      "AlertConfig 需要知道所有仓库库存加起来的总量",
-      "listener 只能在 Manager 内部的代码里被调用"
+      "AlertConfig 需要先知道所有仓库库存加起来的总量才能判断阈值",
+      "listener 只能被 InventoryManager 内部代码调用执行"
     ],
     "options_en": [
       "By design, Manager is architecturally unable to reach into any warehouse at all.",
       "An alert is a per-warehouse per-product rule, and Warehouse owns the quantity changes that trigger it.",
-      "AlertConfig would need to know the summed quantity across every single warehouse.",
-      "A listener can only ever be invoked from code that lives inside Manager."
+      "AlertConfig would first need to know the summed quantity across every warehouse just to check the threshold.",
+      "A listener can only ever be invoked from code that lives inside InventoryManager."
     ],
     "answer": [
       1
@@ -1846,14 +1846,14 @@
     "optionExplanations": [
       "InventoryManager 持有全部 Warehouse 的引用，访问仓库从来不是问题。",
       "告警本质是这个仓库这个产品的库存状态规则，而数量变化正好发生在 Warehouse 内部，配置贴着变化发生的地方最直接。",
-      "阈值判断只看这一个仓库这一个产品的数量穿越，不需要知道其他仓库的库存。",
-      "listener 是在 add/remove 之后被 Warehouse 自己收集触发的，调用点不在 Manager。"
+      "阈值判断只看这一个仓库这一个产品的数量穿越，不需要先汇总其他仓库的库存才能判断，这个前提本身就不成立。",
+      "listener 是在 add/remove 之后被 Warehouse 自己收集触发的，调用点根本不在 Manager 内部。"
     ],
     "optionExplanations_en": [
       "InventoryManager holds a reference to every Warehouse, so access was never the obstacle.",
       "An alert is really a rule about one warehouse's one product, and the number that moves to trigger it changes inside Warehouse — placing the config right where that happens is the most direct path.",
-      "The threshold check only looks at this one warehouse's quantity crossing, with no need to know any other warehouse's stock.",
-      "The listener gets collected and fired by Warehouse itself right after add/remove, not from inside Manager."
+      "The threshold check only looks at this one warehouse's quantity crossing; it never needs a cross-warehouse total first, so this premise doesn't hold.",
+      "The listener gets collected and fired by Warehouse itself right after add/remove — the call site isn't inside Manager at all."
     ]
   },
   {
@@ -1909,15 +1909,15 @@
     "q": "getAlertsToFire 这次应返回什么？",
     "q_en": "What should getAlertsToFire return for this update?",
     "options": [
-      "null，因为库存仍非零",
-      "立即调用 listener 并持锁等待",
-      "删除这个产品的 alert config",
+      "因为扣减后的库存 9 仍然大于 0，所以直接返回 null",
+      "在持有仓库锁的情况下直接调用 listener，等它跑完再解锁",
+      "既然阈值已经跌破，就把这条 alert config 从 map 里删掉",
       "包含该阈值 listener 的 alert 列表"
     ],
     "options_en": [
-      "null, because the stock is still non-zero.",
-      "Call the listener immediately while still holding the lock.",
-      "Delete the alert config for this product.",
+      "Because the deducted stock of 9 is still greater than 0, so it should just return null.",
+      "Call the listener directly while still holding the warehouse lock, and only unlock once it finishes.",
+      "Since the threshold has been crossed, delete this alert config from the map entirely.",
       "A list of alerts containing the listener for that threshold."
     ],
     "answer": [
@@ -1930,15 +1930,15 @@
     "codeSample": "List<AlertListener> getAlertsToFire(String pid, int prev, int next) {\n  List<AlertConfig> configs = alertConfigs.get(pid);\n  if (configs == null) return List.of();\n  List<AlertListener> fired = new ArrayList<>();\n  for (AlertConfig c : configs) {\n    // only fire on downward crossing, not every low read\n    if (prev >= c.threshold() && next < c.threshold())\n      fired.add(c.listener());\n  }\n  return fired;\n}",
     "lang": "java",
     "optionExplanations": [
-      "库存非零不代表没有跌破阈值，9 依然低于 10 这个阈值，这里明显发生了一次下穿。",
-      "在锁内直接调用 listener 会让慢 I/O 占住仓库锁，这正是这个方法要避免的问题。",
-      "阈值穿越只是应该触发一次通知，不代表这条告警规则以后都不需要了，删除配置没有依据。",
+      "库存非零不代表没有跌破阈值，9 依然低于 10 这个阈值，这里明显发生了一次下穿，不能因为非零就直接返回 null。",
+      "在锁内直接调用 listener 会让慢 I/O 占住仓库锁，这正是这个方法要避免的问题，正确做法是先收集、锁外再触发。",
+      "阈值穿越只是应该触发一次通知，不代表这条告警规则以后都不需要了，删除配置没有依据，下次库存再次跌破时还需要它。",
       "prevQty=15 高于阈值、newQty=9 低于阈值，正好是一次下穿，应该把对应的 listener 收集进列表，等释放锁后再触发。"
     ],
     "optionExplanations_en": [
-      "Nonzero stock doesn't mean nothing crossed — 9 is still below the threshold of 10, so a downward crossing clearly happened.",
-      "Calling the listener directly inside the lock is exactly the slow-I/O-holds-the-lock problem this method is designed to avoid.",
-      "Dipping below the threshold just means one notification should fire, not that the rule is done forever — deleting the config has no basis.",
+      "Nonzero stock doesn't mean nothing crossed — 9 is still below the threshold of 10, so a downward crossing clearly happened; being nonzero is no basis for returning null.",
+      "Calling the listener directly inside the lock is exactly the slow-I/O-holds-the-lock problem this method is designed to avoid; the right move is to collect first and fire after the lock releases.",
+      "Dipping below the threshold just means one notification should fire, not that the rule is done forever — deleting the config has no basis, since the next crossing will need it again.",
       "prevQty=15 is above threshold and newQty=9 is below it, exactly a downward crossing, so its listener belongs in the return list and only actually fires once the lock releases."
     ]
   },

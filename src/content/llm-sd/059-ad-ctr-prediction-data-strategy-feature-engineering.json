@@ -134,13 +134,13 @@
       "embeddings"
     ],
     "options": [
-      "one-hot 编码后每个样本这一维其实只占几 KB,完全没问题,不需要为任何高基数类别 ID 做改动",
+      "one-hot 若用稀疏张量只存非零下标,确实只占几 KB,但进模型第一层要乘一个稠密权重矩阵,计算量照样是十亿级,且不同 ID 学不到共享信息",
       "one-hot 十亿维每样本约 4GB 且极稀疏,存不下也难学,所以要用 embedding 映射成低维稠密向量",
       "one-hot 崩溃单纯是因为它把数值特征也一起做了编码,和类别 ID 本身的基数高低完全没有关系",
       "one-hot 完全没问题,真正的瓶颈只在于模型的隐藏层不够深,把网络往深处再加几层就能彻底解决"
     ],
     "options_en": [
-      "After one-hot encoding this one dimension per sample actually takes only a few KB and is fine, needing no change for any high-cardinality categorical ID.",
+      "If stored as a sparse tensor, only the nonzero index takes a few KB — but the first layer still multiplies by a dense weight matrix, so compute stays billion-scale and IDs share no learned signal.",
       "A billion-dim one-hot is ~4GB per sample and extremely sparse, so it neither fits nor trains — hence embeddings mapping IDs to low-dim dense vectors.",
       "One-hot collapses simply because it also encodes numeric features together, entirely unrelated to how high the categorical cardinality happens to be.",
       "One-hot is entirely fine; the real bottleneck is just the model's hidden layers not being deep enough, and stacking a few more layers fully fixes it."
@@ -149,13 +149,13 @@
       1
     ],
     "optionExplanations": [
-      "十亿维远不止几 KB,10 亿×4 字节≈4GB,单样本就压垮内存。",
+      "稀疏存储确实能省存储空间,但解决不了矩阵乘法的计算量,也解决不了跨 ID 泛化的问题。",
       "对;高基数+稀疏让 one-hot 每样本约 4GB 且几乎全零,既存不下又学不动,embedding 把它压成 16-64 维稠密向量。",
       "崩的根因是类别基数太高,不是把数值也编码进来。",
       "加深模型救不了输入表示爆炸,根子在 one-hot 的维度。"
     ],
     "optionExplanations_en": [
-      "A billion dims is far more than a few KB; 1B×4 bytes ≈ 4GB crushes memory for a single sample.",
+      "Sparse storage does save space, but it fixes neither the dense matmul cost nor cross-ID generalization.",
       "Correct — high cardinality plus sparsity makes one-hot ~4GB per sample and nearly all zeros, so embeddings compress it into 16-64 dense dims.",
       "The collapse is from high categorical cardinality, not from also encoding numerics.",
       "Deepening the model cannot fix an exploded input representation; the root is one-hot dimensionality."
@@ -195,14 +195,14 @@
     "options": [
       "继续用 one-hot,只是把总维度从十亿粗暴砍到一百万,靠这种硬截断而不是学习出来的表示来解决",
       "用 embedding:把每个 ID 映射成 16-64 维稠密向量,相似点击模式→相似向量,压维且能泛化",
-      "把 ID 直接当成一个普通整数标量喂进模型,省掉编码这一步,指望模型自己去学习其中的规律",
-      "对每一个 ID 都单独训练出一个专属的小模型,再把海量小模型各自的输出结果做集成打分"
+      "把 ID 直接当成一个普通整数标量喂进模型,省掉学习表示这一步,指望模型自己学到 id=5 和 id=3 之间的语义关系",
+      "对每一个 ID 都单独训练一个专属小模型,十亿用户就要维护十亿个模型,再把这些模型各自的打分结果拿来做集成"
     ],
     "options_en": [
       "Keep one-hot but crudely truncate the dimension from a billion down to a million, via this hard truncation instead of a learned dense representation.",
       "Use embeddings: map each ID to a 16-64-dim dense vector, similar click patterns giving similar vectors — compact and generalizing.",
-      "Feed the ID directly as a plain integer scalar, skipping encoding entirely, hoping the model learns the underlying pattern on its own.",
-      "Train a separate dedicated small model for every single ID, then ensemble the individual outputs of that massive collection of models."
+      "Feed the ID directly as a plain integer scalar, skipping representation learning, hoping the model figures out on its own how id=5 relates to id=3.",
+      "Train a dedicated small model for every single ID — a billion users means a billion models to maintain — then ensemble their individual outputs."
     ],
     "answer": [
       1
@@ -306,13 +306,13 @@
     "options": [
       "给每个 ID 分配唯一行号并维护一张映射表,行数完全不变但查得快",
       "用哈希函数把多个 ID 映进同一桶,行数压到约 1/100,代价是碰撞引入噪声",
-      "把 embedding 维度从 64 硬降到 1,靠减维而不是减行来压表",
+      "把 embedding 维度从 64 硬降到 1,只压缩了列数、行数没变,十亿行存不下的问题照样没解决",
       "只保留当前批次出现过的 ID,其余全部删掉,遇到没见过的就直接报错"
     ],
     "options_en": [
       "Assign each ID a unique row and keep a full lookup table; rows stay unchanged but reads are faster.",
       "Hash many IDs into the same bucket, shrinking rows ~100:1, at the cost of collisions adding noise.",
-      "Cut embedding dimension from 64 down to 1, shrinking columns instead of rows.",
+      "Cut embedding dimension from 64 down to 1 — that only shrinks columns, rows stay unchanged, so the billion-row fit problem is still unsolved.",
       "Keep only IDs seen in the current batch and delete the rest, erroring on any unseen ID."
     ],
     "answer": [
@@ -527,28 +527,28 @@
       "compression"
     ],
     "options": [
-      "只是为了省一点云成本,不压缩表也完全能正常上线服务用户",
+      "压缩只是为了省一点云成本,只要肯多花钱换更大内存的服务节点,不压缩也照样能正常上线服务",
       "不压缩表就放不进服务节点内存,实时推理直接做不了,压缩是在线服务的前提",
-      "压缩纯粹是为了提高模型的预测精度,和内存大小、能否服务都无关",
-      "压缩只影响离线训练阶段的速度,对线上实时服务完全没有影响"
+      "压缩纯粹是为了提高模型的预测精度,和内存放不放得下、能不能服务完全无关",
+      "压缩只影响离线训练阶段跑得快不快,对线上要不要能实时打分完全没有影响"
     ],
     "options_en": [
-      "It only saves a bit of cloud cost; serving still works fine online for users even without it.",
+      "It only saves a bit of cloud cost — pay for a bigger-memory serving node and skipping compression still serves fine.",
       "Without compression the table won't fit serving-node memory, so real-time inference is impossible — compression is a serving prerequisite.",
-      "Compression is purely for the model's prediction accuracy, unrelated to memory size or whether serving is possible.",
-      "Compression only affects offline training-phase speed, with no effect on live online serving at all."
+      "Compression is purely for the model's prediction accuracy, unrelated to whether the table fits memory or serving is possible at all.",
+      "Compression only affects how fast the offline training phase runs, with no bearing on whether live scoring can be real-time."
     ],
     "answer": [
       1
     ],
     "optionExplanations": [
-      "不是省钱那么轻——放不进内存,服务根本起不来。",
+      "换更大内存的机器成本随规模线性甚至更快增长,而这道题问的是「能不能」不是「愿不愿花钱」。",
       "对;推理每次都要查 embedding,表超内存就查不了,10-20ms 出 pCTR 无从谈起,所以压缩是可行性前提。",
       "压缩首先解决的是能不能放进内存、能不能服务,不是提精度。",
       "它直接决定线上能否加载和查表服务,不只是训练速度。"
     ],
     "optionExplanations_en": [
-      "It is not mere cost saving — if it won't fit memory, serving cannot even start.",
+      "Bigger-memory machines get expensive fast at this scale, and the question is whether serving is possible, not whether you're willing to pay.",
       "Correct — inference needs an embedding lookup each time, and an over-memory table cannot be queried, so 10-20ms pCTR is impossible, making compression a feasibility prerequisite.",
       "Compression first addresses fitting memory and serving at all, not accuracy.",
       "It directly determines whether the table can be loaded and served online, not just training speed."
@@ -627,13 +627,13 @@
       "每次请求都现场扫描这个用户全部的历史行为日志、重新完整算一遍聚合结果,以此保证数据绝对最新不过期",
       "预计算进特征库、在线 p99 <5-10ms 快查,批处理刷新,分钟级新鲜用 Kafka+Flink 流式补",
       "把这些需要跨历史聚合的特征全部直接丢弃不用,只依赖当前请求自带的那一小份上下文特征来打分",
-      "让模型在每一次推理的这一刻都直接连上后端数据库,现场跑一遍完整的历史聚合查询语句之后再打分"
+      "让模型在每一次推理的这一刻都直接连上后端数据库,现场跑一遍完整的历史聚合查询语句拿到结果之后再打分,指望能压进 20ms 预算"
     ],
     "options_en": [
       "Rescan this user's entire behavioral history log and fully recompute the aggregate live on every single request, guaranteeing absolute freshness.",
       "Precompute into a feature store with p99 <5-10ms lookup, refreshed by batch, and use Kafka+Flink streaming for minute-fresh needs.",
       "Drop every single feature that needs cross-history aggregation and score using only the tiny set of context features the current request carries.",
-      "Have the model connect straight to the backend database at every single moment of inference and run a full historical aggregation query before scoring."
+      "Have the model connect straight to the backend database at every inference and run a full historical aggregation query before scoring, hoping it fits in 20ms."
     ],
     "answer": [
       1
@@ -679,13 +679,13 @@
       "预计算进特征库,和用户 30 天历史 CTR 走一样的批处理流程",
       "直接从请求 payload 和会话状态取,无需外部查,因为当前请求就能得出",
       "从 30 天的历史日志里聚合出来,每小时定时刷新一次",
-      "让客户端先把这些字段上传、回写数据库,下一次请求才能用上"
+      "让客户端先把时段、设备这些字段上传、回写数据库,下一次请求才能读到,当次请求反而用不上"
     ],
     "options_en": [
       "Precompute into the feature store, going through the same batch pipeline as user 30-day CTR.",
       "Take them directly from the request payload and session state with no lookup, since the current request yields them.",
       "Aggregate them from 30 days of history logs, refreshed on an hourly schedule.",
-      "Have the client upload these fields first, write them back to the database, and only use them next request."
+      "Have the client upload time-of-day and device first, write them back to the database, only readable next request — useless for the current one."
     ],
     "answer": [
       1
@@ -735,13 +735,13 @@
     "tradeoff": "流式(分钟级新鲜、增量聚合、多一套管线) vs 批处理(小时/天、简单但太旧)",
     "whenOtherWins": "如果特征本身天级更新就够(如用户长期类目亲和),用便宜的批处理即可,不必上流式的复杂度。",
     "options": [
-      "把批处理刷新频率硬生生提到每分钟一次,单纯靠更频繁的全量重算来解决这个棘手的新鲜度问题",
+      "把批处理刷新频率硬生生提到每分钟一次,靠更频繁的全量重算解决新鲜度,但每分钟全量扫一遍历史数据成本远高于增量聚合",
       "用流式管线(Kafka+Flink)近实时增量聚合,分钟级写进特征库,填批处理和请求实时之间的空档",
       "在请求路径上现场扫描全部原始日志,当场重新算出这 3 分钟窗口内的完整聚合结果给模型用",
       "干脆放弃这个只有 3 分钟新鲜度的珍贵信号不要,只用现成的小时级批处理特征凑合着用"
     ],
     "options_en": [
-      "Force batch refresh up to once per minute, relying purely on more frequent full recomputation to solve this thorny freshness problem on its own.",
+      "Force batch refresh up to once per minute, relying on more frequent full recomputation — but scanning all history every minute costs far more than incremental streaming.",
       "Use a streaming pipeline (Kafka+Flink) to incrementally aggregate near-real-time, writing minute-fresh into the feature store, bridging batch and request-time.",
       "Scan the entire raw logs live on the request path and freshly recompute the full 3-minute window aggregate result for the model to use.",
       "Just give up on this valuable 3-minute-freshness signal entirely and make do with the existing hourly batch features instead."
@@ -792,13 +792,13 @@
       "estimation"
     ],
     "options": [
-      "只把用户 embedding 单独一项拿来估算:约 4 GB,单台机器内存就能全部放下",
+      "只把用户 embedding 单独一项拿来估算,漏算了画像和广告部分:约 4 GB,单台机器内存就能全部放下",
       "各分项相加合计约 270 GB(量化后),放不进单机,要用分片 Redis 集群 + 副本承载",
       "把用户和广告的全部原始特征都算进去:约 10 TB,必须全部落盘、彻底放弃内存服务",
       "只统计用户 embedding 这一项:约 256 GB,广告与画像部分不计入这次估算"
     ],
     "options_en": [
-      "Estimating from the user-embedding item alone: about 4 GB, fitting entirely in one machine's memory.",
+      "Estimating from the user-embedding item alone, missing profiles and ad-side numbers entirely: about 4 GB, fitting in one machine's memory.",
       "Summing all parts gives about 270 GB after quantization, too big for one node, served by a sharded Redis cluster with replication.",
       "Counting every raw user and ad feature in full: about 10 TB, forcing everything onto disk and abandoning in-memory serving.",
       "Counting only the user-embedding item: about 256 GB, leaving the ad and profile parts out of this estimate."
@@ -844,13 +844,13 @@
       "estimation"
     ],
     "options": [
-      "约 5 万次读/秒,单个最普通的 Redis 节点就绰绰有余,完全不需要做任何分片处理和扩容准备",
+      "约 5 万次读/秒,漏乘了每请求的查询次数,单个最普通的 Redis 节点就绰绰有余,不需要分片和扩容准备",
       "约 150 万次读/秒(500K×3),约 450 MB/s,据此配约 10 节点 Redis + 读副本",
       "约 500 次读/秒,把读吞吐和请求 QPS、每请求查询次数都当成两件完全无关的独立事情来看",
       "约 5 亿次读/秒,认为再怎么扩大集群规模、加多少台机器都扛不住,只能彻底放弃特征库这条路"
     ],
     "options_en": [
-      "About 50K reads/sec, comfortably handled by one plain Redis node with absolutely no sharding or scaling preparation needed at all.",
+      "About 50K reads/sec, forgetting to multiply by lookups-per-request, comfortably handled by one plain Redis node with no sharding needed.",
       "About 1.5M reads/sec (500K×3), ~450 MB/s, sizing about 10 Redis nodes with read replicas.",
       "About 500 reads/sec, treating read throughput and request QPS or lookups-per-request as two entirely separate, unrelated things to consider.",
       "About 500M reads/sec, deemed unbearable no matter how many machines the cluster scales to, so the feature store must be abandoned altogether."
@@ -905,13 +905,13 @@
       "每秒约 50 万次打分,认为单个重模型自己就能轻松扛住、完全不需要两段式架构",
       "每秒约 1 亿次打分(500K×200),重模型扛不住全部,所以必须两段式只排约 200 候选",
       "每秒约 200 次打分,认为打分量和请求 QPS、每次候选数量都完全没有关系",
-      "每秒约 1000 亿次打分,认为任何硬件规模都绝不可能扛住,只能干脆放弃 CTR 排序"
+      "每秒约 1000 亿次打分,把候选数和 QPS 相乘又多乘了一次候选数,认为只能干脆放弃 CTR 排序"
     ],
     "options_en": [
       "About 500K scores/sec, judged easily handled by a single heavy model on its own with no two-stage architecture needed at all.",
       "About 100M scores/sec (500K×200), unbearable for a heavy model on all, so two-stage ranking of ~200 candidates is essential.",
       "About 200 scores/sec, treating score volume as having nothing to do with either request QPS or the candidate count per request.",
-      "About 100 billion scores/sec, judged absolutely impossible for any hardware scale, so CTR ranking must simply be dropped."
+      "About 100 billion scores/sec, from multiplying in the candidate count an extra time, judged as needing to simply drop CTR ranking."
     ],
     "answer": [
       1
@@ -958,14 +958,14 @@
     "options": [
       "每次请求都现场重新算一遍这个用户的完整历史聚合,单纯靠不断堆机器硬把延迟压到 20ms 以内不超时",
       "预计算进特征库快查 + 压缩 embedding 进内存 + 分片 Redis 配副本扛吞吐,上下文特征实时取",
-      "把十亿用户的全部历史特征都直接烘焙进模型权重里存起来,推理时完全不查任何外部存储系统",
-      "让每一次用户请求都同步训练出一个专属这个用户自己的小模型,训练完成之后再拿这个小模型来打分"
+      "把十亿用户的全部历史特征都直接烘焙进模型权重里存起来,推理时完全不查任何外部存储系统,权重体积会随用户数线性膨胀",
+      "让每一次用户请求都同步训练出一个专属这个用户自己的小模型,训练完成之后再拿这个小模型来打分,延迟和算力成本都是无底洞"
     ],
     "options_en": [
       "Recompute this user's entire history aggregation live on every single request, relying purely on piling on more and more machines to hit 20ms without timing out.",
       "Precompute into a fast feature store + compress embeddings into memory + sharded Redis with replicas for throughput, with context features real-time.",
-      "Bake every one of a billion users' entire history features directly into the model's weights so inference queries no external store system at all.",
-      "Synchronously train a small model dedicated to each individual user on every single request, then use that freshly trained small model to score."
+      "Bake every one of a billion users' history features directly into the model's weights so inference queries no external store — weight size grows linearly with users.",
+      "Synchronously train a small model dedicated to each individual user on every single request, then score with it — latency and compute cost are bottomless."
     ],
     "answer": [
       1

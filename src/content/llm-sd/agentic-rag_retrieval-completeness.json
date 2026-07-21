@@ -21,13 +21,13 @@
       "先对整份文档整体做一次 embedding，再按向量聚类结果切块，最后把每块连同向量和元数据一起存进向量库",
       "跳过切块，直接把整份原始文档原样存进向量库，等查询命中时再即时切块和 embedding",
       "解析 → 切块(带 overlap) → embedding → 存向量库 + 元数据(文件/页/chunk_id)",
-      "先在这几百份文档上微调训练一个法律专用模型，再让它直接回答、不走检索"
+      "先在这几百份文档上微调训练一个法律专用模型，把知识直接存进模型权重，不走切块、embedding、向量库这套索引链路"
     ],
     "options_en": [
       "Embed the whole document once first, then chunk by vector clusters, then store each chunk with its vector and metadata.",
       "Skip chunking, store whole raw documents as-is in the vector store, and chunk plus embed on the fly at query time.",
       "Parse, chunk (with overlap), embed, then store in a vector DB with metadata (file/page/chunk_id).",
-      "Fine-tune a legal-specific model on these documents first, then answer directly with no retrieval."
+      "Fine-tune a legal-specific model on these documents first, baking the knowledge into the model's weights instead of going through chunking, embedding, and a vector store."
     ],
     "answer": [
       2
@@ -59,13 +59,13 @@
       "先整体做 embedding 顺序反了——embedding 得在切块之后逐块进行，先斩后奏这条链路技术上跑不通。",
       "整份原文存进向量库等于把它当文档仓库用，检索时既拿不到细粒度片段也算不出相似度。",
       "对；解析后按 overlap 切块、逐块转向量、把文件/页/chunk_id 一起写进库，这是能真正跑起来的标准顺序。",
-      "微调专用模型走的是训练路线，换一批文档就要重训一次，丢了 RAG 免训练、即插即用的优势。"
+      "微调专用模型走的是训练路线，跳开了切块/embedding/向量库这套索引链路，换一批文档就要重训一次，丢了 RAG 免训练、即插即用的优势。"
     ],
     "optionExplanations_en": [
       "Embedding has to happen per chunk, so embedding the whole document before chunking runs the pipeline backwards and it simply doesn't work.",
       "Storing the raw document whole turns the vector store into a plain file dump — no fine-grained chunks to hit, no similarity score to compute.",
       "Correct — parse, split into overlapping chunks, turn each into a vector, and write it in with file/page/chunk_id metadata: the sequence that actually runs.",
-      "Fine-tuning a dedicated model is a training track — retrain every time the document set changes, giving up RAG's no-training, plug-and-play edge."
+      "Fine-tuning a dedicated model bypasses chunking/embedding/vector-store entirely and is a training track — retrain every time the document set changes, giving up RAG's no-training, plug-and-play edge."
     ]
   },
   {
@@ -247,13 +247,13 @@
     "tradeoff": "按意图选路径：找单点=检索 vs 穷尽全量=map-reduce",
     "options": [
       "B(汇总全卷所有损害赔偿)——要穷尽不漏，必须遍历全量做 map-reduce",
-      "A(找第 7.2 条上限)——虽只此一条，但也得遍历全量才够稳妥保险",
+      "A(找第 7.2 条上限)——虽只此一条，但遍历全量才更保险，别冒漏检的风险",
       "两者都只用 top-k 检索即可，靠相似度排序取前几块候选就够了",
       "两者都一律上 map-reduce，宁可全量遍历也绝不冒漏检的风险"
     ],
     "options_en": [
       "B (summarize all damages) — must be exhaustive, so a full map-reduce pass.",
-      "A (find the cap in clause 7.2) — even though it's just one item, it still needs a full pass to be truly safe.",
+      "A (find the cap in clause 7.2) — even though it's just one item, run the full pass anyway rather than risk missing something.",
       "Both cases just need top-k retrieval; ranking by similarity and grabbing the top few candidates is enough.",
       "Both should always run map-reduce; better to do a full pass than ever risk missing something."
     ],
@@ -325,13 +325,13 @@
       "refine 这种做法其实并不需要读遍全部 chunk，靠采样其中几块串起来就足以让它收敛",
       "map-reduce 只负责并行抽取各个 chunk 的局部结果，从来都不会把它们直接产出成最终答案",
       "map-reduce 并行 map 各块再一次 reduce；refine 串行更新 running answer",
-      "两者其实完全等价，只是并行处理的时候被叫做 map-reduce、串行处理的时候被叫做 refine 而已"
+      "两者其实完全等价，只是同一套遍历 chunk 的逻辑，处理方式并行时叫 map-reduce、串行时叫 refine 而已"
     ],
     "options_en": [
       "Refine as a practice doesn't actually need to read through every chunk; sampling a few and stitching them together is enough for it to converge.",
       "Map-reduce is only ever responsible for extracting partials from each chunk in parallel and never turns them into a final answer by itself.",
       "Map-reduce maps chunks in parallel then reduces once; refine updates a running answer serially.",
-      "The two are actually fully equivalent — it's just that the parallel version gets called 'map-reduce' and the serial version gets called 'refine'."
+      "The two are actually fully equivalent — it's the same chunk-traversal logic, just called 'map-reduce' when done in parallel and 'refine' when done serially."
     ],
     "answer": [
       2
@@ -340,13 +340,13 @@
       "错；refine 同样要走遍每个 chunk，只是方式是串行更新而非并行。",
       "错；reduce 阶段正是把局部结果聚合成最终答案。",
       "对；map-reduce 靠并行拿吞吐，refine 靠串行携带上下文换连贯性。",
-      "错；一个可并行一个必须串行，扩展性和连贯性取舍完全不同。"
+      "错；虽然都要遍历全部 chunk，但一个可并行一个必须串行，扩展性和连贯性取舍完全不同。"
     ],
     "optionExplanations_en": [
       "Incorrect — refine also walks every chunk, just serially updating instead of in parallel.",
       "Incorrect — the reduce step is exactly what aggregates partials into a final answer.",
       "Correct — map-reduce buys throughput via parallelism, refine buys coherence via a serial running answer.",
-      "Incorrect — one parallelizes and one must be serial, a very different scalability/coherence tradeoff."
+      "Incorrect — both walk every chunk, but one parallelizes and one must be serial, a very different scalability/coherence tradeoff."
     ],
     "termDefinitions": [
       {
@@ -379,13 +379,13 @@
       "long-context"
     ],
     "options": [
-      "主要风险是以为 embedding 会因为输入变长而需要重新在线计算，反过来拖慢整个离线索引管线的运行效率",
+      "主要风险是以为 embedding 会因为这次输入变长而需要重新在线计算一遍，反过来拖慢整个离线索引管线的运行效率和吞吐",
       "长上下文 degrade(lost in the middle)、成本爆炸且超窗口，只喂检索/压缩后的 context",
       "主要风险是以为一旦超过窗口，模型就会直接报错拒答，还得额外再加一层人工兜底处理流程",
       "主要风险是以为向量库会因为这次查询变少而导致缓存失效，需要把整套索引重新构建一遍"
     ],
     "options_en": [
-      "The main risk is assuming embeddings would need to recompute online just because input grows, which in turn slows down the whole offline indexing pipeline's throughput.",
+      "The main risk is assuming embeddings would need to be recomputed online just because input grows, which in turn slows down the whole offline indexing pipeline's throughput and efficiency.",
       "Long context degrades (lost in the middle), cost explodes, and it exceeds the window — feed only retrieved/condensed context.",
       "The main risk is assuming that once the window is exceeded the model would immediately hard-error and refuse, requiring yet another extra manual fallback layer.",
       "The main risk is assuming the vector store's cache would go stale just because this one query got smaller, requiring the whole index to be rebuilt from scratch."
@@ -432,13 +432,13 @@
     ],
     "tradeoff": "bi-encoder(快、粗召回) vs cross-encoder rerank(慢、精排)",
     "options": [
-      "以为 rerank 其实能够直接替代掉 embedding 和整套向量库，靠它自己一步就完成召回和排序这两件事情",
+      "以为 rerank 其实能够直接替代掉 embedding 和整套向量库，靠它自己一步就完成召回和排序，还能省下检索那一路的算力开销",
       "以为 rerank 主要是为了压缩索引，用来减少向量库的存储占用和相关的成本开销",
       "以为 rerank 能让整体检索变得更快，于是可以直接跳过精排步骤、只返回最初的原始候选块",
       "用 cross-encoder 成对精排 query-chunk，precision 更高，把最相关的几块塞进 prompt"
     ],
     "options_en": [
-      "Assume rerank can actually replace embeddings and the whole vector store outright, doing both recall and ranking in one single step all by itself.",
+      "Assume rerank can actually replace embeddings and the whole vector store outright, doing both recall and ranking in one step and even saving the compute of that retrieval pass.",
       "Assume rerank mainly exists to compress the index, in order to cut the vector store's storage footprint and related costs.",
       "Assume rerank makes overall retrieval faster, so you could just skip the fine ranking step and return the original raw candidates.",
       "A cross-encoder reranks query-chunk pairs for higher precision, packing the most relevant few into the prompt."
@@ -460,13 +460,13 @@
       }
     ],
     "optionExplanations": [
-      "rerank 只排序不召回，候选还是得先靠 embedding 找出来，它顶替不了向量检索这一步。",
+      "rerank 只排序不召回，候选还是得先靠 embedding 找出来，它顶替不了向量检索这一步，也省不下那份算力。",
       "rerank 动的是排序后的候选，跟向量库要存多少东西不搭边，省不了存储。",
       "cross-encoder 逐对打分反而更慢，rerank 换来的是精度不是速度，跳过它才是图快。",
       "对；cross-encoder 联合读 query 和 chunk 来打分，比粗排的 bi-encoder 更准，能把 50 个候选压成塞得进 prompt 的 5 块。"
     ],
     "optionExplanations_en": [
-      "Rerank only reorders — candidates still have to come from embedding-based recall first, so it can't stand in for vector search.",
+      "Rerank only reorders — candidates still have to come from embedding-based recall first, so it can't stand in for vector search, and it saves no compute there either.",
       "Rerank works on candidates after recall and has nothing to do with how much the vector store stores, so it saves no storage.",
       "Scoring pairs one by one with a cross-encoder is actually slower — rerank buys accuracy, not speed; skipping it is what would be fast.",
       "Correct — a cross-encoder scores the query and chunk together, sharper than the coarse bi-encoder pass, narrowing 50 candidates down to the 5 that fit the prompt."
@@ -552,13 +552,13 @@
       "让模型完全自由发挥地去回答，出了问题以后再全靠人工事后逐句逐条全量复查来兜底把关",
       "chunk 带 (文件,页,chunk_id) 做 citation，每条 claim 对照 chunk verify",
       "只原样返回检索到的那些 chunk 原文、完全不做任何生成，交给用户自己去读、自己去判断",
-      "调高 temperature 这个采样参数让答案的措辞听起来更丰富更华丽，靠这种方式掩盖引用来源上的不确定性"
+      "调高 temperature 这个采样参数让答案的措辞听起来更丰富更华丽，靠这种方式掩盖引用来源和事实依据上的种种不确定性"
     ],
     "options_en": [
       "Let the model completely free-wheel in its answers, then have humans go back afterward and recheck every single line by hand as the only safety net.",
       "Carry (file, page, chunk_id) as citations, and verify each claim against its chunk.",
       "Return only the raw retrieved chunk text as-is and skip generation entirely, leaving it to users to read through and judge for themselves.",
-      "Raise the temperature sampling parameter so answers sound richer and more elaborate, using that wording to paper over uncertainty in the citations."
+      "Raise the temperature sampling parameter so answers sound richer and more elaborate, using that wording to paper over every kind of uncertainty in the citations and facts."
     ],
     "answer": [
       1

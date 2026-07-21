@@ -266,31 +266,31 @@
       "ttft"
     ],
     "options": [
-      "生成的答案会更长，因为省下的算力用来多生成 token",
+      "省下的 prefill 算力会自动用来延长生成，输出 token 数变多",
       "首 token 延迟(TTFT)显著下降，用户更快看到回复开始",
-      "答案质量会下降，因为跳过了前缀的计算",
-      "吞吐不变，只是显存占用增加了"
+      "答案质量会下降，因为缓存的前缀 K/V 是近似值而非精确复用",
+      "吞吐(tokens/s)显著提升，但首 token 延迟基本不变"
     ],
     "options_en": [
-      "Answers get longer because the saved compute produces more tokens.",
+      "The compute saved automatically extends generation, producing more output tokens.",
       "TTFT drops sharply, so users see the reply begin much sooner.",
-      "Answer quality drops because prefix computation is skipped.",
-      "Throughput is unchanged, only memory usage rises."
+      "Answer quality drops because the cached prefix K/V is an approximation, not an exact reuse.",
+      "Throughput (tokens/s) rises sharply, but time-to-first-token stays about the same."
     ],
     "answer": [
       1
     ],
     "optionExplanations": [
-      "省下的算力用来服务更多请求或更快响应，不是让单个答案变长。",
+      "省下的是 prefill 算力，只影响首 token 出现的速度；decode 阶段每步生成不受影响，不会让输出变长。",
       "对；prefill 是 TTFT 的主要成分，砍掉 60–70% 前缀重算直接让首 token 更快出现。",
-      "前缀 K/V 只是被复用而非跳过计算，结果完全等价，质量不变。",
-      "TTFT 下降本身就改善了延迟，且缓存复用还提升有效吞吐，不是「不变」。"
+      "前缀 K/V 是被精确复用，不是近似值——数值完全等价，质量不受影响。",
+      "缓存减少的是 prefill 计算量，直接砍的是首 token 延迟(TTFT)；decode 阶段吞吐本身不受影响，说反了。"
     ],
     "optionExplanations_en": [
-      "The saved compute serves more requests or responds faster, not lengthen a single answer.",
+      "The saved compute is prefill compute; it only affects how fast the first token appears — decode-per-step is unaffected, so output length doesn't change.",
       "Correct — prefill is the main component of TTFT, so removing 60–70% of prefix recompute makes the first token appear sooner.",
-      "The prefix K/V is reused, not skipped, so results are equivalent and quality is unchanged.",
-      "Lower TTFT already improves latency, and cache reuse also raises effective throughput — not 'unchanged.'"
+      "The prefix K/V is reused exactly, not approximated — results are numerically equivalent and quality is unaffected.",
+      "Caching cuts prefill compute, which directly lowers TTFT (first-token latency); decode-phase throughput itself doesn't change — this option has it backwards."
     ],
     "termDefinitions": [
       {
@@ -508,30 +508,30 @@
       "memory"
     ],
     "options": [
-      "缓存必须是一整块连续显存，请求结束才能整块释放回池",
-      "缓存分散在磁盘上，用到时再从磁盘换入显存",
-      "每请求缓存要等整批完成后统一回收，粒度是整批",
+      "缓存必须像传统实现一样整块连续分配，请求结束才整块释放回池",
+      "缓存平时存在 CPU 内存里，attention 计算前才换入显存",
+      "每请求缓存要等整批全部完成后才统一回收，粒度是整批而非单请求",
       "缓存是一串 page 的链表，请求完成后 page 即时归还"
     ],
     "options_en": [
-      "The cache must be one contiguous block, freed whole only when the request finishes.",
-      "The cache lives scattered on disk and is paged into GPU memory when needed.",
-      "Per-request cache is reclaimed only after the whole batch finishes, at batch granularity.",
+      "The cache must be allocated as one contiguous block like a traditional implementation, freed whole only when the request finishes.",
+      "The cache normally lives in CPU memory and is swapped into GPU memory right before attention compute.",
+      "Per-request cache is reclaimed only after the whole batch fully finishes — batch granularity, not per-request.",
       "The cache is a linked list of pages, and pages go back to the free pool the moment the request ends."
     ],
     "answer": [
       3
     ],
     "optionExplanations": [
-      "PagedAttention 的核心恰恰是打破「必须连续」，用分页非连续管理。",
-      "page 在显存里非连续，不是换到磁盘；磁盘换入会慢到无法接受。",
-      "回收是 page 级即时的，不等整批，这正是它比静态分配灵活的地方。",
+      "PagedAttention 的核心恰恰是打破「必须连续」这个传统假设，改用分页非连续管理。",
+      "page 常驻显存内非连续存放，不会换出到 CPU 内存；频繁换入换出会拖慢延迟。",
+      "回收是 page 级、请求级即时的，不等整批全部完成，这正是它比静态批处理灵活的地方。",
       "对；逻辑连续物理分散的 page 链表 + block table 映射，完成即时还池，支持 page 级复用。"
     ],
     "optionExplanations_en": [
-      "PagedAttention's core is breaking the 'must be contiguous' rule with paged non-contiguous management.",
-      "Pages are non-contiguous in GPU memory, not swapped to disk; disk swap would be unacceptably slow.",
-      "Reclamation is per-page and immediate, not batch-wide — that's exactly its edge over static allocation.",
+      "PagedAttention's core breaks exactly this 'must be contiguous' traditional assumption, using paged non-contiguous management instead.",
+      "Pages reside non-contiguously in GPU memory and aren't swapped out to CPU memory; frequent swap-in/out would hurt latency badly.",
+      "Reclamation is page-level and per-request, immediate — not waiting for the whole batch — which is exactly its edge over static batching.",
       "Correct — a logically-contiguous, physically-scattered page list plus a block table, returning pages to the pool on completion for page-level reuse."
     ],
     "termDefinitions": [
@@ -707,31 +707,31 @@
       "decode"
     ],
     "options": [
-      "瓶颈是算力不足，只能靠加更多 GPU 卡来解决",
+      "瓶颈是算力不足，加更多 GPU 卡、提高并行度就能线性解决",
       "解码是内存带宽瓶颈，每 token 一次完整前向却只产一个",
-      "瓶颈是网络延迟，投机解码通过压缩传输来解决",
-      "瓶颈是磁盘 IO，投机解码把权重预取到内存里"
+      "瓶颈是网络延迟，投机解码靠压缩传输、减少跨机通信解决",
+      "瓶颈是磁盘 IO，投机解码靠提前把权重从磁盘预取进显存解决"
     ],
     "options_en": [
-      "The bottleneck is raw compute, and the only fix is adding more GPUs.",
+      "The bottleneck is raw compute, and adding more GPUs or raising parallelism scales it away linearly.",
       "Decode is memory-bandwidth bound: a full forward pass per token yields just one token.",
-      "The bottleneck is network latency, which speculative decoding fixes by compressing transfers.",
-      "The bottleneck is disk IO, which speculative decoding fixes by prefetching weights to memory."
+      "The bottleneck is network latency, and speculative decoding fixes it by compressing transfers and cutting cross-machine chatter.",
+      "The bottleneck is disk IO, and speculative decoding fixes it by prefetching weights from disk into memory ahead of time."
     ],
     "answer": [
       1
     ],
     "optionExplanations": [
-      "问题不是算力不够，恰恰是算力闲置、卡在带宽，加卡不对症。",
+      "问题不是算力不够，恰恰是算力闲置、卡在带宽；加卡或提高并行度并不能提升单请求的解码速度。",
       "对；解码卡在把权重从显存搬进来的带宽上，算力空着；投机解码一次前向并行验证多个候选正好把它填满。",
-      "解码瓶颈在显存带宽不在网络，压缩传输解决不了它。",
-      "权重常驻显存不走磁盘，磁盘 IO 不是解码瓶颈。"
+      "解码瓶颈在显存带宽而非网络传输，压缩传输、减少跨机通信也解决不了它。",
+      "权重常驻显存、不逐 token 重新读磁盘，磁盘 IO 预取解决不了这个瓶颈。"
     ],
     "optionExplanations_en": [
-      "The issue isn't too little compute — compute idles while bandwidth binds, so adding GPUs misses the point.",
+      "The issue isn't too little compute — compute idles while bandwidth binds; more GPUs or parallelism doesn't speed up a single request's decode.",
       "Correct — decode binds on moving weights from memory while compute sits idle, and speculative decoding fills it by verifying many candidates in one forward pass.",
-      "The decode bottleneck is memory bandwidth, not network, so compressing transfers won't fix it.",
-      "Weights are resident in memory, not on disk, so disk IO isn't the decode bottleneck."
+      "The decode bottleneck is memory bandwidth, not the network, so compressing transfers or cutting cross-machine chatter won't fix it.",
+      "Weights stay resident in GPU memory and aren't re-read from disk per token, so disk-IO prefetching doesn't address this bottleneck."
     ],
     "termDefinitions": [
       {
@@ -871,31 +871,31 @@
       "decode"
     ],
     "options": [
-      "全部 5 个都丢弃，草稿模型从头重新猜过",
-      "全部 5 个都保留，因为草稿模型通常猜得对",
+      "全部 5 个都丢弃，草稿模型从头重新猜过，浪费已确认的两个",
+      "全部 5 个都保留，因为草稿模型通常猜得对、验证只是走个形式",
       "1、2 接受；3 从目标校正分布重采样；4、5 丢弃",
-      "只丢弃第 3 个，第 4、5 个照常保留"
+      "只丢弃第 3 个，第 4、5 个照常保留，反正大概率也对"
     ],
     "options_en": [
-      "Discard all five and let the draft model start guessing over from scratch.",
-      "Keep all five, since the draft model is usually right anyway.",
+      "Discard all five and let the draft model start guessing from scratch, wasting the two already confirmed.",
+      "Keep all five, since the draft model usually guesses right and verification is just a formality.",
       "Accept 1 and 2, resample 3 from the target's corrected distribution, and discard 4 and 5.",
-      "Discard only token 3 and keep tokens 4 and 5 as usual."
+      "Discard only token 3 and keep tokens 4 and 5 as usual, since they're probably right anyway."
     ],
     "answer": [
       2
     ],
     "optionExplanations": [
-      "1、2 已通过验证不该丢，全丢会白白浪费已确认的加速。",
-      "全保留会破坏等价性——第 3 个被否，其后的都建立在错的前提上。",
+      "1、2 已经过验证不该丢，全丢等于把已确认的加速白白扔掉。",
+      "验证不是走形式——第 3 个已被拒绝，其后 token 建立在错的前提上，全保留会破坏输出等价性。",
       "对；前两个保留、拒绝点重采样一个正确 token、其后作废，正是保证输出与目标一致的处理。",
-      "4、5 是基于被否的第 3 个生成的，前提已错，必须一起丢弃。"
+      "「大概率也对」不够——4、5 是基于被否的第 3 个生成的，前提已错，必须一起丢弃。"
     ],
     "optionExplanations_en": [
-      "Tokens 1–2 already passed and shouldn't be dropped; discarding all wastes confirmed speedup.",
-      "Keeping all breaks equivalence — token 3 was rejected so everything after rests on a wrong premise.",
+      "Tokens 1-2 already passed verification and shouldn't be dropped — discarding all of them wastes the confirmed speedup.",
+      "Verification isn't a formality — token 3 was rejected, so everything after it rests on a wrong premise; keeping all breaks output equivalence.",
       "Correct — keep the first two, resample a correct token at the rejection point, discard the rest, preserving equivalence to the target.",
-      "Tokens 4–5 were generated from the rejected token 3, so their premise is wrong and they must be discarded too."
+      "'Probably right anyway' isn't good enough — tokens 4-5 were generated from the rejected token 3, so their premise is wrong and they must be discarded too."
     ],
     "termDefinitions": [
       {
@@ -923,31 +923,31 @@
       "quality"
     ],
     "options": [
-      "因为草稿模型和目标模型本来就是同一个模型",
+      "因为草稿模型和目标模型本来就是同一个模型的不同量化版本",
       "拒绝采样让 token 分布与只用目标模型采样相同",
-      "因为最后会用目标模型把草稿答案整段重写一遍",
-      "因为差异很小，工程实践中可以忽略不计"
+      "因为最后会用目标模型把草稿的整段答案重新生成一遍替换掉",
+      "因为统计上差异很小，工程实践里可以近似忽略不计"
     ],
     "options_en": [
-      "Because the draft and the target are the same model to begin with.",
+      "Because the draft and the target are actually the same model at different quantization levels.",
       "Rejection sampling makes the produced token distribution identical to sampling the target alone.",
-      "Because the target model rewrites the draft's whole answer at the end anyway.",
-      "Because the difference is tiny and negligible in practice."
+      "Because the target model regenerates the draft's whole answer from scratch at the end to replace it.",
+      "Because the difference is statistically small and can be approximated away in practice."
     ],
     "answer": [
       1
     ],
     "optionExplanations": [
-      "草稿和目标是两个不同大小的模型，不是同一个。",
+      "草稿和目标通常是架构、参数量都不同的两个模型，不是同一模型的量化版本。",
       "对；拒绝采样的接受概率经设计，使输出分布严格等于目标模型单采，故是精确等价而非近似。",
-      "不会整段重写，验证是逐 token 的接受/拒绝，不是事后重写。",
-      "不是「差异小可忽略」，而是数学上严格等价、零质量损失。"
+      "不存在事后整段重写——验证是逐 token 的接受/拒绝，通过的 token 不会被重新生成。",
+      "不是「统计上近似、可忽略」，而是数学上严格等价、零质量损失，不是近似。"
     ],
     "optionExplanations_en": [
-      "The draft and target are two different-size models, not the same one.",
+      "The draft and target are typically two models with different architectures and parameter counts, not quantized variants of one model.",
       "Correct — rejection-sampling accept probabilities are designed so the output distribution strictly equals the target alone: exact equivalence, not approximate.",
-      "There is no whole-answer rewrite; verification is per-token accept/reject, not post-hoc rewriting.",
-      "It's not 'small and negligible' — it is mathematically exact equivalence with zero quality loss."
+      "There's no whole-answer regeneration afterward — verification is per-token accept/reject, and accepted tokens are never redone.",
+      "It's not 'statistically small and approximable' — it is mathematically exact equivalence with zero quality loss, not an approximation."
     ],
     "termDefinitions": [
       {
@@ -1189,31 +1189,31 @@
     ],
     "whenOtherWins": "如果所有请求生成长度几乎一致、几乎同时结束，static batching 的简单性就够了，连续批处理的动态管理收益不大。",
     "options": [
-      "把所有请求按生成长度排序，长的单独排一批处理",
+      "把所有请求按预估生成长度排序分组，长请求单独排一批处理",
       "continuous batching：完成即移出、新请求即插入",
-      "统一限制每个请求最多生成 50 token，消除长度差异",
-      "给每个请求分配一张独立 GPU，彼此互不等待"
+      "统一限制每个请求最多只能生成 50 个 token，直接消除长度差异",
+      "给每个请求单独分配一整张独立 GPU 卡，彼此互不等待排队"
     ],
     "options_en": [
-      "Sort all requests by generation length and process the long ones as their own batch.",
+      "Sort all requests by estimated generation length and process the long ones in their own batch.",
       "Continuous batching: evict finished requests and slot queued ones in each iteration.",
-      "Cap every request at 50 generated tokens to erase the length variance.",
-      "Give every request its own dedicated GPU so nothing ever waits."
+      "Cap every request at exactly 50 generated tokens to directly erase the length variance.",
+      "Give each request its own dedicated GPU card so nothing ever waits in a queue."
     ],
     "answer": [
       1
     ],
     "optionExplanations": [
-      "按长度分批仍是静态的，批内最长者照样拖住，且需预知长度不现实。",
+      "按预估长度分组仍是静态批处理，组内最长者照样拖住，且生成长度事先不可知。",
       "对；迭代级动态增删请求，短请求完成即腾位、新请求即补入，GPU 持续满载。",
-      "限死 50 token 会截断需要长回答的请求，牺牲质量换利用率，不可取。",
-      "每请求一张 GPU 成本爆炸且利用率极低，与「喂满 GPU」目标相悖。"
+      "直接砍成 50 token 会截断需要长回答的请求，用质量换利用率，不可取。",
+      "每请求单独一张 GPU 成本爆炸，短请求跑完后那张卡照样空闲，利用率没解决。"
     ],
     "optionExplanations_en": [
-      "Length-based batching is still static; the longest in a batch still stalls it, and you can't know length in advance.",
+      "Grouping by estimated length is still static batching — the longest in a group still stalls it, and generation length isn't known in advance.",
       "Correct — iteration-level add/remove frees a finished short request's slot and refills it, keeping the GPU saturated.",
-      "Capping at 50 tokens truncates answers that need to be long, trading quality for utilization — unacceptable.",
-      "One GPU per request explodes cost and slashes utilization, the opposite of keeping the GPU full."
+      "Hard-capping at 50 tokens truncates answers that need to be long — trading quality for utilization, unacceptable.",
+      "One dedicated GPU per request explodes cost, and that GPU still sits idle once a short request finishes — it doesn't solve utilization."
     ],
     "termDefinitions": [
       {

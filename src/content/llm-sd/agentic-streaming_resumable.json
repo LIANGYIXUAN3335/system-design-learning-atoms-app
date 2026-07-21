@@ -282,13 +282,13 @@
       "改用 WebSocket 建立全双工长连接，还要自己写心跳保活和断线重连逻辑，才能恢复中断的 token 流",
       "用 SSE 做单向 server→client 推送，EventSource 靠 Last-Event-ID 自动重连续传",
       "改用 HTTP 长轮询，客户端每隔几秒就发一次请求去拉取新 token，一直轮询到 job 标记为完成为止",
-      "用一个一直不关闭的 chunked HTTP 响应持续把 token 往下推，一旦断线就得把整段内容从头重新来过"
+      "用一个一直不关闭的 chunked HTTP 响应持续把 token 往下推，没有事件 id 可定位断点，一旦断线就得整段重来"
     ],
     "options_en": [
       "Switch to WebSocket for a full-duplex connection and hand-roll heartbeat and reconnect logic to recover the interrupted token stream.",
       "Use SSE for one-way server-to-client push; EventSource auto-reconnects and resumes via Last-Event-ID.",
       "Switch to HTTP long-polling, sending a request every few seconds to pull new tokens until the job is marked complete.",
-      "Use one never-closing chunked HTTP response to keep pushing tokens, restarting the whole stream on a drop."
+      "Use one never-closing chunked HTTP response to keep pushing tokens; with no event id to locate the break, a drop forces restarting the whole stream from scratch."
     ],
     "answer": [
       1
@@ -342,13 +342,13 @@
       "sse"
     ],
     "options": [
-      "每条只发 data: <token> 不带 id 字段，靠客户端自己数收了多少条来记录进度，容易在断线后数错",
+      "每条只发 data: <token> 不带 id 字段，靠客户端自己数收了多少条来记录进度，断线后容易数错且服务端也无法据此重放",
       "在同一个流里混用 WebSocket 的 send() 双向发消息来同步进度，试图借它来同步续传状态",
       "每条事件带 id: <seq> 和 data: <token>，断线时浏览器自动带 Last-Event-ID 头回来",
       "把所有 token 攒完拼成一条超大 data 事件一次性发完，前端拿到之后再整体渲染出来"
     ],
     "options_en": [
-      "Send only data: <token> with no id field and let the client itself count how many it received to track progress.",
+      "Send only data: <token> with no id field, letting the client count how many arrived to track progress — this drifts after a drop, and the server has no id to replay from either.",
       "Mix in WebSocket send() inside the same stream to sync progress bidirectionally.",
       "Emit id: <seq> and data: <token> per event so the browser auto-sends Last-Event-ID on reconnect.",
       "Buffer all tokens into one huge data event and send it at once for the client to render as a whole."
@@ -450,13 +450,13 @@
     "options": [
       "是根据平均 token 数量和写入速率，精确反推出来的最优过期阈值",
       "TTL 当然越长越好，干脆设成无限、永久保留全部 token 历史不删",
-      "token 历史只是临时数据，根本不需要设 TTL，用完即弃、随手清掉就行",
+      "token 历史只是临时数据，根本不需要设 TTL，反正流式响应用完就没人再看，随手清掉就行",
       "这是产品给定的保留窗口(SLO 类)，决定「重连能续传多久」，也是存储容量的估算基数"
     ],
     "options_en": [
       "It is the optimal expiry threshold reverse-computed precisely from average token count and write rate.",
       "Longer is always better, so just set it to infinite and keep all token history forever.",
-      "Token history is only temporary data and needs no TTL at all — discard it whenever you like.",
+      "Token history is just temporary data needing no TTL at all — once the stream finishes nobody looks at it again, so discard it whenever.",
       "It is a product-given retention window (SLO-like) that sets how long resume works and sizes storage capacity."
     ],
     "answer": [
@@ -465,13 +465,13 @@
     "optionExplanations": [
       "TTL 从来不是靠平均量和写入速率精确反推出的公式解——它是产品先拍板的保留目标，工程照着实现即可。",
       "保留时间不是越长越好：无限存下去会让 token 历史无限膨胀，存储成本和合规风险都跟着涨。",
-      "不设 TTL 不是免费的，历史数据会无限堆积占用存储，正是 TTL 存在的理由。",
+      "不设 TTL 不是免费的：历史在保留窗口内还要支持续传，并非用完即弃；无限堆积也会持续占用存储，正是 TTL 存在的理由。",
       "对，这是产品先定的保留窗口，续传能力和存储预算都得按它来算。"
     ],
     "optionExplanations_en": [
       "The TTL isn't a formula precisely back-solved from average token volume and write throughput — the product picked the window first and engineering just implements it.",
       "Retention isn't simply better the longer it runs: keeping everything forever lets token history balloon, driving up storage cost and compliance risk.",
-      "Skipping TTL isn't free — history piles up and eats storage, which is exactly the problem TTL exists to solve.",
+      "Skipping TTL isn't free: within the window, history is still needed for resume, not disposable the moment the stream ends; unbounded retention also keeps eating storage, which is exactly why TTL exists.",
       "Correct — it's a product-set retention window that both bounds resumability and sizes storage capacity."
     ],
     "termDefinitions": [
@@ -508,13 +508,13 @@
     ],
     "tradeoff": "seq/version 守卫(拦住乱序覆盖) vs 只加 loading(遮住却没解决竞态)",
     "options": [
-      "加一个 loading 遮罩盖住整个页面，什么都先不显示，一直耐心等到最后一个响应都回来之后，才统一揭开呈现最终结果",
+      "加一个 loading 遮罩盖住整个页面，什么都先不显示，一直耐心等到最后一个响应都回来之后才统一揭开，但乱序覆盖状态的问题照样存在",
       "每个请求带单调递增 seq/version，响应只接受最新 seq、旧的丢弃，用 AbortController 取消在途请求",
       "把所有推荐请求都改成同步串行，严格等上一个完全处理完毕之后才发下一个，这样天然就不会出现乱序",
       "给每一个在途请求都额外加一段随机延迟来错开返回时间，尽量让较新发出的请求晚一点才返回"
     ],
     "options_en": [
-      "Cover the whole page with a loading overlay and reveal everything together only after the last response returns.",
+      "Cover the whole page with a loading overlay, showing nothing until the very last response returns and revealing everything at once — but the out-of-order overwrite problem is still there.",
       "Tag each request with a monotonic seq/version, accept only the latest seq, drop stale ones, and cancel in-flight requests with AbortController.",
       "Make all recommendation requests synchronous and serial — strictly finish one before sending the next — so ordering can never race.",
       "Add a random delay to each in-flight request to stagger returns, trying to make newer requests come back later."
@@ -594,13 +594,13 @@
       ]
     },
     "options": [
-      "纯客户端 localStorage 存下已收到的 token，刷新页面后仍然还在、读取速度也最快，不必每次都走一趟服务端网络往返",
+      "纯客户端 localStorage 存下已收到的 token，刷新页面后仍然还在、读取速度也最快，但换设备看不到、崩溃前未落盘也会丢失",
       "纯客户端内存里存 UI 状态，完全不落后端，够单次会话用就行、实现也最省事",
       "服务端持久化的 (job_id, seq, token)+status 为权威源，前端乐观展示但以服务端为准，刷新/换设备/崩溃都可恢复",
       "谁先把状态写进存储就以谁为准，先到先得，压根不用去比较 seq 或版本号谁更新"
     ],
     "options_en": [
-      "Pure client-side localStorage of received tokens: it survives refresh and reads fastest, avoiding a server round-trip each time.",
+      "Pure client-side localStorage of received tokens: it survives refresh and reads fastest, but it's invisible on another device and un-flushed state is lost on crash.",
       "Store UI state purely in client memory with no backend at all; good enough for a single session and simplest to build.",
       "Server-persisted (job_id, seq, token)+status is authoritative; client shows optimistic state but defers to the server, so refresh/device-switch/crash all recover.",
       "Whoever writes the state first wins — first-come-first-served, with no need to compare seq or version numbers."

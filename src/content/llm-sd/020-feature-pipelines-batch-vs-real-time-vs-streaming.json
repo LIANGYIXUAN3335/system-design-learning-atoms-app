@@ -79,13 +79,13 @@
       "批处理:口味变化慢,几小时陈旧可接受,用 Spark 跑上亿条最便宜也最好调试",
       "请求时同步计算:在预测请求里现算 30 天购买次数,保证绝对最新",
       "流处理:为 30 天聚合维护一个永不关闭的有状态窗口,持续实时更新",
-      "干脆不预计算,每次训练和推理都全表扫描一遍历史订单"
+      "跳过预计算,训练推理都各自直接扫上亿条订单做全表聚合,图省掉批处理运维成本"
     ],
     "options_en": [
       "Batch: taste changes slowly and hours of staleness is fine, so run Spark over 100M+ records at the lowest cost and easiest debugging.",
       "Request-time synchronous compute: recompute the 30-day purchase count inside each prediction request to guarantee absolute freshness.",
       "Streaming: keep a never-closing stateful window for the 30-day aggregate, updating continuously in real time.",
-      "Skip precomputation entirely and full-scan the order history on every training and inference call."
+      "Skip precomputation and let both training and inference full-scan the 100M+ order table directly, trading it for avoiding batch DAG ops overhead."
     ],
     "answer": [
       0
@@ -96,13 +96,13 @@
       "对;宽松新鲜度 + 大数据量正是批处理的主场,spot 实例最便宜、有界输入可回放可单测。",
       "在服务路径里现算 30 天聚合会顶破单请求延迟预算,而且这类特征根本不需要毫秒新鲜。",
       "为一个 30 天窗口常驻有状态流是杀鸡用牛刀:always-on 成本和状态运维都白付,新鲜度还用不上。",
-      "每次全表扫上亿条订单既慢又贵,预计算存下来就是为了避免重复扫描。"
+      "省掉批处理运维听着诱人,但每次训练推理都全表扫上亿条订单,延迟和成本比批处理还高,预计算正是为了避免这个代价。"
     ],
     "optionExplanations_en": [
       "Correct — relaxed freshness plus big data is batch's home turf: spot instances are cheapest and the bounded input is replayable and unit-testable.",
       "Computing a 30-day aggregate inside the serving path blows the per-request latency budget, and these features don't need millisecond freshness.",
       "A resident stateful stream for a 30-day window is overkill: you pay always-on cost and state ops for freshness you never use.",
-      "Full-scanning 100M+ orders every call is slow and costly; precomputing exists precisely to avoid re-scanning."
+      "Skipping batch ops sounds tempting, but full-scanning 100M+ orders on every call costs more in latency and compute than the batch job it was meant to avoid."
     ],
     "termDefinitions": [
       {
@@ -196,13 +196,13 @@
     "options": [
       "上限约 1 秒陈旧,足以驱动反欺诈系统的分钟级滑动窗口计数与实时拦截",
       "上限约 24 小时陈旧(等于跑批间隔),对分钟级反欺诈/会话特征是硬伤,对慢变量够用",
-      "上限约 5 分钟陈旧,和流处理的持续物化几乎等价,可支撑会话内特征更新",
+      "上限约 5 分钟陈旧,只要把批 job 从日频改成 5 分钟微批调度,就能逼近流处理的实时性",
       "没有陈旧,批 job 会在源数据一有变化就自动触发重算,始终保持最新"
     ],
     "options_en": [
       "Ceiling of about 1 second stale, enough to drive a fraud system's minute-scale sliding-window counts and real-time blocking.",
       "Ceiling of about 24 hours stale (equal to the run interval), a dealbreaker for minute-scale fraud/session features but fine for slow signals.",
-      "Ceiling of about 5 minutes stale, nearly equivalent to streaming's continuous materialization and able to support in-session features.",
+      "Ceiling of about 5 minutes stale — just reschedule the batch job from daily to a 5-minute micro-batch to approach streaming's real-time freshness.",
       "No staleness — a batch job auto-recomputes the moment source data changes, always staying current."
     ],
     "answer": [
@@ -211,13 +211,13 @@
     "optionExplanations": [
       "1 秒新鲜要常驻流/请求时才做得到,日频批根本达不到,分钟级反欺诈也不能靠它。",
       "对;新鲜度上限就等于跑批周期,日频最坏近 24h 陈旧,慢变量够、分钟级需求不够。",
-      "5 分钟是流处理量级;日频批相差好几个数量级,不能画等号。",
+      "题目给定的是日频批,不是重新设计调度;即便改成 5 分钟微批,仍背着批处理的重跑开销,不等于流处理的持续物化。",
       "批 job 只在被调度时跑,数据变化不会触发重算,天生带跑批间隔的陈旧。"
     ],
     "optionExplanations_en": [
       "One-second freshness needs a resident stream or request-time; a daily batch can't reach it and can't back minute-scale fraud.",
       "Correct — the freshness ceiling equals the run cadence, so daily is up to ~24h stale: fine for slow signals, not for minute-scale needs.",
-      "Five minutes is streaming territory; a daily batch is orders of magnitude off, so they're not equivalent.",
+      "The scenario fixes a daily job, not a redesign; even a 5-min micro-batch still carries batch rerun overhead and isn't streaming's continuous materialization.",
       "A batch job only runs when scheduled; data changes don't trigger recompute, so run-interval staleness is inherent."
     ],
     "termDefinitions": [
@@ -280,13 +280,13 @@
     },
     "options": [
       "三范式新鲜度、成本都一样,只是所用工具名字不同",
-      "请求时新鲜度最低、成本最低,批处理新鲜度最高、成本最高",
+      "请求时新鲜度最低、成本最低(不用搭常驻管线),批处理新鲜度最高、成本最高",
       "新鲜度批<流<请求时,成本也随之批<流<请求时,吞吐请求时最低",
       "流处理在三项上都严格优于批和请求时,是永远的最优解"
     ],
     "options_en": [
       "All three have identical freshness and cost; only the tool names differ.",
-      "Request-time has the lowest freshness and cost, while batch has the highest freshness and cost.",
+      "Request-time has the lowest freshness and cost since it skips building a standing pipeline; batch ends up with the highest freshness and cost.",
       "Freshness rises batch < streaming < request-time, cost rises the same way, and request-time has the lowest throughput.",
       "Streaming strictly dominates batch and request-time on all three axes and is always optimal."
     ],
@@ -295,13 +295,13 @@
     ],
     "optionExplanations": [
       "三者恰恰在新鲜度、成本、复杂度上系统性不同,工具名不同只是表象。",
-      "说反了:请求时最新鲜也最贵,批处理最不新鲜但最便宜。",
+      "说反了:免建管线不等于免成本——请求时要为每次请求现算,延迟 SLA 逼着用贵的在线资源;批处理才是最不新鲜但最便宜的。",
       "对;新鲜度与成本同向递增,请求时逐请求算所以单点吞吐最低,这条单调链是选型基础。",
       "流处理不是万能:它成本/复杂度高于批,新鲜度低于请求时,没有严格支配。"
     ],
     "optionExplanations_en": [
       "They differ systematically on freshness, cost, and complexity; differing tool names are just surface.",
-      "Backwards: request-time is the freshest and priciest, while batch is the least fresh but cheapest.",
+      "Backwards: skipping a pipeline isn't free — request-time computes per call under a latency SLA on pricey online resources, while batch is the least fresh but cheapest.",
       "Correct — freshness and cost rise together, and request-time computes per request so its throughput is lowest; this monotonic chain drives selection.",
       "Streaming isn't universal: it costs and complicates more than batch and is less fresh than request-time, so it doesn't dominate."
     ],
@@ -412,13 +412,13 @@
       ]
     },
     "options": [
-      "Kafka Streams:嵌在应用 JVM 里最省事,本地状态足以扛数百万 key 的滑动窗口",
+      "Kafka Streams:嵌在应用 JVM 里最省事,本地状态足以扛数百万 key 的滑动窗口聚合",
       "Apache Flink:独立分布式引擎,原生事件时间窗口 + 大规模状态 + exactly-once",
       "两个都不行:滑动窗口只能交给批处理每小时全量重算一次",
       "随便选:Flink 和 Kafka Streams 在状态规模、部署形态上没有实质区别"
     ],
     "options_en": [
-      "Kafka Streams: embedding in the app JVM is simplest, and its local state handles millions of keys of sliding windows.",
+      "Kafka Streams: embedding in the app JVM is simplest, and its local state handles millions of keys of sliding-window aggregation.",
       "Apache Flink: a standalone distributed engine with native event-time windows, large-scale state, and exactly-once.",
       "Neither works: a sliding window can only be full-recomputed hourly by batch.",
       "Either is fine: Flink and Kafka Streams don't really differ in state scale or deployment shape."
@@ -545,13 +545,13 @@
     "options": [
       "因为它会自动纠正错误事件,重放时把之前写脏的数据改对再交给下游",
       "因为日志只追加不改写,原始事件完整有序保留,可从任意位点重放来重算/回填/故障恢复",
-      "因为它把特征的最终值也一并存一份,在线服务端直接读这个成品值就行,不必重算",
+      "因为它把特征的最终值也一并存一份,在线服务端可以直接读这个物化成品值,省得每次重算",
       "因为它会压缩掉历史事件只留每个键的最新状态,靠丢弃旧数据来节省存储成本"
     ],
     "options_en": [
       "Because it auto-corrects bad events, cleaning previously dirty data on replay before handing off downstream.",
       "Because the log is append-only and never rewritten, keeping raw events intact and ordered so you can replay from any offset to recompute/backfill/recover.",
-      "Because it also stores the final feature values, so online serving reads the finished value directly without recomputing.",
+      "Because it also stores the final feature values, so online serving can read this materialized value directly instead of recomputing it every time.",
       "Because it compacts away history keeping only each key's latest state, saving storage cost by discarding old data."
     ],
     "answer": [
@@ -895,13 +895,13 @@
     ],
     "tradeoff": "Kappa(单路径省偏斜,但要成熟流基建) vs Lambda(批流逻辑天生不同或有遗留约束时更现实)",
     "options": [
-      "Lambda,因为无论何时双路径都比单路径更可靠",
+      "Lambda,因为批流两条路径互为兜底,无论何时都比单路径更可靠",
       "无所谓,两者在偏斜和维护量上没差别",
       "Kappa:单管线 + 重放消除双路径偏斜,逻辑只写一遍",
       "都不选,应退回纯批处理放弃实时需求"
     ],
     "options_en": [
-      "Lambda, because dual paths are always more reliable than a single path.",
+      "Lambda, because the batch and stream paths back each other up, making it more reliable than a single path no matter what.",
       "It doesn't matter; the two are identical on skew and maintenance.",
       "Kappa: one pipeline plus replay removes dual-path skew, and the logic is written once.",
       "Neither; fall back to pure batch and drop the real-time need."
@@ -951,13 +951,13 @@
     "tradeoff": "流处理(有状态窗口、分钟级新鲜) vs 批(太旧) / 请求时(预算内做不了窗口)",
     "options": [
       "批处理每日聚合,凌晨统一算一次卡交易数",
-      "请求时在拦截请求里现场扫这张卡 10 分钟的全部交易",
+      "请求时在拦截请求里现场扫这张卡 10 分钟内的全部交易再累加计数",
       "静态规则:每张卡固定阈值,不看时间窗口",
       "流处理的有状态窗口聚合:持续维护每张卡的滑动 10 分钟计数"
     ],
     "options_en": [
       "Batch daily aggregation, computing the card's transaction count once overnight.",
-      "Request-time: scan all of this card's 10-minute transactions live inside the blocking request.",
+      "Request-time: scan all of this card's transactions from the last 10 minutes live inside the blocking request and sum them up.",
       "A static rule: a fixed threshold per card, ignoring the time window.",
       "Streaming stateful windowed aggregation: continuously maintain a sliding 10-minute count per card."
     ],
@@ -1469,13 +1469,13 @@
     "options": [
       "批量并行拿到极高吞吐,单位记录成本最低,结果只到跑批时刻",
       "说明批处理延迟极低,能在毫秒内返回单条特征查询",
-      "说明批处理天然新鲜,这 100M 条记录会实时更新",
+      "说明批处理天然新鲜,这 100M 条记录会随源数据实时更新",
       "说明批处理必须用 GPU 才能处理这么多记录"
     ],
     "options_en": [
       "Bulk parallelism yields very high throughput at the lowest per-record cost, but results are only as fresh as the run.",
       "It shows batch has very low latency, returning a single feature lookup in milliseconds.",
-      "It shows batch is inherently fresh — those 100M records update in real time.",
+      "It shows batch is inherently fresh — those 100M records update in real time as the source data changes.",
       "It shows batch must use GPUs to handle that many records."
     ],
     "answer": [
@@ -1625,15 +1625,15 @@
     "tradeoff": "按新鲜度需求选档(有据可依) vs 无理由默认某范式(暴露成本意识缺失)",
     "options": [
       "特征名 + 新鲜度需求 + 成本含义,把选择绑到约束上",
-      "模型准确率 + 训练轮数 + 参数量大小",
-      "用哪家云厂商 + 机房位置 + 网络带宽",
-      "团队规模 + 开发排期 + 向谁汇报"
+      "模型准确率 + 训练轮数 + 参数量大小,这些是汇报模型效果常用的指标",
+      "用哪家云厂商 + 机房位置 + 网络带宽,这些决定了部署成本高低",
+      "团队规模 + 开发排期 + 向谁汇报,这些决定项目能不能按时交付"
     ],
     "options_en": [
       "The feature name + its freshness need + the cost implication, tying the choice to constraints.",
-      "Model accuracy + number of training epochs + parameter count.",
-      "Which cloud vendor + data-center location + network bandwidth.",
-      "Team size + development timeline + who you report to."
+      "Model accuracy + number of training epochs + parameter count — the metrics you'd report for model performance.",
+      "Which cloud vendor + data-center location + network bandwidth — these determine deployment cost.",
+      "Team size + development timeline + who you report to — these determine whether the project ships on time."
     ],
     "answer": [
       0

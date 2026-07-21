@@ -509,7 +509,7 @@
     "options": [
       "让所有 Movie 变成可变对象",
       "避免订票和取消时反复扫描所有影院和场次",
-      "替代 Showtime 的锁",
+      "取代 Showtime 内部用于并发控制的锁机制",
       "强制所有场次按时间排序"
     ],
     "answer": [
@@ -520,7 +520,7 @@
     "options_en": [
       "It turns every Movie into a mutable object.",
       "It avoids repeatedly scanning every theater and showtime on booking and cancellation.",
-      "It replaces Showtime's lock.",
+      "It replaces the concurrency-control lock used inside Showtime.",
       "It forces every showtime to sort by time."
     ],
     "tradeoff": "构造期建索引换 O(1) 路由 vs 每次操作都要 O(t×s) 扫描",
@@ -534,13 +534,13 @@
     "optionExplanations": [
       "索引只是加速查找的映射表，跟 Movie 对象是否可变没有任何关系。",
       "showtimeId、confirmationId 都是外部输入的 key，建索引能让订票和取消直接路由，不必每次扫一遍所有 theater 和 showtime。",
-      "索引解决的是查找速度，Showtime 的锁解决的是并发正确性，两者是不同问题，谁也替代不了谁。",
+      "索引解决的是查找速度，Showtime 内部用来做并发控制的锁解决的是写冲突正确性，两者是不同问题，谁也替代不了谁。",
       "索引按 id 做映射，跟场次要不要按时间排序无关，构建索引不会强加任何排序规则。"
     ],
     "optionExplanations_en": [
       "Indexes are just lookup maps for speed — they have nothing to do with whether Movie objects are mutable.",
       "showtimeId and confirmationId are external input keys, so indexes let booking and cancellation route directly instead of scanning every theater and showtime each time.",
-      "Indexes solve lookup speed; Showtime's lock solves concurrency correctness — different problems, and neither substitutes for the other.",
+      "Indexes solve lookup speed; the lock Showtime uses internally for concurrency control solves write-conflict correctness — different problems, and neither substitutes for the other.",
       "Indexes map by id, not by time, so building them imposes no ordering on showtimes at all."
     ]
   },
@@ -685,7 +685,7 @@
     "codeSample": "book(showtimeId, seatIds)\n    showtime = showtimesById[showtimeId]\n    reservation = Reservation(generateId(), showtime, seatIds)\n    showtime.book(reservation)\n    reservationsById[reservation.id] = reservation\n    return reservation",
     "lang": "text",
     "options": [
-      "BookingSystem 跳过 Showtime 直接改座位状态",
+      "BookingSystem 完全跳过 Showtime，直接修改座位状态变量",
       "Reservation 自己调用取消并释放座位",
       "Theater 统一持有所有 showtime 的锁",
       "BookingSystem 编排和索引，Showtime 原子校验并保存"
@@ -697,7 +697,7 @@
     "why_en": "BookingSystem orchestrates while Showtime performs atomic validation and storage.",
     "whenOtherWins": "如果使用持久化数据库，showtime.book 的原子性可能由事务或唯一约束承载。",
     "options_en": [
-      "BookingSystem skips Showtime and mutates seat state directly.",
+      "BookingSystem skips Showtime entirely and mutates the seat-state variable directly.",
       "Reservation calls its own cancel and frees the seats itself.",
       "Theater holds a single lock for every showtime under it.",
       "BookingSystem orchestrates and indexes; Showtime does the atomic check-and-store."
@@ -878,7 +878,7 @@
       "允许同一座位同时被多个用户预订成功",
       "在任何并发场景下吞吐量都必然最高",
       "实现简单、无死锁风险、Seat 保持字符串",
-      "座位 ID 的合法性校验可以直接省略"
+      "座位 ID 是否存在、是否合法的校验都可以省略不做"
     ],
     "answer": [
       2
@@ -889,7 +889,7 @@
       "Lets the same seat be booked by multiple users at once.",
       "Guarantees the highest throughput in any concurrency scenario.",
       "Simple to implement, no multi-lock deadlock risk, Seat stays a string.",
-      "Seat ID validity checks can be skipped entirely."
+      "Whether a seat ID even exists or is valid can be skipped entirely."
     ],
     "tradeoff": "单锁实现简单 vs 多锁高吞吐但要处理死锁",
     "termDefinitions": [
@@ -946,7 +946,7 @@
     "q_en": "What alternative design gives higher throughput?",
     "options": [
       "给所有入场请求加上随机延迟来分散压力",
-      "直接删除 reservation 列表来减少扫描",
+      "直接把 reservationsById 整个索引清空，用来减少扫描开销",
       "把锁的粒度提升到整个 Theater 级别",
       "把 Seat 升级为带锁的类，按 seatId 排序加锁"
     ],
@@ -958,7 +958,7 @@
     "whenOtherWins": "普通场次或面试基础范围用 per-showtime 锁更稳，除非明确需要优化同场并发。",
     "options_en": [
       "Add random delay to every incoming request to spread out load.",
-      "Delete the reservations list to cut scan cost.",
+      "Delete the entire reservationsById index outright to cut scanning overhead.",
       "Raise the lock's granularity all the way up to the whole Theater.",
       "Promote Seat to a class with a lock, acquiring locks in sorted seatId order."
     ],
@@ -994,13 +994,13 @@
     },
     "optionExplanations": [
       "随机延迟只是让请求变慢，并不会让互相独立的座位预订真正并行起来，吞吐量并没有提升。",
-      "reservations 是事实来源，删掉它会让可用性和取消都失效，这是破坏正确性，不是优化。",
+      "reservationsById 是 reservation 的事实来源索引，清空它会让可用性和取消都失效，这是破坏正确性，不是优化。",
       "把锁提升到 Theater 级别是往粗粒度反方向走，会让同一影院所有场次的预订都排队，吞吐量只会更差。",
       "把 Seat 升级成带锁的类，只阻塞真正争抢同一座位的请求，不同座位可以并行；多锁场景下按 seatId 排序获取能避免死锁。"
     ],
     "optionExplanations_en": [
       "Random delay just slows requests down; it doesn't make independent seat bookings run in parallel, so throughput doesn't actually improve.",
-      "Reservations are the source of truth — deleting the list breaks availability and cancellation, which is a correctness bug, not an optimization.",
+      "reservationsById is the source-of-truth index for reservations — clearing it breaks availability and cancellation, which is a correctness bug, not an optimization.",
       "Raising the lock to the Theater level moves toward coarser granularity, serializing every showtime's bookings in that theater — throughput gets worse, not better.",
       "Promoting Seat to a lockable class only blocks requests contending for the same seat, letting different seats book in parallel; acquiring locks in sorted seatId order avoids deadlock."
     ]
@@ -1250,7 +1250,7 @@
     "q": "Movie 为什么要有 id 而不只存 title？",
     "q_en": "Why does Movie need an id instead of only a title?",
     "options": [
-      "title 不能用于搜索",
+      "给 title 字段加唯一索引就能防止两部电影重名",
       "id 用来表示座位号",
       "Movie 不该被引用",
       "重映或翻拍可能同名，id 才是稳定身份"
@@ -1261,20 +1261,20 @@
     "why": "用户按标题搜索，但系统内部需要稳定唯一身份连接 showtime。两个 Dune 或同名电影不应被混为一谈。",
     "why_en": "Movie needs an ID because titles are searchable but not guaranteed unique.",
     "options_en": [
-      "Title strings cannot be used for search matching at all.",
+      "Adding a unique index on title would stop two movies from sharing a name.",
       "The ID represents a specific seat number.",
       "Movie objects should never be referenced by anything.",
       "A remake or re-release can share a title, so the ID is the stable identity."
     ],
     "tradeoff": "id 作稳定内部身份 vs title 作用户可搜索但不唯一的标签",
     "optionExplanations": [
-      "用户确实是按 title 搜索的，title 完全可以用于搜索，问题只是它不能当内部唯一标识用。",
+      "给 title 加唯一索引确实能挡住完全同名的重复记录，但重映或翻拍电影本就该被允许共享同一个 title，唯一索引反而会拒绝合法数据，替代不了稳定的 id。",
       "座位号是 Seat 的标识（例如 A5），跟 Movie 的 id 是两个完全不相关的字段。",
       "Showtime 恰恰需要引用 Movie 才能知道自己在放哪部电影，Movie 必须能被引用。",
       "重映或翻拍可能和原作同名，title 不保证唯一，只有 id 才能稳定地把 showtime 绑在正确的那部电影上。"
     ],
     "optionExplanations_en": [
-      "The user really does search by title — title works fine for search, the problem is only that it can't serve as a stable internal identity.",
+      "A unique index on title would indeed block exact-duplicate rows, but a remake or re-release is legitimately allowed to share its title with the original — the index would reject valid data instead of substituting for a stable id.",
       "A seat number is Seat's identifier (like A5) — that's an entirely different field from Movie's id.",
       "Showtime specifically needs to reference Movie to know which film it's showing, so Movie must be referenceable.",
       "A re-release or remake can share a title with the original, so title isn't guaranteed unique — only the id can stably tie a showtime to the right film."
@@ -1383,7 +1383,7 @@
     "q": "searchMovies 和 getShowtimesAtTheater 应如何处理？",
     "q_en": "How should searchMovies and getShowtimesAtTheater handle them?",
     "options": [
-      "返回所有过去和未来的全部场次",
+      "把所有过去和未来场次都返回，交给前端自己过滤掉",
       "只返回 future showtimes",
       "直接把 Movie 对象删除掉",
       "把过去的场次当成免费票发放"
@@ -1395,7 +1395,7 @@
     "why_en": "Search and browsing should return future showtimes because past showtimes are not bookable.",
     "whenOtherWins": "如果是历史订单或排片管理后台，过去场次才可能需要返回。",
     "options_en": [
-      "Return every past and future showtime, unfiltered.",
+      "Return every past and future showtime and let the frontend filter them out.",
       "Return only future showtimes.",
       "Delete the Movie object outright.",
       "Treat past showtimes as free tickets to hand out."
@@ -1409,13 +1409,13 @@
       }
     ],
     "optionExplanations": [
-      "把过去场次也混进结果里，用户点开一个已经放映完的场次只会订票失败，是不可操作的信息。",
+      "把过滤逻辑丢给前端，后端还是把不可预订的过去场次混进响应里，用户依旧可能点开一个已经放映完的场次。",
       "只返回还没开场的 showtime，用户看到的每一项都真的能订，不会点进去才发现已经过期。",
       "过去场次是否清理是内存管理问题，跟要不要删掉整个 Movie 对象没有关系——Movie 还要给未来场次用。",
       "免费票是完全没出现过的产品需求，基础设计不该凭空发明一套赠票逻辑。"
     ],
     "optionExplanations_en": [
-      "Mixing past showtimes into the results just gives the user options that fail the moment they try to book them — not actionable information.",
+      "Pushing the filtering to the frontend still means the backend response mixes in unbookable past showtimes, so the user can still tap into one that's already over.",
       "Returning only showtimes that haven't started yet means every item the user sees is actually bookable, with no surprise dead ends.",
       "Whether to clean up past showtimes in memory is a separate housekeeping question — it has nothing to do with deleting the Movie object, which future showtimes still need.",
       "Free tickets are a product requirement that never came up here — the base design shouldn't invent a giveaway mechanism out of nowhere."
@@ -1512,7 +1512,7 @@
     "q": "最安全的基础处理是什么？",
     "q_en": "What is the safest base-design behavior?",
     "options": [
-      "直接删除并保留无主 reservation",
+      "直接删除 showtime 对象，无主 reservation 留在原地不管",
       "只从 movie index 删除",
       "把票自动挪到任意其他场次",
       "拒绝删除，先取消并通知所有 reservation"
@@ -1524,7 +1524,7 @@
     "why_en": "Removing a showtime with active reservations should be rejected until reservations are handled.",
     "whenOtherWins": "如果业务支持场次取消流程，可发事件给通知监听器并批量退款/取消后再清理索引。",
     "options_en": [
-      "Delete it immediately and leave the orphaned reservations behind.",
+      "Delete the showtime object outright and leave orphaned reservations in place.",
       "Only remove it from the movie index.",
       "Automatically move the tickets to some other showtime.",
       "Reject the deletion; cancel and notify every reservation first."
@@ -1538,13 +1538,13 @@
       }
     ],
     "optionExplanations": [
-      "直接删掉这场，会让已经发出去的确认码从此找不到对应场次，变成悬空引用，取消或查询都会出错。",
+      "直接删掉 showtime 对象，会让已经发出去的确认码从此找不到对应场次，留在原地的 reservation 变成悬空引用，取消或查询都会出错。",
       "只从 movie index 里摘掉，Theater.showtimes 和 showtimesById 还留着这场的记录，索引之间会互相矛盾。",
       "换一个场次意味着座位号、开场时间全都不一样，自动挪票等于替用户做了一个他没同意的决定。",
       "有 active reservation 时先拒绝删除，等取消和通知都完成、没有悬空引用了，才真正移除这场。"
     ],
     "optionExplanations_en": [
-      "Deleting it outright leaves existing confirmationIds pointing at a showtime that no longer exists — a dangling reference that breaks cancellation and lookups.",
+      "Deleting the showtime object outright leaves existing confirmationIds pointing at a showing that no longer exists — the orphaned reservations become a dangling reference that breaks cancellation and lookups.",
       "Removing it only from the movie index leaves Theater.showtimes and showtimesById still holding the entry, so the indexes end up contradicting each other.",
       "A different showtime can mean a different seat layout and start time entirely, so auto-moving tickets makes a decision for the user they never agreed to.",
       "Rejecting the delete while active reservations exist, then removing the showtime only after cancellation and notification finish, avoids ever leaving a dangling reference."
@@ -1726,7 +1726,7 @@
     "options": [
       "Movie 会经历从上映中变成已下映的状态转换",
       "座位有 available/held/booked/released 四态",
-      "Theater 会在系统运行期间变成 Reservation 对象",
+      "Theater 对象会在系统运行期间被直接替换成 Reservation 对象",
       "Search 查询过程会直接变成支付流程的一部分"
     ],
     "answer": [
@@ -1737,7 +1737,7 @@
     "options_en": [
       "A Movie transitions from currently showing to no longer showing.",
       "A seat has explicit available/held/booked/released states.",
-      "A Theater turns into a Reservation object at runtime.",
+      "A Theater object gets directly replaced by a Reservation object at runtime.",
       "A Search query directly becomes part of the payment flow."
     ],
     "tradeoff": "小型状态生命周期用简单字段 vs 状态继续增多时改用 State pattern",
@@ -1751,13 +1751,13 @@
     "optionExplanations": [
       "电影上映状态是产品层面的元数据变化，不是本题在讨论的、跟座位绑定的那套状态机。",
       "座位加入 hold 后有 available、held、booked、released 四个状态，转换规则一多，就得防着中间被跳过走错状态，这正是所说的小型生命周期。",
-      "Theater 是持有 showtime 列表的容器，它的类型不会在运行期间变成另一个完全不同的类。",
+      "Theater 是持有 showtime 列表的容器，它的类型不会在运行期间被替换成另一个完全不同的类。",
       "Search 是只读查询，支付是完全独立的后续流程，两者不会因为加了 hold 就合并成一个步骤。"
     ],
     "optionExplanations_en": [
       "A movie's showing status is product-level metadata, not the seat-bound state machine this question is actually about.",
       "Once holds exist, a seat cycles through available, held, booked, and released with explicit transition rules, and once transitions carry rules you must guard against illegal jumps — exactly the small lifecycle being described.",
-      "Theater is a container holding a list of showtimes; its type doesn't morph into a completely different class at runtime.",
+      "Theater is a container holding a list of showtimes; its type never gets swapped out for a completely different class at runtime.",
       "Search is a read-only query and payment is a separate downstream flow — adding holds doesn't merge the two into one step."
     ],
     "table": {
@@ -1800,7 +1800,7 @@
     "q": "合理的设计判断是什么？",
     "q_en": "What is a reasonable design judgment?",
     "options": [
-      "所有场次都统一固定写死 1 秒超时",
+      "无论场次冷热，全部场次都统一写死固定 1 秒超时",
       "hold 一旦创建就必定永不失效",
       "5-10 分钟常见，业务可调，过短伤用户过长占座",
       "必须一直等到电影正式开场才失效"
@@ -1812,7 +1812,7 @@
     "why_en": "Hold timeout is a business tradeoff between checkout usability and seat availability.",
     "whenOtherWins": "高需求首映场可能使用更短 hold，低峰场次可以更宽松。",
     "options_en": [
-      "Hard-code the exact same fixed 1-second timeout for every showtime.",
+      "Hard-code the exact same fixed 1-second timeout for every showtime, hot or not.",
       "Once created, a hold should absolutely never lapse.",
       "5-10 minutes is typical and tunable, too short hurts users and too long locks seats.",
       "A hold must wait all the way until the movie actually starts to lapse."
@@ -1826,13 +1826,13 @@
       }
     ],
     "optionExplanations": [
-      "1 秒连输入卡号都不够，用户还没填完支付信息 hold 就没了，等于变相拒绝所有正常结账。",
+      "不管场次冷热都写死 1 秒，连输入卡号都不够，用户还没填完支付信息 hold 就没了，等于变相拒绝所有正常结账。",
       "hold 一旦创建就永不失效，用户中途放弃也会让座位永久锁死，其他人再也订不到。",
       "超时时长本质是业务权衡：太短挤压用户填支付信息的时间，太长又让没人认领的座位白白占着，5-10 分钟是常见且可调的经验值。",
       "等到开场才让 hold 失效，意味着一个放弃结账的用户能把座位锁到最后一刻，跟座位该尽快放出去矛盾。"
     ],
     "optionExplanations_en": [
-      "A one-second window isn't even enough to type in a card number — the hold would time out before the user finishes entering payment details, effectively blocking every normal checkout.",
+      "Hard-coding 1 second regardless of demand isn't even enough to type in a card number — the hold would time out before the user finishes entering payment details, effectively blocking every normal checkout.",
       "A hold that never times out means an abandoned checkout locks the seat forever, with no one else ever able to book it.",
       "The timeout length is fundamentally a business tradeoff: too short squeezes the time users have to enter payment, too long leaves an unclaimed seat sitting idle — 5-10 minutes is a common, tunable rule of thumb.",
       "Waiting until the movie starts to release the hold means an abandoned checkout can lock the seat all the way to showtime, fighting against freeing it back up quickly."
@@ -2118,7 +2118,7 @@
     "q": "基础设计如何处理？",
     "q_en": "How should the base design handle this?",
     "options": [
-      "系统自动帮用户恢复刚才取消的那次 reservation",
+      "系统自动帮用户把刚才取消的那次 reservation 悄悄恢复回来",
       "自动把这张票转移到下一场放映",
       "reservationsById 查不到，报 NotFound",
       "只把 seatIds 字段清空，其余不变"
@@ -2130,20 +2130,20 @@
     "why_en": "After cancellation removes the reservation index entry, repeated cancellation is treated as not found.",
     "whenOtherWins": "如果产品要求区分“已取消”和“不存在”，需要保留历史 reservation 状态或审计记录。",
     "options_en": [
-      "The system automatically restores the just-cancelled reservation.",
+      "The system quietly restores the just-cancelled reservation for the user.",
       "The ticket is automatically moved to the next showing.",
       "reservationsById has no entry, so it returns NotFound / invalid.",
       "Only the seatIds field gets cleared, everything else stays."
     ],
     "tradeoff": "复用已删除索引的天然拒绝 vs 额外维护一份已取消历史状态",
     "optionExplanations": [
-      "取消成功后 reservationsById 里那条记录已经被删掉，系统没有留任何东西可以自动恢复。",
+      "取消成功后 reservationsById 里那条记录已经被删掉，系统没有留任何东西可以悄悄恢复给用户。",
       "转到下一场放映是完全没出现过的新功能，基础设计的取消流程不会做这种事。",
       "第一次取消已经把这个确认码从索引里删掉，再查同一个值跟查一个随机不存在的值没区别，自然是 NotFound。",
       "reservation 对象在第一次取消时已经从索引和 showtime 的列表里一起消失，没有只清空 seatIds 的中间状态可以操作。"
     ],
     "optionExplanations_en": [
-      "Once cancellation succeeds, the entry in reservationsById is already deleted — there's nothing left for the system to auto-restore.",
+      "Once cancellation succeeds, the entry in reservationsById is already deleted — there's nothing left for the system to quietly restore for the user.",
       "Moving the ticket to the next showing is a feature that was never part of this design — the base cancellation flow doesn't do that.",
       "The first cancellation already removed confirmationId from reservationsById, so looking it up again is indistinguishable from a random id that never existed — NotFound is correct.",
       "The reservation object itself already disappeared from both the index and the showtime's list on the first cancellation — there's no in-between state where only seatIds gets cleared."
@@ -2209,7 +2209,7 @@
     "q_en": "Which statement is most accurate?",
     "options": [
       "一个座位最多属于一份 active reservation",
-      "同一部 movie 只能在一家 theater 上映",
+      "同一部 movie 在同一天只能在一家 theater 排片上映",
       "每个 theater 永远只能有一个 screen",
       "每个 user 一次最多只能订一个座位"
     ],
@@ -2221,7 +2221,7 @@
     "whenOtherWins": "加入 hold 后，应扩展为一个 seatId 最多处于一个 active reservation 或未过期 hold 中。",
     "options_en": [
       "A seat belongs to at most one active reservation.",
-      "The same movie can only play at one theater.",
+      "The same movie can only be scheduled at one theater on a given day.",
       "A theater can only ever have one screen.",
       "A user can only book one seat at a time."
     ],
@@ -2235,13 +2235,13 @@
     ],
     "optionExplanations": [
       "book 时的整单校验和加的锁、cancel 里的同步删除，全都是在维护这一条：同一场次内一个座位不会同时属于两份预订。",
-      "一部电影完全可以同时在多家影院排片，这跟本题的并发和座位不变量没有关系。",
+      "一部电影完全可以在同一天于多家影院同时排片，这跟本题的并发和座位不变量没有关系。",
       "本设计并没有限制每个 theater 只能有一个 screen，实际上一个 theater 通常持有多场不同 showtime。",
       "多座位一次预订本身就是明确要支持的能力（如 A5/A6/A7 一起订），一次一个座位并不是这道题的约束。"
     ],
     "optionExplanations_en": [
       "Every lock and all-or-nothing check in book, and the synchronized removal in cancel, all exist to protect exactly this: within one showing, a seat never belongs to two active reservations at once.",
-      "A movie can absolutely play at multiple theaters at the same time — that has nothing to do with this design's concurrency or seat invariant.",
+      "A movie can absolutely be scheduled at multiple theaters on the same day — that has nothing to do with this design's concurrency or seat invariant.",
       "Nothing in this design limits a theater to one screen; in practice a theater holds many different showtimes.",
       "Booking several seats at once is explicitly a supported capability here (like A5/A6/A7 together) — one-seat-at-a-time was never a constraint of this design."
     ]

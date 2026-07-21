@@ -19,14 +19,14 @@
     "diagram": "flowchart LR\n  T[\"交易到达\"] --> F[\"特征检索<br/>~15ms\"] --> M[\"模型打分<br/>~10ms\"] --> D[\"决策引擎<br/>~5ms\"] --> A[\"block/pass/review\"]",
     "options": [
       "特征检索 → 模型打分 → 决策引擎，三段串行、各有独立延迟预算",
-      "数据入湖 → 离线训练 → 批量导出，凌晨跑一次",
-      "用户注册 → 风控画像 → 月度对账，与实时无关",
+      "数据入湖 → 离线批量训练 → 凌晨定时导出模型权重，是训练管线而非在线打分路径",
+      "用户注册 → 风控画像 → 月度对账出报表，是账期流程、不卡在交易授权路径上",
       "只有一步：把交易丢给模型直接输出 block/pass"
     ],
     "options_en": [
       "Feature retrieval → model scoring → decision engine, three serial stages each with its own latency budget.",
-      "Ingest to lake → offline training → batch export, run once overnight.",
-      "User signup → risk profiling → monthly reconciliation, unrelated to real time.",
+      "Ingest to lake → offline batch training → export model weights on a nightly schedule — that's the training pipeline, not the online scoring path.",
+      "User signup → risk profiling → monthly reconciliation report — a billing-cycle process, not on the transaction-authorization path.",
       "Just one step: hand the txn to the model and output block/pass directly."
     ],
     "answer": [
@@ -34,14 +34,14 @@
     ],
     "optionExplanations": [
       "对；三段串行且各有预算，特征→打分→决策，最后 ~20ms 留给网络与序列化，是 50ms 内的标准拆法。",
-      "这是离线训练流水线，不是授权前必须 <50ms 的在线打分路径。",
-      "月度对账是事后流程，跟交易授权的实时决策无关。",
+      "这是离线批量训练+定时导出权重的流水线，不是授权前必须 <50ms 的在线打分路径。",
+      "月度对账出报表是事后账期流程，跟交易授权的实时决策无关。",
       "少了特征检索和决策引擎：没有实时/预计算特征就打分不准，没有规则层就处理不了边界。"
     ],
     "optionExplanations_en": [
       "Correct — three serial budgeted stages, feature→score→decision, with ~20ms left for network/serialization, the standard sub-50ms breakdown.",
-      "That's the offline training pipeline, not the online pre-authorization path that must be under 50ms.",
-      "Monthly reconciliation is an after-the-fact process, unrelated to real-time authorization decisions.",
+      "That's the offline batch-training-plus-nightly-export pipeline, not the online pre-authorization path that must be under 50ms.",
+      "Monthly reconciliation reporting is an after-the-fact billing-cycle process, unrelated to real-time authorization decisions.",
       "It drops feature retrieval and the decision engine: without real-time/precomputed features scoring is inaccurate, and without a rules layer edge cases aren't handled."
     ],
     "termDefinitions": [
@@ -136,29 +136,29 @@
     "whenOtherWins": "若该任务完全不依赖近实时信号(如纯静态信用评分)，单一预计算特征库更简单也够用。",
     "diagram": "flowchart LR\n  P[\"特征库 Redis/DynamoDB<br/>用户聚合/信任分\"] --> S[\"打分\"]\n  R[\"流处理 Flink/Kafka<br/>近 5 分钟速度\"] --> S",
     "options": [
-      "只用低延迟特征库，把一切都预计算好，最省事最好维护",
-      "只用流处理实时算特征，实时性最强、不需要额外存储",
+      "只用低延迟特征库，把用户画像预计算好存起来，查询快但拿不到最近几分钟的速度信号",
+      "只用流处理实时算特征，能抓速度信号但每次都要重新聚合长期画像、丢历史沉淀",
       "双路径：特征库取长期画像 + 流处理取 5 分钟速度信号",
-      "推理时现场 join 多张明细表算特征，口径最灵活"
+      "推理时现场 join 多张明细表算特征，口径灵活但延迟高、抖动大，扛不住 50ms 预算"
     ],
     "options_en": [
-      "Use only a low-latency feature store; precomputing everything is simplest to run and maintain.",
-      "Use only stream processing to compute features live for maximum freshness, with no extra storage.",
+      "Use only a low-latency feature store; queries are fast, but you can't see the last few minutes of velocity.",
+      "Use only stream processing; it catches velocity, but re-aggregates long-term profiles from scratch every time and loses historical depth.",
       "Dual path: the feature store for long-term profiles plus streaming for 5-minute velocity signals.",
-      "Join raw detail tables at inference time, which keeps feature definitions most flexible."
+      "Join raw detail tables at inference time; definitions stay flexible, but latency and jitter blow through the 50ms budget."
     ],
     "answer": [
       2
     ],
     "optionExplanations": [
       "只用特征库拿不到最近几分钟的速度信号，盗卡快速连刷会被放过——面试里被视为对时效理解有缺口。",
-      "只用流处理缺长期设备信任/商户风险等预计算画像，判断维度不全。",
+      "只用流处理缺长期设备信任/商户风险等预计算画像，判断维度不全、还要每次重新聚合历史。",
       "对；两路互补，预计算给长期画像、流给即时速度，合起来既准又快、还避免推理时 join。",
       "推理时 join 明细表延迟高、抖动大，50ms 预算根本扛不住。"
     ],
     "optionExplanations_en": [
       "A store alone misses last-few-minutes velocity, so rapid stolen-card reuse slips through — seen in interviews as a gap in recency understanding.",
-      "Streaming alone lacks precomputed long-term profiles like device trust and merchant risk, so judgment dimensions are incomplete.",
+      "Streaming alone lacks precomputed long-term profiles like device trust and merchant risk, and must re-aggregate history every time — judgment dimensions are incomplete.",
       "Correct — the two paths complement each other, precompute for profiles and stream for instant velocity, accurate and fast while avoiding inference-time joins.",
       "Joining detail tables at inference is high-latency and jittery; a 50ms budget can't absorb it."
     ],
@@ -324,14 +324,14 @@
     "options": [
       "深度集成模型，越大越准，8–15ms 的额外延迟在授权链路上无关紧要",
       "GBM(XGBoost/LightGBM)：1–3ms，准确率不输深度集成",
-      "线性回归，最简单最快，准确率低一点无所谓",
-      "每笔交易同时跑 GBM 与深度集成再投票，结果最稳"
+      "线性回归，打分几乎零延迟，但抓不住欺诈信号间的非线性交互，准确率明显打折",
+      "每笔交易同时跑 GBM 与深度集成再投票，双重延迟叠加、10ms 预算根本装不下"
     ],
     "options_en": [
       "A deep ensemble; bigger is more accurate and 8–15ms of extra latency doesn't matter on the authorization path.",
       "A GBM (XGBoost/LightGBM): 1–3ms, with accuracy on par with a deep ensemble.",
-      "Linear regression, simplest and fastest, with lower accuracy being acceptable.",
-      "Run both a GBM and a deep ensemble per transaction and vote for the most robust result."
+      "Linear regression scores at near-zero latency, but can't capture the nonlinear interactions in fraud signals, so accuracy takes a real hit.",
+      "Run both a GBM and a deep ensemble per transaction and vote; latency stacks up and a 10ms budget simply can't fit it."
     ],
     "answer": [
       1
@@ -548,16 +548,16 @@
       ]
     },
     "options": [
-      "三档流量大致均分，标签质量与新鲜度也完全一样",
+      "三档流量大致均分(各约33%)，且三者标签的确认时间与可信度也完全一致",
       "auto-pass 量最大但标签弱；manual review 量小但标签强",
       "auto-block 流量最大，因为高分交易占大多数、都要拦下来",
-      "manual review 的标签最弱，因为分析师主观判断、容易出错"
+      "manual review 的标签最弱，因为分析师主观判断、容易出错，不适合喂给重训"
     ],
     "options_en": [
-      "The three tiers split traffic roughly evenly with identical label quality and freshness.",
+      "The three tiers split traffic roughly evenly (~33% each), with identical label confirmation time and trustworthiness.",
       "Auto-pass carries the most traffic but weak labels; manual review is small but strongly labeled.",
       "Auto-block carries the most traffic because high-score transactions are the majority and all get blocked.",
-      "Manual review has the weakest labels because analyst judgment is subjective and error-prone."
+      "Manual review has the weakest labels because analyst judgment is subjective and error-prone, unfit to feed retraining."
     ],
     "answer": [
       1
@@ -566,13 +566,13 @@
       "流量严重不均(94/5/1)，标签质量也不同，均分假设完全错误。",
       "对；关键洞察是中段虽小却提供分析师确认的强标签，是重训的高质量燃料。",
       "auto-block 只占 ~1%，绝大多数交易是合法的会走 auto-pass，流量最大的是 auto-pass。",
-      "人工复核由分析师数小时内确认，恰恰是最强标签，不是最弱。"
+      "人工复核由分析师数小时内确认，恰恰是最强标签而非最弱，正是重训该用的数据。"
     ],
     "optionExplanations_en": [
       "Traffic is heavily skewed (94/5/1) and label quality differs, so the even-split assumption is wholly wrong.",
       "Correct — the key insight is that the small middle band supplies analyst-confirmed strong labels, high-quality fuel for retraining.",
       "Auto-block is only ~1%; the vast majority of legit txns go to auto-pass, which has the most traffic.",
-      "Manual review is analyst-confirmed within hours, precisely the strongest label, not the weakest."
+      "Manual review is analyst-confirmed within hours, precisely the strongest label rather than the weakest, exactly what retraining should use."
     ],
     "termDefinitions": [
       {
@@ -654,16 +654,16 @@
     "tradeoff": "动态阈值(随产能/时段/攻击强度自适应但更复杂) vs 固定阈值(简单但高峰爆队列或漏抓)",
     "whenOtherWins": "当流量与攻击强度非常平稳、审核产能长期富余时，固定阈值更简单也够用、易于审计。",
     "options": [
-      "永久固定 0.40/0.85，简单可预测",
+      "永久固定在 0.40/0.85，简单可预测，产能紧或攻击猛时也不跟着调整",
       "动态调整：按审核产能、时段、攻击强度实时改三档边界",
-      "只按时间调，攻击强度不该影响阈值",
-      "让阈值随机波动，避免被欺诈者猜到"
+      "只按时段调整阈值，攻击强度信号被忽略、不纳入决策",
+      "让三档边界随机波动，指望这样能让欺诈者猜不到规律"
     ],
     "options_en": [
-      "Permanently fixed at 0.40/0.85 for simple predictability.",
+      "Permanently fixed at 0.40/0.85 for simple predictability, unchanged even when capacity is tight or attacks surge.",
       "Dynamic: adjust the tier boundaries in real time by review capacity, time of day, and attack intensity.",
-      "Adjust only by time of day; attack intensity shouldn't affect thresholds.",
-      "Let thresholds fluctuate randomly to keep fraudsters from guessing them."
+      "Adjust only by time of day; the attack-intensity signal is ignored and left out of the decision.",
+      "Let the tier boundaries fluctuate randomly, hoping that keeps fraudsters from guessing the pattern."
     ],
     "answer": [
       1
@@ -1264,16 +1264,16 @@
     "tradeoff": "回退规则兜底(不中断交易、拦明显欺诈但精度降) vs 全停/全放(要么阻断营收要么门户大开)",
     "whenOtherWins": "对极高风险交易类别，宁可在打分不可用时保守拒绝或走人工，也不放行——此时‘全走人工’胜过规则兜底。",
     "options": [
-      "打分挂了就全部放行，优先保证交易链路不中断",
-      "打分挂了就全部拒绝，宁可错杀也不放过欺诈",
+      "打分挂了就全部放行，优先保证交易链路不中断，但故障窗口内欺诈会大量涌入",
+      "打分挂了就全部拒绝，宁可错杀也不放过欺诈，合法交易也被一起挡下",
       "优雅降级：回退确定性业务规则，拦明显欺诈不中断交易",
-      "直接停服等模型恢复，期间不处理任何交易请求"
+      "直接停服等模型恢复，期间不处理任何交易请求，业务整体中断"
     ],
     "options_en": [
-      "If scoring is down, approve everything to keep the payment path unbroken.",
-      "If scoring is down, decline everything — better to over-block than to let fraud through.",
+      "If scoring is down, approve everything to keep the payment path unbroken, but fraud floods in during the outage window.",
+      "If scoring is down, decline everything — better to over-block than let fraud through, at the cost of blocking legit transactions too.",
       "Graceful degradation: fall back to deterministic rules that block obvious fraud without halting traffic.",
-      "Take the service offline until the model recovers, processing no transactions meanwhile."
+      "Take the service fully offline until the model recovers, processing no transactions and stalling the whole business meanwhile."
     ],
     "answer": [
       2
@@ -1370,16 +1370,16 @@
     "tradeoff": "多区域就近部署(低延迟+合规驻留但运维/一致性更复杂) vs 单区域(简单但跨洲延迟高、难满足驻留)",
     "whenOtherWins": "若用户集中在单一地区、且无跨境数据驻留要求，单区域部署更简单、成本更低也够用。",
     "options": [
-      "单区域集中部署，靠优化代码把跨洲延迟压下去",
+      "单区域集中部署，靠优化代码把跨洲延迟压下去，但物理 RTT 下限压不掉",
       "多区域部署：打分/特征就近放用户区降 RTT，数据留在合规辖区满足驻留",
-      "全球所有请求都打到同一个数据中心，最一致",
-      "把延迟预算从 50ms 放宽到 500ms 就不用多区域了"
+      "全球所有请求都打到同一个数据中心，最一致，但远端用户 RTT 会爆表",
+      "把延迟预算从 50ms 放宽到 500ms 就不用多区域了，但这违反授权前的产品 SLO"
     ],
     "options_en": [
-      "A single centralized region, tuning code to squeeze out cross-continent latency.",
+      "A single centralized region, tuning code to squeeze out cross-continent latency — but the physical RTT floor won't budge.",
       "Multi-region: place scoring/features near users to cut RTT, keep data in compliant jurisdictions for residency.",
-      "Route all global requests to one data center for maximum consistency.",
-      "Just relax the budget from 50ms to 500ms and skip multi-region."
+      "Route all global requests to one data center for maximum consistency, but RTT balloons for distant users.",
+      "Just relax the budget from 50ms to 500ms and skip multi-region — but that violates the pre-authorization product SLO."
     ],
     "answer": [
       1
@@ -1511,16 +1511,16 @@
       ]
     },
     "options": [
-      "三级答案没有本质区别，只看表达是否流畅、结构是否完整",
+      "三级答案没有本质区别，只看表达是否流畅、结构是否完整，跟深度无关",
       "L4 单阈值管线；L5 三段+PSI；Staff+ 监控金字塔+降级",
-      "L4 的答案最全面、Staff+ 最简单，级别越高反而讲得越少",
-      "只有 Staff+ 需要讲模型，L4/L5 只讲工程组件"
+      "L4 的答案最全面、Staff+ 反而最简单，级别越高讲得越少",
+      "只有 Staff+ 需要讲模型内部机制，L4/L5 只讲工程组件不涉及模型"
     ],
     "options_en": [
-      "The three levels differ only in how fluent and well-structured the delivery is.",
+      "The three levels differ only in how fluent and well-structured the delivery is, unrelated to depth.",
       "L4: single-threshold pipeline; L5: three stages plus PSI; Staff+: monitoring pyramid plus degradation.",
-      "L4 answers are the most complete and Staff+ the simplest; higher levels say less.",
-      "Only Staff+ needs to discuss the model; L4 and L5 cover engineering components only."
+      "L4 answers are the most complete and Staff+ is actually the simplest; higher levels say less.",
+      "Only Staff+ needs to discuss internal model mechanics; L4 and L5 cover engineering components only, no model."
     ],
     "answer": [
       1

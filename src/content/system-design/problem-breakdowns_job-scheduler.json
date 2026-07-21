@@ -407,10 +407,10 @@
     "q": "查询某用户 Job 状态的接口，最合理的形态是？",
     "q_en": "What's the most sensible shape for the API that queries a user's job statuses?",
     "options": [
-      "POST /jobs/query 带一个 SQL 字符串",
+      "POST /jobs/query，请求体里直接拼一段原始 SQL 交给数据库跑",
       "GET /jobs 按 user_id/status/时间区间过滤",
-      "GET /jobs/{job_id} 一次只能查一个",
-      "WebSocket 订阅所有 Job"
+      "GET /jobs/{job_id}，一次只能查一个，还得前端自己拼循环调用",
+      "WebSocket 订阅全部 Job 的实时事件，靠前端自己筛出目标用户"
     ],
     "answer": [
       1
@@ -425,22 +425,22 @@
       "query"
     ],
     "options_en": [
-      "POST /jobs/query carrying a raw SQL string.",
+      "POST /jobs/query, with the request body concatenating a raw SQL string straight into the database.",
       "GET /jobs filtered by user_id, status, and a time range.",
-      "GET /jobs/{job_id}, only one job per call.",
-      "A WebSocket subscription to every job."
+      "GET /jobs/{job_id}, one job per call, forcing the frontend to loop over ids itself.",
+      "A WebSocket subscription to every job's events, with the frontend filtering out its own user."
     ],
     "optionExplanations": [
-      "把 SQL 字符串直接传给接口既不安全也不是 REST 该有的形状。",
+      "把原始 SQL 直接拼进请求体交给数据库执行，SQL 注入风险大，也不是 REST 该有的形状。",
       "对，GET /jobs 按 user_id 过滤，配合 status 和时间区间，正好对应监控需求。",
-      "一次只能查一个 job_id，没法回答「这个用户所有 Job 状态」这种列表问题。",
-      "订阅全部 Job 的推送流，对『查某用户状态』这种一次性查询来说是杀鸡用牛刀。"
+      "一次只能查一个 job_id，前端得自己写循环调用，没法一次性回答「这个用户所有 Job 状态」这种列表问题。",
+      "订阅全部 Job 的事件流、再靠前端自己按 user_id 过滤，对『查某用户状态』这种一次性查询来说是杀鸡用牛刀，还浪费带宽。"
     ],
     "optionExplanations_en": [
-      "Passing a raw SQL string to the endpoint is neither safe nor how a REST API should look.",
+      "Concatenating raw SQL straight into the request body and handing it to the database is a SQL-injection risk and not how a REST API should look.",
       "Right: GET /jobs filtered by user_id, plus status and a time range, matches the monitoring requirement directly.",
-      "That only fetches one job_id at a time — it can't answer 'all of this user's job statuses'.",
-      "Subscribing to every job's stream is overkill for a one-shot query like 'check this user's status'."
+      "That only fetches one job_id at a time and pushes the looping onto the frontend — it can't answer 'all of this user's job statuses' in one call.",
+      "Subscribing to every job's event stream and filtering by user_id on the frontend is overkill and wastes bandwidth for a one-shot query like 'check this user's status'."
     ]
   },
   {
@@ -574,10 +574,10 @@
     "q": "作者默认选用的数据库是？",
     "q_en": "Which database does the author default to?",
     "options": [
-      "单实例部署的 Postgres 关系型主库",
+      "单实例部署的 Postgres 关系型主库，靠强一致换取简单的 join 查询",
       "灵活的键值存储 DynamoDB（或 Cassandra）",
-      "专门存储节点和边关系的 Neo4j 图数据库",
-      "面向全文检索的 Elasticsearch 搜索引擎"
+      "专门存储节点和边关系的 Neo4j 图数据库，适合复杂关系遍历",
+      "面向全文检索和聚合分析的 Elasticsearch 搜索引擎，不适合当主存储"
     ],
     "answer": [
       1
@@ -592,10 +592,10 @@
     ],
     "tradeoff": "易扩展的键值存储 vs 关系型数据库的强一致与多表能力",
     "options_en": [
-      "A single-instance, single-primary Postgres relational database.",
+      "A single-instance, single-primary Postgres relational database, trading scale for strong consistency and easy joins.",
       "A flexible key-value store like DynamoDB (or Cassandra).",
-      "The Neo4j graph database, built to store nodes and their relationships.",
-      "The Elasticsearch search engine, built for full-text search."
+      "The Neo4j graph database, built to store nodes and their relationships, good for complex relationship traversal.",
+      "The Elasticsearch search engine, built for full-text search and aggregation, not a fit as the primary store."
     ],
     "termDefinitions": [
       {
@@ -834,10 +834,10 @@
     "q": "Executions 表的复合主键设计是怎样的？",
     "q_en": "What is the composite primary key design for the Executions table?",
     "options": [
-      "分区键选 job_id，排序键选 status 用来表示当前执行状态",
+      "分区键选 job_id，排序键选 status，同一 Job 多次执行会互相覆盖",
       "分区键 time_bucket，排序键 execution_time+job_id",
-      "分区键选 user_id，排序键选 attempt 用来记录重试的次数",
-      "只用 job_id 一个字段作单一主键，完全不设置任何排序键"
+      "分区键选 user_id，排序键选 attempt，图的是按用户批量查询方便",
+      "只用 job_id 一个字段作单一主键，完全不设置排序键，图省事但丢了区分执行批次的能力"
     ],
     "answer": [
       1
@@ -876,22 +876,22 @@
       ]
     },
     "options_en": [
-      "Partition key job_id, sort key status representing the current execution state.",
+      "Partition key job_id, sort key status; repeated runs of the same job would overwrite each other.",
       "Partition key time_bucket, sort key execution_time plus job_id.",
-      "Partition key user_id, sort key attempt recording the retry count.",
-      "A single primary key of just job_id, with no sort key set at all."
+      "Partition key user_id, sort key attempt, aimed at making per-user lookups fast.",
+      "A single primary key of just job_id, no sort key at all — simple, but it loses the ability to tell attempts apart."
     ],
     "optionExplanations": [
-      "job_id 做分区键更适合 Jobs 表；status 也不能保证唯一，撑不起排序键的职责。",
+      "job_id 做分区键更适合 Jobs 表；status 也不能保证唯一，同一个 Job 的多次执行会互相覆盖。",
       "对，time_bucket 分区把同一小时的执行聚在一起，execution_time+job_id 保证同分区内主键唯一。",
       "user_id 分区服务的是『按用户查』这条次要路径，不是『找即将执行的 Job』这条主路径。",
-      "只用 job_id 当主键，同一个 Job 的多次执行会互相覆盖，没法区分是哪一次。"
+      "只用 job_id 当主键，图省事，但和第一个选项一个毛病：没有排序键区分执行批次，没法知道是哪一次。"
     ],
     "optionExplanations_en": [
-      "job_id as a partition key belongs to the Jobs table, and status alone can't guarantee uniqueness as a sort key.",
+      "job_id as a partition key belongs to the Jobs table, and status alone can't guarantee uniqueness — repeated runs of the same job would overwrite each other.",
       "Right: partitioning by time_bucket groups an hour's executions together, and execution_time plus job_id keeps the key unique within it.",
       "Partitioning by user_id serves the secondary 'look up by user' path, not the primary 'find what's due soon' one.",
-      "Using only job_id as the key would let repeated runs of the same job overwrite each other, with no way to tell them apart."
+      "Using only job_id as the key is simple to set up, but it has the same problem as the first option: no sort key to distinguish attempts, so there's no way to tell which run is which."
     ]
   },
   {
@@ -969,10 +969,10 @@
     "q": "把某一小时的所有写入集中到同一个分区，潜在风险是什么？",
     "q_en": "What's the risk of concentrating an entire hour's writes into a single partition?",
     "options": [
-      "会导致该时间桶下的读取查询明显变慢",
+      "会导致该时间桶下的读取查询明显变慢，拖慢 Worker 拉取速度",
       "重负载下可能形成热分区（hot partition）",
-      "会导致这套设计完全无法支持周期性 Job",
-      "会导致写入记录里的 job_id 字段丢失"
+      "会导致这套设计完全无法支持周期性 Job 的重复调度",
+      "会导致写入记录里的 job_id 字段丢失，后续没法追溯"
     ],
     "answer": [
       1
@@ -985,19 +985,19 @@
       "sharding"
     ],
     "options_en": [
-      "It would make read queries against that time bucket noticeably slower.",
+      "It would make read queries against that time bucket noticeably slower, slowing down worker pull rates.",
       "Under heavy load it can create a hot partition.",
-      "It would make this design completely unable to support recurring jobs.",
-      "It would cause the job_id field to be lost from written records."
+      "It would make this design completely unable to support recurring jobs' repeat scheduling.",
+      "It would cause the job_id field to be lost from written records, making runs untraceable afterward."
     ],
     "optionExplanations": [
-      "读取确实可能被拖慢，但根源在写入全砸向一个分区，先烧穿的是写吞吐上限。",
+      "读取确实可能被拖慢，但根源在写入全砸向一个分区，先烧穿的是写吞吐上限，不是这条读延迟。",
       "对，一小时的写入全砸向同一个分区，负载一高就会撞到分区写容量上限。",
       "热分区是性能问题，不会让周期性 Job 这个功能直接失效。",
       "热分区影响的是写入能不能扛住，不会凭空把已经写进去的字段丢掉。"
     ],
     "optionExplanations_en": [
-      "Reads can get dragged down too, but the root cause is writes all hammering one partition first.",
+      "Reads can get dragged down too, but the root cause is writes all hammering one partition first, not this read-latency story.",
       "Right: a whole hour's writes land on the same partition, so heavy load runs straight into that partition's write ceiling.",
       "A hot partition is a performance problem — it doesn't disable the periodic-job feature itself.",
       "A hot partition affects whether writes keep up — it doesn't make an already-written field disappear."
@@ -1014,10 +1014,10 @@
     "q": "在「定义 / 执行实例分离」下，周期性 Job 完成一次后如何安排下一次？",
     "q_en": "Under the definition-versus-execution-instance split, how is the next run of a recurring job scheduled after one completes?",
     "options": [
-      "直接修改 Job 定义表里那个记录下一次调度时间的时间字段数值内容",
+      "直接修改 Job 定义表里记录下一次调度时间的字段数值，省了插入新记录这一步",
       "保持 Job 定义不变，计算下一次执行时间并在 Executions 表插入一条新实例",
-      "把整张 Jobs 定义表原封不动地完整复制一份、再另存成一条新记录",
-      "先彻底删除这个旧的 Job 定义记录，然后再重新创建一个全新的 Job 出来"
+      "把整张 Jobs 定义表原封不动地复制一份、另存成一条新记录，图的是保留历史",
+      "先彻底删除这个旧的 Job 定义记录，再重新创建一个全新的 Job 出来，等于换了个调度对象"
     ],
     "answer": [
       1
@@ -1030,21 +1030,21 @@
       "scheduling"
     ],
     "options_en": [
-      "Directly edit the time field in the job definition that records the next scheduled time.",
+      "Directly edit the time field in the job definition that records the next scheduled time, skipping the insert step.",
       "Keep the definition unchanged and insert a new Executions row.",
-      "Copy the entire Jobs definition table as-is and save it as another new record.",
-      "First fully delete the old job definition, then create a brand-new job from scratch."
+      "Copy the entire Jobs definition table as-is and save it as another new record, aiming to keep history around.",
+      "First fully delete the old job definition, then create a brand-new job from scratch — effectively a different scheduled object."
     ],
     "optionExplanations": [
-      "Job 定义里根本没有『下一次时间』这种可变字段，这套设计压根不改定义。",
+      "Job 定义里根本没有『下一次时间』这种可变字段，这套设计压根不改定义，也没有『插入』这一步可省。",
       "对，Jobs 表里那条定义完全不碰，只是把下次该跑的时间点重新算一遍，写成一条新的执行记录，靠这个循环支持重复。",
-      "复制整张定义表既没必要，也违背『定义只保留一份、被反复复用』的设计初衷。",
+      "复制整张定义表既没必要，也违背『定义只保留一份、被反复复用』的设计初衷，历史该由 Executions 表来存。",
       "删了再建等于换了个新 Job，和『同一个周期性 Job 持续产生新实例』完全是两回事。"
     ],
     "optionExplanations_en": [
-      "The job definition doesn't even have a mutable 'next time' field — this design never touches the definition at all.",
+      "The job definition doesn't even have a mutable 'next time' field — this design never touches the definition, so there's no insert step to skip.",
       "Right: the definition stays untouched, and the next occurrence just becomes a new row inserted into Executions.",
-      "Copying the whole definition row is both unnecessary and defeats the point of keeping one reusable definition.",
+      "Copying the whole definition row is both unnecessary and defeats the point of keeping one reusable definition — history belongs in the Executions table.",
       "Deleting and recreating is effectively a different job — that's not the same as one recurring job spawning new instances."
     ]
   },
@@ -1447,10 +1447,10 @@
     "q": "两层调度架构如何同时满足这两点？",
     "q_en": "How does the two-layer scheduler architecture satisfy both at once?",
     "options": [
-      "让 Worker 直接每秒查数据库",
+      "让 Worker 直接每秒查数据库，图的是实现简单不用引入队列",
       "查库低频（5 分钟一次），队列缓冲保证高吞吐执行",
-      "把所有 Job 缓存在应用内存里轮询",
-      "取消数据库，全部用 Redis"
+      "把所有 Job 缓存在应用内存里轮询，省去数据库查询延迟",
+      "取消数据库，全部用 Redis 做持久化和调度"
     ],
     "answer": [
       1
@@ -1465,10 +1465,10 @@
     ],
     "tradeoff": "数据库低频查询 vs 队列保精度、高吞吐",
     "options_en": [
-      "Have workers query the database every second directly.",
+      "Have workers query the database every second directly, aiming for simplicity by skipping the queue.",
       "Query the database infrequently while a queue buffers jobs for high-throughput execution.",
-      "Cache every job in application memory and poll it.",
-      "Remove the database entirely and use only Redis."
+      "Cache every job in application memory and poll it, avoiding database query latency.",
+      "Remove the database entirely and use only Redis for persistence and scheduling."
     ],
     "optionExplanations": [
       "Worker 直接每秒查库，等于把高频查询压力原样转嫁给数据库，没有解耦。",
@@ -1785,10 +1785,10 @@
     "q": "RabbitMQ 实现延迟投递的典型方式及其难点是？",
     "q_en": "What's RabbitMQ's typical way of achieving delayed delivery, and what's the difficulty?",
     "options": [
-      "原生 delay 字段，零配置",
+      "以为有原生 delay 字段，零配置直接可用",
       "TTL + 死信交换机（DLX）模拟延迟投递",
-      "用 Kafka 分区偏移量实现",
-      "RabbitMQ 不支持任何延迟"
+      "照搬 Kafka 分区偏移量的思路来实现延迟",
+      "RabbitMQ 完全不支持任何形式的延迟投递"
     ],
     "answer": [
       1
@@ -1803,10 +1803,10 @@
     ],
     "tradeoff": "自建 RabbitMQ 延迟（可控但复杂） vs 托管队列原生延迟（简单省心）",
     "options_en": [
-      "A native delay field with zero configuration.",
+      "Assuming there's a native delay field, ready to use with zero configuration.",
       "Per-message TTL plus a dead-letter exchange (DLX) simulates delayed delivery.",
-      "Kafka-style partition offsets.",
-      "RabbitMQ supports no delay at all."
+      "Copying Kafka's partition-offset approach to implement delay.",
+      "RabbitMQ supports no form of delay whatsoever."
     ],
     "termDefinitions": [
       {
@@ -1834,13 +1834,13 @@
     "optionExplanations": [
       "标准 RabbitMQ 并没有开箱即用的原生延迟字段，这个说法过于理想化。",
       "对，靠给消息设 TTL、到期后转投死信交换机，间接模拟出延迟投递的效果。",
-      "Kafka 的分区偏移量是另一套系统的概念，跟 RabbitMQ 的实现方式无关。",
+      "Kafka 的分区偏移量是另一套系统的概念，照搬过来跟 RabbitMQ 的实现方式无关。",
       "RabbitMQ 能做延迟，只是不是原生字段，得靠 TTL+DLX 这种组合技模拟。"
     ],
     "optionExplanations_en": [
       "Stock RabbitMQ has no true zero-config native delay field — that's overselling it.",
       "Right: setting a TTL and routing expired-timer messages through a dead-letter exchange simulates delayed delivery indirectly.",
-      "Kafka partition offsets belong to a different system entirely — that's not how RabbitMQ works.",
+      "Kafka partition offsets belong to a different system entirely — copying that idea over has nothing to do with how RabbitMQ works.",
       "RabbitMQ can do delay, just not as a native field — it takes the TTL-plus-DLX combination to simulate it."
     ]
   },
@@ -1953,10 +1953,10 @@
     "q": "SQS 的 DelaySeconds（延迟投递）上限是多少，为什么这对本设计不成问题？",
     "q_en": "What's the cap on SQS's DelaySeconds, and why isn't it a problem for this design?",
     "options": [
-      "上限只有 60 秒，覆盖不了我们需要的 5 分钟窗口",
+      "上限只有 60 秒，覆盖不了我们的 5 分钟窗口，得拆成多次投递",
       "上限 15 分钟，而我们只需在 5 分钟窗口内投递，绰绰有余",
-      "上限是 1 小时，刚好能卡住我们需要的窗口边界",
-      "完全没有上限，可以设置任意长的延迟投递时间"
+      "上限是 1 小时，刚好卡住我们需要的窗口边界，余量很紧",
+      "完全没有上限，可以设置任意长的延迟投递时间，更灵活"
     ],
     "answer": [
       1
@@ -1969,10 +1969,10 @@
       "numbers"
     ],
     "options_en": [
-      "A 60-second cap, which cannot cover the five-minute window we need.",
+      "A 60-second cap, which cannot cover our five-minute window, so it'd have to be split into multiple deliveries.",
       "A fifteen-minute cap, comfortably covering our five-minute window.",
-      "A one-hour cap, which just barely covers the window boundary we need.",
-      "There is no cap at all; any arbitrarily long delay can be set."
+      "A one-hour cap, which just barely covers the window boundary we need, leaving little slack.",
+      "There is no cap at all; any arbitrarily long delay can be set, giving more flexibility."
     ],
     "termDefinitions": [
       {
@@ -1982,13 +1982,13 @@
       }
     ],
     "optionExplanations": [
-      "60 秒的上限远小于我们要投递的 5 分钟窗口，这个数字说反了。",
+      "60 秒的上限远小于我们要投递的 5 分钟窗口，这个数字说反了，也不需要拆多次投递。",
       "对，上限是 15 分钟，我们只需要覆盖 5 分钟窗口，还留了不少余量。",
       "1 小时这个上限数字不对，会误导设计者以为窗口卡得很紧、其实还很宽松。",
       "延迟投递不可能没有上限，SQS 明确写死了 15 分钟这个边界。"
     ],
     "optionExplanations_en": [
-      "60 seconds is far smaller than the 5-minute window we need to cover — that number is wrong.",
+      "60 seconds is far smaller than the 5-minute window we need to cover — that number is wrong, and no splitting is actually needed.",
       "Right: the cap is 15 minutes, and our window only needs 5, leaving plenty of headroom.",
       "1 hour is the wrong number — it would mislead you into thinking the window is tightly bounded when it isn't.",
       "Delayed delivery isn't unbounded — SQS hard-caps it at 15 minutes."
@@ -2295,10 +2295,10 @@
     "q": "给 Executions 表做写分片后，Worker 读取时要相应做什么？",
     "q_en": "After write-sharding the Executions table, what must workers do differently when reading?",
     "options": [
-      "只查一个分片即可",
+      "只查一个分片即可，其余分片的记录可以忽略",
       "并行查询某个时间桶下的所有分片，再合并结果",
-      "改成全表扫描",
-      "不再需要查 Executions 表"
+      "改成全表扫描，放弃 time_bucket 分区带来的效率",
+      "写分片后不再需要查 Executions 表，改读缓存即可"
     ],
     "answer": [
       1
@@ -2312,22 +2312,22 @@
     ],
     "diagram": "flowchart LR\n    W[\"Worker window\"] --> R0[\"read shard 0\"]\n    W --> R1[\"read shard 1\"]\n    W --> RN[\"read shard N\"]\n    R0 --> M[\"merge due executions\"]\n    R1 --> M\n    RN --> M\n    M --> Q[\"enqueue\"]",
     "options_en": [
-      "Query only a single shard.",
+      "Query only a single shard, treating records in the other shards as ignorable.",
       "Query all shards of a time bucket in parallel and merge the results.",
-      "Fall back to a full table scan.",
-      "The Executions table is no longer needed."
+      "Fall back to a full table scan, giving up the efficiency time_bucket partitioning bought.",
+      "After write sharding, the Executions table no longer needs querying — read from a cache instead."
     ],
     "optionExplanations": [
       "只查一个分片会漏掉分散在其他分片里的执行记录，结果不完整。",
       "对，Worker 要并行查该时间桶下的所有分片再合并，这是分片换来分散写入的读放大代价。",
       "改成全表扫描完全丢掉了按 time_bucket 分区带来的效率优势，得不偿失。",
-      "写分片只是改变了数据的物理分布，Executions 表该查还是要查。"
+      "写分片只是改变了数据的物理分布，Executions 表该查还是要查，没有缓存能替代它。"
     ],
     "optionExplanations_en": [
       "Querying just one shard misses execution records scattered across the others — the result is incomplete.",
       "Right: the worker fans out across every shard in that time bucket in parallel and merges the results — that's the read amplification cost sharding trades for spread-out writes.",
       "Switching to a full table scan throws away all the efficiency that time_bucket partitioning was buying — not worth the tradeoff.",
-      "Write sharding only changes physical data placement — the Executions table still has to be queried."
+      "Write sharding only changes physical data placement — the Executions table still has to be queried, and no cache substitutes for it."
     ]
   },
   {
@@ -2626,10 +2626,10 @@
     "q": "在「冷启动 vs 弹性」上，Lambda 相对容器的特点是？",
     "q_en": "On the cold-start-versus-elasticity axis, how does Lambda compare to containers?",
     "options": [
-      "Lambda 完全没有冷启动问题，但弹性伸缩能力很差",
+      "Lambda 完全没有冷启动问题，但弹性伸缩能力很差，跟不上流量",
       "Lambda 弹性极强、可瞬间自动扩，但有冷启动、稳定高负载下更贵",
-      "Lambda 和容器两者都完全不存在冷启动问题",
-      "容器的弹性伸缩能力其实比 Lambda 更强、扩容更快"
+      "Lambda 和容器两者都完全不存在冷启动问题，随时秒级响应",
+      "容器的弹性伸缩能力其实比 Lambda 更强、扩容更快，运维还更省心"
     ],
     "answer": [
       1
@@ -2666,10 +2666,10 @@
       ]
     },
     "options_en": [
-      "Lambda has no cold-start problem at all, but its elasticity is poor.",
+      "Lambda has no cold-start problem at all, but its elasticity is poor and can't keep up with traffic.",
       "Lambda scales almost instantly but has cold starts and costs more under steady heavy load.",
-      "Neither Lambda nor containers have a cold-start problem at all.",
-      "Containers actually scale more elastically and faster than Lambda."
+      "Neither Lambda nor containers have a cold-start problem at all, both respond within seconds anytime.",
+      "Containers actually scale more elastically and faster than Lambda, with lower ops overhead too."
     ],
     "termDefinitions": [
       {
@@ -2685,16 +2685,16 @@
       }
     ],
     "optionExplanations": [
-      "说反了，Lambda 恰恰是弹性极强的那一方，冷启动才是它的代价，不是没有代价。",
+      "说反了，Lambda 恰恰是弹性极强的那一方，冷启动才是它的代价，不是没有代价；它的扩容速度也远不算差。",
       "对，Lambda 能瞬间自动扩容、弹性最强，但有冷启动，稳定高吞吐下反而比容器贵。",
-      "容器同样存在启动新实例的延迟，『两者都完全没有冷启动』并不成立。",
-      "又说反了，Lambda 才是扩容更快的那一方，容器扩缩需要新建实例，天然慢一拍。"
+      "容器同样存在启动新实例的延迟，『两者都完全没有冷启动、随时秒级响应』并不成立。",
+      "又说反了，Lambda 才是扩容更快的那一方，容器扩缩需要新建实例，运维也更重，天然慢一拍。"
     ],
     "optionExplanations_en": [
-      "That's backwards — Lambda is actually the highly elastic side; cold start is its cost, not something it lacks.",
+      "That's backwards — Lambda is actually the highly elastic side; cold start is its cost, not something it lacks, and its scaling isn't slow either.",
       "Right: Lambda can scale out instantly with the strongest elasticity, but it pays for that with cold starts and higher cost at steady high throughput.",
-      "Containers have their own instance-startup delay too — 'neither has cold start' just isn't true.",
-      "Backwards again — Lambda scales faster; spinning up new container instances is inherently the slower path."
+      "Containers have their own instance-startup delay too — 'neither has cold start, both respond within seconds' just isn't true.",
+      "Backwards again — Lambda scales faster; spinning up new container instances is inherently the slower path, with heavier ops overhead too."
     ]
   },
   {
@@ -2953,10 +2953,10 @@
     "q": "健康检查方案的主要问题是？",
     "q_en": "What's the main problem with this health-check approach?",
     "options": [
-      "这种方案其实完全检测不出任何一种 Worker 故障",
+      "这种方案其实完全检测不出任何一种 Worker 故障，轮询压根没有意义",
       "在成千上万 Worker 下轮询扩展性差、网络抖动易误报、要额外基建、监控服务本身也可能挂",
-      "健康检查轮询得太快，会把 Worker 本身的负载压垮，进而影响任务本该有的正常执行",
-      "健康检查这种机制天生就不支持基于 HTTP 协议来实现"
+      "健康检查轮询得太快，会把 Worker 本身的负载压垮，进而影响任务本该有的正常执行，得调低频率",
+      "健康检查这种机制天生就不支持基于 HTTP 协议来实现，得改用其他协议"
     ],
     "answer": [
       1
@@ -2971,10 +2971,10 @@
     ],
     "tradeoff": "主动轮询检测（额外基建） vs 被动机制如可见性超时（无额外基建）",
     "options_en": [
-      "This approach actually cannot detect any kind of worker failure at all.",
+      "This approach actually cannot detect any kind of worker failure at all, so polling would be pointless.",
       "Polling thousands of workers scales poorly, false-positives from network blips, and the monitor itself can become a single point of failure.",
-      "Polling health checks too fast would overload the workers themselves., which would in turn disrupt jobs that should be running fine.",
-      "Health checks as a mechanism inherently cannot be implemented over HTTP."
+      "Polling health checks too fast would overload the workers themselves, which would in turn disrupt jobs that should be running fine, so you'd have to lower the polling rate.",
+      "Health checks as a mechanism inherently cannot be implemented over HTTP, so you'd need a different protocol."
     ],
     "optionExplanations": [
       "健康检查能测出一部分崩溃（探测超时/无响应），说它『完全测不出』不成立。",

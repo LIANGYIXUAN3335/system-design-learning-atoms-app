@@ -302,7 +302,7 @@
     "q_en": "What should the default getAvailableCompartment implementation do?",
     "options": [
       "每次扫描 compartments，找同尺寸且未占用的格口",
-      "维护三棵平衡树按尺寸和最近使用排序",
+      "维护三棵平衡树，分别按尺寸、位置和最近使用排序并保持同步更新",
       "把所有格口放进一个全局随机池",
       "让 AccessToken 反向扫描寻找空格口"
     ],
@@ -315,7 +315,7 @@
     "diagram": "flowchart TD\n  A[\"need size\"] --> B[\"scan compartments\"]\n  B --> C{\"size matches and free?\"}\n  C -- yes --> D[\"return compartment\"]\n  C -- no --> B\n  B --> E[\"none available\"]",
     "options_en": [
       "Scan compartments each time and return the first matching, unoccupied slot of that size.",
-      "Maintain three balanced trees sorted by size and recency.",
+      "Maintain three balanced trees, sorted by size, position, and recency, kept in sync on every update.",
       "Put all compartments into one global random pool.",
       "Have AccessToken scan backward to find an empty compartment."
     ],
@@ -357,13 +357,13 @@
     ],
     "optionExplanations": [
       "20-50 个格口的规模下，线性扫描的耗时差异小到可以忽略，还换来最简单、单一来源的代码。",
-      "三棵平衡树能拿到 O(log n) 查找，但要为几十个元素维护三份索引结构，投入产出不成比例。",
+      "三棵平衡树能拿到 O(log n) 查找，但要为几十个元素维护三份索引结构并在每次投递/取件后保持同步，投入产出不成比例。",
       "随机池丢掉了尺寸信息，投递时没法保证拿到的格口尺寸匹配包裹，这条路线直接不满足需求。",
       "AccessToken 应该只管过期判断，让它反向扫描格口会把分配逻辑塞进错误的对象里。"
     ],
     "optionExplanations_en": [
       "At 20 to 50 compartments, the runtime gap from a linear scan is negligible, and it buys the simplest, single-source code.",
-      "Three balanced trees give O(log n) lookup, but maintaining three index structures for a few dozen elements isn't worth the payoff.",
+      "Three balanced trees give O(log n) lookup, but keeping three index structures in sync on every deposit and pickup, for a few dozen elements, isn't worth the payoff.",
       "A random pool throws away size information, so deposit can no longer guarantee the slot it grabs actually fits the package.",
       "AccessToken should only own expiration logic; making it scan compartments backward shoves allocation into the wrong object."
     ]
@@ -582,7 +582,7 @@
     "q_en": "How should the system handle this?",
     "options": [
       "直接打开格口，把状态标记为已释放",
-      "把错误当成普通无效码，不提示已过期",
+      "把过期码当普通无效码返回，不额外附加过期原因或建议联系支持",
       "自动把包裹转移到其它可用格口",
       "返回过期错误，但保留 token 与占用状态"
     ],
@@ -594,20 +594,20 @@
     "whenOtherWins": "如果安全策略要求不暴露码是否曾经存在，可以把过期和无效都显示为通用错误，但内部仍要保留清理状态。",
     "options_en": [
       "Open the compartment directly and mark its state as released.",
-      "Treat it as a generic invalid code without mentioning expiry.",
+      "Treat it as a generic invalid code, with no separate expired reason or prompt to contact support.",
       "Automatically move the package to another available compartment.",
       "Return an expired error, but keep the token and the occupied state."
     ],
     "tradeoff": "保留 token 便于诊断 vs 立即释放格口提高可用性",
     "optionExplanations": [
       "直接开门还标记释放，等于把还没被工作人员处理的包裹直接判给了任何知道旧码的人。",
-      "把过期码当普通无效码，用户会以为码打错了，反而找不到该联系谁处理包裹。",
+      "把过期码当普通无效码返回，用户看不到过期原因，也不会被引导去联系支持处理包裹。",
       "自动转移包裹需要机械臂或人工介入，这已经超出基础范围能做到的动作。",
       "返回明确的过期错误，同时格口继续保持占用，等工作人员来处理，这样状态和现实保持一致。"
     ],
     "optionExplanations_en": [
       "Opening the door and marking it released hands the still-unprocessed package to anyone who still has the old code.",
-      "Treating a lapsed code as a generic invalid one leaves the user thinking they mistyped it, with no clue who to contact instead.",
+      "Treating a lapsed code as a generic invalid one hides the expiry reason and never nudges the user to contact support about the package.",
       "Auto-moving the package would need a robotic arm or staff intervention — beyond what this base scope can do.",
       "Return a clear lapsed-code error while the slot stays occupied, so the state matches reality until staff handles it."
     ]
@@ -1025,7 +1025,7 @@
       "拒绝投递并返回无可用 medium 格口",
       "自动放入 large 格口",
       "把包裹拆成 small",
-      "生成 token 但不分配格口"
+      "生成 token 但不分配格口，等取件时再补上映射"
     ],
     "answer": [
       0
@@ -1037,20 +1037,20 @@
       "Reject the deposit and report no available medium compartment.",
       "Automatically place it in a large compartment.",
       "Split the package into smaller pieces.",
-      "Generate a token without allocating a compartment."
+      "Generate a token without allocating a compartment, and patch the mapping in later at pickup."
     ],
     "tradeoff": "严格精确匹配 vs 向上尺寸 fallback",
     "optionExplanations": [
       "基础需求写死了精确尺寸匹配，没有 fallback 条款，medium 满了就该老实拒绝。",
       "放进 large 格口就是隐含实现了尺寸 fallback，但题目当前范围明确没有这条规则。",
       "拆包裹是物流层面的操作，Locker 系统管不到，也不该管。",
-      "没有格口就发 token，取件时会打开一个不存在包裹的门，状态直接错乱。"
+      "先发 token 再指望取件时补上映射，中间这段时间 token 指向的格口根本不存在，状态直接错乱。"
     ],
     "optionExplanations_en": [
       "The base requirement hard-codes exact-size matching with no fallback clause, so a full medium slot means a straight rejection.",
       "Placing it in large silently implements a size fallback, but this scope explicitly has no such rule yet.",
       "Repackaging is a logistics-layer operation; the locker system has no business — or ability — to do it.",
-      "Issuing a token without a compartment means pickup would open a door with no package behind it — state goes straight to garbage."
+      "Issuing the token first and hoping to patch the mapping in at pickup leaves the token pointing at no compartment in the meantime — state goes straight to garbage."
     ]
   },
   {
@@ -1213,7 +1213,7 @@
     "q_en": "What flow is better than a single-phase deposit?",
     "options": [
       "先给用户 token，再让司机随便找一个格口",
-      "把包裹是否存在的检查留到 pickup 时才做",
+      "把包裹是否存在的检查留到 pickup 时才做，deposit 阶段先假定成功",
       "所有投递都改成工作人员手工登记处理",
       "reserve 先占位，confirm 才发 token"
     ],
@@ -1225,7 +1225,7 @@
     "whenOtherWins": "在面试基础范围里，单阶段 deposit 更简单；两阶段适合需要传感器、人工确认或严格物理验证的生产系统。",
     "options_en": [
       "Give the user a token first, then let the driver find any compartment afterward.",
-      "Defer the check for whether the package exists until pickup time.",
+      "Defer the presence check until pickup time, and just assume success during deposit.",
       "Route every deposit through manual staff registration instead.",
       "Reserve holds the spot; only confirm issues the token."
     ],
@@ -1234,13 +1234,13 @@
     "lang": "text",
     "optionExplanations": [
       "先发 token 再让司机随便找格口，等于访问凭证和物理位置压根没绑定，谁都不知道该开哪扇门。",
-      "把存在性检查拖到 pickup 才做，意味着中间这段时间格口可能是空的却被标记占用，账对不上。",
+      "把存在性检查拖到 pickup 才做、deposit 时先假定成功，意味着中间这段时间格口可能是空的却被标记占用，账对不上。",
       "全面转人工登记放弃了自动化的意义，量大了工作人员根本处理不过来。",
       "reserve 先占位开门等司机放包，确认后 confirm 才发 token，这样永远不会对着空格口发码。"
     ],
     "optionExplanations_en": [
       "Issuing the token first and letting the driver pick any compartment means the credential is never actually bound to a location — nobody knows which door to open.",
-      "Deferring the presence check to pickup means the slot could sit marked occupied while actually empty in between — the books don't match.",
+      "Deferring the presence check to pickup and assuming success at deposit means the slot could sit marked occupied while actually empty in between — the books don't match.",
       "Routing everything through manual staff registration throws away the point of automating this at all; volume would overwhelm staff fast.",
       "Reserve opens the door and holds the spot while the driver deposits, and only confirm issues the token, so a code is never handed out for an empty slot."
     ]
@@ -1285,7 +1285,7 @@
     "q": "invalid token 和 expired token 为什么要给不同错误？",
     "q_en": "Why should invalid token and expired token return different errors?",
     "options": [
-      "invalid 一定说明包裹被盗",
+      "invalid 一定说明包裹已经被盗，需要立刻报警处理",
       "expired 可以继续开门",
       "二者必须完全一样，否则无法清理",
       "expired 说明码曾有效，用户该联系支持"
@@ -1296,7 +1296,7 @@
     "why": "过期错误告诉用户码曾有效但窗口已过，包裹仍可能需要人工处理。随机错误或已使用码则只说明当前不可用。",
     "why_en": "An expired-token error is actionable because the package may still be in the locker awaiting staff handling.",
     "options_en": [
-      "Invalid always means the package was stolen.",
+      "Invalid always means the package has been stolen and police should be called immediately.",
       "A lapsed token can still open the door.",
       "The two must be identical, or cleanup becomes impossible.",
       "Lapsed means the code was once valid but the window passed, so the user should contact support."
@@ -1322,13 +1322,13 @@
       ]
     },
     "optionExplanations": [
-      "invalid 只说明码当前查不到，不能这样脑补出被盗结论。",
+      "invalid 只说明码当前查不到，不能这样脑补出被盗甚至需要报警的结论。",
       "过期 token 明确是被拒绝的，绝不能再开门，这个说法反了。",
       "如果两者非要给一样的错误，系统就没法用同一个字段回答“包裹是否还在里面”这个问题。",
       "lapse 状态说明码曾经有效，包裹很可能还在格口里，这个信息值得单独告诉用户去找支持。"
     ],
     "optionExplanations_en": [
-      "Invalid only means the code can't be found right now — that's not license to assume the package was stolen.",
+      "Invalid only means the code can't be found right now — that's not license to assume theft, let alone call the police.",
       "A lapsed token is explicitly rejected and must never open the door again — this option has it backwards.",
       "If both had to return the identical error, the system would lose the one field that answers 'is the package still inside?'",
       "A lapse state means the code was once valid and the package is likely still sitting in the slot, worth telling the user separately so they contact support."
@@ -1461,7 +1461,7 @@
     "options": [
       "系统无法区分过期码，工作人员也找不到格口",
       "删除 map 会让所有格口变大",
-      "token 删除后包裹会自动消失",
+      "token 删除后包裹会自动从格口里消失，不需要人工搬运",
       "过期码应继续允许用户取件"
     ],
     "answer": [
@@ -1473,20 +1473,20 @@
     "options_en": [
       "The system can no longer tell a lapsed code apart, and staff can't locate the compartment either.",
       "Deleting the map makes every compartment bigger.",
-      "The package disappears automatically once the token is deleted.",
+      "Once the token is deleted, the package automatically disappears from the compartment without staff removal.",
       "Lapsed codes should still be allowed to open the door."
     ],
     "tradeoff": "立即删除 token 简化 map vs 保留 token 支持过期诊断与清理",
     "optionExplanations": [
       "提前删掉 token 既丢了“这码曾经有效”的诊断信息，也丢了工作人员该开哪个格口的线索。",
       "删 map 不会改变任何格口的物理尺寸，这个因果关系是编的。",
-      "token 删除和包裹是否消失是两回事，硬件里的包裹不会因为一条内存记录被删就凭空消失。",
+      "token 删除和包裹是否消失是两回事，硬件里的包裹不会因为一条内存记录被删就自动搬走或凭空消失。",
       "过期码的定义就是不再被允许开门，这个说法直接和过期的含义相矛盾。"
     ],
     "optionExplanations_en": [
       "Deleting the token early loses both the diagnostic fact 'this code was once valid' and the clue staff need for which slot to open.",
       "Deleting a map entry doesn't change any compartment's physical size — that causal link is invented.",
-      "Deleting a token and a package disappearing are unrelated; a physical package doesn't vanish because one in-memory record was removed.",
+      "Deleting a token and a package vanishing are unrelated; a physical package doesn't get auto-removed or disappear because one in-memory record was deleted.",
       "A lapsed code is by definition one that's no longer allowed to open a door — this option directly contradicts what lapse means."
     ]
   },
@@ -1499,7 +1499,7 @@
     "q": "pickup 为什么可以返回 void，而不是返回 Package 或 Compartment？",
     "q_en": "Why can pickup return void instead of returning Package or Compartment?",
     "options": [
-      "因为 pickup 不需要检查 token",
+      "因为 pickup 不需要检查 token，只要格口物理开了门就算成功",
       "因为返回 void 可以跳过清理",
       "因为用户必须自己打开门",
       "因为开门就是用户可见的成功反馈，不必暴露格口对象"
@@ -1510,7 +1510,7 @@
     "why": "locker 是与硬件联动的系统，开门就是用户可见结果。业务上不需要把格口对象暴露给调用方。",
     "why_en": "Pickup can return void because the hardware door opening is the observable success result.",
     "options_en": [
-      "Because pickup doesn't need to check the token.",
+      "Because pickup doesn't need to check the token — the compartment physically opening counts as success on its own.",
       "Because returning void lets you skip cleanup.",
       "Because the user has to open the door themselves.",
       "Because the door opening is the visible success signal, so there's no need to expose the compartment object."
@@ -1541,13 +1541,13 @@
       ]
     },
     "optionExplanations": [
-      "pickup 恰恰必须先查 token 才能判断该不该开门，这个说法说反了。",
+      "pickup 恰恰必须先查 token 才能判断该不该开门，物理开门本身不能替代凭证校验，这个说法说反了。",
       "返回类型和要不要清理状态没有因果关系，void 一样得完成 markFree 和删除映射。",
       "硬件联动的门是系统开的，用户不需要也不该自己动手开门。",
       "硬件已经把门打开当成看得见的成功信号，调用方不需要再拿到一个格口对象去做什么。"
     ],
     "optionExplanations_en": [
-      "Pickup has to check the token first to decide whether to open the door at all — this gets the order backwards.",
+      "Pickup has to check the token first to decide whether to open the door at all — the physical open can't substitute for that credential check, so this gets the order backwards.",
       "Return type has no causal link to whether cleanup happens; a void return still has to run markFree and remove the mapping.",
       "The hardware-linked door is opened by the system; the user doesn't and shouldn't need to open it manually.",
       "The hardware already treats the open door as the visible success signal, so the caller has no use for a compartment object on top of that."
@@ -1731,7 +1731,7 @@
     "q_en": "Why is a linear scan over compartments acceptable at this locker scale?",
     "options": [
       "locker 一定只有 1 个格口",
-      "所有语言扫描数组都是 O(1)",
+      "所有语言的数组下标访问和遍历扫描都是 O(1)，所以不用担心复杂度",
       "token 过期后就不需要扫描",
       "几十个格口下 O(n)/O(1) 差异可忽略"
     ],
@@ -1744,7 +1744,7 @@
     "scenario_en": "A typical Amazon Locker site has only 20 to 50 compartments; each depositPackage call does one linear scan in getAvailableCompartment.",
     "options_en": [
       "A locker is assumed to always have exactly one compartment.",
-      "Array scans are O(1) in every language.",
+      "Both indexed access and full scans over an array are O(1) in every language, so complexity isn't a concern here.",
       "Scanning becomes unnecessary once a token lapses.",
       "At a few dozen compartments, the O(n) vs O(1) gap is negligible."
     ],
@@ -1762,13 +1762,13 @@
     ],
     "optionExplanations": [
       "题目场景写明是 20-50 个格口，不是 1 个，这个前提本身就错。",
-      "数组扫描是 O(n)，不是常数时间，这个复杂度判断是错的。",
+      "数组下标访问是 O(1)，但遍历扫描是 O(n)，这里把两种不同操作的复杂度混为一谈了。",
       "扫描发生在查找可用格口的阶段，和 token 是否过期是两条独立逻辑，不存在关掉扫描的说法。",
       "几十个元素的量级下，实际耗时差异小到测不出来，这也是不用为它引入索引结构的原因。"
     ],
     "optionExplanations_en": [
       "The scenario states 20 to 50 compartments, not one — this premise is simply wrong.",
-      "Scanning an array is O(n), not constant time — this complexity claim is incorrect.",
+      "Indexed array access is O(1), but a full traversal scan is O(n) — this option conflates two different operations' complexity.",
       "Scanning happens while looking for an available slot; token lapse is a separate check entirely, not something that turns scanning off.",
       "At a scale of a few dozen elements the real timing difference is too small to matter, which is also why an index isn't worth building here."
     ]
@@ -1787,7 +1787,7 @@
     "lang": "text",
     "options": [
       "用 Compartment 上的物理状态作为单一可用性来源",
-      "用 accessTokenMapping 推导占用",
+      "用 accessTokenMapping 反向推导每个格口当前是否被占用",
       "用每个 Size 的队列做 O(1) 分配",
       "允许任何尺寸互相替代"
     ],
@@ -1799,20 +1799,20 @@
     "whenOtherWins": "极大规模或高频投递时，按尺寸维护可用队列会更快。",
     "options_en": [
       "Use the compartment's own physical state as the single source of availability.",
-      "Derive occupancy from accessTokenMapping instead.",
+      "Derive each compartment's current occupancy in reverse from accessTokenMapping instead.",
       "Maintain an O(1) queue of available compartments per size.",
       "Allow any size to substitute for any other."
     ],
     "tradeoff": "单一物理状态来源简单 vs 从 token 生命周期推导更省内存但更复杂",
     "optionExplanations": [
       "代码直接读 c.getSize() 和 c.isOccupied()，可用性只认格口自己的字段，逻辑单一来源、好推理。",
-      "这段代码根本没碰 accessTokenMapping，从 token 推导占用是另一种设计，不是这里写的东西。",
+      "这段代码根本没碰 accessTokenMapping，从 token 反向推导每个格口占用是另一种设计，不是这里写的东西。",
       "代码里是 for 循环挨个扫描，不是从队列里 pop 一个出来，跟按尺寸维护队列是两种实现。",
       "循环条件写死了 c.getSize() == size，尺寸不匹配直接跳过，代码里没有互相替代的空间。"
     ],
     "optionExplanations_en": [
       "It reads c.getSize() and c.isOccupied() directly, so availability only trusts the compartment's own fields — single source, easy to reason about.",
-      "This snippet never touches accessTokenMapping at all; deriving occupancy from tokens would be a different design, not what's written here.",
+      "This snippet never touches accessTokenMapping at all; deriving each compartment's occupancy in reverse from tokens would be a different design, not what's written here.",
       "The code is a for-loop scanning one by one, not popping from a queue — that's a different implementation from a per-size queue.",
       "The loop condition hard-checks c.getSize() == size and skips mismatches — there's no substitution happening in this code."
     ]
@@ -1973,7 +1973,7 @@
     "q_en": "What is the most important invariant?",
     "options": [
       "有效 token 对应一个占用格口，取件后两者一起清理",
-      "所有包裹都必须建成独立的 Package 对象",
+      "所有包裹都必须建成独立的 Package 对象并持久化保存",
       "所有格口必须按随机顺序被分配",
       "过期 token 自动等价于格口空闲可用"
     ],
@@ -1986,20 +1986,20 @@
     "diagram": "flowchart TD\n  A[\"active token\"] --> B[\"points to occupied compartment\"]\n  B --> C[\"contains package\"]\n  D[\"pickup or expire\"] --> E[\"remove token\"]\n  E --> F[\"clear compartment\"]",
     "options_en": [
       "A valid token maps to one occupied compartment, and pickup clears both together.",
-      "Every package must have its own Package object.",
+      "Every package must have its own Package object that is persisted to storage.",
       "Every compartment must be assigned in random order.",
       "A lapsed token automatically means the compartment is free."
     ],
     "tradeoff": "统一清理不变量 vs 允许 token/占用状态短暂不同步",
     "optionExplanations": [
       "凭证指向的格口和它是否被占用得对得上号，取件成功那一刻两者要一起清空，这条规则贯穿投递、取件、过期处理全过程。",
-      "范围里 Package 从没被要求建成独立对象，这个说法凭空加了一条不存在的规则。",
+      "范围里 Package 从没被要求建成独立对象、更没要求持久化保存，这个说法凭空加了两条不存在的规则。",
       "分配顺序是线性扫描先到先得，不是随机打乱，这个描述和代码逻辑对不上。",
       "过期只改变访问权限，不改变包裹还在不在格口里，这正是本设计要避免的混淆。"
     ],
     "optionExplanations_en": [
       "A credential and the occupancy of the slot it points to must stay in sync, clearing together the moment pickup succeeds — that rule runs through deposit, pickup, and lapse handling.",
-      "Package was never required to be its own object in this scope — this option invents a rule that doesn't exist.",
+      "Package was never required to be its own object, let alone a persisted one, in this scope — this option invents rules that don't exist.",
       "Allocation is a linear first-match scan, not a random shuffle — this description doesn't match the code.",
       "Lapsing only revokes access, it doesn't change whether the package is still physically in the slot — that's exactly the confusion this design avoids."
     ]

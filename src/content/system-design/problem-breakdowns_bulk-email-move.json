@@ -68,13 +68,13 @@
     "options": [
       "POST 发起→job_id；GET 查进度；GET job/items 分页拉明细",
       "只用一个同步 POST，在同一个响应里返回全部几千封邮件的移动结果与失败原因",
-      "用 GET 发起移动，把几千个邮件 ID 全塞进 URL 查询串，同步返回结果",
+      "用 GET 发起移动，把几千个邮件 ID 全部塞进 URL 查询串，还同步阻塞等全部处理完才返回结果",
       "每封邮件各开一个独立 endpoint，由前端自己拼调用顺序和重试逻辑"
     ],
     "options_en": [
       "POST to start → job_id; GET job progress; GET job/items for paginated details",
       "One synchronous POST that returns the move result and failure reason for all several-thousand emails in the same response",
-      "Use GET to start the move, stuff all email ids into the query string, and return results synchronously",
+      "Use GET to start the move, stuff all the email ids into the query string, and block synchronously until every one is processed before returning",
       "One endpoint per email, with the frontend assembling the call order and retry logic"
     ],
     "answer": [
@@ -83,13 +83,13 @@
     "optionExplanations": [
       "对：一个 POST 发起(返回 job_id)、一个 GET 查进度、一个 GET 分页拉明细——异步三件套。",
       "错：同步返回全部结果就退回阻塞式设计了。",
-      "错：GET 不该有副作用，URL 也塞不下几千个 ID。",
+      "错：GET 不该有副作用，URL 也塞不下几千个 ID，还同步阻塞到全部处理完才返回。",
       "错：一封一个 endpoint 违背批量的初衷。"
     ],
     "optionExplanations_en": [
       "Right: one POST to start (returns job_id), one GET for progress, one GET for paginated details — the async trio.",
       "Wrong: returning all results synchronously falls back to the blocking design.",
-      "Wrong: GET should be side-effect-free, and a URL cannot hold thousands of ids.",
+      "Wrong: GET should be side-effect-free, a URL cannot hold thousands of ids, and blocking until everything finishes is the same synchronous problem again.",
       "Wrong: one endpoint per email defeats the point of a bulk op."
     ],
     "codeSample": "# 发起：返回 202 + job_id\nPOST /v1/mailboxes/{mailboxId}/bulk-move\nAuthorization: Bearer <token>\n{ \"search_result_token\":\"sr_123\", \"destination_folder_id\":\"newsletter\" }\n-> 202 { \"job_id\":\"job_9\", \"status\":\"queued\" }\n\n# 查进度 / 拉明细\nGET /v1/bulk-move-jobs/{job_id}\nGET /v1/bulk-move-jobs/{job_id}/items?page_size=50&cursor=...",
@@ -196,13 +196,13 @@
     "options": [
       "API 网关→bulk-move 服务(建 job+入队)→队列→worker 池并行移动回写",
       "API 网关→bulk-move 服务→在这一次请求里同步循环把几千封全部移完再返回响应",
-      "API 网关→服务→把几千封打包成一条巨型队列消息→交给单个 worker 全做完",
+      "API 网关→服务→把几千封打包成一条巨型队列消息，交给单个 worker 串行处理，中途失败就要整条消息重来",
       "客户端直连数据库、逐条发 SQL 修改→绕过网关和服务层、也不用队列"
     ],
     "options_en": [
       "API gateway → bulk-move service (create job + enqueue) → queue → worker pool moving in parallel and writing status back",
       "API gateway → bulk-move service → synchronously loop and move all several-thousand inside this one request before responding",
-      "API gateway → service → pack all several-thousand into one giant queue message handled by a single worker",
+      "API gateway → service → pack all several-thousand into one giant queue message handled by a single worker that processes them serially, redoing the whole message if it fails partway",
       "The client issues SQL row-by-row directly to the DB, bypassing the gateway and service layer, with no queue"
     ],
     "answer": [
@@ -211,13 +211,13 @@
     "optionExplanations": [
       "对:网关→服务(建 job+入队)→队列→worker 池并行、逐条回写——异步、可水平扩、失败可重试。",
       "错:同步循环几千封会长时间阻塞、请求超时,退回阻塞设计。",
-      "错:巨型单消息+单 worker=单点、无并行、失败全丢。",
+      "错:巨型单消息+单 worker=单点、无并行，中途失败要整条消息重投重来。",
       "错:客户端直连库、绕过服务层是安全与耦合灾难。"
     ],
     "optionExplanations_en": [
       "Right: gateway → service (create job + enqueue) → queue → worker pool in parallel, writing status back — async, scalable, retryable.",
       "Wrong: a synchronous loop over thousands blocks and times out — the blocking design again.",
-      "Wrong: one giant message + a single worker is a single point, no parallelism, all-or-nothing failure.",
+      "Wrong: one giant message + a single worker is a single point of failure with no parallelism — a mid-message failure means redoing the whole message.",
       "Wrong: a client connecting directly to the DB and bypassing the service is a security and coupling disaster."
     ],
     "diagram": "flowchart LR\n  C[\"client\"] --> G[\"API Gateway\"] --> S[\"bulk-move 服务\"]\n  S -->|建作业| DB[(\"job DB\\njobs / message / task\")]\n  S -->|每封一个任务入队| Q[\"队列\"]\n  Q --> W[\"worker 池\"]\n  W -->|移动 + 更新状态| DB",
@@ -243,13 +243,13 @@
     "q_en": "Should \"which emails\" come from a stored result set or from re-running a stored query?",
     "options": [
       "两种都行：存 search_result_token 快照，或存查询条件、发起时服务端重跑",
-      "只能把几千个 message id 全部塞进请求体传给服务端，服务端照单逐条执行移动",
+      "只能把几千个 message id 全部塞进请求体传给服务端，服务端再照单逐条执行移动，请求体随邮件数线性膨胀",
       "必须让用户在前端把每封邮件都勾选一遍，再把选中的列表上传给服务端",
       "直接按文件夹整体移动全邮箱，不用管搜索结果命中的是哪几封"
     ],
     "options_en": [
       "Either works: store a search_result_token snapshot, or store the query and re-run it server-side on kickoff",
-      "You must stuff all several-thousand message ids into the request body and have the server move them one by one",
+      "You must stuff all several-thousand message ids into the request body and have the server move them one by one — the body grows linearly with the email count",
       "The user must tick every single email in the frontend and upload the selected list to the server",
       "Just move the entire mailbox folder-wise and ignore which emails the search actually matched"
     ],
@@ -258,13 +258,13 @@
     ],
     "optionExplanations": [
       "对：token=结果快照(稳定、不随邮箱变)；重跑查询=省存储但结果可能已变。看要不要「所见即所得」。",
-      "错：几千个 id 塞请求体又大又脆。",
+      "错：几千个 id 塞请求体，大小随邮件数线性膨胀，又大又脆。",
       "错：手动勾几千封不现实。",
       "错：移全邮箱不是用户要的。"
     ],
     "optionExplanations_en": [
       "Right: a token is a snapshot (stable, unaffected by mailbox changes); re-running the query saves storage but the set may have changed. Depends on whether you need what-you-saw-is-what-you-get.",
-      "Wrong: thousands of ids in the body are bulky and fragile.",
+      "Wrong: thousands of ids make the body grow linearly with the count — bulky and fragile.",
       "Wrong: ticking thousands by hand is unrealistic.",
       "Wrong: moving the whole mailbox is not what the user asked."
     ],
@@ -540,13 +540,13 @@
     "options": [
       "同一事务里改 current_folder_id 并标 task finished",
       "先改文件夹，几秒后再用另一个连接把该任务标成完成，中间崩了也不回滚",
-      "只标任务完成，不真的去改 current_folder_id，靠重跑补上",
+      "只标任务完成，不真的去改 current_folder_id，指望之后靠重跑把这封邮件真正移动过去补上",
       "每封移动都锁住整张 message 表，全部串行地一封封做"
     ],
     "options_en": [
       "In one transaction, change current_folder_id and mark the task finished",
       "Change the folder first, then mark the task done seconds later on another connection, with no rollback if it crashes in between",
-      "Only mark the task finished without actually changing current_folder_id, relying on a re-run",
+      "Only mark the task finished without actually changing current_folder_id, hoping a later re-run performs the real move to catch up",
       "Lock the entire message table for every single move and do them strictly serially"
     ],
     "answer": [
@@ -555,13 +555,13 @@
     "optionExplanations": [
       "对：改文件夹和标任务放同一事务，要么都成、要么都回滚，不会出现「移了但没记」或反之。",
       "错：两步分开，中间崩溃就状态不一致(半完成)。",
-      "错：不真移动就没意义。",
+      "错：标完成但没真移动，续跑逻辑会把它当已完成而跳过，永远补不上。",
       "错：锁全表串行毁掉并行、吞吐崩。"
     ],
     "optionExplanations_en": [
       "Right: put the folder change and task mark in one transaction — both commit or both roll back, so you never get \"moved but not recorded\" or vice versa.",
       "Wrong: two separate steps leave inconsistent (half-done) state if it crashes between them.",
-      "Wrong: not actually moving is pointless.",
+      "Wrong: marking done without moving means the resume logic treats it as finished and skips it — it never gets fixed.",
       "Wrong: locking the whole table serializes everything and kills throughput."
     ],
     "why": "单封移动的原子边界是：改 current_folder_id 和标 task finished 同事务提交，崩溃时一起回滚。整批 job 不做大事务，而是靠可信的单封 checkpoint 续跑；否则会重复移或漏掉邮件。",
@@ -627,13 +627,13 @@
     "q_en": "How should job completion be detected and delivered?",
     "options": [
       "服务端在 processed==total 时标 completed，SSE 推 UI",
-      "等 UI 每次轮询时顺便帮忙把 job 的状态改写成 completed 再落库",
+      "等 UI 每次轮询时顺便帮忙把 job 状态改写成 completed 再落库，完成与否就取决于客户端多久轮询一次",
       "让每个 worker 做完自己那条后各自去改 job 的最终状态",
       "靠前端每秒轮询数据库、自己数完成条数来判定整个 job"
     ],
     "options_en": [
       "The server marks completed when processed==total and pushes it to the UI over SSE",
-      "Let the UI flip the job status to completed and persist it whenever it happens to poll",
+      "Let the UI flip the job status to completed and persist it whenever it happens to poll — completion then depends on how often the client polls",
       "Have each worker set the job final status itself after finishing its own task",
       "Rely on the frontend polling the DB every second and counting finished rows itself"
     ],
@@ -720,13 +720,13 @@
     "options": [
       "明细用 cursor 分页从 task 表拉；大文件异步导出到 S3 给下载链接",
       "把几万条明细一次性全塞进一个响应返回给前端，让浏览器渲染",
-      "每次 UI 打开报告就重新扫 task 表现算一份完整 CSV，不缓存",
+      "每次 UI 打开报告都重新扫一遍 task 表现算一份完整 CSV，不缓存也不复用上次结果",
       "把整份报告塞进 job 状态查询接口的一个字段里一起返回"
     ],
     "options_en": [
       "Paginate details from the task table with a cursor; export big files asynchronously to S3 and hand back a download link",
       "Return all tens-of-thousands of rows in a single response and let the browser render them",
-      "Rescan the task table and recompute a full CSV every time the UI opens the report, with no caching",
+      "Rescan the task table and recompute a full CSV every time the UI opens the report, with no caching and no reuse of the last result",
       "Stuff the whole report into one field of the job-status endpoint response"
     ],
     "answer": [
@@ -735,13 +735,13 @@
     "optionExplanations": [
       "对：明细分页(cursor)拉、文件走异步导出到 S3 返回 URI、且在 job 完成时生成一次报告——UI 多次取也不重算。",
       "错：几万条一次返回会撑爆响应。",
-      "错：每次请求现算=重复生成、浪费。",
+      "错：每次请求现算=重复生成、越查越浪费。",
       "错：大报告塞进状态字段既臃肿又不该。"
     ],
     "optionExplanations_en": [
       "Right: paginate details (cursor), export files asynchronously to S3 returning a URI, and generate the report once at job completion so repeated fetches do not recompute.",
       "Wrong: returning tens of thousands of rows at once blows up the response.",
-      "Wrong: recomputing on every request wastes work.",
+      "Wrong: recomputing from scratch on every request wastes more work the more often it's opened.",
       "Wrong: a big report does not belong in a status field."
     ],
     "why": "明细用 cursor 分页从 task 表拉；大 CSV/PDF 走后台导出到 S3 并返回下载链接。报告在 job 完成时生成一次，UI 之后只取现成文件，不每次重算。",
@@ -839,13 +839,13 @@
     "options": [
       "if task.status==done: return\nwith txn: move(msg); mark_done(task)",
       "move(msg); mark_done(task)   # 不查状态，队列每重投一次就把这封邮件再移动一次，只能事后人工修",
-      "for _ in range(3): move(msg)   # 保险起见把每封都移三遍，指望覆盖丢失的投递",
+      "for _ in range(3): move(msg)   # 保险起见把每封都移三遍，指望多做几次能覆盖丢失的投递，反而制造重复移动",
       "mark_done(task)   # 只标完成、不真移动，指望下一次重投时补上这次的移动"
     ],
     "options_en": [
       "if task.status==done: return\nwith txn: move(msg); mark_done(task)",
       "move(msg); mark_done(task)   # no status check, so every redelivery moves the email again and only a human can undo it",
-      "for _ in range(3): move(msg)   # move each email three times to be safe, hoping to cover lost deliveries",
+      "for _ in range(3): move(msg)   # move each email three times to be safe, hoping extra attempts cover lost deliveries — this only creates duplicate moves",
       "mark_done(task)   # mark done without moving, hoping a later redelivery performs the move"
     ],
     "answer": [
@@ -854,13 +854,13 @@
     "optionExplanations": [
       "对：先查状态、已完成就跳过，重投也无害（幂等）；否则在事务里移动+标完成。",
       "错：不查状态，重投会把同一封重复处理。",
-      "错：故意移三遍更糟，纯属重复。",
+      "错：故意移三遍不解决丢失投递，只会制造重复移动。",
       "错：不移动只标完成，等于没干活。"
     ],
     "optionExplanations_en": [
       "Right: check status first and skip if done (idempotent), so redelivery is harmless; otherwise move + mark done in a transaction.",
       "Wrong: no check means redelivery reprocesses the same email.",
-      "Wrong: moving three times is deliberately worse.",
+      "Wrong: moving three times does not address lost deliveries — it only creates duplicate moves.",
       "Wrong: marking done without moving does no real work."
     ],
     "why": "at-least-once 队列可能重投同一 task，所以 worker 先查状态：done 就返回，否则事务里移动并标 done。这样重复投递只会变成 no-op。",
@@ -895,13 +895,13 @@
     "q_en": "Which counter update avoids lost increments (no race)?",
     "options": [
       "UPDATE jobs SET processed_count = processed_count + 1 WHERE job_id=?   -- 或 Redis INCR",
-      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- 读改写",
+      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- 读改写，两个 worker 同时读到旧值会互相覆盖",
       "每个 worker 在自己内存里存局部计数，从不合并回 jobs 表",
       "让前端每次轮询时扫一遍 task 表，自己重新数完成条数"
     ],
     "options_en": [
       "UPDATE jobs SET processed_count = processed_count + 1 WHERE job_id=?   -- or Redis INCR",
-      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- read-modify-write",
+      "c = SELECT processed_count; c = c + 1; UPDATE jobs SET processed_count = c   -- read-modify-write; two workers reading the same stale value will overwrite each other",
       "Each worker keeps a local count in its own memory and never merges it back into jobs",
       "Have the frontend rescan the task table on every poll and re-count finished rows itself"
     ],
