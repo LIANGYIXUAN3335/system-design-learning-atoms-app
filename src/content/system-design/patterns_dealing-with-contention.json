@@ -10,13 +10,13 @@
     "options": [
       "多个进程同时争抢同一份资源，比如最后一张票或同一个拍卖品",
       "系统里只有读请求，完全没有任何写请求会发生",
-      "数据库表里只存放几乎从不会发生变化的静态配置选项",
+      "数据库表里只存放几乎从不会发生变化的静态配置选项，几乎没有并发写",
       "各个微服务彼此之间完全没有共享状态或共享数据"
     ],
     "options_en": [
       "Multiple processes competing for the same resource at the same time, like the last concert ticket or one auction item.",
       "The system only ever receives read requests and never any writes at all.",
-      "The database table only stores static configuration that almost never changes at all.",
+      "The database table only stores static configuration that almost never changes, with almost no concurrent writes at all.",
       "Different microservices share no state or data with each other at all, ever."
     ],
     "answer": [
@@ -158,13 +158,13 @@
     "scenario": "你只需要“有库存时才把库存减 1”，这个规则能直接写成当前行上的 WHERE 条件，不需要先查再判断。",
     "q": "在数据库里落地这条规则最简单且并发安全的做法是什么？",
     "options": [
-      "先 SELECT 查询库存，在应用代码里判断是否大于零，确认后再无条件执行一次 UPDATE 写回新库存值",
+      "先 SELECT 查询库存，在应用代码里判断是否大于零，确认后再无条件执行一次 UPDATE 写回新库存值，中间留有并发窗口",
       "用一条 conditional UPDATE，把 WHERE available_seats > 0 写进同一语句",
       "给整个数据库加一把全局互斥锁，让所有并发到达的购买请求都排队串行执行",
       "把所有并发到达的购买请求直接丢弃，统一提示用户稍后重新下单再试一次"
     ],
     "options_en": [
-      "SELECT the count first, check it's positive in application code, then run a separate unconditional UPDATE to write the new value back.",
+      "SELECT the count first, check it's positive in application code, then run a separate unconditional UPDATE to write the new value back, leaving a concurrency window in between.",
       "Use one conditional UPDATE that puts WHERE available_seats > 0 in the same statement.",
       "Put a single global mutex lock on the entire database so every concurrent purchase request queues up and runs serially.",
       "Just drop every purchase request that arrives concurrently and uniformly ask users to reorder a bit later."
@@ -227,13 +227,13 @@
       "它先无条件读一次库存，再无条件写一次新值，两次操作之间的间隙仍然会导致超卖",
       "它把检查条件和 decrement 合成一次原子写，只有 available_seats > 0 时才会匹配",
       "它会一直锁住整张 concerts 表，直到应用服务重启之后才会真正释放这把锁",
-      "只要这条语句被执行，它就一定会抛出异常来阻止提交，而不会返回 affected rows 为 0"
+      "只要这条语句被执行，它就一定会抛出异常来阻止提交，而不会返回 affected rows 为 0，靠异常回滚保证安全"
     ],
     "options_en": [
       "It reads the count once unconditionally and writes the new value once unconditionally, so overselling can still happen in the gap between the two steps.",
       "It merges the check and the decrement into one atomic write that only matches when available_seats is greater than 0.",
       "It keeps the entire concerts table locked until the moment the application server eventually restarts.",
-      "As long as the statement executes, it is guaranteed to throw an exception to block the commit, instead of ever returning zero affected rows."
+      "As long as the statement executes, it is guaranteed to throw an exception to block the commit instead of ever returning zero affected rows, relying on that exception to stay safe."
     ],
     "answer": [
       1
@@ -292,13 +292,13 @@
     "q": "Conditional UPDATE 匹配 0 行时，应用层最容易犯什么错误？",
     "options": [
       "以为 0 行会自动抛异常，于是继续无条件执行后续的 INSERT 创建 ticket",
-      "正确检查 affected row count，发现 0 行就主动回滚整个事务",
+      "正确检查 affected row count，发现 0 行就主动回滚整个事务，不继续插入",
       "立刻把失败原因和剩余库存一起返回给前端用户",
       "停止对该 concert 的所有后续写入，人工介入排查"
     ],
     "options_en": [
       "Assuming zero rows automatically raises an exception, then unconditionally running the follow-up INSERT to create the ticket.",
-      "Correctly checking the affected row count and rolling back the whole transaction when it is zero.",
+      "Correctly checking the affected row count, rolling back the whole transaction when it is zero, and not proceeding to insert.",
       "Immediately returning the failure reason and remaining inventory to the frontend.",
       "Stopping all further writes to that concert and escalating for manual investigation."
     ],
@@ -356,13 +356,13 @@
       "INSERT 从 UPDATE 的 RETURNING 结果读取，只有那一行真的被改动才会插入",
       "INSERT 永远无条件执行，完全不管前面的 UPDATE 究竟改动了多少行数据",
       "COMMIT 语句会自动判断库存是否足够，并帮你补上这段业务检查逻辑",
-      "外层的这个 CTE 会让所有座位在整个 concert 的生命周期里都被永久锁定住"
+      "外层的这个 CTE 会让所有座位在整个 concert 的生命周期里都被永久锁定住，直到活动结束"
     ],
     "options_en": [
       "The INSERT reads from the UPDATE's RETURNING result, so it only inserts when that row was actually changed.",
       "The INSERT always runs unconditionally, completely regardless of how many rows the preceding UPDATE actually changed.",
       "The COMMIT statement automatically checks whether inventory was sufficient and fills in that business-logic check for you.",
-      "This outer CTE permanently locks every seat for the concert's entire lifetime."
+      "This outer CTE permanently locks every seat for the concert's entire lifetime, until the event ends."
     ],
     "answer": [
       0
@@ -652,13 +652,13 @@
     "options": [
       "用 SELECT ... FOR UPDATE 先锁住候选座位，再在锁内完成决策",
       "对所有座位都无条件执行 UPDATE，完全不做任何前置判断或检查动作",
-      "只维护一个总库存 counter，完全不关心具体某个座位当前的可用状态",
+      "只维护一个总库存 counter，完全不关心具体某个座位当前的可用状态，也不记录座位号",
       "完全不做任何同步机制，出问题就交给客户端自己不断重试来兜底"
     ],
     "options_en": [
       "Use SELECT ... FOR UPDATE to lock the candidate seats first, then decide within the lock.",
       "Run an unconditional UPDATE on every seat with no upfront check or validation at all.",
-      "Only maintain a single total-inventory counter and ignore any individual seat's current availability.",
+      "Only maintain a single total-inventory counter, ignore any individual seat's current availability, and never record seat numbers.",
       "Add no synchronization mechanism at all and leave it entirely to the client to keep retrying on its own."
     ],
     "answer": [
@@ -716,13 +716,13 @@
     "q": "`SELECT ... FOR UPDATE` 在事务里的作用是什么？",
     "options": [
       "锁住 SELECT 选中的行，使其他事务在你提交前无法修改这些行",
-      "把这次查询自动转换成只读缓存，用来加速后续的相同查询",
+      "把这次查询自动转换成只读缓存，用来加速后续的相同查询，减少数据库压力",
       "在数据库内部自动发起一次外部支付请求接口",
       "把没有被选中的那些座位行从表里永久删除掉"
     ],
     "options_en": [
       "It locks the rows the SELECT returned, so other transactions cannot modify them before you commit.",
-      "It automatically converts this query into a read-only cache that speeds up later identical queries.",
+      "It automatically converts this query into a read-only cache that speeds up later identical queries and reduces database load.",
       "It triggers an outbound payment API call from inside the database engine.",
       "It permanently deletes every seat row that the SELECT did not return."
     ],
@@ -845,13 +845,13 @@
     "options": [
       "绝不在持有数据库锁时做慢 I/O；支付调用放在拿锁前或释放锁之后",
       "把这把锁一直持有 10 分钟，直到用户离开支付页面为止",
-      "为了简单，直接把整张 seats 表都锁住再调用支付接口",
+      "为了简单，直接把整张 seats 表都锁住再调用支付接口，等支付返回再放开",
       "让所有排队等待同一座位的买家都同步等待同一次支付调用返回"
     ],
     "options_en": [
       "Never do slow I/O while holding a database lock; call the payment API before acquiring it or after releasing it.",
       "Hold that lock continuously for 10 minutes until the user leaves the payment page.",
-      "For simplicity, lock the entire seats table before calling the payment endpoint.",
+      "For simplicity, lock the entire seats table before calling the payment endpoint, releasing it only after payment returns.",
       "Make every buyer waiting on the same seat block synchronously on that one payment call's response."
     ],
     "answer": [
@@ -909,13 +909,13 @@
     "q": "银行转账里 Alice->Bob 和 Bob->Alice 同时发生，为什么可能 deadlock？",
     "options": [
       "两个事务按相反顺序去拿两个账户的锁，各自持有一把并等待另一把",
-      "数据库这种系统本身根本不支持存储账户余额这类数值",
+      "数据库这种系统本身根本不支持存储账户余额这类数值，只能存文本字段",
       "转账这种操作在设计上一定完全不需要用到事务",
       "只是因为两笔转账里出现的用户名字碰巧不一样而已"
     ],
     "options_en": [
       "The two transactions acquire the two account locks in opposite orders, each holding one and waiting on the other.",
-      "Databases as a category of system cannot store numeric values like account balances at all.",
+      "Databases as a category of system cannot store numeric values like account balances at all, only text fields.",
       "A transfer operation is designed to never need a transaction wrapping it under any circumstances.",
       "It's simply because the two transfers happen to involve users with different names."
     ],
@@ -974,13 +974,13 @@
       "所有事务按全局一致的顺序拿锁，比如永远按 user_id 从小到大排序",
       "永远先锁住这次操作的发起人，再锁对方",
       "每次转账都随机决定先锁哪一个账户",
-      "完全不处理数据库抛出的 deadlock 错误，让它直接失败"
+      "完全不处理数据库抛出的 deadlock 错误，让它直接失败，把报错抛给用户"
     ],
     "options_en": [
       "Every transaction acquires locks in one globally consistent order, such as always sorting by user_id ascending.",
       "Always lock the account that initiated this particular transfer first, then the other one.",
       "Randomly decide which account to lock first on every transfer.",
-      "Never handle the deadlock error the database raises and just let the transaction fail."
+      "Never handle the deadlock error the database raises, just let the transaction fail, and surface the raw error to the user."
     ],
     "answer": [
       0
@@ -1038,13 +1038,13 @@
     "q": "Optimistic concurrency control 的基本假设是什么？",
     "options": [
       "冲突比较少见，所以先放大家去执行，写入时用 version 检测冲突再决定重试",
-      "冲突总是非常频繁，所以要先无差别地阻塞住全部到达的并发写请求和流量",
+      "冲突总是非常频繁，所以要先无差别地阻塞住全部到达的并发写请求和流量，全部串行执行",
       "数据库表结构设计上完全不需要额外设计任何用于比较的版本字段",
       "所有写入操作都可以互相无条件地直接覆盖，完全不用管先后的顺序"
     ],
     "options_en": [
       "Conflicts are rare, so let everyone proceed and detect conflicts at write time with a version check, retrying if needed.",
-      "Conflicts are always extremely frequent, so every incoming concurrent write request must be blocked indiscriminately upfront.",
+      "Conflicts are always extremely frequent, so every incoming concurrent write request must be blocked indiscriminately upfront and serialized.",
       "The table schema design never needs any additional version field at all for comparison purposes.",
       "Every write operation is allowed to unconditionally overwrite every other write, with no regard for ordering at all."
     ],
@@ -1169,13 +1169,13 @@
     "options": [
       "WHERE version = 42 让基于旧版本的写只会匹配 0 行，应用检查后再回滚或重试",
       "它会直接忽略掉 version 这一列，强制用新值覆盖掉旧的值",
-      "它只检查 available_seats 是否大于零，完全不会去检查 version",
+      "它只检查 available_seats 是否大于零，完全不会去检查 version，撞车也照样写入",
       "只要提交一失败，它就会自动阻塞并等待 10 分钟之后重发"
     ],
     "options_en": [
       "WHERE version = 42 makes a write based on a stale version match zero rows, and the app checks that before rolling back or retrying.",
       "It ignores the version column entirely and forcibly overwrites the old value with the new one.",
-      "It only checks whether available_seats is greater than zero and never looks at version at all.",
+      "It only checks whether available_seats is greater than zero and never looks at version at all, writing even on a conflict.",
       "The moment a commit fails, it automatically blocks and resends the exact same write ten minutes later."
     ],
     "answer": [
@@ -1301,13 +1301,13 @@
       "值从 A 变到 B 又变回 A，只做相等比较的版本检查会误以为期间什么都没发生",
       "两个不同的锁被按照完全相同的先后顺序去获取加锁",
       "一个消费者队列里始终只配置了单独一个 worker 在处理消息",
-      "Redis 里的某个 key 因为 TTL 到期而被自动清理删除掉"
+      "Redis 里的某个 key 因为 TTL 到期而被自动清理删除掉，锁也随之丢失"
     ],
     "options_en": [
       "A value changes from A to B and back to A, fooling an equality-based version check into thinking nothing happened.",
       "Two different locks happen to be acquired in exactly the same order every single time.",
       "A consumer queue is always configured with just a single worker processing its messages.",
-      "A Redis key gets automatically cleaned up and removed because its TTL lapsed."
+      "A Redis key gets automatically cleaned up and removed because its TTL lapsed, and the lock is lost with it."
     ],
     "answer": [
       0
@@ -1362,13 +1362,13 @@
     "q": "在高冲突场景下，为什么 pessimistic locking 往往比 OCC 更合适？",
     "options": [
       "OCC 在高冲突下会产生大量失败重试，浪费的工作量可能超过提前排队等待锁的成本",
-      "因为 OCC 这种机制在原理上永远都无法保证数据最终的正确性和一致性",
+      "因为 OCC 这种机制在原理上永远都无法保证数据最终的正确性和一致性，必然丢更新",
       "因为使用行锁完全不会降低系统整体的并发处理能力和吞吐量",
       "因为 OCC 这种机制在设计上只能被用来处理只读的查询请求场景"
     ],
     "options_en": [
       "Under high contention, OCC produces heavy failed-retry churn, and the wasted work can exceed the cost of just queuing on a lock upfront.",
-      "Because OCC as a mechanism can never, by its very design, guarantee eventual data correctness and consistency.",
+      "Because OCC as a mechanism can never, by its very design, guarantee eventual data correctness, so it inevitably loses updates.",
       "Because taking a row lock never reduces the system's overall concurrency or throughput at all.",
       "Because OCC as a mechanism is, by design, only ever applicable to read-only query scenarios."
     ],
@@ -1444,13 +1444,13 @@
     "q": "Write skew 具体指的是哪种冲突？",
     "options": [
       "两个事务读取的是重叠集合，写的却是不同行，各自看都合法，合起来却破坏了跨行约束",
-      "两个事务同时写同一行数据，触发了数据库普通的 version 检查冲突",
+      "两个事务同时写同一行数据，触发了数据库普通的 version 检查冲突，立刻被拦下",
       "某个 Redis key 因为设置的过期时间到了而被自动删除掉",
       "数据库所在服务器磁盘剩余空间严重不足，导致这次写入被拒绝"
     ],
     "options_en": [
       "Two transactions read an overlapping set of rows but write different rows, each valid alone yet jointly violating a cross-row invariant.",
-      "Two transactions write the same row at the same time and trigger an ordinary database version-check conflict.",
+      "Two transactions write the same row at the same time, trigger an ordinary database version-check conflict, and are caught immediately.",
       "A Redis key gets automatically deleted because its set lifetime ran out.",
       "The database server's disk runs critically low on free space, so this write gets rejected."
     ],
@@ -1756,13 +1756,13 @@
     "options": [
       "把跨行约束物化到单个 team row 上，比如维护一个 active_count 字段",
       "让每个 engineer 行各自独立无保护地更新，彼此完全不做任何交叉检查",
-      "把整个系统里所有路径的隔离级别，一律降到最弱的 READ UNCOMMITTED",
+      "把整个系统里所有路径的隔离级别，一律降到最弱的 READ UNCOMMITTED，牺牲全部隔离",
       "干脆把“至少一人值班”这条业务约束直接从系统里删掉，不再检查"
     ],
     "options_en": [
       "Materialize the cross-row invariant onto a single team row, such as an active_count field.",
       "Let each engineer row update independently with no protection and no cross-checking between them at all.",
-      "Downgrade every path in the whole system's isolation level to the weakest option, READ UNCOMMITTED.",
+      "Downgrade every path in the whole system to the weakest isolation level, READ UNCOMMITTED, sacrificing all isolation.",
       "Just delete the 'at least one on-call' business rule from the system entirely and stop checking it."
     ],
     "answer": [
@@ -1819,13 +1819,13 @@
     "q": "Distributed lock 和数据库事务里的行锁，关键区别是什么？",
     "options": [
       "Distributed lock 是有独立生命周期的租约记录，可以跨等待、外部调用或多个步骤存在",
-      "Distributed lock 只能存在于单个 SQL 事务内部，事务结束它就消失",
+      "Distributed lock 只能存在于单个 SQL 事务内部，事务结束它就消失，跨请求就失效了",
       "Distributed lock 不需要设置任何过期时间，也不需要显式释放",
       "Distributed lock 只能用来保护只读的查询请求"
     ],
     "options_en": [
       "A distributed lock is a lease with its own independent lifetime that can span a wait, an external call, or multiple steps.",
-      "A distributed lock can only exist inside a single SQL transaction and disappears when it ends.",
+      "A distributed lock can only exist inside a single SQL transaction and disappears when it ends, so it cannot span requests.",
       "A distributed lock needs no expiration time and never needs to be explicitly released.",
       "A distributed lock can only be used to protect read-only queries."
     ],
@@ -2046,13 +2046,13 @@
     "options": [
       "持有者因 GC pause 或网络变慢而超过 TTL 后，锁被别人拿到，短时间内双方都以为自己持有这把锁",
       "Redis 里设置的 TTL 数值在任何情况下都永远都不会真正失效或被自动清理掉",
-      "NX 选项会让所有并发到达的请求都在同一时刻各自写入成功，彼此之间完全互不阻挡也不会互相干扰",
+      "NX 选项会让所有并发到达的请求都在同一时刻各自写入成功，彼此之间完全互不阻挡也不会互相干扰，等于没有互斥",
       "Redis 这种内存存储引擎本身完全不支持给任何 key 设置带存活时长的过期字段"
     ],
     "options_en": [
       "If the holder stalls past the TTL due to a GC pause or slow network, someone else grabs the lock and briefly both sides think they hold it.",
       "A TTL value set on a Redis key will never actually lapse or get cleaned up automatically under any circumstances.",
-      "The NX option lets every concurrent request succeed in writing at the very same instant, with none of them blocking or interfering with each other.",
+      "The NX option lets every concurrent request succeed in writing at the very same instant with none of them blocking each other, giving no mutual exclusion at all.",
       "Redis as an in-memory storage engine simply does not support setting any kind of lifetime field on any key at all."
     ],
     "answer": [
@@ -2475,13 +2475,13 @@
     "q": "对这条规则来说，最合适的起点是什么？",
     "options": [
       "Conditional UPDATE，用 WHERE status != 'cancelled' 做守卫",
-      "先专门搭建一整套完全独立的 ZooKeeper 分布式协调集群，专门用来管理这一类状态变更逻辑",
+      "先专门搭建一整套完全独立的 ZooKeeper 分布式协调集群，专门用来管理这一类状态变更逻辑，再接进主流程",
       "把这条路径上所有相关的每一个事务都统一强制设成 SERIALIZABLE 最强隔离级别",
       "用一把持有时间很长的 Redis 分布式锁把整条业务处理流程都紧紧包住"
     ],
     "options_en": [
       "A conditional UPDATE guarded by WHERE status != 'cancelled'.",
-      "Stand up an entire, fully independent ZooKeeper coordination cluster dedicated to managing this one kind of status change.",
+      "Stand up an entire, fully independent ZooKeeper coordination cluster dedicated to managing this one kind of status change, then wire it into the main flow.",
       "Force every single related transaction on this path uniformly into the strongest SERIALIZABLE isolation.",
       "Wrap this whole business flow tightly in one long-held Redis distributed lock."
     ],
@@ -2668,13 +2668,13 @@
     "q": "对这种拍卖出价场景，常见的并发控制选择是什么？",
     "options": [
       "OCC，把当前 high bid 当作单调 version/guard，只接受基于预期状态且更高的出价",
-      "对这个 item 的每一次出价请求都无条件地直接覆盖掉之前系统里已经记录好的这个历史最高出价",
+      "对这个 item 的每一次出价请求都无条件地直接覆盖掉之前系统里已经记录好的这个历史最高出价，谁最后到谁赢",
       "每次只要有人出价，就要把整个数据库直接锁住长达整整 10 分钟之后才能处理完这一次",
       "完全按照用户过去积累的历史消费偏好来随机决定这次要接受哪一次出价"
     ],
     "options_en": [
       "OCC, using the current high bid as a monotonic version/guard and only accepting a higher bid based on the expected state.",
-      "Unconditionally overwrite whatever high bid the system had already recorded before, for every single incoming bid request.",
+      "Unconditionally overwrite whatever high bid the system had already recorded before, for every single incoming bid, so whoever arrives last wins.",
       "Every single time someone bids, lock the entire database directly for a full, uninterrupted ten minutes before processing it.",
       "Randomly decide which bid to accept this time based entirely on a user's accumulated past spending preferences."
     ],
@@ -2734,13 +2734,13 @@
     "options": [
       "用户选座的瞬间就立即创建一个带 10 分钟 TTL 的临时座位 reservation",
       "什么都不做，等支付完全完成之后再去检查这个座位是否还在场",
-      "所有座位统一只用一个总库存 counter 数字，完全不单独跟踪座位本身状态",
+      "所有座位统一只用一个总库存 counter 数字，完全不单独跟踪座位本身状态，选座只减总数",
       "让用户去线下柜台人工确认座位，完全不做任何线上的并发控制机制"
     ],
     "options_en": [
       "Create a ten-minute TTL temporary seat reservation the very instant the user selects the seat.",
       "Do nothing and only check whether the seat is still there after payment is entirely complete.",
-      "Track only a single total-inventory counter number for all seats, without tracking any individual seat's own state.",
+      "Track only a single total-inventory counter for all seats without tracking any individual seat's own state, and selecting a seat only decrements the total.",
       "Have the user confirm the seat in person at an offline counter, with no online concurrency control mechanism at all."
     ],
     "answer": [
@@ -2799,13 +2799,13 @@
     "options": [
       "当一次资金移动必须原子跨越多个服务或分片，各自拥有独立的 source of truth",
       "当只是在同一个数据库里，更新两个账户各自对应的那一行数据本身而已",
-      "当这次操作只涉及读取账户当前余额本身，完全没有发生任何写入相关的真实动作行为",
+      "当这次操作只涉及读取账户当前余额本身，完全没有发生任何写入相关的真实动作行为，没有任何冲突",
       "当用户只是修改自己的昵称这类和资金流转完全无关的普通个人资料信息"
     ],
     "options_en": [
       "When one money movement must atomically span multiple services or shards, each with its own independent source of truth.",
       "When it is just updating the two account rows themselves inside one and the same single database.",
-      "When the operation only involves reading the account's current balance itself, with no actual write action of any kind occurring.",
+      "When the operation only involves reading the current balance itself with no actual write action of any kind occurring, and no conflict at all.",
       "When a user is only editing their own display name, ordinary personal profile information entirely unrelated to any money movement."
     ],
     "answer": [
@@ -2868,13 +2868,13 @@
     "options": [
       "把该司机状态设为 pending_request，并带上过期时间或 TTL",
       "继续无差别地给同一个司机并发发出好几个派单请求来反复打扰他",
-      "只更新乘客侧的数据表，完全不改动司机那一侧相关的任何状态字段信息",
+      "只更新乘客侧的数据表，完全不改动司机那一侧相关的任何状态字段信息，司机仍算空闲",
       "把所有司机的状态都永久锁住，一直到整个平台重启之后才能解除"
     ],
     "options_en": [
       "Set that driver's status to pending_request with an expiration or TTL.",
       "Keep sending several concurrent dispatch requests to that same driver indiscriminately, repeatedly bothering them.",
-      "Only update the rider-side data table and leave every bit of driver-related state field information untouched.",
+      "Only update the rider-side data table and leave every driver-side state field untouched, so the driver still reads as idle.",
       "Permanently lock every driver's status, only releasing it once the entire platform eventually restarts."
     ],
     "answer": [
@@ -3010,13 +3010,13 @@
     "options": [
       "给 restaurant 这一行加一个专用 version 列，用 OCC 来更新平均分",
       "无条件地直接覆盖 avg_rating，谁的写请求后到就以谁的结果为准",
-      "让所有餐厅共用同一把全局锁，串行化处理系统里所有餐厅的全部评论 review",
+      "让所有餐厅共用同一把全局锁，串行化处理系统里所有餐厅的全部评论 review，吞吐被彻底压垮",
       "只更新 review 明细表本身，完全不考虑聚合值最终是否还保持一致"
     ],
     "options_en": [
       "Add a dedicated version column to the restaurant row and use OCC to update the average.",
       "Unconditionally overwrite avg_rating directly, letting whichever write arrives last win.",
-      "Share one single global lock across every restaurant, serializing every review for every restaurant in the whole system.",
+      "Share one single global lock across every restaurant, serializing every review for every restaurant in the whole system, crushing throughput.",
       "Only update the detailed review rows themselves, without considering whether the aggregate value ends up consistent at all."
     ],
     "answer": [
@@ -3074,13 +3074,13 @@
     "q": "面试里为什么不该一看到并发就直接上 Redis distributed lock？",
     "options": [
       "新组件会增加故障模式，很多场景用数据库事务、行锁或 OCC 已经足够解决",
-      "因为 Redis 这种存储引擎在设计上永远不能用来保存任何锁",
+      "因为 Redis 这种存储引擎在设计上永远不能用来保存任何锁，只能做纯缓存",
       "因为分布式锁在任何场景下都必然比条件写实现起来更简单",
       "因为数据库这类系统天生完全没有能力处理并发写"
     ],
     "options_en": [
       "A new component adds new failure modes, and many scenarios are already covered by a database transaction, row lock, or OCC.",
-      "Because Redis as a storage engine is inherently incapable of holding any kind of lock.",
+      "Because Redis as a storage engine is inherently incapable of holding any kind of lock and can only be a pure cache.",
       "Because a distributed lock is guaranteed to be simpler to implement than a conditional write in every scenario.",
       "Because databases as a category of system are inherently incapable of handling concurrent writes."
     ],
@@ -3203,13 +3203,13 @@
     "options": [
       "竞争集中在同一个 source of truth 上，写冲突无法靠分散应用服务器或读副本消除",
       "因为这些技术会自动把一行数据拆分成无限多行，用来分摊这份写入的压力",
-      "因为 read replicas 这种组件天生就能够承接系统里全部的写入流量负载",
+      "因为 read replicas 这种组件天生就能够承接系统里全部的写入流量负载，主库就此空闲",
       "因为 load balancer 这种组件会直接改变数据库底层的行级锁定语义规则"
     ],
     "options_en": [
       "Contention concentrates on one source of truth, and write conflicts cannot be dissolved by spreading out app servers or read replicas.",
       "Because these techniques automatically split one row of data into infinitely many rows to spread out this write load.",
-      "Because read replicas as a component are inherently able to absorb the system's entire write traffic load.",
+      "Because read replicas as a component are inherently able to absorb the entire write traffic load, leaving the primary idle.",
       "Because a load balancer as a component directly changes the database's underlying row-level locking semantics rules."
     ],
     "answer": [
@@ -3260,13 +3260,13 @@
     "options": [
       "把这个资源的所有请求放入一个专属队列，由单个 worker 顺序处理",
       "让所有请求继续无差别地并发直接写同一行数据",
-      "只增加更多 read replicas 来分摊这次写入的压力",
+      "只增加更多 read replicas 来分摊这次写入的压力，主库照样是瓶颈",
       "让客户端各自随机决定这次请求算不算成功"
     ],
     "options_en": [
       "Put all requests for that specific resource into a dedicated queue processed by a single worker.",
       "Let every request keep writing that same row concurrently with no coordination.",
-      "Just add more read replicas to try to absorb this write load.",
+      "Just add more read replicas to try to absorb this write load, while the primary stays the bottleneck.",
       "Let each client randomly decide on its own whether this request counts as successful."
     ],
     "answer": [
