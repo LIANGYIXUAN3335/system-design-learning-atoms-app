@@ -388,19 +388,30 @@ console.log('tracks');
   t('ALL_TRACK matches everything', filterDeck([a, b, c, d], ALL_TRACK).length === 4);
   t('filterDeck unions correctly', filterDeck([a, b, c], llmTrack).map((x) => x.id).join(',') === 'c');
   t(
-    'seed tracks: 5, ids stable',
-    seedTracks.length === 5 &&
-      seedTracks.map((x) => x.id).join(',') === 'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill',
+    'seed tracks: 6, ids stable',
+    seedTracks.length === 6 &&
+      seedTracks.map((x) => x.id).join(',') ===
+        'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill,interview-review',
   );
   t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
   t('bundle covers llm-sd seed track', filterDeck(bundle, seedTracks[2]).length >= 300);
   t('bundle covers low-level-design seed track', filterDeck(bundle, seedTracks[3]).length >= 700);
+  t('bundle covers interview-review seed track', filterDeck(bundle, seedTracks[5]).length >= 250);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
   const classicDeck = filterDeck(bundle, seedTracks[1]);
   const categories = buildCategoryStats(classicDeck, new Map());
   t('classic track has category groups', categories.length > 40 && categories.every((c) => c.total > 0));
   t('category filter scopes deck', filterByCategory(classicDeck, categories[0].id).length === categories[0].total);
+  // 面试复盘 track: 8 named Chinese categories, one per failure mode (build-deck CATEGORY_OVERRIDES)
+  const reviewCats = new Set(filterDeck(bundle, seedTracks[5]).map((c) => c.category));
+  t(
+    'interview-review track has its 8 named categories',
+    reviewCats.size === 8 &&
+      ['开场与叙事', '反问与读空气', '红旗与表达习惯', 'BQ 故事库', '先骨架后细节', '系统设计复盘', '编码反射', '知识短板'].every(
+        (name) => reviewCats.has(name),
+      ),
+  );
   // M3: per-topic coverage status (seen = answered ≥1×, distinct from mastered)
   t('empty srs → all topics not-started', categories.every((c) => c.seen === 0 && categoryStatus(c) === 'not-started'));
   t('categoryStatus: none seen', categoryStatus({ seen: 0, total: 5 }) === 'not-started');
