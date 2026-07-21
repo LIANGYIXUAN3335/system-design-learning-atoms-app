@@ -336,7 +336,7 @@
       "存进 Redis 字符串缓存",
       "只留在爬虫本机磁盘",
       "对象存储（S3 / GCS 等 Blob 服务）",
-      "直接写进 Frontier 队列消息体"
+      "把网页全文直接塞进 Frontier 抓取队列的消息体里"
     ],
     "answer": [
       2
@@ -354,7 +354,7 @@
       "Store it as a Redis string.",
       "Keep it only on the crawler's local disk.",
       "Object storage such as S3 or GCS.",
-      "Write it straight into the Frontier queue message."
+      "Cram the whole page's text straight into the Frontier queue message."
     ],
     "q_en": "Where should the extracted text data be stored?",
     "scenario_en": "The crawler must store massive extracted text for later batch processing and training reads; access is object-level and does not need relational transactions.",
@@ -387,13 +387,13 @@
       "Redis 更适合毫秒级热点小对象缓存，海量长期文本会把内存成本推得很高。",
       "本机磁盘只在单机、可丢弃场景下够用，Worker 重建或迁移时数据就没了。",
       "文本体量大、访问是对象级读写、不需要事务，这正是对象存储该出场的场景。",
-      "队列消息应保持轻量用于调度，大 payload 会拖慢投递和消费。"
+      "队列消息应保持轻量只用于调度，把整页文本塞进去会撑大 payload、拖慢投递和消费。"
     ],
     "optionExplanations_en": [
       "Redis fits millisecond hot-object caching, but holding massive long-lived text there gets expensive fast.",
       "Local disk only works for single-machine disposable data — it's gone when a worker is rebuilt or moved.",
       "Large text volume, object-level access, and no transaction needs is exactly when object storage fits.",
-      "Queue messages should stay lightweight for scheduling; a large payload slows delivery down."
+      "Queue messages should stay lightweight for scheduling; stuffing whole-page text in bloats the payload and slows delivery."
     ]
   },
   {
@@ -452,7 +452,7 @@
     "options": [
       "拆成 Fetcher、Extraction 两阶段流水线",
       "只增加更多线程数量，但不改变任务边界划分",
-      "把原始 HTML 完整内容直接放进队列消息体里",
+      "把每个页面抓到的原始 HTML 完整内容直接塞进队列消息体里当负载",
       "把所有处理步骤都塞进一个更大的单体进程里"
     ],
     "answer": [
@@ -470,7 +470,7 @@
     "options_en": [
       "Split into Fetcher and Extraction pipeline stages.",
       "Just add more worker threads without changing any task boundaries.",
-      "Put the entire raw HTML content directly inside the queue message.",
+      "Push each page's entire raw HTML straight into the queue message as its payload.",
       "Cram every processing step into one larger monolithic process."
     ],
     "q_en": "What is the first change to improve fault tolerance?",
@@ -478,13 +478,13 @@
     "optionExplanations": [
       "把网络抓取和 HTML 解析拆成两阶段，失败互不牵连，各自能独立重试扩容。",
       "只加线程不改变任务边界，一步失败还是会搞乱整条 URL 的处理状态。",
-      "把原始 HTML 塞进消息体是加大 payload，队列更不稳定，不是容错改造。",
+      "把原始 HTML 塞进消息体只是加大 payload，让队列更不稳定，并不是提升容错的改造。",
       "塞进一个更大单体只会让失败面更集中，跟目标方向正好相反。"
     ],
     "optionExplanations_en": [
       "Splitting fetch and extraction into stages isolates failures so each can retry and scale on its own.",
       "Adding threads without changing task boundaries still lets one failing step wreck the whole URL's state.",
-      "Cramming raw HTML into the message just grows the payload and destabilizes the queue further.",
+      "Stuffing raw HTML into the message body just enlarges the payload and destabilizes the queue — it is not a fault-tolerance change.",
       "Cramming everything into one bigger monolith concentrates the failure surface, the opposite of the goal."
     ]
   },
@@ -498,7 +498,7 @@
     "scenario": "10B 页面抓取中网络失败率高、解析规则又常改，管线被拆成抓取与解析两个阶段。",
     "scenario_en": "Across 10B pages network fetches fail often and parsing rules change often, so the pipeline is split into a fetch stage and an extraction stage.",
     "options": [
-      "Fetcher 负责解析链接，Extraction 负责访问 DNS",
+      "Fetcher 负责解析页面里的链接，Extraction 负责去和 DNS 服务器通信",
       "Fetcher 存原始 HTML，Extraction 从中产出文本和新 URL",
       "Fetcher 负责更新模型参数，Extraction 负责训练模型",
       "Fetcher 负责做去重，Extraction 负责管队列可见性"
@@ -515,20 +515,20 @@
     ],
     "tradeoff": "抓取失败隔离 vs 解析失败隔离——两个阶段各自的重试边界",
     "options_en": [
-      "The fetcher is responsible for parsing links, while extraction is responsible for talking to DNS.",
+      "The fetcher parses the links on the page, while extraction talks to the DNS servers.",
       "The fetcher stores raw HTML; extraction turns it into text and new URLs.",
       "The fetcher is responsible for updating model weights, while extraction is responsible for training the model.",
       "The fetcher is responsible for deduplicating, while extraction is responsible for managing queue visibility."
     ],
     "q_en": "What is the key responsibility split between the URL Fetcher and Text/URL Extraction?",
     "optionExplanations": [
-      "Fetcher 不解析链接，DNS 查询发生在抓取之前，不是 Extraction 的职责。",
+      "Fetcher 不解析链接，DNS 查询发生在抓取之前，这两件事都不是 Extraction 的职责。",
       "Fetcher 存原始 HTML，Extraction 读 HTML 产出文本和新链接。",
       "模型训练不在这个爬虫流水线里，两个阶段都不碰模型参数。",
       "去重和队列可见性是 Metadata DB 和队列服务的职责，不是这两阶段的划分依据。"
     ],
     "optionExplanations_en": [
-      "The fetcher doesn't parse links; DNS lookups happen before fetching, not inside extraction.",
+      "The fetcher does not parse links, and DNS lookups happen before fetching — neither belongs to extraction.",
       "Fetcher stores raw HTML; extraction reads it to produce text and new URLs.",
       "Model training isn't part of this pipeline; neither stage touches model weights.",
       "Dedup and queue visibility belong to the metadata store and queue service, not this stage split."
@@ -546,7 +546,7 @@
       "让每个 Worker 用本地文件记录状态",
       "只依赖浏览器缓存",
       "Metadata DB，队列消息只放 URL 记录 id",
-      "把完整 HTML 和状态都塞进 SQS 消息"
+      "把完整 HTML 内容和所有抓取状态全塞进 SQS 消息体里传递"
     ],
     "answer": [
       2
@@ -565,7 +565,7 @@
       "Have each worker keep state in a local file.",
       "Rely only on the browser cache.",
       "A Metadata DB, with the queue message carrying only the URL record id.",
-      "Stuff the full HTML and all state into the SQS message."
+      "Stuff the full HTML content and all crawl state into the SQS message body."
     ],
     "q_en": "What component should the web crawler add to hold URL state?",
     "scenario_en": "The queue needs to pass URLs to process, but each URL also needs metadata such as crawl status, HTML object location, text object location, failure count, and depth.",
@@ -573,13 +573,13 @@
       "本地文件只有那台机器能看到，别的 Worker 查不到某个 URL 的最新状态。",
       "浏览器缓存服务的是终端用户，这条抓取管线里没有浏览器会话。",
       "状态和大对象引用放进可查询的数据库，队列只传一个轻量 id 做调度。",
-      "把完整 HTML 塞进消息体会让队列超载，也让状态和调度耦合在一起。"
+      "把完整 HTML 塞进消息体会让队列超载，也把状态和调度耦合在一起，难以查询。"
     ],
     "optionExplanations_en": [
       "A local file is visible only to that one machine; other workers can't see a URL's current state.",
       "Browser caching serves end users; there's no browser session in this crawl pipeline.",
       "State and blob references live in a queryable database while the queue carries just a lightweight id.",
-      "Stuffing full HTML into the message overloads the queue and couples state with scheduling."
+      "Putting full HTML into the message overloads the queue and couples state with scheduling, making it hard to query."
     ]
   },
   {
@@ -593,7 +593,7 @@
     "scenario_en": "The pipeline passes pending URLs through SQS, but pages average about 2MB while a single message is capped at 256KB.",
     "options": [
       "这样做会让 DNS 解析明显变慢",
-      "这样做会导致 robots.txt 无法被正确解析",
+      "这样做会导致站点的 robots.txt 规则无法被正确解析和遵守",
       "队列消息根本不允许携带任何字符串",
       "队列不适合大 payload，应传对象存储引用而非内容本身"
     ],
@@ -609,20 +609,20 @@
     ],
     "options_en": [
       "It would make DNS resolution noticeably slower.",
-      "It would prevent robots.txt from being parsed correctly.",
+      "It would prevent the site's robots.txt rules from being parsed and honored.",
       "A queue cannot store any string at all.",
       "Queues are not built for large payloads; pass an object-storage reference instead."
     ],
     "q_en": "Why should raw HTML not be placed directly in the Frontier or processing queue messages?",
     "optionExplanations": [
       "HTML 大小和 DNS 解析速度没有关系，DNS 只查域名对应的 IP。",
-      "robots.txt 是单独抓取解析的文件，跟队列消息里放不放 HTML 无关。",
+      "robots.txt 是单独抓取解析的文件，跟队列消息里放不放 HTML 完全无关。",
       "队列消息可以携带字符串，只是不适合携带很大的 payload。",
       "队列为轻量调度信号设计，大 HTML 应存对象存储，消息只带引用。"
     ],
     "optionExplanations_en": [
       "HTML size has nothing to do with DNS resolution speed; DNS just looks up the IP for a domain.",
-      "robots.txt is fetched and parsed separately, unrelated to what the queue message carries.",
+      "robots.txt is fetched and parsed as a separate file, unrelated to whether HTML sits in the queue message.",
       "Queue messages can carry strings fine; the issue is a very large payload, not any string at all.",
       "Queues are built for lightweight scheduling signals; large HTML belongs in object storage, referenced."
     ]
@@ -639,7 +639,7 @@
     "options": [
       "可以更换抽取逻辑而不必重新抓取网页",
       "可以跳过所有 URL 去重",
-      "可以让每个域名每秒抓取无限次",
+      "可以让每个域名每秒无限次抓取而不受限流约束",
       "可以避免对象存储"
     ],
     "answer": [
@@ -655,20 +655,20 @@
     "options_en": [
       "You can swap the extraction logic without re-fetching the page.",
       "You can skip all URL deduplication.",
-      "You can crawl a domain unlimited times per second.",
+      "You could crawl each domain unlimited times per second with no rate limit.",
       "You can avoid using object storage."
     ],
     "q_en": "What direct benefit does keeping raw HTML give when extraction requirements change later?",
     "optionExplanations": [
       "留着原始 HTML，抽取规则变了只需重跑解析，不用重新抓一次网页。",
       "去重靠的是 Metadata DB 记录和内容哈希，跟留不留原始 HTML 无关。",
-      "礼貌限速看的是抓取请求本身，留不留原始 HTML 不会改变这个约束。",
+      "礼貌限速看的是抓取请求本身，留不留原始 HTML 都不会放开这个每秒次数约束。",
       "原始 HTML 恰恰还是要存进对象存储，这个说法和留 HTML 的目的相反。"
     ],
     "optionExplanations_en": [
       "Keeping raw HTML means you can rerun extraction when rules change, without hitting the site again.",
       "Dedup relies on metadata records and content hashes, unrelated to whether raw HTML is kept.",
-      "Politeness limits govern the fetch requests themselves; keeping raw HTML doesn't change that.",
+      "Politeness rate limits govern the fetch requests themselves; keeping raw HTML does nothing to lift the per-second cap.",
       "Raw HTML is exactly what still needs to land in object storage, the opposite of avoiding it."
     ]
   },
@@ -685,7 +685,7 @@
       "会让 S3 存储账单明显变贵",
       "Worker 崩溃会丢失重试计时，短暂重试往往也没用",
       "会强制所有抓取请求变成同步执行",
-      "会导致 robots.txt 完全无法下载"
+      "会导致每个域名的 robots.txt 文件完全无法被下载下来"
     ],
     "answer": [
       1
@@ -701,20 +701,20 @@
       "It would make S3 storage noticeably more expensive.",
       "A worker crash loses the retry timer, and a short fixed delay rarely helps anyway.",
       "It would force every fetch request to become synchronous.",
-      "It would prevent robots.txt from ever being downloaded."
+      "It would make each domain's robots.txt file impossible to download at all."
     ],
     "q_en": "What is the main problem with sleeping in worker memory before retrying a failed fetch?",
     "optionExplanations": [
       "内存里的 sleep 计时器跟 S3 账单毫无关系。",
       "计时器只活在内存里，Worker 崩溃就丢失重试计划；短暂固定等待往往也没用。",
       "同步还是异步是执行模型的选择，跟要不要 sleep 重试没有必然关系。",
-      "robots.txt 依然可以正常下载，跟这个重试写法无关。"
+      "robots.txt 依然照常单独下载，跟在内存里 sleep 重试这个写法没有关系。"
     ],
     "optionExplanations_en": [
       "An in-memory sleep timer has nothing to do with the S3 storage bill.",
       "The timer lives only in memory, so a crash wipes the retry plan out — a short fixed wait rarely helps anyway.",
       "Sync vs async execution is a separate choice, unrelated to whether you sleep before retrying.",
-      "robots.txt can still be downloaded fine; that's unrelated to this retry approach."
+      "robots.txt still downloads separately as usual; it has nothing to do with an in-memory sleep-retry."
     ]
   },
   {
@@ -725,7 +725,7 @@
     "sub": "queue-choice",
     "q": "Kafka 自建重试相比 SQS 可见性超时方案的主要劣势是？",
     "options": [
-      "Kafka 完全无法记录消费 offset",
+      "Kafka 完全无法追踪和提交每个消费者的消费 offset 位点",
       "Kafka 不能保留任何消息日志",
       "Kafka 要自建失败 topic 和调度服务才能退避",
       "Kafka 不支持多个消费者同时读取"
@@ -744,7 +744,7 @@
     "scenario": "团队正在比较用 Kafka 还是 SQS 承载抓取重试，重点是失败后重新调度所需的额外基础设施。",
     "tradeoff": "SQS 内置可见性超时和 DLQ vs Kafka 需要自建重试基础设施",
     "options_en": [
-      "Kafka cannot track consumer offsets at all.",
+      "Kafka cannot track or commit each consumer's offset position at all.",
       "Kafka cannot retain any message log.",
       "Kafka needs a custom failed-message topic and scheduler to implement backoff.",
       "Kafka cannot support multiple consumers reading the same topic."
@@ -794,7 +794,7 @@
       "Kafka 用消费者组原生支持多个消费者并行读取，这不是它的弱点。"
     ],
     "optionExplanations_en": [
-      "Kafka consumers track and commit their own offsets — it's not true that Kafka can't record them.",
+      "Kafka offsets are tracked and committed by the consumers themselves, so it is false that it cannot record them.",
       "Kafka's log naturally supports long retention, so that's not a real weakness.",
       "SQS gives visibility timeouts and a DLQ out of the box; Kafka needs a custom topic and scheduler to match it.",
       "Kafka natively supports multiple consumers via consumer groups, so that's not a weakness either."
@@ -809,7 +809,7 @@
     "scenario": "URL 抓取失败后希望指数退避，消息不要被其他 Worker 立刻拿走；同时不能无限重试，失败多次后要隔离出来分析。",
     "q": "最合适的队列机制组合是？",
     "options": [
-      "Redis list，Worker 进程内 sleep 重试",
+      "Redis list 加 Worker 进程内 sleep 循环重试，崩溃即丢重试状态",
       "Kafka 单 topic，不记录失败次数",
       "把重试计划写进本地 cron 文件",
       "SQS：ChangeMessageVisibility + DLQ 组合"
@@ -828,7 +828,7 @@
     "diagram": "flowchart LR\nQueue[SQS queue] --> Worker[Fetcher]\nWorker -->|success delete| Done[Done]\nWorker -->|fail no delete| Retry[Visibility timeout]\nRetry --> Queue\nWorker -->|too many| DLQ[Dead letter]",
     "tradeoff": "SQS 托管退避与死信 vs 自建队列机制",
     "options_en": [
-      "A Redis list with an in-process sleep for retries.",
+      "A Redis list plus an in-process sleep loop for retries, losing state on crash.",
       "A single Kafka topic that does not track failure counts.",
       "Write the retry schedule to a local cron file.",
       "SQS: ChangeMessageVisibility plus a dead-letter queue."
@@ -873,7 +873,7 @@
       "按接收次数动态延长可见性超时实现退避，超阈值自动进 DLQ，正是这个组合。"
     ],
     "optionExplanations_en": [
-      "A Redis list with in-process sleeps loses its retry state the moment the worker crashes.",
+      "A Redis list with in-memory sleep retries loses all retry state when a worker crashes, so it cannot meet backoff needs.",
       "A single topic with no failure count can't tell whether to keep retrying or dead-letter a message.",
       "A local cron file is visible only on one machine, so no other instance can pick up that plan.",
       "Extending visibility timeout by receive count, then auto dead-lettering past a threshold, is this combo."
@@ -888,7 +888,7 @@
     "q": "这个 SQS 重试上限设计的核心用意是什么？",
     "options": [
       "允许对暂时性故障重试，同时避免对长期失败站点无限重试",
-      "确保每个 URL 最终都会被成功抓取一次",
+      "确保队列里每个 URL 最终都一定会被成功抓取到一次",
       "让爬虫可以完全跳过 robots.txt 检查",
       "把失败消息永久留在原队列里反复处理"
     ],
@@ -905,7 +905,7 @@
     "scenario": "SQS 的 redrive policy 配置了 maxReceiveCount；示例策略是消息被接收 5 次仍失败后，自动移入死信队列（DLQ）。",
     "options_en": [
       "It retries transient failures while avoiding endless retries on dead sites.",
-      "It guarantees every URL is eventually fetched successfully.",
+      "It guarantees every URL in the queue is eventually fetched successfully at least once.",
       "It lets the crawler skip robots.txt checks entirely.",
       "It keeps failed messages in the original queue forever."
     ],
@@ -926,7 +926,7 @@
     ],
     "optionExplanations_en": [
       "A retry cap plus a DLQ is exactly what separates transient failures from URLs worth giving up on.",
-      "The cap actually admits some URLs will never succeed — it's not a guarantee every one gets fetched.",
+      "A retry cap explicitly accepts that some URLs fail forever; it does not guarantee every one succeeds.",
       "Retry count and whether to check robots.txt are two unrelated concerns.",
       "Once the cap is hit, the message moves out to the DLQ instead of looping in the original queue."
     ]
@@ -943,7 +943,7 @@
     "options": [
       "消息会永久丢失",
       "消息超时后重新可见，其他 Worker 能接手",
-      "队列会自动把 HTML 写进 S3",
+      "队列会自动把这条消息的 HTML 内容写进 S3 保存",
       "所有后续消息都会停止投递"
     ],
     "answer": [
@@ -959,7 +959,7 @@
     "options_en": [
       "The message is lost permanently.",
       "The message becomes visible again after timeout, so another worker can pick it up.",
-      "The queue automatically writes the HTML into S3.",
+      "The queue automatically writes this message's HTML content into S3.",
       "All subsequent messages stop being delivered."
     ],
     "q_en": "What happens in SQS if a worker crashes while fetching a URL before deleting the message?",
@@ -972,7 +972,7 @@
     "optionExplanations_en": [
       "An SQS message only counts as done after an explicit delete, so a crash doesn't lose it, just hides it a while.",
       "Once the visibility timeout expires, the message reappears and another worker can pick it up.",
-      "Writing to S3 is application logic; the queue itself never auto-persists anything.",
+      "Writing to S3 is application logic; the queue itself never persists content for you automatically.",
       "One message's visibility state has no effect on delivery of any other message."
     ]
   },
@@ -1212,7 +1212,7 @@
     "scenario": "爬虫要长期抓全网又不能被站长封禁；某站点 robots.txt 里写了 Crawl-delay: 10。",
     "scenario_en": "The crawler must keep crawling the web for months without getting blocked, and one site declares Crawl-delay: 10 in its robots.txt.",
     "options": [
-      "它是官方标准的一部分，所有大爬虫都必须支持",
+      "它是官方 robots.txt 标准的一部分，所有大爬虫都必须支持它",
       "它不是官方标准的一部分，但本设计选择尊重它来保持礼貌",
       "它表示页面最大大小",
       "它只用于 DNS 缓存过期"
@@ -1228,7 +1228,7 @@
       "politeness"
     ],
     "options_en": [
-      "It is part of the official standard, and every major crawler must support it.",
+      "It is part of the official robots.txt standard, and every major crawler must support it.",
       "It is not part of the official standard, but this design respects it as a politeness signal.",
       "It specifies the maximum page size.",
       "It is only used for DNS cache expiration."
@@ -1241,7 +1241,7 @@
       "它和 DNS 缓存过期完全是两回事，只管抓取节奏。"
     ],
     "optionExplanations_en": [
-      "Crawl-delay was never part of the official robots.txt standard, so honoring it is each crawler's choice.",
+      "Crawl-delay was never written into the official robots.txt standard; whether crawlers honor it is each one's own choice.",
       "It's an unofficial convention, but this design deliberately honors it to make politeness real.",
       "Crawl-delay is a request-interval in seconds, not a page-size limit.",
       "It has nothing to do with DNS cache expiry — it only paces fetch requests."
@@ -1390,7 +1390,7 @@
     "options": [
       "获得锁：key 不存在才设置，10 秒后自动过期",
       "永久删除该域名的所有待抓 URL",
-      "把该域名塞进 Bloom Filter",
+      "把该域名指纹塞进 Bloom Filter 记录它已经被访问过",
       "把这条消息立刻发进 DLQ"
     ],
     "answer": [
@@ -1408,7 +1408,7 @@
     "options_en": [
       "Acquire the lock: set only if the key is absent, auto-expiring after 10 seconds.",
       "Permanently delete every pending URL for that domain.",
-      "Add the domain into a Bloom filter.",
+      "Add the domain's fingerprint into a Bloom filter to mark it visited.",
       "Send the message straight to the DLQ."
     ],
     "termDefinitions": [
@@ -1433,13 +1433,13 @@
     "optionExplanations": [
       "NX 保证只有第一个 Worker 能设置成功，EX 让锁在崩溃场景下也能自动到期，不会永久卡死。",
       "SET 命令不会删除数据，这是新建 key，不是删除操作。",
-      "Bloom Filter 是用来判断某个东西见没见过，不能用来做互斥锁。",
+      "Bloom Filter 是用来判断某个东西见没见过，不能拿来做互斥锁保护配额。",
       "抢锁和消息该不该进死信队列是两件事，锁本身不会触发 DLQ。"
     ],
     "optionExplanations_en": [
       "NX makes only the first worker succeed, and EX makes the lock lapse on its own after a crash, never stuck forever.",
       "SET doesn't delete data — this call creates a key, it isn't a delete operation.",
-      "A Bloom filter checks whether something was seen before; it can't provide mutual exclusion like a lock.",
+      "A Bloom filter tests whether something was seen before; it cannot act as a mutex guarding a rate quota.",
       "Acquiring a lock and dead-lettering a message are unrelated; the lock itself never triggers a DLQ."
     ]
   },
@@ -1571,7 +1571,7 @@
     "scenario": "每个域名限 1 rps，几百个 Worker 同时被同一域名限流，都退避到同一个窗口边界。",
     "scenario_en": "With a one-request-per-second cap per domain, hundreds of workers get throttled on the same domain and all back off to the same window boundary.",
     "options": [
-      "所有 URL 都会被自动去重",
+      "同一域名下所有待抓 URL 都会被自动去重合并",
       "DNS 缓存会立刻全部命中",
       "S3 里的对象会被自动删除",
       "同步重试挤爆同一个域名配额，反复失败"
@@ -1587,20 +1587,20 @@
       "jitter"
     ],
     "options_en": [
-      "All URLs get automatically deduplicated.",
+      "All pending URLs under the same domain get automatically deduplicated.",
       "DNS caches suddenly hit one hundred percent.",
       "Objects in S3 get automatically deleted.",
       "Synchronized retries flood the same domain quota and keep failing together."
     ],
     "q_en": "What problem happens when many workers retry at the same rate-limit window reset?",
     "optionExplanations": [
-      "去重逻辑跟窗口重置时机无关，不会因为重试同步就触发。",
+      "去重逻辑跟限流窗口重置时机无关，不会因为重试同步就自动触发。",
       "DNS 缓存命中率和限流窗口重置是两个独立的机制。",
       "S3 对象生命周期由存储策略管，不会因为重试撞车就被删除。",
       "大家同一时刻醒来，会挤爆同一个域名的配额，结果又一起失败。"
     ],
     "optionExplanations_en": [
-      "Dedup logic is unrelated to when the rate-limit window resets — synchronized retries don't trigger it.",
+      "Deduplication is unrelated to when the rate-limit window resets; synchronized retries do not trigger it.",
       "DNS cache hit rate and rate-limit window resets are two independent mechanisms.",
       "S3 object deletion follows storage policy, not a pile-up of retries.",
       "Everyone waking up at once floods the same domain's quota, so they fail together again."
@@ -1615,7 +1615,7 @@
     "q": "这组 BOE 带宽推算得到的结论是什么？",
     "options": [
       "单机网络理论上限约 12,500 页/秒，只是理论峰值",
-      "单机实际就能稳定跑到约 12,500 页/秒",
+      "单机在真实生产环境里就能稳定持续跑到约 12,500 页/秒",
       "带宽和页面大小对估算机器数量没有意义",
       "这个数字说明应该改成抓更小的页面"
     ],
@@ -1632,7 +1632,7 @@
     "scenario": "网络优化型实例带宽约 200 Gbps，平均页面体量约 2MB，这决定了单机纯网络维度的理论抓取速度上限。",
     "options_en": [
       "The theoretical per-machine ceiling is about 12,500 pages/sec, only a theoretical peak.",
-      "A single machine can actually sustain 12,500 pages per second in practice.",
+      "A single machine can sustain around 12,500 pages per second in real production.",
       "Bandwidth and page size are irrelevant to estimating fleet size.",
       "This number implies you should switch to crawling smaller pages."
     ],
@@ -1646,7 +1646,7 @@
     ],
     "optionExplanations_en": [
       "200 Gbps divided by 2MB per page is pure network arithmetic — a ceiling, not a sustainable number.",
-      "Real throughput gets pulled down by DNS, rate limits, and retries, so it never sustains that peak.",
+      "Real throughput is dragged down by DNS, rate limits, and retries, so it never reaches this theoretical peak.",
       "Bandwidth and page size are exactly the two direct inputs to sizing the fleet, not irrelevant variables.",
       "This number is meant to size the fleet, not to suggest changing what pages get crawled."
     ]
@@ -1707,7 +1707,7 @@
       "说明页面大小对完成时间没有任何影响",
       "证明应该直接放弃 5 天这个时间要求",
       "算出单机约 31 天，需多机并行才压进 5 天预算",
-      "证明单机完全可以满足 5 天的时间要求"
+      "证明单台机器独立跑就完全能满足 5 天的时间要求"
     ],
     "answer": [
       2
@@ -1724,7 +1724,7 @@
       "It shows page size has no effect on completion time.",
       "It proves the five-day requirement should be abandoned.",
       "It shows a single machine needs about 31 days, proving parallel machines are required to fit the five-day budget.",
-      "It proves a single machine can already meet the five-day requirement."
+      "It proves one machine on its own can already meet the five-day requirement."
     ],
     "q_en": "What role does the single-machine time estimate play in the design discussion?",
     "scenario_en": "Divide 10 billion pages by the single-machine throughput of about 3,750 pages per second to estimate how long one machine would need.",
@@ -1738,7 +1738,7 @@
       "Page size is already baked into per-second throughput — it's exactly what produced this 31-day figure.",
       "Being over budget at 31 days argues FOR parallelizing, not for abandoning the five-day goal.",
       "One machine alone needs about 31 days, far past the five-day budget — that gap is why you scale out.",
-      "31 days is far beyond five days, so a single machine clearly can't meet the requirement."
+      "Thirty-one days far exceeds five, so a single machine clearly cannot meet the requirement."
     ]
   },
   {
@@ -1750,7 +1750,7 @@
     "q": "用 8 台机器线性并行估算的重点是什么？",
     "options": [
       "机器数量对完成时间没有任何实际影响",
-      "无论用多少台机器都无法在 5 天内完成任务",
+      "无论投入多少台机器都没办法在 5 天预算内完成任务",
       "线性假设在真实系统里永远精确成立",
       "线性并行把 31 天压到约 3.9 天，重点是估算路径"
     ],
@@ -1767,7 +1767,7 @@
     "scenario": "把单机约 31 天的估算线性除以并行机器数，示例用 8 台机器。",
     "options_en": [
       "The number of machines has no effect on completion time.",
-      "No number of machines can finish within five days.",
+      "No number of machines could ever finish the job within the five-day budget.",
       "The linear assumption always holds exactly in real systems.",
       "Linear parallelism cuts 31 days to about 3.9 days; the point is the estimation path."
     ],
@@ -1781,7 +1781,7 @@
     ],
     "optionExplanations_en": [
       "Machine count divides directly into total time — it's exactly what pulls the day count down.",
-      "Eight machines already brings 31 days under roughly four, so the five-day budget is reachable.",
+      "Eight machines already cut 31 days to about four, so the five-day budget is reachable.",
       "Real systems have hot domains and uneven machines, so linear scaling is only a first-order guess.",
       "Dividing by machine count is a rough approximation; what matters is naming the path and its limits."
     ]
@@ -1911,7 +1911,7 @@
     "sub": "dns",
     "q": "DNS 耗时占比较高对 Web Crawler 设计意味着什么？",
     "options": [
-      "这个比例只在很小规模的测试场景下成立，规模变大反而会更快",
+      "这个比例只在很小规模的测试场景下成立，抓取规模变大以后反而会自动变快",
       "应该放弃自建缓存，全部交给单一第三方",
       "大规模抓取下 DNS 是真实瓶颈，要缓存加多 provider",
       "DNS 耗时可以完全忽略，不需要任何优化"
@@ -1928,7 +1928,7 @@
     ],
     "scenario": "早期爬虫研究（如 Mercator 论文）发现，没有自建解析优化前，DNS 查询可能占到每个线程耗时的约 70%。",
     "options_en": [
-      "This ratio only holds in a very small-scale test scenario and improves automatically as scale grows.",
+      "This ratio only holds at tiny test scale and automatically improves as crawl scale grows.",
       "You should drop self-managed caching entirely and rely on a single third-party provider.",
       "At crawler scale, DNS is a real bottleneck needing caching and multiple providers.",
       "DNS lookup time can be ignored entirely and needs no optimization at all."
@@ -1949,7 +1949,7 @@
       "70% 的耗时占比摆在那，完全不管等于放着最大的瓶颈不处理。"
     ],
     "optionExplanations_en": [
-      "Without optimization this ratio only worsens as concurrency and domain count grow, it doesn't fix itself.",
+      "Without optimization this share only grows with concurrency and domain count; it does not speed up on its own.",
       "A single third party still has its own rate cap, so dropping your own cache makes hitting it more likely.",
       "Knowing where the time goes tells you where to invest: cache lookups first, then spread across providers.",
       "That seventy-percent figure is sitting right there — ignoring it leaves the biggest bottleneck untouched."
@@ -1966,7 +1966,7 @@
     "options": [
       "每次请求都强制绕过缓存",
       "把 DNS 查询写入 S3",
-      "用 Bloom Filter 代替 DNS",
+      "用 Bloom Filter 来代替 DNS 完成域名解析",
       "在 Crawler 中缓存域名到 IP 的解析结果"
     ],
     "answer": [
@@ -2008,7 +2008,7 @@
     "options_en": [
       "Force every request to bypass the cache.",
       "Write DNS query logs into S3.",
-      "Replace DNS lookups with a Bloom filter.",
+      "Replace DNS resolution itself with a Bloom filter lookup.",
       "Cache the domain-to-IP resolution inside the crawler."
     ],
     "termDefinitions": [
@@ -2029,7 +2029,7 @@
     "optionExplanations_en": [
       "Bypassing the cache throws away this layer of optimization — request volume doesn't drop because of it.",
       "S3 is object storage for the text output; it doesn't perform domain resolution for you.",
-      "A Bloom filter can only tell you whether something's been seen, not which IP a domain maps to.",
+      "A Bloom filter only tells you if something was seen; it cannot answer which IP a domain maps to.",
       "Many URLs on the same domain reuse one lookup, cutting a large share of redundant round trips."
     ]
   },
@@ -2043,7 +2043,7 @@
     "q": "第三方 DNS 限流下的务实优化是什么？",
     "options": [
       "多个 DNS provider 轮询分摊请求",
-      "停止 DNS 解析，直接猜 IP",
+      "干脆停止 DNS 解析，直接猜测每个域名的 IP",
       "把所有域名固定到同一个 IP",
       "只抓取没有域名的 URL"
     ],
@@ -2061,7 +2061,7 @@
     "tradeoff": "多 provider 分摊限流风险 vs 单一 provider 简单但脆弱",
     "options_en": [
       "Round-robin across multiple DNS providers.",
-      "Stop resolving DNS and guess the IP directly.",
+      "Stop resolving DNS altogether and just guess each domain's IP.",
       "Pin every domain to the same IP address.",
       "Only crawl URLs that have no domain name."
     ],
@@ -2075,7 +2075,7 @@
     ],
     "optionExplanations_en": [
       "Round-robining across providers spreads requests so no single provider is likely to hit its rate cap.",
-      "Guessing the IP will usually miss the right server, and it doesn't solve the throttling problem either.",
+      "Guessing IPs will usually fail to reach the right server and does nothing about the rate limit.",
       "Different domains map to different servers; pinning them to one IP fails most requests outright.",
       "Nearly every page has a domain name, so crawling only domain-less URLs abandons almost every target."
     ]
@@ -2132,7 +2132,7 @@
     "options": [
       "完全跳过内容去重这一整个步骤",
       "hash 存 Metadata DB 并建索引",
-      "只比较 URL 字符串是否完全相同",
+      "只比较两个 URL 的字符串是否完全一模一样",
       "只用进程内存里的 Set，不落盘"
     ],
     "answer": [
@@ -2150,7 +2150,7 @@
     "options_en": [
       "Skip content deduplication entirely, as a whole step.",
       "Store the content hash in the metadata DB and index it.",
-      "Only compare whether the URL strings are exactly identical.",
+      "Only check whether two URL strings are exactly identical, character for character.",
       "Use only an in-process memory set, with no persistence."
     ],
     "q_en": "Which practical content-deduplication approach fits this crawler best?",
@@ -2164,7 +2164,7 @@
     "optionExplanations_en": [
       "Skipping content dedup means identical pages served by different URLs get extracted and stored repeatedly.",
       "An indexed content hash gives exact duplicate detection every worker can query, matching accuracy-first.",
-      "Different URLs often serve the same content, so comparing only URL strings misses that duplicate.",
+      "Different URLs often point to identical content, so comparing URL strings alone misses that duplication.",
       "An in-memory set lives in one process, disappears on restart, and can't be shared across workers."
     ]
   },
@@ -2255,7 +2255,7 @@
     "options": [
       "一定会重复抓取所有页面",
       "会让对象存储失去持久性",
-      "会禁止 URL 深度字段",
+      "会导致 URL 的深度字段被系统彻底禁止使用",
       "误判某个新页面已经抓过，从而跳过它"
     ],
     "answer": [
@@ -2272,7 +2272,7 @@
     "options_en": [
       "It will definitely re-crawl every single page.",
       "It strips durability from object storage.",
-      "It forbids using a URL depth field.",
+      "It would cause the URL depth field to be forbidden entirely.",
       "It may mistakenly treat an unseen page as already crawled and skip it."
     ],
     "termDefinitions": [
@@ -2298,7 +2298,7 @@
     "optionExplanations_en": [
       "This kind of mistake only touches a stray handful of pages, not the whole already-crawled batch.",
       "A Bloom filter is just a duplicate-check tool; it has no bearing on object storage durability.",
-      "The depth field belongs to crawler-trap protection, unrelated to Bloom filter dedup.",
+      "The depth field belongs to crawler-trap defense, unrelated to whether dedup uses a Bloom filter.",
       "The fingerprint bitmap occasionally mistakes something unseen for seen, so that page quietly gets skipped."
     ]
   },
@@ -2314,7 +2314,7 @@
       "先用 hash 索引；Bloom Filter 留作可选优化",
       "完全不需要任何去重",
       "只靠 URL 字符串比较就够了",
-      "坚持用 Bloom Filter，因为它永远不会误判"
+      "坚持一开始就上 Bloom Filter，因为它永远不会产生任何误判"
     ],
     "answer": [
       0
@@ -2333,7 +2333,7 @@
       "Start with a hash index; keep the Bloom filter as an optional later optimization.",
       "Skip deduplication entirely.",
       "Rely only on comparing URL strings.",
-      "Insist on a Bloom filter because it never makes mistakes."
+      "Insist on adopting a Bloom filter up front, because it never produces any false positives."
     ],
     "table": {
       "headers": [
@@ -2366,7 +2366,7 @@
       "Start with an exact hash index, and only reach for a Bloom filter once memory or query pressure shows up.",
       "Skipping dedup lets a lot of duplicate content eat storage and downstream processing capacity.",
       "Different URLs often return the same content, so comparing only strings misses that and the accuracy goal.",
-      "A Bloom filter can absolutely produce false positives — claiming it never makes mistakes is wrong."
+      "A Bloom filter does have false positives, so claiming it never errs is simply wrong."
     ]
   },
   {
@@ -2381,7 +2381,7 @@
     "options": [
       "队列里的死信消息",
       "让爬虫在同一站点无限跟链接、难以结束的页面结构",
-      "DNS provider 的免费额度",
+      "指某个 DNS provider 每月提供的免费调用额度",
       "S3 的对象版本控制"
     ],
     "answer": [
@@ -2396,7 +2396,7 @@
     "options_en": [
       "A dead-letter message sitting in a queue.",
       "A link structure that keeps the crawler following endless links on one site.",
-      "A DNS provider's free-tier quota.",
+      "A DNS provider's monthly free-tier request quota.",
       "S3 object versioning."
     ],
     "q_en": "What is a crawler trap?",
@@ -2409,7 +2409,7 @@
     "optionExplanations_en": [
       "A dead-letter message is a queue artifact from failed retries, unrelated to a site's page structure.",
       "Self-links, calendar pages, or endless parameters keep generating new links, trapping the crawler on one site.",
-      "A free-tier quota is a third-party billing concept, not a page-structure problem.",
+      "A free-tier quota is a billing concept of a third-party service, not a page-structure problem.",
       "Object versioning is a storage-layer feature, unrelated to whether the crawler gets stuck on a site."
     ]
   },
@@ -2426,7 +2426,7 @@
       "直接禁用所有 DNS 缓存查询机制",
       "永远优先抓取最深的链接",
       "记录 link-hop depth，超阈值就停止扩展",
-      "把所有抓到的 URL 强行改写成同一个域名"
+      "把所有抓到的 URL 强行重写到同一个目标域名上去"
     ],
     "answer": [
       2
@@ -2442,7 +2442,7 @@
       "Disable all DNS cache lookups entirely.",
       "Always prioritize the deepest links first.",
       "Record link-hop depth and cut off a branch past a threshold.",
-      "Forcibly rewrite every fetched URL onto the same domain."
+      "Forcibly rewrite every fetched URL onto one single target domain."
     ],
     "q_en": "What is a simple way to avoid crawler traps?",
     "optionExplanations": [
@@ -2455,7 +2455,7 @@
       "Disabling DNS caching only slows normal crawling — it has nothing to do with a trap's endless links.",
       "Prioritizing the deepest links first walks straight into the trap's deepest point, wasting more time.",
       "Counting hops from the seed and cutting a branch past a threshold severs an otherwise endless link space.",
-      "Forcing every URL onto one domain sends the crawl off target and doesn't address the trap at all."
+      "Forcibly rewriting the domain sends crawling off the target site entirely and fixes nothing about traps."
     ]
   },
   {
@@ -2469,7 +2469,7 @@
     "options": [
       "只增加 SQS 可见性超时",
       "只提高 DNS 查询的 QPS",
-      "用 Bloom Filter 代替浏览器渲染",
+      "用 Bloom Filter 来代替浏览器渲染动态页面内容",
       "用 headless browser 渲染后再抽取正文"
     ],
     "answer": [
@@ -2487,7 +2487,7 @@
     "options_en": [
       "Just increase the SQS visibility timeout.",
       "Just raise the DNS query rate limit.",
-      "Replace browser rendering with a Bloom filter.",
+      "Replace browser rendering of dynamic content with a Bloom filter.",
       "Render with a headless browser like Puppeteer or Playwright, then extract."
     ],
     "termDefinitions": [
@@ -2508,7 +2508,7 @@
     "optionExplanations_en": [
       "Visibility timeout only affects queue retry pacing — unrelated to whether content got rendered.",
       "No matter how fast DNS resolves, it can't produce text that a script injects into the page.",
-      "A Bloom filter only checks for duplicates; it can't execute a script or render a DOM.",
+      "A Bloom filter only does dedup; it cannot execute scripts or render the DOM.",
       "Only actually running the script and letting the page finish loading surfaces that generated text."
     ]
   },

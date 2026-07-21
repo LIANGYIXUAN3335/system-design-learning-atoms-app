@@ -8,7 +8,7 @@ export const meta = {
 }
 
 const ROOT = '/Users/yixuanliang/interview/Job_Search/system design learning/atoms-app'
-const N = 236
+const N = 155
 
 function taskPrompt(i) {
   return `You fix answer-length leakage in ONE deck file of Ashlyn's "atoms" system-design app.
@@ -63,6 +63,7 @@ const results = await parallel(Array.from({ length: N }, (_, i) => i).map((i) =>
   agent(taskPrompt(i), {
     label: `len #${i}`,
     phase: 'Fix',
+    model: 'sonnet',
     effort: 'high',
     schema: {
       type: 'object',

@@ -117,7 +117,7 @@
     "q_en": "What does this scale rule out for how the rate limiter is implemented?",
     "options": [
       "单机本地计数或单个 Redis 实例保存全部限流状态",
-      "把限流放在 API Gateway 边缘层做",
+      "把限流逻辑统一下沉到 API Gateway 边缘层执行",
       "使用 Token Bucket 算法",
       "允许限流状态跨节点最终一致"
     ],
@@ -133,7 +133,7 @@
     ],
     "options_en": [
       "A single in-process counter or single Redis instance holding all state",
-      "Placing the limiter at the API Gateway edge layer",
+      "Pushing all limiting logic down to the API Gateway edge layer",
       "Using the Token Bucket algorithm",
       "Letting rate-limit state be eventually consistent across nodes"
     ],
@@ -227,7 +227,7 @@
     "q": "最合适的限流接口返回形态是什么？",
     "q_en": "What should the rate-limit interface return?",
     "options": [
-      "getTrafficLogs(clientId, startTime, endTime) -> { logs, cursor }",
+      "getTrafficLogs(clientId, startTime, endTime, pageSize) -> { logs, nextCursor }",
       "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
       "updateRateLimitRule(ruleId, limit, windowSeconds) -> boolean",
       "renderTimeline(userId, page, pageSize) -> { posts, nextPage }"
@@ -247,7 +247,7 @@
       "headers"
     ],
     "options_en": [
-      "getTrafficLogs(clientId, startTime, endTime) -> { logs, cursor }",
+      "getTrafficLogs(clientId, startTime, endTime, pageSize) -> { logs, nextCursor }",
       "isRequestAllowed(clientId, ruleId) -> { passes, remaining, resetTime }",
       "updateRateLimitRule(ruleId, limit, windowSeconds) -> boolean",
       "renderTimeline(userId, page, pageSize) -> { posts, nextPage }"
@@ -650,7 +650,7 @@
     "q": "User ID 限流相比 IP 限流的主要优势是什么？",
     "q_en": "What is the main advantage of user-ID limiting over IP limiting?",
     "options": [
-      "IP 限流更精确，因为公网 IP 从不重复分配",
+      "IP 限流本身更精确，因为一个公网 IP 永远只对应同一个真实用户",
       "已登录场景更公平：不会把共享 IP 下的多个用户误判成一个",
       "User ID 限流不需要用户先登录鉴权",
       "两者对完全匿名流量的效果完全一样"
@@ -667,7 +667,7 @@
       "contrast"
     ],
     "options_en": [
-      "IP limiting is more precise because public IPs are never reused",
+      "IP limiting is inherently more precise because one public IP always maps to exactly one real user",
       "It is fairer for logged-in users because a shared IP will not be mistaken for one user",
       "User-ID limiting does not require the user to log in first",
       "Both behave identically for fully anonymous traffic"
@@ -723,8 +723,8 @@
     "q": "Fixed Window Counter 的主要缺陷是什么？",
     "q_en": "What is the main flaw of the Fixed Window Counter algorithm?",
     "options": [
-      "必须为每个请求单独存 timestamp",
-      "完全无法实现请求计数",
+      "必须为每个请求单独存一条带 timestamp 的日志",
+      "无法给不同 endpoint 配置不同的限额",
       "窗口边界处可能双倍突发（两个相邻窗口各打满一次）",
       "永远不能返回 reset time"
     ],
@@ -740,8 +740,8 @@
       "fixed-window"
     ],
     "options_en": [
-      "It must store a separate timestamp for every request",
-      "It cannot implement request counting at all",
+      "It must store a separate timestamped log entry for every request",
+      "It cannot give different endpoints different limits",
       "Two adjacent windows can each be maxed out, doubling the effective burst",
       "It can never return a reset time"
     ],
@@ -781,13 +781,13 @@
     },
     "optionExplanations": [
       "固定窗口恰恰不需要单独存每个请求的 timestamp，一个计数器就够了，这个说法说反了。",
-      "固定窗口本身就是靠计数实现的，说它完全不能计数是自相矛盾。",
+      "每条规则本就带 endpoint 维度，固定窗口照样能给不同 endpoint 配不同限额，这不是它的缺陷。",
       "问题出在边界：计数器一重置，上一秒刚打满的 client 马上又拿到一整个新窗口。",
       "窗口边界本身就是确定的时间点，固定窗口反而很容易算出 reset time。"
     ],
     "optionExplanations_en": [
       "Fixed window actually doesn't need a per-request timestamp at all — one counter is enough, so this has it backwards.",
-      "Fixed window is literally built around counting requests, so saying it can't count at all is self-contradictory.",
+      "Rules already carry an endpoint dimension, so a fixed window can still set per-endpoint limits — that's not its flaw.",
       "The flaw is the boundary reset: a client that just maxed out the last second immediately receives a full new window.",
       "Window boundaries are fixed, known points in time, so fixed window is actually one of the easier algorithms to compute a reset time from."
     ],
@@ -805,7 +805,7 @@
     "q_en": "What are the benefit and cost of the Sliding Window Log algorithm?",
     "options": [
       "只需两个整数计数器，但精度很差",
-      "允许短时突发，但管不住长期平均速率",
+      "允许一定的短时突发，但完全约束不了长期平均请求速率",
       "完全无状态，不需要存任何东西",
       "计数精确，但要存大量 timestamp"
     ],
@@ -822,7 +822,7 @@
     ],
     "options_en": [
       "Needs only two integer counters, but accuracy is poor",
-      "Allows short bursts, but does not cap the sustained average rate",
+      "Allows some short bursts, but cannot constrain the long-term average request rate at all",
       "Completely stateless — nothing needs to be stored",
       "Counts are exact, but it stores a lot of timestamps"
     ],
@@ -1161,7 +1161,7 @@
     "q": "哪条 Redis 命令最贴合这个读取？",
     "q_en": "Which Redis command best fits this read?",
     "options": [
-      "KEYS alice:bucket:* 再逐个 HGET",
+      "KEYS alice:bucket:* 再对每个匹配 key 逐个 HGET tokens",
       "BLPOP alice:bucket 0 取下一个 token",
       "PUBLISH alice:bucket check-tokens",
       "HMGET alice:bucket tokens last_refill"
@@ -1181,7 +1181,7 @@
       "code"
     ],
     "options_en": [
-      "KEYS alice:bucket:* then HGET each one",
+      "KEYS alice:bucket:* then HGET tokens on each matching key",
       "BLPOP alice:bucket 0 to take the next token",
       "PUBLISH alice:bucket check-tokens",
       "HMGET alice:bucket tokens last_refill"
@@ -1211,7 +1211,7 @@
     "q_en": "Why can a race condition still occur even after wrapping the write in MULTI/EXEC?",
     "options": [
       "读发生在事务外，两个 gateway 可能都读到旧值",
-      "MULTI/EXEC 里的写入根本不会真正执行",
+      "MULTI/EXEC 里排队的写入在 EXEC 时根本不会被真正执行",
       "Redis hash 里存不了时间戳",
       "EXPIRE 会把所有用户一起删掉"
     ],
@@ -1227,7 +1227,7 @@
     ],
     "options_en": [
       "The read happens outside the transaction, so two gateways can both see a stale value",
-      "Writes inside MULTI/EXEC never actually get executed",
+      "Writes queued inside MULTI/EXEC never actually get executed at EXEC time",
       "A Redis hash cannot store a timestamp",
       "EXPIRE deletes every user's data at once"
     ],
@@ -1441,7 +1441,7 @@
     "q": "超限请求应该如何处理？",
     "q_en": "How should an over-limit request be handled?",
     "options": [
-      "把请求排队，等窗口重置后再处理",
+      "把超限请求先排队缓存，等窗口重置后再处理",
       "静默丢弃请求，不给任何响应",
       "fail fast，立刻返回 429",
       "写入数据库排队，等人工审核放行"
@@ -1459,7 +1459,7 @@
       "fail-fast"
     ],
     "options_en": [
-      "Queue the request and process it after the window resets",
+      "Buffer the over-limit request in a queue and process it after the window resets",
       "Silently drop the request and return nothing at all",
       "Fail fast and return a 429 right away",
       "Park it in a database queue for a human to review"
@@ -1560,7 +1560,7 @@
     "q": "哪种响应最符合规范和用户体验？",
     "q_en": "Which response best matches the HTTP spec and gives a good client experience?",
     "options": [
-      "返回 HTTP 200 成功状态，只在 body 里说明 error",
+      "返回 HTTP 200 成功状态，只在 response body 里用错误字段说明限流",
       "返回 HTTP 500 服务器错误，且不附带任何 header",
       "不返回任何响应，让客户端连接持续挂起",
       "HTTP 429 + X-RateLimit-* + Retry-After"
@@ -1580,7 +1580,7 @@
       "headers"
     ],
     "options_en": [
-      "Return HTTP 200 success and put the error only in the body",
+      "Return HTTP 200 success and signal the throttling only via an error field in the response body",
       "Return HTTP 500 with no headers at all",
       "Send no response and leave the connection hanging",
       "HTTP 429 with X-RateLimit-* and Retry-After"
@@ -1612,7 +1612,7 @@
       "不够：实际检查吞吐远低于 1M/sec，必须分片到多个实例",
       "足够：单实例可以直接扛住 1M/sec",
       "应该放弃 Redis，改成查询主数据库计数",
-      "应该把 refill rate 设为 0 来减轻压力"
+      "应该把每个 client 的 refill rate 都设为 0 来减轻 Redis 压力"
     ],
     "answer": [
       0
@@ -1628,7 +1628,7 @@
       "Not enough: real check throughput is far below 1M/sec, so it must be sharded",
       "Enough: a single instance can directly handle 1M/sec",
       "Abandon Redis and count against the primary database instead",
-      "Set the refill rate to zero to reduce load"
+      "Set every client's refill rate to zero to reduce Redis load"
     ],
     "optionExplanations": [
       "把 raw ops 换成 check 数要除以读写成本；单点最多只到十万级检查，1M 目标要横向摊开。",
@@ -1656,7 +1656,7 @@
     "options": [
       "随机挑一个 Redis 实例写入状态",
       "按 client identifier 一致性哈希到固定 shard",
-      "把同一份 bucket 复制到所有 shard 后随便读写",
+      "把同一份 bucket 完整复制到每一个 shard，读写时随便挑一个实例",
       "每个请求都广播给全部 Redis 实例"
     ],
     "answer": [
@@ -1674,7 +1674,7 @@
     "options_en": [
       "Write to a randomly chosen Redis instance",
       "Consistent-hash the client identifier onto a fixed shard",
-      "Copy the same bucket to every shard and read/write any of them",
+      "Copy the same bucket to every shard and read or write whichever instance you like",
       "Broadcast every request to all Redis instances"
     ],
     "termDefinitions": [
@@ -1765,7 +1765,7 @@
       "继续用单实例，靠升级硬件解决",
       "关闭一部分限流规则来降低压力",
       "按 client key 分片到约 10 个实例",
-      "把全部限流状态复制到每个节点本地判断"
+      "把全部限流状态复制到每一个 gateway 节点上做本地判断"
     ],
     "answer": [
       2
@@ -1781,7 +1781,7 @@
       "Keep a single instance and just upgrade hardware",
       "Turn off some rate-limit rules to reduce load",
       "Shard state by client key across about ten instances",
-      "Replicate all rate-limit state to every node and decide locally"
+      "Replicate all rate-limit state to every gateway node and decide locally on each one"
     ],
     "optionExplanations": [
       "硬件升级能小幅提升单实例的吞吐上限，但离 10 倍差距还差得远，量级上解决不了问题。",
@@ -1840,7 +1840,7 @@
     "options": [
       "限流器故障时改为放行所有请求",
       "只对已付费的用户执行限流",
-      "把超限请求排队等 Redis 恢复",
+      "把无法判断的请求先排队缓存，等 Redis 恢复后再处理",
       "无法判断时拒绝请求，保护后端但牺牲可用性"
     ],
     "answer": [
@@ -1857,7 +1857,7 @@
     "options_en": [
       "Switch to allowing all requests when the limiter fails",
       "Only rate-limit paying customers",
-      "Queue over-limit requests until Redis recovers",
+      "Buffer the unverifiable requests in a queue until Redis recovers and process them then",
       "Reject requests it cannot verify, protecting the backend at the cost of availability"
     ],
     "table": {
@@ -1882,13 +1882,13 @@
     "optionExplanations": [
       "故障时改成放行所有请求，说的其实是 fail-open 的定义，跟这里问的正好相反。",
       "只挑付费用户限流是一个业务规则的选择，跟「故障时怎么办」这个 fail-closed 的定义没有关系。",
-      "把超限请求挂起排队，是另一种处理策略，不是 fail-closed 这个术语本身的定义。",
+      "把无法判断的请求挂起排队等 Redis 恢复，是另一种处理策略，不是 fail-closed 这个术语本身的定义。",
       "判断不了配额时选择拒绝而不是放行，这样能护住后端，但代价是一些本该通过的健康请求也会被挡在门外。"
     ],
     "optionExplanations_en": [
       "Switching to allow everything on failure is actually the definition of fail-open — the opposite of what's being asked here.",
       "Rate-limiting only paying users is a business-rule choice, unrelated to what fail-closed means about handling a failure.",
-      "Queuing over-limit requests until Redis recovers is a different handling strategy, not the definition of the term fail-closed itself.",
+      "Queuing the unverifiable requests until Redis recovers is a different handling strategy, not the definition of the term fail-closed itself.",
       "Choosing to reject rather than allow when quota can't be verified protects the backend, at the cost of also blocking some healthy requests that should have gone through."
     ]
   },
@@ -2145,7 +2145,7 @@
     "q": "最重要的低延迟优化是什么？",
     "q_en": "What is the single most important low-latency optimization?",
     "options": [
-      "每请求打开新连接以避免复用",
+      "每次请求都新建一条 TCP 连接，用完立刻关闭",
       "把限流检查改成离线批处理",
       "删除所有 headers",
       "连接池 / 持久 Redis 连接"
@@ -2163,7 +2163,7 @@
       "connection-pooling"
     ],
     "options_en": [
-      "Open a fresh connection per request to avoid reuse",
+      "Open a brand-new TCP connection per request and close it right after",
       "Turn rate-limit checks into an offline batch job",
       "Strip out all response headers",
       "Connection pooling with persistent Redis connections"
@@ -2201,7 +2201,7 @@
     "options": [
       "多区域部署 Gateway 和 Redis，就近完成限流",
       "把所有流量强制回源到单一区域",
-      "只增加 HTTP 429 的 body 字段",
+      "只在 HTTP 429 响应的 body 里多返回几个诊断字段",
       "直接关闭 TLS 加密传输"
     ],
     "answer": [
@@ -2218,7 +2218,7 @@
     "options_en": [
       "Deploy gateways and Redis regionally, so checks stay local",
       "Force all traffic back to a single origin region",
-      "Just add another field to the 429 response body",
+      "Just return a few more diagnostic fields in the 429 response body",
       "Simply turn off TLS encryption"
     ],
     "optionExplanations": [
@@ -2294,7 +2294,7 @@
     "options": [
       "某篇帖子被非常多不同用户同时读取",
       "单个 client 请求量极高，压垮所在 shard",
-      "某张数据库表的 schema 设计得不好",
+      "某张数据库表的 schema 设计得不好，导致查询变得很慢",
       "所有用户的请求量都完全均匀"
     ],
     "answer": [
@@ -2310,7 +2310,7 @@
     "options_en": [
       "One post is being read by many different users",
       "One client sends extreme traffic and overloads its shard",
-      "A database table has a poorly designed schema",
+      "A database table has a poorly designed schema that makes queries slow",
       "Every user's request volume is perfectly even"
     ],
     "optionExplanations": [
@@ -2485,7 +2485,7 @@
     "q": "最常见的动态配置方案是什么？",
     "q_en": "What is the most common approach for dynamic configuration?",
     "options": [
-      "每次改限额都要重新部署所有 gateway",
+      "每次改限额都要重新构建镜像并重新部署所有 gateway 实例",
       "把规则直接写进客户端代码里",
       "只靠人工 SSH 登录改内存",
       "规则存配置库，gateway 定期 polling"
@@ -2504,7 +2504,7 @@
     ],
     "diagram": "flowchart LR\nAdmin[Admin config] --> Store[Config store]\nStore --> Watch[Watch or poll]\nWatch --> Gateway[Gateway cache]\nGateway --> Checks[Limiter checks]",
     "options_en": [
-      "Redeploy every gateway whenever a limit changes",
+      "Rebuild the image and redeploy every gateway instance whenever a limit changes",
       "Hard-code the rules directly into client code",
       "Only change memory by hand over SSH",
       "Rules live in a config store that gateways poll periodically"
@@ -2548,7 +2548,7 @@
     "q_en": "Which configuration-distribution approach should be considered?",
     "options": [
       "ZooKeeper/Pub-Sub push 配置变更",
-      "每天定点人工重启所有 gateway 让配置生效",
+      "每天定点人工重启所有 gateway 实例来让新的配置生效",
       "把规则直接写死在部署镜像里",
       "只手动更新其中一台 gateway"
     ],
@@ -2566,7 +2566,7 @@
     ],
     "options_en": [
       "Push config changes out via ZooKeeper or Pub/Sub",
-      "Restart every gateway by hand at a fixed time each day",
+      "Restart every gateway instance by hand at a fixed time each day to apply new config",
       "Bake the rules directly into the deployment image",
       "Manually update just one single gateway"
     ],
@@ -2662,7 +2662,7 @@
     "q": "中级候选人在这题里至少应讲清楚什么？",
     "q_en": "What should a mid-level candidate clearly cover at minimum in this question?",
     "options": [
-      "从零手写一遍完整 ZooKeeper 实现",
+      "从零手写一遍完整的 ZooKeeper 分布式协调实现",
       "选对部署位置、讲清一种算法、知道要分片 Redis",
       "背出 Lua 虚拟机的内部源码",
       "只讨论前端错误提示文案"
@@ -2678,7 +2678,7 @@
       "mid"
     ],
     "options_en": [
-      "Implement a full ZooKeeper from scratch",
+      "Hand-write a complete ZooKeeper distributed-coordination implementation from scratch",
       "Place the limiter well, explain one algorithm, and know Redis needs sharding",
       "Recite the internal source of the Lua VM",
       "Only discuss frontend error copy"
@@ -2707,7 +2707,7 @@
     "q": "下一步最应该主动展开什么？",
     "q_en": "What should you proactively expand on next?",
     "options": [
-      "只死记硬背固定窗口的定义",
+      "只是把固定窗口算法的定义原封不动地背下来",
       "假装系统完全没有故障模式",
       "讲清原子更新、按 key 分片、降级",
       "把限流丢给客户端就当结束"
@@ -2723,7 +2723,7 @@
       "senior"
     ],
     "options_en": [
-      "Only recite the definition of a fixed window",
+      "Just memorize the fixed-window algorithm's definition word for word",
       "Pretend the system has no failure modes",
       "Explain atomic updates, sharding, and failure degradation",
       "Hand rate limiting to the client and stop there"
@@ -2795,7 +2795,7 @@
     "q": "Staff+ 答案通常应体现什么？",
     "q_en": "What should a Staff+ answer typically demonstrate?",
     "options": [
-      "只是多罗列几种算法的名字而已",
+      "只是把更多限流算法的名字一个接一个地罗列出来",
       "完全回避任何权衡取舍的讨论",
       "假设所有客户端天生值得信任",
       "强调生产深度：多区域、可观测性、真实容量"
@@ -2811,7 +2811,7 @@
       "staff"
     ],
     "options_en": [
-      "Just list a few more algorithm names",
+      "Just rattle off the names of even more rate-limiting algorithms one after another",
       "Avoid any discussion of trade-offs entirely",
       "Assume every client is inherently trustworthy",
       "Emphasize production depth: multi-region, observability, real capacity"

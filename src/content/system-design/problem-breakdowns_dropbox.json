@@ -484,13 +484,13 @@
     "q": "原始文件内容应该存在哪里？",
     "options": [
       "File Service 本地文件系统",
-      "Metadata DB 的一列",
+      "Metadata DB 里新增一个二进制 BLOB 大字段列",
       "Redis Pub/Sub",
       "S3 / GCS 这类 Blob Storage"
     ],
     "options_en": [
       "The File Service's local file system.",
-      "A column in the metadata database.",
+      "A dedicated binary BLOB column added to the metadata database.",
       "Redis Pub/Sub.",
       "Blob storage such as S3 or GCS."
     ],
@@ -752,15 +752,15 @@
     "sub": "upload-consistency",
     "q": "使用 Blob Storage 后，metadata 和 file bytes 之间会出现什么一致性问题？",
     "options": [
-      "这个云存储 S3 会自动帮你创建用户账号",
+      "S3 写入和 metadata 写在同一个事务里，不会不一致",
       "上传后文件名字段直接就无法保存",
-      "CDN 边缘节点会把数据库整个删掉",
+      "S3 上传成功就代表 metadata 那条记录一定也写好了",
       "文件传上去了但 metadata 没存，或者反过来"
     ],
     "options_en": [
-      "This cloud storage, S3, automatically creates a user account for you.",
+      "The S3 write and the metadata write share one transaction, so they can't diverge.",
       "The file name field simply cannot be saved after upload.",
-      "A CDN edge node deletes the entire database.",
+      "A successful S3 upload guarantees the metadata row was already written too.",
       "The file uploaded but metadata wasn't saved, or the reverse happened."
     ],
     "answer": [
@@ -775,15 +775,15 @@
     ],
     "q_en": "What consistency problem appears when metadata and file bytes live separately?",
     "optionExplanations": [
-      "S3 不会替你创建用户账号，这个说法跟场景完全不搭。",
+      "S3 和数据库是两个独立系统，没有跨系统事务，正因如此才会出现中间态。",
       "文件名字段的保存跟这里讨论的一致性问题无关，完全能正常写入。",
-      "CDN 边缘节点不会碰数据库，这个后果在真实系统里不会发生。",
+      "S3 只知道自己的字节，管不到 metadata 那张表写没写成功，两者各自成败。",
       "两个系统各自独立成功或失败，就会留下“字节到了但记录没写”或反过来的中间态。"
     ],
     "optionExplanations_en": [
-      "S3 doesn't create user accounts for you — that claim doesn't fit the scenario at all.",
+      "S3 and the database are two separate systems with no cross-system transaction — that's exactly why an in-between state appears.",
       "Saving the file name field is unrelated to this consistency problem; it saves fine.",
-      "A CDN edge node never touches the database — this outcome couldn't happen in a real system.",
+      "S3 only knows about its own bytes; it has no idea whether the metadata row was written, since the two succeed or fail independently.",
       "Each system can succeed or fail on its own, so you end up with bytes present but no record, or the reverse."
     ],
     "scenario": "Dropbox 把文件字节写进 S3、元数据写进 Metadata DB，这两次写没有共同事务包住。",
@@ -847,13 +847,13 @@
     "options": [
       "所有用户请求都固定从源站跨洲下载文件",
       "用 CDN 缓存文件并发放短期 signed URL",
-      "把这些大文件统一塞进 Redis 内存缓存里",
+      "把所有大文件统一塞进 Redis 集群的内存缓存里做分发",
       "发动所有用户之间互相转发彼此的文件"
     ],
     "options_en": [
       "Every user request always fetches across continents from the origin.",
       "Cache files at CDN edge nodes and issue short-lived signed URLs.",
-      "Stuff all these large files into a Redis in-memory cache.",
+      "Stuff all these large files into a Redis cluster's in-memory cache to serve them.",
       "Have every user relay files back and forth to each other."
     ],
     "answer": [
@@ -969,13 +969,13 @@
     "q": "把 sharelist 直接放在 FileMetadata 中的主要查询问题是什么？",
     "options": [
       "下载单个文件时反而没法检查访问权限",
-      "这个字段没法存储 uploadedBy 上传者信息",
+      "撤销某个用户的共享权限时要逐个文件去改它的 sharelist",
       "这时候没法保存文件的大小字段",
       "查看“分享给我”的文件可能要扫描全部文件的 sharelist"
     ],
     "options_en": [
       "Downloading a single file can no longer check access permission.",
-      "This field cannot store the uploadedBy uploader information.",
+      "Revoking one user's access means editing that user's entry in every file's share list.",
       "The file size field cannot be saved at this point.",
       "Listing files shared with me may require scanning every file's sharelist."
     ],
@@ -992,13 +992,13 @@
     "q_en": "What query problem comes from storing sharelist inside FileMetadata?",
     "optionExplanations": [
       "单文件权限检查恰恰是 inline sharelist 最擅长的场景，这个说法说反了。",
-      "uploadedBy 是完全独立的字段，跟 sharelist 放在哪里没有任何关系。",
+      "这确实是个写放大成本，但题目问的是查询问题；真正的查询痛点是反向查“分享给我”。",
       "文件大小的存储方式跟分享列表设计是两件不相关的事。",
       "反过来查“谁分享给了我”时，没有反向索引就只能把每个文件的 sharelist 都翻一遍。"
     ],
     "optionExplanations_en": [
       "Single-file permission checks are exactly what an inline share list is good at — this gets it backwards.",
-      "uploadedBy is a completely separate field, unrelated to where the share list lives.",
+      "That's a real write-amplification cost, but the question asks about the query problem; the query pain is the reverse \"shared with me\" lookup.",
       "How file size is stored has nothing to do with the sharing list design.",
       "Answering 'what's shared with me' without a reverse index means checking every file's sharing field one at a time."
     ],
@@ -1273,13 +1273,13 @@
     "options": [
       "人工合并每个字节",
       "所有冲突都拒绝",
-      "强一致锁住全球文件",
+      "给每个文件都加全局强一致的写锁",
       "last write wins"
     ],
     "options_en": [
       "Manually merge every byte.",
       "Reject every conflicting write.",
-      "Lock the file globally for strong consistency.",
+      "Put a global strong-consistency write lock on every file.",
       "Last write wins."
     ],
     "answer": [
@@ -1389,13 +1389,13 @@
     "options": [
       "同步这件事完全只靠每小时轮询一次",
       "单连接推送变更，靠周期性 polling 兜底漏掉的事件",
-      "给每一个文件单独开一条 WebSocket 连接",
+      "给每一个文件都单独开一条长连的 WebSocket 连接推送",
       "同步通知完全依赖发邮件来提醒用户"
     ],
     "options_en": [
       "Sync relies entirely on polling once every hour.",
       "One connection pushes changes, backed by periodic polling.",
-      "Open a separate WebSocket connection for every single file.",
+      "Open a separate long-lived WebSocket connection per file to push changes.",
       "Sync notifications rely entirely on sending emails to users."
     ],
     "answer": [
@@ -1643,13 +1643,13 @@
     "scenario": "面试里算了一笔账：50GB 文件在 100Mbps 连接上要传约 4000 秒（约 1.11 小时）。",
     "q": "这个耗时估算最能支持哪个产品决策？",
     "options": [
-      "应该把带宽限制成 10Mbps 以便计费",
+      "应该把每个用户的上传带宽限制成 10Mbps 方便计费",
       "上传接口不需要任何超时设置",
       "必须提供进度指示和断点续传，避免用户空等一小时",
       "可以要求用户全程不关闭浏览器且不能中断"
     ],
     "options_en": [
-      "Bandwidth should be capped at 10Mbps for billing purposes.",
+      "Cap each user's upload bandwidth at 10Mbps to make billing easier.",
       "The upload endpoint needs no timeout settings at all.",
       "Provide progress indication and resumable upload; users shouldn't wait an hour blind.",
       "Require users to keep the browser open the entire time without interruption."
@@ -1688,13 +1688,13 @@
     "scenario": "面试里提到：Amazon API Gateway 这类托管入口的请求体上限约 10MB，远小于 50GB 文件。",
     "q": "这个限制说明了什么设计约束？",
     "options": [
-      "干脆把 API Gateway 这一层整个去掉",
+      "干脆把 API Gateway 这一整层从架构里彻底去掉",
       "50GB 文件绝不能塞进单个 API Gateway 请求",
       "数据库的连接数需要相应调大十倍",
       "CDN 的缓存命中率会因此明显下降"
     ],
     "options_en": [
-      "Just remove the API Gateway layer entirely.",
+      "Just remove the entire API Gateway layer from the architecture.",
       "A 50GB file can never fit through a single API-Gateway request.",
       "Database connection limits need to be increased tenfold.",
       "CDN cache hit rate will drop noticeably because of this."
@@ -1733,13 +1733,13 @@
     "scenario": "要上传 50GB 文件，用户需要看到进度，断网或关浏览器后也能从已完成部分继续。",
     "q": "应该采用什么策略？",
     "options": [
-      "让服务端先收完整 50GB 文件再切块处理",
+      "让服务端先完整接收 50GB 文件落盘之后再切块处理",
       "直接禁止用户上传任何大文件",
       "把整个文件塞进一个巨大的 JSON 字段里",
       "客户端切成 5-10MB chunks，支持断点续传"
     ],
     "options_en": [
-      "Have the server receive the full 50GB file before chunking it.",
+      "Have the server fully receive and store the 50GB file to disk before chunking.",
       "Simply disallow users from uploading any large file.",
       "Stuff the entire file into one giant JSON field.",
       "The client uploads in 5-10MB chunks with resumable support."
@@ -1820,13 +1820,13 @@
       "恶意客户端可伪造 chunk 状态，造成数据不一致",
       "这样一来客户端就没法正常显示上传进度",
       "这个云存储 S3 就不会返回上传成功",
-      "metadata 这张表没法存储数组字段"
+      "客户端频繁 PATCH 会因为请求体过大撑爆后端内存"
     ],
     "options_en": [
       "A malicious client can forge chunk status, causing data inconsistency.",
       "This means the client can no longer show upload progress properly.",
       "This cloud storage, S3, would not return upload success.",
-      "The metadata table cannot store array fields."
+      "Frequent client PATCHes could blow up backend memory with oversized request bodies."
     ],
     "answer": [
       0
@@ -1850,13 +1850,13 @@
       "客户端说的话不能直接当真——恶意客户端能谎报某个 chunk 已传完，带偏 metadata 和 S3 的实际状态。",
       "进度展示照样能正常做，跟这里讨论的伪造风险是两件事。",
       "这个风险跟 S3 会不会返回上传成功没有关系，S3 该怎么响应还是怎么响应。",
-      "数组字段的存储能力跟安全风险无关，metadata 表完全存得下。"
+      "PATCH 只带一个状态标记，体量很小，撑爆内存不是这里的风险；真正问题是客户端能谎报状态。"
     ],
     "optionExplanations_en": [
       "You can't take the client's word for it — a malicious client can simply lie about a chunk being done, drifting metadata away from what S3 actually has.",
       "Progress display still works fine; that's unrelated to the forgery risk being discussed here.",
       "This risk has nothing to do with whether S3 returns upload success — S3 responds the same either way.",
-      "Whether array fields can be stored has nothing to do with the security risk; the metadata table handles them fine."
+      "A PATCH only carries a small status flag, so memory blow-up isn't the risk here; the real problem is the client can lie about status."
     ],
     "scenario": "Dropbox 分块上传时客户端 PATCH 上报每个 chunk 完成，服务端据此把文件标记为可下载。",
     "scenario_en": "During a chunked Dropbox upload the client PATCHes each chunk as done, and the server marks the file downloadable based on that."
@@ -1870,13 +1870,13 @@
     "scenario": "客户端上传每个 part 后拿到 ETag；后端需要确认这些 parts 确实存在于 S3 multipart upload 中。",
     "q": "后端应如何验证 chunk 状态？",
     "options": [
-      "后端完全信任客户端上报的 PATCH body",
+      "后端就直接完全信任客户端上报的那份 PATCH body",
       "查 S3 ListParts 核对 part/ETag",
       "只看客户端本地显示的那个上传进度条数值",
       "仅凭上传的文件名判断上传状态"
     ],
     "options_en": [
-      "The backend fully trusts the client-reported PATCH body.",
+      "The backend just fully trusts the PATCH body the client reports.",
       "Call S3 ListParts to check the part and ETag.",
       "Just look at the progress bar value shown on the client.",
       "Judge upload status purely from the uploaded file name."
@@ -2013,13 +2013,13 @@
     "sub": "download",
     "q": "为什么 multipart upload 不意味着下载也必须按原始 chunks 下载？",
     "options": [
-      "这个云存储 S3 永远只保存成多个不可组合的 parts",
+      "这个云存储 S3 永远只把它保存成多个互相不可组合的独立 parts",
       "CDN 网络完全没办法下载大文件",
       "组装完成后是普通对象，下载靠 signed URL 或 Range",
       "现在的浏览器完全没法处理 Range 请求"
     ],
     "options_en": [
-      "This cloud storage, S3, always keeps it as separate, unmergeable parts.",
+      "This cloud storage, S3, forever keeps it as separate, non-combinable parts.",
       "A CDN network cannot download large files at all.",
       "Once assembled it is a normal object; downloads can use a signed URL or Range.",
       "Modern browsers simply cannot handle Range requests."
@@ -2138,13 +2138,13 @@
     "q": "固定大小 chunk 在文件开头插入 1 字节会造成什么问题？",
     "options": [
       "chunk 边界整体偏移，fingerprint 多数变化",
-      "插入字节之后只有第一个 chunk 会发生变化",
+      "插入那个字节之后其实只有开头第一个 chunk 会发生变化",
       "这时候文件就没法再进行加密了",
       "这时候 CDN 就没办法缓存这个文件了"
     ],
     "options_en": [
       "Chunk boundaries all shift, and most fingerprints change too.",
-      "Only the first chunk changes after the byte is inserted.",
+      "After that byte is inserted, actually only the very first chunk changes.",
       "The file can no longer be encrypted at this point.",
       "A CDN can no longer cache this file at this point."
     ],
@@ -2190,13 +2190,13 @@
     "scenario": "希望小范围编辑只影响附近块，而不是让后面所有固定大小块都重新计算和同步。",
     "q": "应采用哪种 chunk 边界策略？",
     "options": [
-      "永远固定每 5MB 切一刀，边界从不改变",
+      "永远固定每 5MB 硬切一刀，块的边界从来不随内容改变",
       "CDC：用 rolling hash 按内容决定边界",
       "按照文件名字符串的长度来切块",
       "按照上传用户的 ID 来决定切块方式"
     ],
     "options_en": [
-      "Always cut every fixed 5MB; the boundary never changes.",
+      "Always cut a hard boundary every fixed 5MB; boundaries never follow content.",
       "CDC: use a rolling hash to set boundaries by content.",
       "Chunk based on the length of the file name string.",
       "Chunk based on the uploading user's ID."
@@ -2441,13 +2441,13 @@
     "q": "signed URL 的安全局限是什么？",
     "options": [
       "它是 bearer token，拿到 URL 就能下载",
-      "这种签名 URL 完全没有办法设置过期时间",
+      "这种签名 URL 完全没有任何办法给它设置过期时间限制",
       "这种 URL 完全不能配合 CDN 一起使用",
       "这种 URL 里必须包含用户的登录密码"
     ],
     "options_en": [
       "It's a bearer token; whoever holds the URL can download it.",
-      "This signed URL has absolutely no way to set an expiration.",
+      "This signed URL has no way whatsoever to set an expiration limit.",
       "This kind of URL cannot be used together with a CDN at all.",
       "This URL must contain the user's login password."
     ],

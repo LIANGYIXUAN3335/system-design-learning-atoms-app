@@ -147,7 +147,7 @@
     "scenario": "每个 metric data point 约 100-200 bytes，峰值 5M metrics/s，原始写入量约 1GB/s。",
     "q": "这个字节量级最支持哪条设计判断？",
     "options": [
-      "1GB/s 在网络和存储层可以忽略，用什么线格式都一样",
+      "1GB/s 对现代万兆网卡和 SSD 来说不算大，用什么线格式吞吐都一样",
       "线格式和存储都要考虑压缩与批量；JSON 逐点发送在此量级下不现实",
       "每个 point 应带上完整历史记录以减少请求数",
       "字节量级只影响磁盘成本，不影响协议选择"
@@ -163,7 +163,7 @@
       "throughput"
     ],
     "options_en": [
-      "1GB/s is negligible for networking and storage, so any wire format works the same.",
+      "1GB/s is small for modern 10GbE NICs and SSDs, so any wire format gives the same throughput.",
       "Both the wire format and storage need compression and batching; sending raw JSON per point will not scale.",
       "Each point should carry its full history to reduce the number of requests.",
       "The byte volume only affects disk cost, not protocol choice."
@@ -299,7 +299,7 @@
       "Metric 只用于告警，Series 只用于通知展示",
       "Metric 是某一时刻的单点值，Series 是它随时间累积的序列",
       "两者其实是同一个概念，只是叫法不一样而已",
-      "Metric 存用户身份信息，Series 存访问日志内容"
+      "Metric 是指标的名字与类型定义，Series 才是某一时刻上报的单个测量点"
     ],
     "answer": [
       1
@@ -316,7 +316,7 @@
       "Metric is only for alerting, and series is only for notification display.",
       "A metric is a single point value at an instant; a series is that value accumulated over time.",
       "The two terms are actually the same concept, just called differently.",
-      "Metric stores user identity data, and series stores access logs."
+      "A metric is the name-and-type definition, and a series is a single measurement reported at one instant."
     ],
     "termDefinitions": [
       {
@@ -336,13 +336,13 @@
       "把两者按用途（告警/通知）分家是错的：区分点不在谁用它，而在数据本身是单点还是序列。",
       "cpu_usage{host=\"server-1\"}=0.75 这一条是 metric；把 server-1 所有时刻的这类值串起来才是 series。",
       "两者粒度不同不能互换：metric 是一个点，series 是这个点所在的完整时间轴，混用会让存储模型出错。",
-      "两者都是指标数据，不涉及用户身份或访问日志，那属于完全不同的数据域。"
+      "这把两个概念说反了：series 不是单个点，而是同名同 label 的点连成的整条时间轴。"
     ],
     "optionExplanations_en": [
       "Splitting them by use case, alerting versus display, is wrong; the real distinction is single point versus full sequence, not who consumes it.",
       "cpu_usage{host=\"server-1\"}=0.75 at one instant is the metric point; stringing every timestamp for that host together is the series.",
       "They're different granularities, not synonyms: a metric is one point, a series is its whole timeline, and conflating them breaks the storage model.",
-      "Both hold metric data, not user identity or access logs; that belongs to an entirely different data domain."
+      "This reverses the two: a series isn't a single point but the whole timeline of same-name, same-label points."
     ]
   },
   {
@@ -409,7 +409,7 @@
     "scenario": "Agent/服务要高吞吐发送指标，网络协议示例用 JSON 表达，但真实系统可换 protobuf。",
     "q": "摄取 API 的形态应是什么？",
     "options": [
-      "GET /metrics/one-by-one 每个点一个请求",
+      "GET /metrics/one-by-one，每个数据点单独发一个 HTTP 请求",
       "POST /metrics/ingest 批量提交 metrics 数组",
       "DELETE /dashboards/all",
       "POST /alerts/notifyOnly"
@@ -429,7 +429,7 @@
       "ingestion"
     ],
     "options_en": [
-      "GET /metrics/one-by-one, one request per data point.",
+      "GET /metrics/one-by-one, one HTTP request per data point.",
       "POST /metrics/ingest with a batched array of metrics.",
       "DELETE /dashboards/all.",
       "POST /alerts/notifyOnly."
@@ -465,7 +465,7 @@
     "scenario": "Dashboard 需要按 PromQL-like DSL 查询某个时间范围内的聚合指标。",
     "q": "查询 API 最贴近哪种形态？",
     "options": [
-      "POST /metrics/ingest，用于写入而非查询",
+      "POST /metrics/ingest，把批量指标点写入存储而不是查询",
       "GET /alerts/sendNow，用于手动触发通知",
       "GET /metrics/query，按 DSL 表达过滤聚合和时间范围",
       "DELETE /series，用于删除整条 series"
@@ -485,7 +485,7 @@
       "query"
     ],
     "options_en": [
-      "POST /metrics/ingest, used for writing, not querying.",
+      "POST /metrics/ingest, which writes batched metric points into storage rather than querying.",
       "GET /alerts/sendNow, used to manually trigger a notification.",
       "GET /metrics/query, expressing filters, aggregation, and time range via the DSL.",
       "DELETE /series, used to delete an entire series."
@@ -626,10 +626,10 @@
     "sub": "ingestion",
     "q": "只在负载均衡器后面增加更多 ingestion service 实例，为什么还不够？",
     "options": [
-      "会让负载均衡器无法分流请求",
-      "会导致所有实例都禁止批量发送",
+      "负载均衡器本身会先于数据库被请求打满，成为新瓶颈",
+      "实例一多，每个实例的批量窗口变小，摄取吞吐反而下降",
       "只扩展了入口，所有实例仍冲击同一个数据库",
-      "会让 Kafka 被直接删除"
+      "多个实例会重复写入同一批指标点，造成数据翻倍"
     ],
     "answer": [
       2
@@ -642,23 +642,23 @@
       "scaling"
     ],
     "options_en": [
-      "It would make the load balancer unable to distribute requests.",
-      "It would forbid every instance from batching sends.",
+      "The load balancer itself saturates before the database and becomes the new bottleneck.",
+      "With more instances each one's batch window shrinks, so ingestion throughput actually drops.",
       "It only scales the entry point; every instance still hits the same database.",
-      "It would delete Kafka outright."
+      "Multiple instances would write the same batch of points twice, doubling the data."
     ],
     "q_en": "Why is adding more ingestion service instances behind a load balancer still not enough?",
     "optionExplanations": [
-      "负载均衡器天生就是用来分流的，加实例不会削弱它这个能力。",
-      "批量发送是每个实例自己的行为，跟实例数量多少完全没有关系。",
+      "LB 确实要够格，但本题瓶颈在下游 DB：入口再宽，所有实例仍写同一个库。",
+      "批量窗口由每个实例自己的攒批策略决定，跟实例数量无关，吞吐不会因此下降。",
       "多开几个 ingestion 实例只是扩宽了入口，它们最终还是把请求全部转给同一个数据库承接。",
-      "这一步的场景里还没有引入 Kafka，也谈不上被删除的问题。"
+      "同一批点只由接收它的那个实例处理，不会因为多开实例就被重复写入。"
     ],
     "optionExplanations_en": [
-      "Load balancers exist to spread traffic; adding more instances doesn't weaken that ability.",
-      "Batching is each instance's own behavior, unrelated to how many instances are running.",
+      "The LB does need to be capable, but the bottleneck here is the downstream DB: however wide the entry, all instances still write one database.",
+      "The batch window is set by each instance's own batching policy, independent of instance count, so throughput doesn't drop.",
       "Adding more ingestion instances only widens the front door; they all still forward writes to the same downstream database.",
-      "Kafka hasn't even been introduced at this stage of the design, so deleting it isn't the issue here."
+      "A given batch of points is handled only by the instance that received it, so adding instances doesn't cause duplicate writes."
     ],
     "scenario": "5M metrics/s 洪峰下 ingestion 已扩到 50 个实例，但它们后面仍是同一个 TSDB。",
     "scenario_en": "At five million metrics per second you have scaled ingestion to fifty instances, but they all still write to the same TSDB."
@@ -734,7 +734,7 @@
     "options": [
       "让每个业务进程各自建数据库连接",
       "装一个面向用户的浏览器插件",
-      "让人工定期手工上传 CSV 文件",
+      "让运维定期手工把机器指标导出成 CSV 再上传",
       "本地 agent，采集+缓冲+批量上报"
     ],
     "answer": [
@@ -752,7 +752,7 @@
     "options_en": [
       "Let every business process open its own database connection.",
       "Install a browser extension aimed at end users.",
-      "Have someone manually upload CSV files on a schedule.",
+      "Have ops staff periodically export machine metrics to CSV and upload them by hand.",
       "A local agent that collects, buffers, and batches uploads."
     ],
     "termDefinitions": [
@@ -786,7 +786,7 @@
     "q": "Kafka 缓冲的一个重要代价是什么？",
     "options": [
       "所有数据会因此变成强一致查询",
-      "运维复杂度会自动降到 0，不再需要人管",
+      "运维复杂度会自动降到零，broker 和分区都不用再操心",
       "恢复后要追赶 backlog，容量不足会长期落后",
       "消费者从此不能并行处理消息"
     ],
@@ -802,7 +802,7 @@
     ],
     "options_en": [
       "All data would suddenly become strongly consistent to query.",
-      "Operational complexity automatically drops to zero and no longer needs anyone managing it.",
+      "Operational complexity automatically drops to zero, with brokers and partitions needing no attention.",
       "After recovery it must catch up on a backlog, and tight capacity means staying behind long-term.",
       "Consumers can no longer process messages in parallel."
     ],
@@ -1357,7 +1357,7 @@
     "options": [
       "全量原始点扫描不会影响查询延迟，只影响存储成本",
       "全量原始点扫描会让面板退化到分钟级，须靠 rollup 或缓存降点数",
-      "2.59 亿行对时间序列数据库来说可以直接一次性全表扫描",
+      "2.59 亿行对专门的时间序列数据库来说完全可以直接一次性全表扫描",
       "点数越多，索引会自动保证查询保持亚秒级"
     ],
     "answer": [
@@ -1373,7 +1373,7 @@
     "options_en": [
       "Full raw-resolution scans do not affect query latency, only storage cost.",
       "Full raw-resolution scans degrade panels to minutes, so rollups or caching must cut the points scanned.",
-      "259 million rows can be scanned in one full table pass for a time-series database.",
+      "259 million rows can be scanned in a single full table pass on a dedicated time-series database.",
       "More points automatically keep the query at sub-second latency thanks to indexing."
     ],
     "q_en": "What design decision does a 30-day raw-point query at this scale imply?",
@@ -1399,9 +1399,9 @@
     "sub": "rollups",
     "q": "为什么不能只存平均值 rollup 后再查询 p99 latency？",
     "options": [
-      "平均值会自动包含 p99",
-      "p99 不需要任何数据",
-      "TSDB 不能保存数字",
+      "只要再存下每个窗口的最大值，就能反推出 p99",
+      "p99 可以用均值乘一个固定系数在查询时估出来",
+      "把 rollup 粒度调细到 1 秒就能保住 p99 精度",
       "平均值丢掉分布信息，无法恢复百分位"
     ],
     "answer": [
@@ -1415,9 +1415,9 @@
       "percentiles"
     ],
     "options_en": [
-      "The average automatically includes p99.",
-      "p99 needs no data at all.",
-      "The time-series database cannot store numbers.",
+      "Just also storing each window's max value lets you reconstruct p99.",
+      "p99 can be estimated at query time by multiplying the average by a fixed factor.",
+      "Shrinking rollup granularity to one second preserves p99 accuracy.",
       "An average discards distribution information, so percentiles cannot be recovered from it."
     ],
     "termDefinitions": [
@@ -1429,15 +1429,15 @@
     ],
     "q_en": "Why can you not store only average rollups and later query p99 latency?",
     "optionExplanations": [
-      "均值是把一堆数压成一个数，压缩过程本身就丢掉了分布形状，反推不出 p99 在哪。",
-      "计算任何百分位都需要样本或分布摘要作为输入，不存在不需要数据就能算出来的百分位。",
-      "TSDB 存数字完全没问题，问题出在只存了均值这一个统计量，而不是整条分布。",
+      "多存一个最大值也只是两个极端统计量，中间的分布形状仍然缺失，凑不出 p99。",
+      "均值和 p99 的比值随分布形状漂移，没有固定系数，乘出来的只是猜测不是真分位。",
+      "只要每个桶仍只存均值，桶再细也是一串均值，窗口内的分布照样丢失。",
       "均值只留下一个数，那 10 秒里每个样本的分布形状已经不可逆地丢了，只能换成直方图或近似分位结构重新存。"
     ],
     "optionExplanations_en": [
-      "An average compresses many numbers into one, and that compression itself throws away the shape needed to find where p99 sits.",
-      "Computing any percentile needs samples or a distribution summary as input; there's no such thing as a percentile with zero data behind it.",
-      "TSDBs store numbers just fine; the real problem is storing only the average statistic instead of the full distribution.",
+      "One extra max value is still just two extreme statistics; the middle of the distribution is missing, so p99 can't be pieced together.",
+      "The ratio of average to p99 drifts with distribution shape; there's no fixed factor, so the product is a guess, not a real quantile.",
+      "If each bucket still stores only an average, finer buckets are just a longer string of averages; the in-window distribution is still lost.",
       "An average collapses a window into one number; the shape of those ten seconds is irreversibly gone, so it has to be rebuilt as a histogram or an approximate-quantile structure instead."
     ],
     "scenario": "为省存储，10 秒原始点在 30 天后 rollup 成 1 分钟粒度，但 SLO 报表仍要查 p99 延迟。",
@@ -1453,9 +1453,9 @@
     "q": "最佳低延迟读优化是什么？",
     "options": [
       "每次刷新都全量重新扫描 raw 数据一遍",
-      "干脆把整个 dashboard 功能禁用掉",
+      "给每个 dashboard 加只读副本，把读流量分摊到副本上",
       "查询拆分：新近数据查库，历史数据读缓存/预计算结果",
-      "干脆把已有的告警规则全部删掉"
+      "把 raw 原始点的保留期砍到 7 天来减少扫描量"
     ],
     "answer": [
       2
@@ -1471,23 +1471,23 @@
     ],
     "options_en": [
       "Fully re-scan raw data from scratch on every single refresh.",
-      "Just disable the entire dashboard feature outright.",
+      "Give each dashboard a read replica and spread all reads across replicas.",
       "Split the query: read fresh data from the database and historical data from cache or precomputed results.",
-      "Just delete all of the existing alert rules outright."
+      "Cut the raw-point retention to seven days to reduce how much gets scanned."
     ],
     "q_en": "What is the best low-latency read optimization here?",
     "scenario_en": "Dashboard queries refresh every 10 seconds over a 30-day chart, so adjacent queries cover almost the same time range.",
     "optionExplanations": [
       "10 秒刷新一次还每次全扫，等于把同一段历史区间重复算了几百遍，白白浪费计算。",
-      "禁用功能是在回避问题，不是在优化延迟，用户失去了本来该有的能力。",
+      "只读副本能分摊并发，但每次仍要重扫同一段 30 天历史，单条查询延迟一点没降。",
       "相邻两次刷新看的历史区间几乎完全重叠，把稳定不变的历史部分缓存住只查新增的一小段就够了。",
-      "告警规则和 dashboard 的读延迟是两条独立路径，删掉规则改变不了查询要扫多少数据。"
+      "缩短保留期直接砸掉 30 天图表要看的历史，是牺牲功能而不是优化延迟。"
     ],
     "optionExplanations_en": [
       "Re-scanning everything every ten seconds recomputes the same historical range hundreds of times over; pure wasted work.",
-      "Disabling a feature dodges the problem instead of fixing latency, and users just lose a capability they should have.",
+      "Read replicas spread concurrency, but each query still re-scans the same 30 days, so single-query latency doesn't drop.",
       "Adjacent refreshes overlap on almost the same historical range, so caching the stable old part and only querying the fresh slice is enough.",
-      "Alert rules and dashboard read latency are separate paths; deleting rules doesn't change how much data a query has to scan."
+      "Shortening retention throws away the very history the 30-day chart needs; that sacrifices the feature, not optimizes latency."
     ]
   },
   {
@@ -1498,9 +1498,9 @@
     "sub": "query-cache",
     "q": "Dashboard 查询结果缓存最棘手的问题是什么？",
     "options": [
-      "缓存这种结构完全存不下数组",
-      "加缓存反而会让查询变慢",
-      "缓存命中会自动生成新的告警",
+      "缓存最难的是挑一个足够快的结果序列化格式",
+      "缓存最难的是为每个查询结果生成唯一的 key",
+      "缓存最难的是选 Redis 还是进程内本地内存",
       "修正历史数据要失效缓存，还要控制内存"
     ],
     "answer": [
@@ -1514,22 +1514,22 @@
       "invalidation"
     ],
     "options_en": [
-      "Caching as a structure cannot hold arrays at all.",
-      "Adding a cache actually makes queries slower.",
-      "A cache hit automatically generates a new alert.",
+      "The hardest part is picking a fast enough serialization format for results.",
+      "The hardest part is generating a unique cache key for each query result.",
+      "The hardest part is choosing between Redis and in-process local memory.",
       "Correcting historical data must invalidate cache and control memory."
     ],
     "q_en": "What is the hardest part of caching dashboard query results?",
     "optionExplanations": [
-      "缓存存序列化后的数组或聚合结果完全没问题，这不是限制缓存要解决的真实难点。",
-      "加缓存的目标就是减少重复的后端读，命中缓存本该比每次都查数据库更快。",
-      "缓存命中只是返回已存好的结果，不会触发规则评估，也不会生成告警。",
+      "序列化格式的选择有成熟方案，不是真正的难点；难的是历史被修正后缓存怎么失效。",
+      "生成 cache key 只是把查询参数拼成字符串，是套路活，真正棘手的是失效和内存上限。",
+      "选存储介质是常规工程决定，难点在历史数据被回填后如何主动让旧结果失效。",
       "回填或修正历史数据会让相关缓存条目立刻过期变脏，必须主动失效对应 key，同时热门 dashboard 一多，缓存内存也要设上限监控。"
     ],
     "optionExplanations_en": [
-      "Caching serialized arrays or aggregated results works fine; that's not the actual hard part here.",
-      "The whole point of caching is fewer repeated backend reads; a hit should be faster than always hitting the database.",
-      "A cache hit just returns an already-computed result; it doesn't trigger rule evaluation or create an alert.",
+      "Serialization format has well-known solutions and isn't the real difficulty; the hard part is invalidating cache after history is corrected.",
+      "Building a cache key is just concatenating query params, routine work; the tricky part is invalidation and a memory cap.",
+      "Choosing the storage medium is a routine call; the hard part is actively invalidating stale results after historical data is backfilled.",
       "Backfilling or correcting historical data instantly makes matching cache entries stale, so those keys must be actively invalidated, and memory needs a monitored cap as popular dashboards pile up."
     ],
     "scenario": "热门 dashboard 每 10 秒刷新、上千人看同一查询，同时迟到点会修正历史数据。",
@@ -1546,7 +1546,7 @@
     "options": [
       "670 QPS 对 TSDB 来说可以忽略不计，可以把轮询间隔继续调短",
       "轮询频率提高会让 alert 查询与 dashboard、写入争抢 TSDB 资源",
-      "查询量级只取决于 dashboard，不受 alert rule 数量影响",
+      "查询量级只取决于 dashboard 面板数量，跟 alert rule 有多少条无关",
       "更高频轮询能让告警变成强一致"
     ],
     "answer": [
@@ -1562,7 +1562,7 @@
     "options_en": [
       "670 QPS is negligible for the TSDB, so the polling interval can keep shrinking.",
       "Higher polling frequency makes alert queries compete with dashboard queries and writes for TSDB resources.",
-      "The query volume depends only on dashboards, not on the number of alert rules.",
+      "The query volume depends only on the number of dashboard panels, not on how many alert rules exist.",
       "Faster polling makes alerting strongly consistent."
     ],
     "q_en": "What design decision does this alert query volume imply?",
@@ -1937,7 +1937,7 @@
     "q": "标签组合爆炸最支持哪条设计判断？",
     "options": [
       "5000 万种组合不会真的出现，可以不设上限",
-      "只要加内存，TSDB 就能无限吸收 series",
+      "只要给 TSDB 不断加内存和节点，就能无限吸收新增 series",
       "必须在写入路径做 cardinality 控制，否则失控",
       "组合数只影响查询，不影响写入路径"
     ],
@@ -1953,7 +1953,7 @@
     ],
     "options_en": [
       "Fifty million combinations will never really occur, so no cap is needed.",
-      "Just adding memory lets the TSDB absorb series without limit.",
+      "Just keep adding memory and nodes to the TSDB and it can absorb new series without limit.",
       "Cardinality controls must sit on the write path, or it goes out of control.",
       "The combination count only affects queries, not the write path."
     ],
@@ -1982,7 +1982,7 @@
     "q": "应加入哪两个控制组件？",
     "options": [
       "接入 CDN 和对象存储做静态内容缓存分发",
-      "只在客户端浏览器里加一层 localStorage 缓存",
+      "在客户端 SDK 里用 localStorage 本地去重后再上报",
       "Policy Store 定规则，Redis 数 series",
       "只是多开几个用于查看的 dashboard 展示面板"
     ],
@@ -2024,7 +2024,7 @@
     },
     "options_en": [
       "Add a CDN and object storage for static content caching and distribution.",
-      "Add just a layer of client-side browser localStorage caching.",
+      "Dedupe locally in the client SDK using localStorage before reporting.",
       "Policy Store defines the rules, and Redis counts series.",
       "Just create a few more dashboard panels for viewing."
     ],
@@ -2039,13 +2039,13 @@
     "scenario_en": "The ingestion layer must stop a metric from blowing up the TSDB through a new high-cardinality label or unbounded label value.",
     "optionExplanations": [
       "CDN 和对象存储解决的是内容分发和便宜长期存储，管不到写入时是否要接受一个新 series。",
-      "浏览器端的本地缓存对服务器写入路径不可见，拦不住摄取层新增的高基数 series。",
+      "客户端本地去重管不到全局：不同机器各自去重，汇到中心仍是海量新 series，拦不住爆炸。",
       "Policy Store 集中定义每个 metric 允许的 label 和条数上限，Redis 在写入路径实时核对这条是不是要超编，两者配合能在源头拦住爆炸。",
       "开更多 dashboard 面板只是增加查看方式，完全不影响写入路径要不要接受一个新 series。"
     ],
     "optionExplanations_en": [
       "CDNs and object storage solve content distribution and cheap long-term storage; neither touches whether a new series gets accepted at write time.",
-      "Browser-side local cache is invisible to the server write path; it can't block a high-cardinality series from reaching ingestion.",
+      "Client-side dedup can't see the global picture: each machine dedupes on its own, but combined at the center it's still a flood of new series.",
       "A policy store centrally defines each metric's allowed labels and count cap, while Redis checks in real time on the write path whether this point would push things over budget; together they stop the blowup at the source.",
       "Adding more dashboard panels just changes how data is viewed; it has no effect on whether the write path accepts a new series."
     ]
@@ -2089,10 +2089,10 @@
     "sub": "cardinality",
     "q": "某个 metric 超过 series cap 后，系统应该做什么？",
     "options": [
-      "继续无限写入，直到 TSDB 崩溃",
+      "继续无限接收新 series 的点，直到 TSDB 内存被打爆",
       "丢弃新 series 的点，计数并通知团队",
-      "把所有旧指标都删除",
-      "把所有 dashboard 都关掉"
+      "把这个 metric 已有的历史 series 全部删掉腾空间",
+      "临时把该 metric 的 series cap 直接调成无上限"
     ],
     "answer": [
       1
@@ -2105,23 +2105,23 @@
       "dropped-metrics"
     ],
     "options_en": [
-      "Keep writing without limits until the TSDB crashes.",
+      "Keep accepting points for new series without limit until the TSDB memory is blown.",
       "Drop points from the new series, count them, and notify the team.",
-      "Delete all old metrics.",
-      "Turn off every dashboard."
+      "Delete all of this metric's existing historical series to free up space.",
+      "Temporarily raise this metric's series cap to unlimited."
     ],
     "q_en": "What should the system do after a metric exceeds its series cap?",
     "optionExplanations": [
       "放任继续写只是把问题拖到 TSDB 真正崩溃那一刻，代价从可控变成了系统性故障。",
       "只丢掉新 series 的点，把它计入专门的丢弃计数器，并通知负责团队，既护住了系统又不会把问题埋起来。",
-      "超限的是某个新 metric，删掉全部历史数据是完全不成比例的反应，会破坏已有的可观测性。",
-      "关掉全部 dashboard 只会让人看不见问题，写入路径的超限风险丝毫没有被解决。"
+      "删历史 series 换来的空间瞬间又被新的高基数 series 填满，治标不治本还丢了可观测性。",
+      "把 cap 调成无上限等于自废保护，正是它挡着的爆炸会立刻把 TSDB 压垮。"
     ],
     "optionExplanations_en": [
       "Letting writes continue unbounded just delays the problem until the TSDB actually crashes, turning a manageable cost into a systemic outage.",
       "Only dropping points from the new series, counting them in a dedicated drop counter, and notifying the owning team protects the system without burying the problem.",
-      "Only one new metric exceeded the cap; wiping all historical data is a wildly disproportionate response that destroys existing observability.",
-      "Turning off every dashboard just makes the problem invisible; it does nothing to fix the overload risk on the write path."
+      "Space freed by deleting historical series is instantly refilled by the new high-cardinality series; it fixes nothing and loses observability.",
+      "Setting the cap to unlimited removes the very protection it provides; the blowup it was guarding against immediately crushes the TSDB."
     ],
     "scenario": "某服务把 request id 写进 label，一个 metric 的 series 数几分钟内冲破 100 万上限。",
     "scenario_en": "A service puts request ids into labels, and one metric blows past its one-million-series cap within minutes."
@@ -2282,10 +2282,10 @@
     "sub": "late-data",
     "q": "指标晚到或乱序时，系统需要优雅处理，否则会怎样？",
     "options": [
-      "所有数据反而会自动变得更准确",
-      "Kafka 从此没法存储任何消息",
+      "晚到的点会被自动丢弃，对图表和告警没有任何影响",
+      "Kafka 会因为乱序消息永久卡住，无法再继续消费",
       "Dashboard 或告警窗口可能判断出错",
-      "标签数量会因此自动变少"
+      "查询会一直等所有晚到数据到齐才肯返回结果"
     ],
     "answer": [
       2
@@ -2298,10 +2298,10 @@
       "windows"
     ],
     "options_en": [
-      "All data would somehow automatically become more accurate.",
-      "Kafka can no longer store any messages at all.",
+      "Late points are silently dropped with no effect on charts or alerts.",
+      "Kafka gets permanently stuck on out-of-order messages and can't consume further.",
       "Dashboards or alert windows can misjudge as a result.",
-      "The number of labels automatically decreases because of it."
+      "Queries always block until every late point has arrived before returning."
     ],
     "termDefinitions": [
       {
@@ -2312,16 +2312,16 @@
     ],
     "q_en": "What goes wrong if the system does not handle late or out-of-order metrics gracefully?",
     "optionExplanations": [
-      "晚到或乱序只会让数据顺序变复杂，不会让测量值本身变得更准确。",
-      "晚到的点照样能正常写入 Kafka，这跟 Kafka 存储消息的能力没有关系。",
+      "自动丢弃晚到点正是问题所在：窗口内会缺样本，图表出现缺口、告警判断出错。",
+      "Kafka 按到达顺序追加，乱序消息照样能写入和消费，不会卡住。",
       "如果查询和告警窗口不能容忍一定的迟到或做修正，图表会出现缺口，告警的窗口判断也可能被打乱。",
-      "指标晚到或乱序改变的是到达时间顺序，跟这个点携带多少个 label 完全无关。"
+      "查询按当前已有数据返回，不会无限等待；真正的风险是窗口判断本身出错。"
     ],
     "optionExplanations_en": [
-      "Arriving late or out of order only complicates ordering; it doesn't make the underlying measurement any more accurate.",
-      "A late point still writes into Kafka just fine; this has nothing to do with Kafka's ability to store messages.",
+      "Silently dropping late points is exactly the problem: windows miss samples, so charts show gaps and alerts misjudge.",
+      "Kafka appends in arrival order and stores and consumes out-of-order messages fine; it doesn't get stuck.",
       "If queries and alert windows can't tolerate some lateness or apply corrections, dashboards show gaps and alert windows can misjudge.",
-      "Late or out-of-order arrival changes timing, not how many labels a point carries."
+      "Queries return over whatever data exists rather than waiting forever; the real risk is the window judgment itself being wrong."
     ],
     "scenario": "agent 本地缓冲与跨区网络让部分点晚到 2 分钟，而告警用 5 分钟滚动窗口判定。",
     "scenario_en": "Agent-side buffering and cross-region networks make some points arrive two minutes late, while alerts judge a rolling five-minute window."
