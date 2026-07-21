@@ -2830,5 +2830,212 @@
         "meaningEn": "Redis is a single-threaded in-memory key-value store often used for hot data and counters."
       }
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-online-auction-051",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "purchasing",
+    "scenario": "拍卖以 $500 结束，系统给赢家发邮件要求 N 小时内付款；限期已过对方仍未付款，商品还悬在那没人确认成交。",
+    "scenario_en": "The auction closes at $500 and the winner gets an email demanding payment within N hours; the deadline passes with no payment, and the item is still stuck with no confirmed sale.",
+    "q": "赢家逾期未付款后，系统该把这场拍卖交给谁？",
+    "q_en": "When the winning bidder misses the payment deadline, who should the system hand the sale to?",
+    "options": [
+      "顺延给出价第二高的用户，重新走一遍限期付款流程",
+      "直接取消这场拍卖，商品下架，不再联系任何出价者",
+      "重新挂牌拍卖，从起拍价开始接受全新一轮出价",
+      "对赢家的默认支付方式发起强制扣款，跳过人工确认"
+    ],
+    "options_en": [
+      "Roll the sale to the second-highest bidder and restart the same payment-deadline flow with them.",
+      "Cancel the auction outright, delist the item, and stop contacting any of the bidders.",
+      "Re-list the item as a brand-new auction starting again from the starting price.",
+      "Force-charge the winner's default payment method automatically, skipping human confirmation."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "次高出价者本就愿意出这个价，顺延跳过重新挂牌的等待，只需给他一样的限期付款窗口。",
+      "直接取消放弃了次高出价者本就愿意成交的一个价，比顺延多损失一次潜在成交机会。",
+      "重新挂牌清零了已经积累的竞价热度，还要再等一整轮拍卖周期才有结果。",
+      "强制扣款默认赢家已授权免密支付，而逾期未付本身通常就是支付方式失败或用户放弃的信号。"
+    ],
+    "optionExplanations_en": [
+      "The second-highest bidder already offered this price, so rolling over skips a fresh listing cycle and just reuses the same deadline flow.",
+      "Cancelling outright throws away a price the second-highest bidder already agreed to, a worse outcome than rolling over.",
+      "Re-listing resets the bidding momentum already built up and costs a whole new auction cycle before there's any result.",
+      "Force-charging assumes the winner authorized frictionless billing, but a missed deadline is usually exactly a sign that payment failed or they walked away."
+    ],
+    "why": "赢家逾期未付款时顺延给出价第二高的人，重复同一套限期付款流程；这是把「先到先得」换成「按出价高低顺位试」，避免一人违约让整场流拍。",
+    "why_en": "When the winner misses the deadline, roll the sale to the second-highest bidder and run the same payment-deadline flow again — swapping first-come-first-served for trying bidders in price order so one no-show doesn't sink the whole sale.",
+    "tradeoff": "顺延给次高价 vs 重新挂牌拍卖",
+    "whenOtherWins": "次高出价与最高价差距很大（比如只比起拍价高一点）时，顺延成交价明显偏低，重新挂牌争取更好价格反而更划算。",
+    "tags": [
+      "auction",
+      "purchasing",
+      "failure-recovery"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-online-auction-052",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "cache-db-consistency",
+    "scenario": "已排除「竞价期间让 Redis 当真相源、异步落库」这条路；只在「先改缓存再写库」和「先写库再改缓存」两种顺序间选。",
+    "scenario_en": "\"Let Redis be the source of truth during bidding and write the database asynchronously\" has already been ruled out; the choice is only between updating the cache first or writing the database first.",
+    "q": "更新最高价时，写库和改缓存哪个该先做？",
+    "q_en": "When updating the max bid, which should happen first — the database write or the cache update?",
+    "options": [
+      "先写库，成功后再更新缓存；缓存更新失败就标记该条目失效，下次读时重建",
+      "先原子更新缓存，再写库；如果库写失败，把缓存回滚成更新前的原始值",
+      "让 Redis 在整个竞价期间都直接当真相源，出价全部先异步再落库",
+      "缓存和数据库各自独立更新，谁先执行成功就以谁的结果为准"
+    ],
+    "options_en": [
+      "Write the database first; once it succeeds, update the cache. If the cache update fails, mark that entry invalid and rebuild it on the next read.",
+      "Atomically update the cache first, then write the database; if the database write fails, roll the cache back to its value from before the update.",
+      "Let Redis be the source of truth for the entire bidding window, writing every bid to the database asynchronously afterward.",
+      "Update the cache and the database independently, and treat whichever one finishes successfully first as the correct result."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "库写成功才是出价真正被接受；缓存只反映已确认的状态，更新失败最坏也只是短暂展示旧值。",
+      "缓存已经改成新值对外可见，回滚发生在库写失败之后，中间这段时间读到的是一个从没真正落库的最高价。",
+      "这正是前面因为强一致要求被排除掉的那条路，这里的前提就是不能选它。",
+      "谁先成功就算数，等于放弃了库和缓存必须一致这件事，两边随时可能各说各话。"
+    ],
+    "optionExplanations_en": [
+      "The database write succeeding is what actually accepts the bid; the cache only mirrors confirmed state, so a failed cache update just leaves a briefly stale value.",
+      "The cache is already visible with the new value before the rollback happens, so reads in that window see a max bid that was never actually persisted.",
+      "That's exactly the option strong consistency already ruled out earlier — the premise here is that it's off the table.",
+      "Letting whichever side finishes first win gives up on keeping the cache and database in agreement at all, so they can drift apart at any time."
+    ],
+    "why": "先写库、库确认后再改缓存：缓存只展示库里已落地的值，更新失败只需失效重建；反过来先改缓存的话，回滚完成前的读请求会看到一个从未真正落库的最高价。",
+    "why_en": "Write the database first and only update the cache once it's confirmed, so the cache always mirrors a persisted value and a failed update just means invalidate-and-rebuild — updating the cache first instead risks readers seeing a max bid that was never actually saved, in the window before a failed write rolls it back.",
+    "tradeoff": "先库后缓存的偶尔读旧值 vs 先缓存后库的偶尔读到幽灵新值",
+    "whenOtherWins": "如果场景只是展示性、不牵涉资金判定，能接受偶尔提前看到未确认的值，先改缓存再写库能让大多数请求更快看到最新价格。",
+    "tags": [
+      "auction",
+      "cache-max-bid",
+      "consistency"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "单线程的内存键值存储，常用来放热点数据和计数器。",
+        "meaningEn": "Redis is a single-threaded in-memory key-value store often used for hot data and counters."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-online-auction-053",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "service-scaling",
+    "scenario": "峰值写入约 1.5 万笔/秒。Bid/Auction Service 是无状态的处理层，Auction 表却要保证同一行 max_bid 的单库事务一致。",
+    "scenario_en": "Peak write traffic is about 15K requests per second. The Bid/Auction Service is a stateless processing layer, while the Auction table still needs single-row transactional consistency on max_bid.",
+    "q": "Bid/Auction Service 只需加实例，数据库为什么还要分片？",
+    "q_en": "The Bid/Auction Service can just add instances — why does the database still need sharding?",
+    "options": [
+      "无状态服务加实例配自动伸缩就够；数据库要维持单行事务一致，只能靠分片才行",
+      "两者都要按 auction_id 分片，因为都在处理同一场拍卖的数据，缺一不可",
+      "两者都只要加实例就行，因为整个系统在这一层从上到下都是无状态的",
+      "Bid Service 也得跟着分片，因为它的消费者要和 Kafka 分区数一一对齐"
+    ],
+    "options_en": [
+      "Stateless services just add instances with autoscaling; the database must keep max_bid transactionally consistent per row, so only sharding works.",
+      "Both need sharding by auction_id, since both are handling data for the same auction and neither can skip it.",
+      "Both only need more instances, because this whole layer of the system is stateless from top to bottom.",
+      "The Bid Service also needs sharding, because its consumers must line up one-to-one with the Kafka partition count."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "服务实例不存状态，任何一台都能处理任何请求；数据库要维护条件更新的单行事务，必须把同一拍卖的数据固定在一个分片里。",
+      "服务实例没有持久状态，加一台就多一份处理能力，不需要像数据库那样按数据归属切分。",
+      "数据库持有 max_bid 这份必须保证一致的状态，多加实例并不能替代分片解决写吞吐瓶颈。",
+      "消费者数量确实要配合分区数伸缩，但那只决定处理并行度，不等于要给 Auction 表做分片。"
+    ],
+    "optionExplanations_en": [
+      "Service instances hold no state, so any instance can handle any request; the database has to keep the conditional-update transaction on one row, which forces that auction's data onto a single shard.",
+      "Service instances carry no persisted state, so one more instance is just one more unit of capacity — no need to split data across shards like the database does.",
+      "The database holds the max_bid state that must stay consistent; adding more instances there doesn't substitute for sharding the write bottleneck away.",
+      "Consumer count does need to track partition count, but that only sets processing parallelism — it has nothing to do with sharding the Auction table."
+    ],
+    "why": "服务层无状态，加实例加自动伸缩就能应对峰值；数据库持有必须保持事务一致的 max_bid，只能按 auction_id 分片，把同一拍卖的读写摆进同一个分片。",
+    "why_en": "The service layer is stateless, so adding instances with autoscaling handles peak load; the database holds max_bid, which must stay transactionally consistent, so it can only scale by sharding on auction_id to keep one auction's reads and writes on one shard.",
+    "tradeoff": "无状态服务的弹性伸缩 vs 有状态数据库的分片改造",
+    "whenOtherWins": "如果服务本身也要维护连接状态（比如 SSE 长连接），加实例就不再是免费的，还得靠 Pub/Sub 之类的机制在实例间协调。",
+    "tags": [
+      "auction",
+      "capacity-estimation",
+      "sharding"
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-online-auction-054",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "capacity-estimation",
+    "scenario": "峰值写入同样是约 1.5 万笔/秒。这个数字对 Kafka 分区数几乎没有压力，却直接把数据库逼向分片。",
+    "scenario_en": "Peak write traffic is the same roughly 15K per second either way — that number barely stresses Kafka's partition count, yet it's exactly what forces the database into sharding.",
+    "q": "15K bids/s 峰值下，Kafka 为什么不用像数据库那样大改？",
+    "q_en": "At a peak of 15K bids/s, why doesn't Kafka need the same overhaul the database does?",
+    "options": [
+      "适度数量的分区就能扛住这吞吐，按 auctionId 分区还顺带拿到并行度",
+      "必须把分区数一口气扩到几万个，让每场热门拍卖都单独占满自己专属的一个分区",
+      "得先关掉分区、退化成单分区串行消费，才能保证严格的全局顺序处理",
+      "分区数要和数据库分片数一一对应，两边必须按同一个键同步扩容才行"
+    ],
+    "options_en": [
+      "A modest number of partitions comfortably absorbs this throughput, and partitioning by auctionId also hands you parallelism for free.",
+      "Partitions have to jump straight into the tens of thousands so every popular auction can occupy its own dedicated partition.",
+      "Partitioning first has to be turned off, falling back to single-partition serial consumption, to guarantee strict global ordering.",
+      "Partition count has to match the database's shard count one-for-one, with both required to scale together on the same key."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "15K/s 对 Kafka 的吞吐能力来说不大，适度分区数就够；按 auctionId 分区顺便让不同拍卖的消费天然并行。",
+      "分区数不用跟着拍卖数量线性增长，这个吞吐量下适度数量就能扛住，扩到几万个是过度设计。",
+      "全局顺序从来不是这里的目标，只要求同一拍卖内部有序，单分区串行反而丢掉了并行度。",
+      "Kafka 分区数和数据库分片数是两套独立的伸缩决策，没有必须一一对应这回事。"
+    ],
+    "optionExplanations_en": [
+      "15K/s isn't much load for Kafka's throughput, so a modest partition count handles it, and partitioning by auctionId naturally parallelizes consumption across different auctions.",
+      "Partition count doesn't need to grow linearly with the number of auctions — a modest count already absorbs this throughput, so scaling into the tens of thousands is over-engineering.",
+      "Strict global ordering was never the goal here, only ordering within one auction, so falling back to a single serial partition would just throw away parallelism.",
+      "Kafka's partition count and the database's shard count are two separate scaling decisions with no requirement to match one-for-one."
+    ],
+    "why": "15K bids/s 对 Kafka 来说吞吐压力不大，适度数量的分区（按 auctionId 分）就能扛住并顺带拿到并行度；同一个数字却逼数据库分片，因为数据库要额外保证单行事务一致。",
+    "why_en": "15K bids/s isn't much throughput pressure for Kafka, so a modest number of partitions keyed by auctionId absorbs it while giving you parallelism for free — yet that same number forces the database into sharding, because the database also has to guarantee single-row transactional consistency.",
+    "tradeoff": "Kafka 靠分区扩容的低成本 vs 数据库靠分片扩容的高成本",
+    "whenOtherWins": "如果消费端处理逻辑本身很重、单分区吞吐跟不上，才需要认真增加分区数，但那是消费能力问题，不是 15K/s 这个数字本身带来的压力。",
+    "tags": [
+      "auction",
+      "capacity-estimation",
+      "kafka-choice"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Kafka",
+        "meaning": "把消息按分区落盘并复制的分布式日志型消息队列。",
+        "meaningEn": "Kafka is a distributed log-style message queue that persists messages to disk per partition and replicates them."
+      },
+      {
+        "term": "分区 (partition)",
+        "meaning": "Kafka 主题内部的有序日志片段，同一分区内的消息保证按写入顺序消费。",
+        "meaningEn": "A partition is an ordered log segment inside a Kafka topic, and messages within one partition are consumed in write order."
+      }
+    ]
   }
 ]

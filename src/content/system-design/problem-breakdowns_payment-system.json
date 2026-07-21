@@ -3626,5 +3626,254 @@
         "meaningEn": "A chargeback is when a cardholder disputes a charge afterwards and the issuing bank pulls the money back."
       }
     ]
+  },
+  {
+    "id": "sd-problem-breakdowns-payment-system-068",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "transaction-service-scope",
+    "scenario": "Transaction Service 既维护内部 PaymentIntent/Transaction 状态机，又直接握着到 Visa/Mastercard 的私有网络连接和 HSM 密钥；拆成两个服务能各自独立扩展部署。",
+    "scenario_en": "The Transaction Service both owns the internal PaymentIntent/Transaction state machine and directly holds the private network connection and HSM keys to Visa/Mastercard; splitting it into two services would let each scale and deploy independently.",
+    "q": "把内部记录管理和外部网络交互合并进一个服务，代价是什么？",
+    "q_en": "What is the cost of merging internal record management and external network integration into one service?",
+    "options": [
+      "省一次内部网络跳转、把 PCI 合规边界收进一个服务，但两类关注点耦合进了同一份代码",
+      "外部支付网络的证书和 HSM 密钥必须复制到每个调用方服务，合并反而让密钥分布更广",
+      "合并后内部状态查询和外部网络调用共用同一批数据库连接，峰值时互相抢占连接池",
+      "只要内部方法命名清楚，合并成一个服务在后续独立扩展上和拆成两个服务没有实质差别"
+    ],
+    "options_en": [
+      "It saves one internal hop and narrows the PCI compliance boundary to one service, but it couples the two concerns into the same codebase.",
+      "The external network’s certificates and HSM keys would have to be copied to every calling service, so merging actually spreads the keys wider.",
+      "After merging, internal state queries and external network calls share the same pool of database connections and contend for it at peak.",
+      "As long as internal method names are clear, merging into one service makes no real difference to independently scaling it later."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "文章明确指出：合并减少了不必要的网络跳转，也把 PCI 合规范围收窄到一处，代价是内部记录变更和外部协议变更被绑进同一份代码，谁改动都要小心影响另一边。",
+      "这是反的：密钥和证书恰恰因为合并而只需集中在一个服务里管理，拆成多个服务才会让密钥分布面变大。",
+      "文章没有把两者拆成不同数据库连接池来讨论；这里混淆了服务边界耦合和数据库连接争用两个不同问题。",
+      "命名清楚解决的是可读性，不解决部署边界；两个关注点仍在同一次发布、同一个进程里，独立扩展和独立发版做不到。"
+    ],
+    "optionExplanations_en": [
+      "The article says the merge cuts an unnecessary hop and narrows the PCI boundary to one service, at the cost of tying internal record changes and external protocol changes to the same codebase.",
+      "This is backwards: merging is what lets keys stay centralized in one service; splitting into more services is what would spread key distribution wider.",
+      "The article never frames this as separate connection pools; it conflates service-boundary coupling with database connection contention, a different problem.",
+      "Clear naming fixes readability, not deployment boundaries; the two concerns still ship together in the same release and process, so independent scaling is not actually possible."
+    ],
+    "why": "合并省了一次网络跳转、把 PCI 合规边界收窄到一处，但内部记录的变更节奏被绑进外部支付网络协议的变更节奏，任何一边升级都要碰同一份代码。",
+    "why_en": "Merging saves a hop and narrows the PCI boundary to one place, but it ties the pace of internal record changes to external network protocol changes, so upgrading either side touches the same code.",
+    "tradeoff": "单服务减少跳转/收窄合规边界 vs 拆分服务解耦内部记录与外部协议演进节奏",
+    "whenOtherWins": "如果要接入十几个国家的本地支付网络，外部对接逻辑复杂到需要专门团队维护时，拆出独立 Network Gateway 服务能让两边独立发版。",
+    "tags": [
+      "transaction-service",
+      "pci",
+      "coupling"
+    ],
+    "termDefinitions": [
+      {
+        "term": "PCI",
+        "fullName": "Payment Card Industry Data Security Standard",
+        "meaning": "支付卡行业数据安全标准，规定如何处理、存储、传输持卡人数据。",
+        "meaningEn": "PCI DSS is the Payment Card Industry Data Security Standard that governs how cardholder data must be handled, stored, and transmitted."
+      },
+      {
+        "term": "HSM",
+        "fullName": "Hardware Security Module",
+        "meaning": "硬件安全模块：专用硬件安全生成/存储密钥并执行加解密，密钥不出硬件。",
+        "meaningEn": "An HSM, or Hardware Security Module, is dedicated hardware that generates and stores keys and performs crypto operations without the key ever leaving the device."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-payment-system-069",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "reconciliation-architecture",
+    "scenario": "pending_verification 方案里，对账是财务团队每天手工核对银行文件补的例外流程；CDC 方案里，Reconciliation Service 是常驻消费 timeout 事件的服务，和支付主链路平级。",
+    "scenario_en": "In the pending_verification design, reconciliation is an exception process finance runs by hand against bank files each day; in the CDC design, the Reconciliation Service is a standing service consuming timeout events alongside the main payment path.",
+    "q": "为什么\"把对账当异常处理\"是 pending_verification 方案的根因缺陷？",
+    "q_en": "Why is \"treating reconciliation as exception handling\" the root architectural flaw of the pending_verification design?",
+    "options": [
+      "对账没有事件入口感知超时，只能靠人工每天扫一遍，核对量随交易量线性增长但系统没跟着扩容",
+      "pending_verification 状态会在数据库里一直持有行锁，把其它支付请求堵住",
+      "人工核对出的结论权威性高于支付网络的 settlement 文件，事后要用它覆盖 CDC 事件",
+      "把人工核对频率从每天一次提到每小时一次，就能补上这个架构缺口"
+    ],
+    "options_en": [
+      "Reconciliation has no event entry point to sense timeouts, so it relies on a daily human sweep whose workload grows linearly with volume while the system never scales with it.",
+      "The pending_verification status holds a database row lock indefinitely, blocking other payment requests.",
+      "The conclusion from manual reconciliation outranks the payment network’s settlement file, so it should overwrite CDC events afterward.",
+      "Raising the manual reconciliation cadence from daily to hourly would close this architectural gap."
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "文章明确写出这条因果链：超时置为 pending_verification → 财务每日人工核对 → 手改终态，核对量随交易量同增，Black Friday 峰值时反而最慢。",
+      "文章没有讨论行锁；这只是一个状态标记，真正的问题是靠人工节奏推进它，不是数据库层面锁住了别的请求。",
+      "这是反的：文章说 settlement 文件是\"definitive record\"、权威的网络记录，人工核对结论应该被它核对而不是反过来覆盖它。",
+      "提高核对频率只是缩短了延迟，核对量依旧随交易量线性增长且靠人力完成，峰值一来照样被压垮，没有解决系统不随量扩容的根因。"
+    ],
+    "optionExplanations_en": [
+      "The article spells out exactly this chain: timeout → pending_verification → daily manual review by finance → manual status fix, with review load growing with volume and getting slowest at the Black Friday peak.",
+      "The article never discusses row locks; this is just a status marker, and the real problem is that it depends on human cadence, not that it blocks other requests at the database level.",
+      "This is backwards: the article calls the settlement file the definitive, authoritative network record that manual conclusions should be checked against, not the other way around.",
+      "A faster cadence only shortens the delay; the review load still grows linearly with volume and is still done by hand, so it still buckles at peak — the scaling root cause is untouched."
+    ],
+    "why": "对账被绑在人工核对这条例外分支上，核对能力不会随交易量自动扩容，促销峰值反而最慢；CDC 方案把它做成消费 timeout 事件的常驻服务，核对能力随事件流一起水平扩展。",
+    "why_en": "Reconciliation is bolted onto a manual exception path whose capacity never scales with transaction volume and gets slowest exactly at promotion peaks; the CDC design makes it a standing service consuming timeout events, so its capacity scales horizontally with the event stream.",
+    "tradeoff": "对账作为人工例外流程 vs 对账作为消费事件流的常驻服务",
+    "whenOtherWins": "如果交易量长期很低（比如内部小额结算），人工每日核对的成本可能低于搭建独立对账服务的工程投入。",
+    "tags": [
+      "reconciliation",
+      "architecture",
+      "root-cause"
+    ],
+    "termDefinitions": [
+      {
+        "term": "CDC",
+        "fullName": "Change Data Capture",
+        "meaning": "变更数据捕获：从数据库 WAL/oplog 读出已提交的变更，生成事件流。",
+        "meaningEn": "CDC, or Change Data Capture, reads committed changes from the database’s write-ahead log and turns them into an event stream."
+      },
+      {
+        "term": "pending_verification",
+        "meaning": "超时但结果未知的中间状态，等待对账服务确认最终结果。",
+        "meaningEn": "pending_verification is an interim status for a timed-out payment whose outcome is still unknown, awaiting reconciliation."
+      },
+      {
+        "term": "settlement 文件",
+        "meaning": "支付网络定期交付的批量对账文件，是交易结果的权威记录。",
+        "meaningEn": "A settlement file is a batch reconciliation file the payment network delivers on a schedule, serving as the authoritative record of what happened."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-payment-system-070",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "webhook-production-hardening",
+    "scenario": "已经有 CDC 事件触发 Webhook Service，并带指数退避重试；这只是最基础的形态。要把它做到生产级，发送侧还要补哪些能力？",
+    "scenario_en": "A CDC event already triggers the Webhook Service with exponential-backoff retries — that is only the baseline. To make it production-grade, what must the sending side add?",
+    "q": "生产级 webhook 投递系统在基本重试之外还需要补哪些能力？（多选）",
+    "q_en": "Beyond basic retries, what does a production-grade webhook delivery system still need? (Select all that apply)",
+    "options": [
+      "为每个事件生成可去重的唯一事件 id（idempotency key）",
+      "投递状态的详细监控与失败告警",
+      "商户可查询、可手动 replay 失败投递的 webhook 日志和看板",
+      "把商户的 webhook 签名密钥写进事件 payload 方便调试"
+    ],
+    "options_en": [
+      "Generate a unique, dedupe-able event id (idempotency key) for every event.",
+      "Detailed monitoring and failure alerting on delivery status.",
+      "Merchant-queryable webhook logs with a dashboard to manually replay failed deliveries.",
+      "Embed the merchant’s webhook signing secret in the event payload to make debugging easier."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "每个事件带唯一 id，商户端凭它去重；没有这个 id，商户没法分清是新事件还是同一条重投。",
+      "投递失败率、延迟这些指标要能被监控告警，否则某个商户端点挂了几个小时也不会有人发现。",
+      "商户端点故障恢复后要能翻查失败记录并手动重放，不然只能干等下一次事件触发才补上缺口。",
+      "签名密钥的作用恰恰是让商户验证 payload 没被篡改；把密钥写进 payload，等于让任何拿到 payload 的人都能伪造后续签名。"
+    ],
+    "optionExplanations_en": [
+      "A unique id on every event lets the merchant deduplicate; without it the merchant cannot tell a genuinely new event from a redelivery of the same one.",
+      "Delivery failure rate and latency need to be monitored and alertable, otherwise a merchant endpoint can be down for hours before anyone notices.",
+      "After a merchant endpoint recovers, someone needs to browse failures and replay them by hand, otherwise the gap only gets filled by the next unrelated event.",
+      "The whole point of the signing secret is letting the merchant verify the payload was not tampered with; putting the secret inside the payload lets anyone who sees the payload forge future signatures."
+    ],
+    "why": "基本重试只解决\"投递失败要不要再试\"；生产级还要让商户能去重、让我们能发现投递在变差、让商户能补上错过的事件，三者缺一都会在故障时放大成事故。",
+    "why_en": "Basic retries only answer \"should a failed delivery be retried\"; production-grade also needs the merchant able to dedupe, the sender able to see delivery quality degrading, and the merchant able to backfill missed events — missing any one turns an outage into an incident.",
+    "tags": [
+      "webhook",
+      "production",
+      "observability"
+    ],
+    "termDefinitions": [
+      {
+        "term": "webhook",
+        "meaning": "服务器对服务器的回调：事件发生时我们 POST 到商户预先登记的 URL。",
+        "meaningEn": "A webhook is a server-to-server callback: we POST to a URL the merchant registered when an event happens."
+      },
+      {
+        "term": "idempotency key",
+        "meaning": "让重复执行的操作只生效一次的去重标识。",
+        "meaningEn": "An idempotency key is an identifier that lets a repeated operation take effect only once."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-payment-system-071",
+    "format": "multi",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "webhook-deepdive-scope",
+    "scenario": "这道支付系统面试题里 webhook 只被当成配角一笔带过；如果换成一场专门的\"设计 webhook 投递系统\"面试，考察深度完全不同。",
+    "scenario_en": "In this payment-system interview, webhooks are only a brief supporting topic; a dedicated \"design a webhook delivery system\" interview would probe far deeper.",
+    "q": "独立的 webhook 系统设计面试通常还会重点深挖哪些点？（多选）",
+    "q_en": "What would a standalone webhook-system design interview typically probe deeper on? (Select all that apply)",
+    "options": [
+      "exactly-once 投递语义能逼近到什么程度",
+      "商户 endpoint 长时间宕机后，积压队列该怎么处理",
+      "adaptive rate limiting 防止投递压垮商户系统",
+      "把 webhook 整体换成给每个商户建一条 WebSocket 长连接"
+    ],
+    "options_en": [
+      "How close delivery can actually get to exactly-once semantics.",
+      "How to handle the backlog that builds up after a merchant endpoint is down for a long stretch.",
+      "Adaptive rate limiting so delivery does not overwhelm merchant systems.",
+      "Replacing webhooks entirely with a persistent WebSocket connection to every merchant."
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "投递方最多只能保证至少一次；专门面试会追问怎么靠幂等 key、去重窗口把重复处理概率压到接近于零。",
+      "商户端点挂几小时后，退避重试会攒下一大批待投递事件；面试会问队列怎么限流、怎么做补偿式批量重放。",
+      "商户容量各不相同，固定速率要么打爆小商户要么浪费大商户带宽；面试会问怎么按商户历史成功率动态调它。",
+      "webhook 是服务器对服务器的单向通知，WebSocket 要为每个商户单独维护一条常驻双向通道；商户规模一大，这类常驻连接的运维成本就和这道题的目标完全不匹配。"
+    ],
+    "optionExplanations_en": [
+      "A sender can only promise at-least-once; a dedicated interview pushes on how idempotency keys and dedupe windows squeeze duplicate processing close to zero.",
+      "After a merchant endpoint is down for hours, backoff retries pile up a large backlog; the interview asks how to throttle and batch-replay it.",
+      "Merchant capacity varies widely; a fixed rate either overwhelms small merchants or wastes headroom on large ones, so the interview asks how to tune it off historical success rate.",
+      "A webhook is a one-way server-to-server notice, while WebSocket needs a dedicated persistent bidirectional channel per merchant; at real merchant scale that standing-connection cost does not match this problem’s operational goals at all."
+    ],
+    "why": "基础版 webhook 只需要\"事件发生就 POST 一次，失败退避重试\"；专门面试会把投递语义、积压处理、限流策略这些 webhook 本身的核心难点逐一往深处逼问，而不是支付系统的重点。",
+    "why_en": "The baseline webhook only needs \"POST once when the event happens, back off and retry on failure\"; a dedicated interview pushes on delivery semantics, backlog handling, and rate limiting — the core hard parts of webhooks themselves, not the payment system’s focus.",
+    "tags": [
+      "webhook",
+      "interview-scope",
+      "follow-ups"
+    ],
+    "termDefinitions": [
+      {
+        "term": "exactly-once",
+        "meaning": "恰好一次语义：即使发生重试，同一条消息的处理效果只生效一次。",
+        "meaningEn": "Exactly-once semantics means a message takes effect only once even when retries happen."
+      },
+      {
+        "term": "adaptive rate limiting",
+        "meaning": "根据接收方实时状态动态调整投递速率的限流策略。",
+        "meaningEn": "Adaptive rate limiting adjusts the delivery rate based on the receiver’s real-time capacity or health."
+      },
+      {
+        "term": "WebSocket",
+        "meaning": "维持双向、持久连接的协议，用于服务器主动推送数据给客户端。",
+        "meaningEn": "WebSocket is a protocol that keeps a persistent, bidirectional connection open so a server can push data to a client."
+      }
+    ]
   }
 ]

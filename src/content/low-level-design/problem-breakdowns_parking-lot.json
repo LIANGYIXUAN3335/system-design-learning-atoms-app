@@ -2729,5 +2729,324 @@
       "The base spec has a single rate, so leading with a strategy abstraction is over-design at any level.",
       "Bug-free code with tests is not the whiteboard bar, and tradeoffs are never fully excluded."
     ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-057",
+    "format": "cloze",
+    "atomType": "number",
+    "topic": "low-level-design",
+    "sub": "lock-capacity-math",
+    "scenario": "3-5 个入口共用一把方法级锁，你要用数字说服面试官粗粒度锁不是瓶颈。",
+    "scenario_en": "With 3-5 entrances sharing one method-level lock, you need numbers to show the coarse lock isn't a bottleneck.",
+    "q": "补全并发容量的余量估算：",
+    "q_en": "Fill in the concurrency headroom estimate:",
+    "text": "每次 enter 耗时 100 毫秒 → 吞吐 1000÷100 = {{10}} 辆/秒；200 个车位每 2 小时周转一轮 → 需求约 200÷7200 ≈ {{0.03}} 辆/秒；两者相除得到约 {{300}} 倍余量。",
+    "why": "吞吐=1000ms÷100ms/次=10 次/秒（entries per second）；需求=200 spots÷7200 秒≈0.03 辆/秒；10÷0.03≈300 倍。这个数字用来判断方法级锁够不够，不必一开始就上读写锁。",
+    "why_en": "Throughput is 1000ms / 100ms per entry = 10 entries/sec; demand is 200 spots / 7200 seconds ≈ 0.03 vehicles/sec, giving about 300x headroom — enough to justify a simple method-level lock over a read-write lock.",
+    "termDefinitions": [
+      {
+        "term": "headroom / 余量",
+        "meaning": "系统实际吞吐超出真实需求的倍数，数字越大代表越不用担心这条路径先成为瓶颈。",
+        "meaningEn": "Headroom is how many times over actual demand your capacity sits — a bigger number means this path is unlikely to be the first bottleneck."
+      },
+      {
+        "term": "吞吐 / throughput",
+        "meaning": "单位时间内系统能处理的请求数，这里是每秒能完成几次 enter。",
+        "meaningEn": "Throughput is how many requests a system can process per unit time — here, how many enter calls per second."
+      }
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-058",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "low-level-design",
+    "sub": "derive-approach-lock-failure",
+    "scenario": "系统选了『不存索引，每次现算 occupancy』的方案，随后要支持多入口并发。",
+    "scenario_en": "The system picked the derive-on-demand occupancy approach, then needs to support multiple concurrent entrances.",
+    "q": "按顺序排列推导方案在并发下失效的过程：",
+    "q_en": "Put the derive-on-demand approach's concurrency failure in order:",
+    "steps": [
+      "occupancy 不单独存，每次入场都遍历 activeTickets 现算。",
+      "新增需求：多个入口要能同时处理车辆。",
+      "遍历 tickets 求 occupancy 时，不能有别的线程正在改 activeTickets。",
+      "只能把整个 activeTickets map 锁起来，读和写都互斥。",
+      "所有入口排队等同一把大锁，比只锁一个 Set 索引的粒度粗得多。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "why": "推导方案没有冗余数据，但并发下必须把整张 map 锁起来做读写互斥；省下的存储换来了比维护 Set 索引更差的并发粒度。",
+    "why_en": "The derive-on-demand approach has no redundant state, but under concurrency it forces a lock on the entire ticket map for both reads and writes — trading storage savings for worse concurrency granularity than a maintained Set index.",
+    "tradeoff": "无冗余、逻辑最干净 vs 并发时锁粒度粗、吞吐更差",
+    "termDefinitions": [
+      {
+        "term": "锁粒度 / lock granularity",
+        "meaning": "一把锁保护的数据范围大小；锁的范围越大，能并行执行的操作就越少。",
+        "meaningEn": "Lock granularity is how much data one lock protects — the bigger the scope, the less can run in parallel."
+      }
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-059",
+    "format": "chain",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "trace-concrete-states",
+    "scenario": "3 个车位的场，B 位被 CAR 占用 2.5 小时后正常出场，随后用同一张票再出场一次。",
+    "scenario_en": "In a 3-spot lot, spot B is claimed by a car for 2.5 hours then exits normally, and the same ticket is used to exit a second time.",
+    "q": "按顺序排列这次会话从入场到二次出场的状态变化：",
+    "q_en": "Put this session's states in order, from entry through the second exit attempt:",
+    "steps": [
+      "初始：occupiedSpotIds={}，activeTickets={}。",
+      "enter(CAR) 找到 spot B → occupiedSpotIds={\"B\"}，activeTickets 存入 T123。",
+      "2.5 小时后 exit(\"T123\")：向上取整按 3 小时收 1500 分，两个索引清空。",
+      "再次 exit(\"T123\")：activeTickets 查不到 T123，抛出 invalid ticket 错误，状态不变。"
+    ],
+    "answerOrder": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "why": "正常入场占位发票、出场按取整计费并清空两个索引，再出场时查不到票直接报错且不改状态——这条 trace 同时验证了计费公式和防重复出场。",
+    "why_en": "Normal entry claims a spot and issues a ticket, exit bills with round-up and clears both indexes, and a second exit finds nothing and errors without touching state — this trace verifies both the fee formula and double-exit prevention in one pass.",
+    "tradeoff": "手动 trace 一次完整场景 vs 等面试官找到 bug 才修",
+    "termDefinitions": [
+      {
+        "term": "trace-through",
+        "meaning": "在写完流程后手动带入一组具体数值，逐步核对状态是否符合预期，抢在面试官之前自己发现 bug。",
+        "meaningEn": "A trace-through is manually walking a concrete scenario through your pseudocode step by step to catch bugs before your interviewer does."
+      }
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-060",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "floor-state-methods",
+    "scenario": "扩展成多层车库后，你要用『两问法』给新增的 ParkingFloor 类定出状态和方法。",
+    "scenario_en": "After extending to a multi-floor garage, you apply the two-question method to design the new ParkingFloor class.",
+    "q": "ParkingFloor 应该记住什么、暴露哪些方法？",
+    "q_en": "What should ParkingFloor remember, and what methods should it expose?",
+    "options": [
+      "floorNumber 和本层 spots；暴露 findAvailableSpot 和 getAvailableSpotCount 两个方法",
+      "只存 floorNumber，本层车位仍留在 ParkingLot 里统一遍历，Floor 不持有 spots",
+      "存本层已入场的 Ticket 列表，出场校验也交给 ParkingFloor 处理",
+      "只暴露 getAvailableSpotCount，不提供 findAvailableSpot，具体车位靠 ParkingLot 直接读 spots"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "两问法用在 ParkingFloor 上：要记住 floorNumber 和本层 spots，要支持按类型找空位和统计可用数量，这样 ParkingLot 才能委托给每层而不必直接摸 spots 内部列表。",
+    "why_en": "Applying the two-question method to ParkingFloor: it should remember its floorNumber and spots, and expose finding a spot by type plus counting availability, so ParkingLot can delegate instead of reaching into each floor's internal list.",
+    "tradeoff": "Floor 自持 spots 并暴露查找方法 vs ParkingLot 继续统一遍历所有楼层的车位",
+    "whenOtherWins": "如果楼层数量很少（比如只有 2 层）且不需要按楼层统计，直接让 ParkingLot 扁平遍历所有 spots 也够用，不必新增 Floor 类。",
+    "options_en": [
+      "floorNumber and this floor's spots as state; expose the findAvailableSpot and getAvailableSpotCount methods.",
+      "Store only floorNumber; keep spots in ParkingLot and scan them there, so Floor never owns spots.",
+      "Store this floor's active tickets and hand exit validation to ParkingFloor too.",
+      "Expose only getAvailableSpotCount, no findAvailableSpot, so ParkingLot reads each floor's spots directly."
+    ],
+    "termDefinitions": [
+      {
+        "term": "委托 / delegate",
+        "meaning": "把一个操作的具体执行交给下层对象自己完成，上层只调用接口而不碰内部细节。",
+        "meaningEn": "Delegation means handing an operation to a subordinate object to actually perform, while the caller only touches its interface."
+      }
+    ],
+    "optionExplanations": [
+      "两问法直接得出的形状：状态是楼层号和本层车位，方法是按类型查找和计数，ParkingLot 只需调用接口。",
+      "Floor 不持有 spots，找空位还是要靠 ParkingLot 扁平扫描全部车位，引入 Floor 这一层就没有意义。",
+      "出场校验属于编排者职责，票据也不该按楼层拆开存，这会让『查一张票』变成要先知道它在哪层。",
+      "少了 findAvailableSpot，ParkingLot 拿到计数后还是得自己遍历该层 spots，Floor 没有真正封装查找逻辑。"
+    ],
+    "optionExplanations_en": [
+      "This is exactly what the two-question method yields: state is floor number and spots, methods are find-by-type and count.",
+      "Without owning spots, Floor adds a layer that does nothing — ParkingLot still has to flat-scan every spot itself.",
+      "Exit validation belongs to the orchestrator, and splitting tickets by floor turns 'look up one ticket' into a per-floor search.",
+      "Without findAvailableSpot, ParkingLot still has to walk that floor's spots itself after getting the count — no real encapsulation."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-061",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "low-level-design",
+    "sub": "ticket-floor-stability",
+    "scenario": "多层扩展后 spotId 变成 \"3-A15\" 这种带楼层信息的复合格式。",
+    "scenario_en": "After the multi-floor extension, spotId becomes a composite like \"3-A15\" that embeds the floor.",
+    "q": "为什么 Ticket 类可以完全不加字段？",
+    "q_en": "Why can the Ticket class stay unchanged with no new field?",
+    "options": [
+      "spotId 隐式带上楼层，exit 仍按 spotId 查找释放，无需改 Ticket",
+      "楼层信息其实从不需要保留，多层扩展后旧的单层 spotId 编号方式继续沿用",
+      "Ticket 应该新增 floorNumber 字段，否则出场时无法定位车辆所在楼层",
+      "spotId 编码楼层后，Ticket 反而必须改成可变对象才能追加这个信息"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "spotId 从 \"B\" 变成 \"3-A15\" 就把楼层信息编码进已有字段，exit 查找逻辑不用改；Ticket 保持不可变、字段不增加。",
+    "why_en": "Once spotId itself becomes \"3-A15\", floor information rides along in an existing field, so the exit lookup logic is unchanged and Ticket stays immutable with no new field.",
+    "tradeoff": "复合 spotId 隐式带楼层 vs Ticket 显式加 Floor 字段",
+    "options_en": [
+      "spotId implicitly carries the floor, and exit still looks up and frees by spotId, so Ticket doesn't need to change.",
+      "Floor information is never actually needed, so the old single-floor spotId scheme just keeps being used unchanged.",
+      "Ticket should gain a floorNumber field, or exit can't locate which floor the vehicle is on.",
+      "Encoding the floor into spotId actually forces Ticket to become mutable to append that information."
+    ],
+    "optionExplanations": [
+      "字符串本身就是新的复合标识符，找车位、释放车位的逻辑照旧按 id 查找，不需要改 Ticket 的字段。",
+      "多层结构下 spot 本来就要按楼层区分身份，\"B\" 这种旧编号在 10 层车库里会撞号，站不住。",
+      "这是本设计选择不做的做法：只有需要在收据上直接展示楼层文字、不想解析字符串时才值得加。",
+      "spotId 只是构造时确定的一个字符串值，编码楼层信息不需要让 Ticket 本身变成可变对象。"
+    ],
+    "optionExplanations_en": [
+      "The string is itself the new composite identifier — lookup and release logic still works by id, no Ticket field needed.",
+      "In a multi-floor building, spots need floor-qualified identity or the old scheme like \"B\" collides across floors.",
+      "This is the alternative the design didn't take — only worth it if a receipt must show the floor as text without parsing.",
+      "spotId is just a string fixed at construction; encoding the floor into it doesn't require Ticket to become mutable."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-062",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "balanced-alloc-code",
+    "scenario": "500 个车位分 5 层，高峰期低层排队而高层空着，你换成按可用车位数选楼层。",
+    "scenario_en": "500 spots across 5 floors, with lower floors congested and upper floors empty at peak, so you switch to picking the floor with the most availability.",
+    "q": "这段均衡分配伪代码比『第一个匹配楼层』多付出什么代价？",
+    "q_en": "What extra cost does this balanced-allocation pseudocode pay compared to first-match?",
+    "codeSample": "findAvailableSpot(vehicleType)\n    requiredType = mapVehicleTypeToSpotType(vehicleType)\n    bestFloor = null\n    maxAvailable = 0\n    for floor in floors\n        available = floor.getAvailableSpotCount(requiredType)\n        if available > maxAvailable\n            maxAvailable = available\n            bestFloor = floor\n    if bestFloor == null\n        return null\n    return bestFloor.findAvailableSpot(requiredType)",
+    "lang": "text",
+    "options": [
+      "每次入场都要扫一遍全部楼层求最大可用数，换来车位分布更均衡，避免单层拥堵",
+      "会漏掉某些楼层完全不参与遍历，换来的是入场处理速度更快",
+      "只查一次就直接返回第一层，换来的是完全没有均衡效果",
+      "把车位统计逻辑搬到了 ParkingSpot 内部，换来的是 Floor 类可以整个删掉"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "每次入场要遍历所有楼层取最大可用数，比第一个匹配楼层多一轮 O(floors) 扫描；换来的是车流不再堆积在低楼层。",
+    "why_en": "Every entry now scans all floors to find the maximum availability, an extra O(floors) pass compared to first-match — the payoff is traffic no longer piles up on the lower floors.",
+    "tradeoff": "先匹配即返回，最快但可能堵低楼层 vs 全楼层扫描选最优，稍慢但分布均衡",
+    "whenOtherWins": "楼层很少或车流本就稀疏时，第一个匹配楼层的简单遍历已经够用，不值得为均衡多付这轮扫描。",
+    "options_en": [
+      "It scans every floor each entry to find the max availability, trading extra work for a more even spot distribution.",
+      "It skips some floors from the scan entirely, trading correctness for faster entry processing.",
+      "It checks once and returns the first floor, trading away any real balancing effect.",
+      "It moves spot counting into ParkingSpot itself, letting the Floor class be deleted entirely."
+    ],
+    "termDefinitions": [
+      {
+        "term": "O(floors)",
+        "meaning": "算法开销随楼层数量线性增长；这里指每次入场都要遍历一遍全部楼层。",
+        "meaningEn": "O(floors) means the cost grows linearly with the number of floors — here, every entry walks the full floor list."
+      }
+    ],
+    "optionExplanations": [
+      "代码里 for floor in floors 遍历了全部楼层再挑 maxAvailable，这一轮全量扫描就是换取均衡的代价。",
+      "代码没有跳过任何楼层，for 循环覆盖 floors 里的每一个元素，不存在漏扫描的情况。",
+      "代码明确记录 maxAvailable 并持续更新 bestFloor，不是找到第一个非空楼层就直接返回。",
+      "getAvailableSpotCount 仍在 ParkingFloor 上，代码没挪到 ParkingSpot，也没删 Floor 类。"
+    ],
+    "optionExplanations_en": [
+      "The for-loop walks every floor to track maxAvailable — that full scan is exactly the cost paid for balance.",
+      "The loop doesn't skip any floor; it iterates the whole floors list, so nothing is left out.",
+      "The code keeps updating maxAvailable and bestFloor, so it isn't just returning the first non-empty floor.",
+      "getAvailableSpotCount stays a ParkingFloor method here — the code neither moves it nor removes the Floor class."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-063",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "no-gold-plating-search",
+    "scenario": "写 findAvailableSpot 时你想加一条『优先分配靠近入口的车位』的规则，但需求里没提过。",
+    "scenario_en": "While writing findAvailableSpot, you're tempted to add a rule preferring spots near the entrance, even though requirements never mentioned it.",
+    "q": "这种情况下该怎么处理这条额外规则？",
+    "q_en": "What should you do with this extra allocation rule?",
+    "options": [
+      "不主动实现，除非面试官提出或你先问一句是否需要",
+      "直接实现，展示的分配逻辑越复杂越能体现工程能力",
+      "把它写进 ParkingSpot 的构造函数参数里，默认对所有车位生效",
+      "跳过 findAvailableSpot 的实现，先把这条规则的设计文档写清楚"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "需求没提的分配策略先不做，这是在往未被要求的地方烧时间；真要展示可以先问面试官是否要延伸讨论。",
+    "why_en": "Don't build allocation logic nobody asked for — that burns time on unrequested features; if you want to show it, ask the interviewer whether they want that extension.",
+    "tradeoff": "先写需求内的简单线性扫描 vs 主动加需求外的分配优化",
+    "whenOtherWins": "面试官在扩展性环节主动问『如何做更聪明的分配』时，这才是展开 Strategy 模式或就近分配的时机。",
+    "options_en": [
+      "Don't build it proactively — wait for the interviewer to ask, or ask them first whether it's needed.",
+      "Implement it right away; the more sophisticated the allocation logic looks, the more it signals skill.",
+      "Bake it into ParkingSpot's constructor arguments so it applies to every spot by default.",
+      "Skip implementing findAvailableSpot and write up the design for this rule first instead."
+    ],
+    "optionExplanations": [
+      "基础版只需匹配类型并按 O(n) 扫描找到第一个空位，额外偏好逻辑要等被要求才加。",
+      "复杂度不等于工程能力，未被要求的功能是在燃烧白板时间，反而显得没有把握好范围。",
+      "偏好逻辑是分配策略问题，不是车位固有属性，塞进 ParkingSpot 构造函数混淆了状态归属。",
+      "跳过核心方法的实现去写没被要求的文档，本末倒置，交付不出能跑的系统。"
+    ],
+    "optionExplanations_en": [
+      "The base version only needs to match type and scan for the first free spot; extra preference logic waits until asked.",
+      "Complexity isn't skill — building unrequested features burns whiteboard time and signals poor scoping.",
+      "Preference is an allocation-policy concern, not an intrinsic spot property; stuffing it into the constructor mixes up which class should hold that state.",
+      "Skipping the core method to document an unrequested rule is backwards — you'd have nothing working to show."
+    ]
+  },
+  {
+    "id": "lld-problem-breakdowns-parking-lot-064",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "low-level-design",
+    "sub": "enter-failure-atomicity",
+    "scenario": "findAvailableSpot 在 enter 中找不到任何兼容空位。",
+    "scenario_en": "findAvailableSpot finds no compatible free spot inside enter.",
+    "q": "此时 enter 应该先做什么？",
+    "q_en": "What should enter do at this point?",
+    "options": [
+      "直接返回错误，不改动 occupiedSpotIds 或 activeTickets",
+      "先生成一张没有 spotId 的 ticket 占位，等真正有空位时再补上",
+      "把某个已经被别人占用的 spot 强制标记为空闲，让这次入场也侥幸成功",
+      "先把 occupiedSpotIds 加上一个占位 ID 记录，之后再决定要不要报错"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "找不到空位就必须在改变任何状态之前返回错误，这样失败路径不会留下半成品的 ticket 或占用记录。",
+    "why_en": "When no spot is found, enter must return the error before touching any state, so the failure path never leaves a half-written ticket or occupancy record.",
+    "tradeoff": "失败路径零副作用 vs 先分配再回滚更复杂但看似更灵活",
+    "whenOtherWins": "如果系统未来要支持排队等位，才需要在没有空位时也创建某种『等待中』记录，那已经不是这道题的基础需求。",
+    "options_en": [
+      "Return the error immediately without touching occupiedSpotIds or activeTickets.",
+      "Issue a ticket with no spotId as a placeholder and fill it in once a spot opens up.",
+      "Force-mark some other vehicle's already-occupied spot as free so this entry can luck into succeeding.",
+      "Add a placeholder ID record to occupiedSpotIds first, then decide afterward whether to error."
+    ],
+    "optionExplanations": [
+      "两个索引在失败路径上完全不动，保证下一次入场看到的状态和这次失败前一致。",
+      "半成品 ticket 会让 activeTickets 里出现一张指不到真实车位的记录，出场时无法正确释放。",
+      "抢占别人车位是更严重的错误，会让原本合法占用的那辆车凭空丢失车位。",
+      "占位 ID 会让 occupiedSpotIds 出现一个不对应任何真实 spot 的假条目，污染后续的空位统计。"
+    ],
+    "optionExplanations_en": [
+      "Neither index moves on the failure path, so the next entry sees exactly the state it would have seen before this attempt.",
+      "A half-written ticket leaves an entry in activeTickets pointing at no real spot, so exit can never free it correctly.",
+      "Stealing another vehicle's spot is a worse bug — the car that legitimately holds it now has no spot at all.",
+      "A placeholder ID pollutes occupiedSpotIds with an entry that maps to no real spot, corrupting later availability checks."
+    ]
   }
 ]
