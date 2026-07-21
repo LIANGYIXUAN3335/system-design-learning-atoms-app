@@ -21,7 +21,12 @@ This pipeline authors from **two kinds of source**:
   - ② **delivery / behavioral gap** — they knew the material but executed poorly in the room (framing, "why leaving", questions to ask, internal jargon, pacing/AI-perception). Author **behavioral-drill cards** into the `interview-drill` topic (see the dedicated section below).
 - **Output**: knowledge → `src/content/<topic>/...`; behavioral → `src/content/interview-drill/<company-or-theme>.json`.
 
-`<topic>` is one of: `system-design`, `low-level-design`, `ml-system-design`, `ai-coding`, `interview-drill`.
+`<topic>` is one of: `system-design`, `low-level-design`, `ml-system-design`, `ai-coding`, `interview-drill`, `interview-review`.
+
+**`interview-drill` vs `interview-review`** — both are delivery-side decks and share the behavioral-card rules below.
+- `interview-drill` = one interview's items, or a single cross-company delivery theme, authored as it arrives.
+- `interview-review` = the **面试复盘 track**: the consolidated, de-duplicated cross-interview deck built from ALL past debriefs at once (`Interview Action Items.md` + the two question banks + coach-debrief recordings). Its defining constraint is **de-duplication**: a mistake the user repeated across N interviews becomes ONE card that names the recurrence, not N cards. Files are per-theme (`openers-and-narrative`, `bq-stories`, `coding-reflexes`, …), not per-company. abbr `irv`.
+  Note: `interview-review` decks also need `options_en` and the full bilingual option-note trio (`optionMeanings`/`optionDirectness`/`optionScenarioImpacts` + `_en`) plus a `tradeoff` field on fit/contrast cards — the audit treats these as required even though the schema block above lists them as optional.
 
 After writing, VALIDATE (see bottom). Do not finish until your files pass.
 
@@ -133,7 +138,7 @@ Delivery gaps — "address a soft rejection head-on instead of ignoring it", "as
 ## id scheme (collision-free — derive mechanically)
 
 `id = "<abbr>-<file-stem-dashed>-<NNN>"`, NNN zero-padded to 3 digits, starting 001, per file.
-- `<abbr>`: system-design→`sd`, low-level-design→`lld`, ai-coding→`aic`, llm-sd→`llm`, interview-drill→`idr`.
+- `<abbr>`: system-design→`sd`, low-level-design→`lld`, ai-coding→`aic`, llm-sd→`llm`, interview-drill→`idr`, interview-review→`irv`.
 - ROUTING NOTE: the scraped **ml-system-design** source articles are authored INTO the `llm-sd` output dir, with `topic: "llm-sd"` and abbr `llm` (they seed the llm-sd track). low-level-design source → `low-level-design` dir, `topic: "low-level-design"`, abbr `lld`. ai-coding source → `ai-coding` dir, `topic: "ai-coding"`, abbr `aic`.
 - `<file-stem-dashed>`: the source filename without `.md`, with `_` and any non-alphanumeric replaced by `-`.
 - Example: `system-design/deep-dives_kafka.md` → ids `sd-deep-dives-kafka-001`, `sd-deep-dives-kafka-002`, …
