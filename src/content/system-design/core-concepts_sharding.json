@@ -265,16 +265,16 @@
     "q": "这个阶段优先考虑什么？",
     "q_en": "What should you prioritize at this stage?",
     "options": [
-      "跳过分区，直接引入 64 个 shard 做水平扩展",
+      "跳过分区，觉得分片才是唯一解，直接上线 64 个 shard 做水平扩展",
       "先在单机内按时间做 partitioning，让查询只扫相关分区",
-      "删掉表上的所有索引来提升扫描速度",
-      "把全部历史订单迁移进 Redis 当主存储"
+      "删掉表上的所有索引，只留主键，指望没有索引维护开销就能扫描更快",
+      "把全部历史订单迁移进 Redis 当主存储，用内存空间换取扫描速度"
     ],
     "options_en": [
-      "Skip partitioning and jump straight to 64 shards for horizontal scaling.",
+      "Skip partitioning, assume sharding is the only real fix, and jump straight to 64 shards for horizontal scaling.",
       "First partition by time inside the single instance so queries only scan the relevant slice.",
-      "Delete every index on the table to speed up scans.",
-      "Move all historical orders into Redis as the primary store."
+      "Delete every index on the table, keep only the primary key, and hope removing index upkeep alone speeds up scans.",
+      "Move all historical orders into Redis as the primary store, trading memory for scan speed."
     ],
     "answer": [
       1
@@ -315,16 +315,16 @@
     "codeSample": "SELECT * FROM orders\nWHERE created_at >= '2026-06-01'\n  AND created_at <  '2026-07-01';\n-- 如果按月 partition，DB 只扫 2026-06 分区\n\nALTER TABLE orders DETACH PARTITION orders_2024_01;\n-- 清理旧数据可以按分区处理，不用逐行 delete",
     "lang": "sql",
     "optionExplanations": [
-      "64 台机器太重：瓶颈只是扫描范围，不是单机容量或吞吐。",
+      "分片过重：瓶颈只是扫描范围，不是单机容量或吞吐，64 个 shard 还要背路由和 rebalance 成本。",
       "对：按时间分区能让查询只扫相关时间段，先减轻单机扫描压力。",
-      "删索引只会让大表扫描更慢，方向反了。",
-      "Redis 是缓存，不是能顶替持久化订单历史的主存储。"
+      "删索引只会让大表扫描更慢：没了索引，选择性扫描退化成全表扫描，方向反了。",
+      "Redis 是缓存，不是能顶替持久化订单历史的主存储，全量迁移会丢掉持久化保证。"
     ],
     "optionExplanations_en": [
-      "Sixty-four shards is overkill when the bottleneck is scan scope, not machine capacity.",
+      "Sharding is overkill here: the bottleneck is scan scope, not machine capacity, and 64 shards adds routing and rebalancing cost.",
       "Correct; time-based partitioning lets queries skip irrelevant periods, easing the single-machine scan load first.",
-      "Dropping indexes would make large-table scans slower, the wrong direction entirely.",
-      "Redis is a cache, not a durable primary store for the full order history."
+      "Dropping indexes only makes large-table scans slower — without them, selective scans degrade into full scans, the wrong direction.",
+      "Redis is a cache, not a durable primary store for the full order history; migrating everything loses durability guarantees."
     ],
     "termDefinitions": [
       {
@@ -475,16 +475,16 @@
     "q": "为什么用 boolean 字段 `is_premium` 做 shard key 很差？",
     "q_en": "Why is a boolean field like `is_premium` a poor shard key?",
     "options": [
-      "boolean 不能被数据库存储",
+      "boolean 占用空间太小，会造成 shard 存储容量长期用不满",
       "只有两个取值，最多天然分成两个大组，且很容易严重倾斜",
-      "boolean 会让所有查询变成跨 shard",
-      "boolean 字段无法建立索引"
+      "boolean 会让所有查询变成跨 shard，读写都得扇出到全部机器",
+      "boolean 字段没法建索引，数据库会直接拒绝把它设为 shard key"
     ],
     "options_en": [
-      "Booleans can't be stored in a database.",
+      "Booleans take up too little space, so shard storage capacity would go long-term underused.",
       "It only has two values, so at most it splits into two groups, and one easily ends up far larger than the other.",
-      "A boolean shard key forces every query to become cross-shard.",
-      "Boolean fields can't be indexed."
+      "A boolean shard key forces every read and write to fan out across all shards.",
+      "Boolean fields can't be indexed, so the database would flatly refuse to let it be the shard key."
     ],
     "answer": [
       1
@@ -497,16 +497,16 @@
       "cardinality"
     ],
     "optionExplanations": [
-      "错误，boolean 可以被存储，问题出在它作为 shard key 的特性。",
+      "错误，boolean 值本身占用空间很小，但真正的问题是低基数导致数据倾斜，不是浪费存储容量。",
       "正确，boolean 基数只有 2，容易导致数据严重不平衡。",
-      "不准确，boolean shard key 会导致倾斜和热点，但不一定所有查询都跨 shard。",
-      "错误，boolean 字段完全可以建立索引。"
+      "不准确，boolean shard key 会导致倾斜和热点，但不一定所有查询都要跨 shard 扇出。",
+      "错误，boolean 字段完全可以建立索引，数据库不会因此拒绝——真正的问题是基数太低。"
     ],
     "optionExplanations_en": [
-      "Incorrect; databases can store booleans; the issue is their low cardinality as shard keys.",
+      "Incorrect; a boolean value itself takes little space — the real problem is low cardinality causing skew, not wasted capacity.",
       "Correct; a boolean has only two values, creating at most two imbalanced groups.",
-      "Not quite; a boolean key causes skew and imbalance, but not all queries necessarily fan out.",
-      "Incorrect; boolean fields can be indexed like any other column."
+      "Not quite; a boolean key causes skew and imbalance, but not literally every query has to fan out across all shards.",
+      "Incorrect; boolean fields can absolutely be indexed and databases don't reject them as keys — the real problem is low cardinality."
     ],
     "termDefinitions": [
       {
@@ -532,16 +532,16 @@
     "q": "按 country 分片时，如果 90% 用户都在美国，直接后果是什么？",
     "q_en": "If you shard by country and 90% of users are in the US, what is the direct consequence?",
     "options": [
-      "所有 shard 一定完全均匀",
+      "所有 shard 会自动保持均匀，因为 sharding 本身自带负载均衡",
       "美国 shard 变热点，其他相对空闲",
-      "查询会自动变成 O(1)",
-      "数据库不再需要索引"
+      "单条查询自动变成 O(1) 复杂度，跟数据量、分布都没关系了",
+      "数据库不再需要索引，因为分片后每个 shard 的数据量已经变小"
     ],
     "options_en": [
-      "All shards will necessarily stay perfectly balanced.",
+      "All shards stay automatically balanced, because sharding itself does load balancing for you.",
       "The US shard becomes a hotspot while the others sit relatively idle.",
-      "Queries automatically become O(1).",
-      "The database no longer needs indexes."
+      "A single query automatically becomes O(1), regardless of data volume or distribution.",
+      "The database no longer needs indexes, because each shard now holds less data."
     ],
     "answer": [
       1
@@ -554,16 +554,16 @@
       "hotspot"
     ],
     "optionExplanations": [
-      "错：country 高度倾斜时，均匀性直接被打破。",
+      "错：sharding 只负责按 key 路由数据，不会自动纠正一个倾斜 key 造成的不均衡。",
       "对：90% 用户集中在美国，等于把绝大部分数据和请求压到一个 shard 上。",
-      "错：倾斜的 key 只会让延迟变差，不会把查询降到常数时间。",
-      "错：分片内部仍然需要索引来加速本地查询。"
+      "错：倾斜的 key 只会让延迟变差，不会把查询降到常数时间，分片不改变查询复杂度。",
+      "错：分片内部仍然需要索引来加速本地查询，数据量变小不等于不需要索引。"
     ],
     "optionExplanations_en": [
-      "Incorrect; a highly skewed country field directly breaks shard balance.",
+      "Incorrect; sharding only routes data by key — it doesn't auto-correct the imbalance a skewed key creates.",
       "Correct; ninety percent concentration in one region overloads that shard while others stay idle.",
-      "Incorrect; skewed keys make latency worse, not constant-time.",
-      "Incorrect; individual shards still need indexes for fast local queries."
+      "Incorrect; skewed keys make latency worse, not constant-time — sharding doesn't change query complexity.",
+      "Incorrect; individual shards still need indexes for fast local queries; smaller data doesn't mean no index."
     ],
     "termDefinitions": [
       {
@@ -1348,16 +1348,16 @@
     "q": "Sharding 里的 hot spot 指什么？",
     "q_en": "What does a hot spot mean in sharding?",
     "options": [
-      "数据库缓存命中率很高",
-      "所有 shard 都完全均衡",
+      "数据库缓存命中率很高，说明整体系统运行状态健康",
+      "所有 shard 都完全均衡，负载和数据量分布得一样多",
       "某 shard 数据/流量远超其他，成为瓶颈",
-      "某个 shard 的数据永远不被访问"
+      "某个 shard 的数据永远不被访问，变成了冷数据孤岛"
     ],
     "options_en": [
-      "The database's cache hit rate is very high.",
-      "All shards are perfectly balanced.",
+      "The database's cache hit rate is very high, meaning the system overall is healthy.",
+      "All shards are perfectly balanced, with load and data volume spread evenly.",
       "One shard's data or traffic far exceeds the others and becomes the bottleneck.",
-      "One shard's data is never accessed."
+      "One shard's data is never accessed, turning it into a cold-data island."
     ],
     "answer": [
       2
@@ -1394,16 +1394,16 @@
       ]
     },
     "optionExplanations": [
-      "错误，缓存命中与 sharding 热点问题没有必然联系。",
-      "错误，热点的反义就是所有 shard 均衡。",
+      "错误，缓存命中率是应用层指标，跟 sharding 是否倾斜没有必然联系。",
+      "错误，热点的反义就是所有 shard 均衡；本题场景恰恰是均衡被打破了。",
       "正确，热点就是指某个 shard 超负荷，成为整体系统的瓶颈。",
-      "错误，这是冷数据或未使用的 shard，与热点问题反向。"
+      "错误，这是冷数据或未使用的 shard，负载方向和热点正好相反。"
     ],
     "optionExplanations_en": [
-      "Incorrect; cache hit rate is not directly related to shard hotspot issues.",
-      "Incorrect; balanced shards are the opposite of hot spots.",
+      "Incorrect; cache hit rate is an application-layer metric, unrelated to whether sharding is skewed.",
+      "Incorrect; balanced shards are the opposite of a hot spot — this scenario is exactly the imbalance case.",
       "Correct; a hot spot is an overloaded shard that becomes the overall system bottleneck.",
-      "Incorrect; unused shards are the opposite problem from hot spots."
+      "Incorrect; that describes cold or unused data, the opposite load direction from a hot spot."
     ],
     "termDefinitions": [
       {
@@ -1623,16 +1623,16 @@
     "q": "哪种 shard key 变化可以把单用户负载按时间摊开？",
     "q_en": "Which shard key change can spread one user's load across time?",
     "options": [
-      "所有写入固定落到 shard 0",
-      "is_premium 布尔字段",
+      "所有写入固定落到 shard 0，觉得以后再迁移数据也不迟",
+      "把 shard key 换成 is_premium 布尔字段",
       "hash(user_id + date)",
-      "只用 country 地区字段"
+      "只用 country 地区字段做 shard key，因为地区查询很常见"
     ],
     "options_en": [
-      "Send every write to shard 0",
-      "The is_premium boolean field",
+      "Send every write to shard 0, figuring you can migrate data later.",
+      "Switch the shard key to the is_premium boolean field.",
       "hash(user_id + date)",
-      "Use the country field alone"
+      "Use the country field alone as the shard key, since region-scoped queries are common."
     ],
     "answer": [
       2
@@ -1649,16 +1649,16 @@
     "codeSample": "shard = hash(user_id + \":\" + date) % N\n\nuser 42, 2024-01-01 -> shard 3\nuser 42, 2024-01-02 -> shard 1\n# same user's traffic now spreads across shards over time",
     "lang": "text",
     "optionExplanations": [
-      "错，固定写 shard 0 等于人为制造一个热点。",
-      "错，is_premium 基数只有 2，反而制造新的倾斜。",
+      "错，固定写 shard 0 等于人为制造一个热点，迁移不能改变它已经过载的事实。",
+      "错，is_premium 基数只有 2，换成它反而制造新的倾斜，不是按时间摊开。",
       "对：hash(user_id + date) 让同一用户的数据按天落在不同 shard 上，不再全压在一个节点。",
-      "错，country 维度和'按时间摊开'完全无关。"
+      "错，country 维度和'按时间摊开单用户负载'完全无关，改不了同一用户始终落在一个 shard 的事实。"
     ],
     "optionExplanations_en": [
-      "Incorrect; always writing to shard 0 manually creates a hotspot.",
-      "Incorrect; is_premium has only two values and would create a new imbalance instead.",
+      "Incorrect; always writing to shard 0 manually creates a hotspot; migrating later doesn't undo the overload now.",
+      "Incorrect; is_premium has only two values and would create a new imbalance, not spread load over time.",
       "Correct; hash(user_id + date) spreads one user's data across shards by day instead of piling it on one node.",
-      "Incorrect; the country dimension has nothing to do with spreading load over time."
+      "Incorrect; the country dimension is unrelated to spreading one user's load over time; the user still lands on one shard."
     ],
     "termDefinitions": [
       {
@@ -1689,16 +1689,16 @@
     "q": "Cross-shard operation 是什么？",
     "q_en": "What is a cross-shard operation?",
     "options": [
-      "只在单机 partition 内扫描一个分区",
-      "一次请求只命中一个 shard",
+      "只在单机 partition 内扫描一个分区，不涉及任何网络请求",
+      "一次请求只命中一个 shard，不需要合并任何结果",
       "一次查询要跨多个 shard，还要在应用层合并结果",
-      "数据库启动时加载配置"
+      "数据库启动时按配置文件加载参数和连接池"
     ],
     "options_en": [
-      "It only scans one partition inside a single machine.",
-      "A single request only ever hits one shard.",
+      "It only scans one partition inside a single machine, with no network requests involved.",
+      "A single request only ever hits one shard and needs no result merging.",
       "A single query has to reach multiple shards and merge their results in the application layer.",
-      "It's the database loading its configuration at startup."
+      "It's the database loading parameters and connection pools from its config file at startup."
     ],
     "answer": [
       2
@@ -1712,16 +1712,16 @@
     ],
     "diagram": "flowchart TD\n  A[\"Request\"] --> B[\"Shard 1\"]\n  A --> C[\"Shard 2\"]\n  A --> D[\"Shard 3\"]\n  B --> E[\"Merge result\"]\n  C --> E\n  D --> E",
     "optionExplanations": [
-      "错误，这是单机 partition，不涉及多 shard。",
-      "错误，这是单 shard 操作的定义。",
+      "错误，这是单机 partition，不涉及多 shard 或网络请求。",
+      "错误，这是单 shard 操作的定义，不需要跨机器合并。",
       "正确，跨 shard 操作需要发多次数据库请求并合并结果。",
-      "错误，这是数据库启动流程，与跨 shard 无关。"
+      "错误，这是数据库启动流程，与跨 shard 查询无关。"
     ],
     "optionExplanations_en": [
-      "Incorrect; that is within-instance partitioning, not cross-shard.",
-      "Incorrect; that is a single-shard operation.",
+      "Incorrect; that is within-instance partitioning, with no cross-machine calls involved.",
+      "Incorrect; that is a single-shard operation, needing no cross-machine merge.",
       "Correct; a cross-shard operation touches multiple shards and requires coordinating results.",
-      "Incorrect; database startup configuration is unrelated to cross-shard operations."
+      "Incorrect; database startup configuration is unrelated to cross-shard querying."
     ],
     "termDefinitions": [
       {
@@ -1742,16 +1742,16 @@
     "q": "如果按 user_id 分片，哪类查询最可能只命中一个 shard？",
     "q_en": "If you shard by `user_id`, which query is most likely to hit only one shard?",
     "options": [
-      "统计全站所有用户的精确实时总数",
-      "取全站 top 10 最热帖子列表",
+      "统计全站所有用户的精确实时总数，每次都要重新聚合",
+      "取全站 top 10 最热帖子列表，帖子分散在不同用户名下",
       "读 user 12345 的 profile",
-      "取全站实时 trending 搜索词"
+      "取全站实时 trending 搜索词，需要聚合所有用户的搜索行为"
     ],
     "options_en": [
-      "An exact real-time count of every user on the site",
-      "The site-wide list of the ten hottest posts",
+      "An exact real-time count of every user on the site, re-aggregated on every request",
+      "The site-wide list of the ten hottest posts, scattered across many different users",
       "Read user 12345's profile",
-      "The site-wide real-time trending search terms"
+      "The site-wide real-time trending search terms, aggregated from every user's activity"
     ],
     "answer": [
       2
@@ -1765,16 +1765,16 @@
     ],
     "tradeoff": "按 shard key 命中单 shard 的查询（快）vs 需要跨用户聚合的全局查询（要 fan-out 到多个 shard）",
     "optionExplanations": [
-      "错误，用户总数需要从所有 shard 扫描和聚合。",
-      "错误，top 10 帖子可能来自各个用户 shard，需要跨 shard 查询。",
+      "错误，用户总数需要从所有 shard 扫描和聚合，不会命中单个 shard。",
+      "错误，top 10 帖子可能来自各个用户 shard，需要跨 shard 查询和合并。",
       "正确，用户资料在该用户对应的 shard 上，单 shard 查询。",
-      "错误，trending 词汇需要从全站数据聚合。"
+      "错误，trending 词汇需要从全站所有用户的数据聚合，同样要跨 shard。"
     ],
     "optionExplanations_en": [
-      "Incorrect; total user count requires scanning and aggregating all shards.",
-      "Incorrect; the top posts span multiple user shards, requiring cross-shard queries.",
+      "Incorrect; total user count requires scanning and aggregating all shards, never a single one.",
+      "Incorrect; the top posts span multiple user shards, requiring cross-shard queries and merging.",
       "Correct; a single user's profile is on their shard, a simple single-shard lookup.",
-      "Incorrect; trending terms require aggregating data from all shards."
+      "Incorrect; trending terms require aggregating every user's data, also crossing shards."
     ],
     "termDefinitions": [
       {
@@ -1926,16 +1926,16 @@
     "q": "最合理的处理方式是什么？",
     "q_en": "What is the most reasonable handling strategy?",
     "options": [
-      "删除 trending 功能",
-      "每个请求实时查询所有 64 个 shard",
+      "直接删除 trending 功能，图省事回避这个问题",
+      "每个请求都实时查询所有 64 个 shard，保证数据绝对最新",
       "缓存或后台预计算 trending 结果，定期刷新",
-      "把 shard key 改成 boolean"
+      "把 shard key 改成 boolean，指望能顺带解决查询延迟"
     ],
     "options_en": [
-      "Remove the trending feature entirely.",
-      "Query all 64 shards live on every request.",
+      "Just delete the trending feature to avoid the problem entirely.",
+      "Have every request query all 64 shards live, so the data is always perfectly fresh.",
       "Cache or precompute the trending results in the background and refresh them periodically.",
-      "Change the shard key to a boolean field."
+      "Change the shard key to a boolean, hoping that also fixes the query latency."
     ],
     "answer": [
       2
@@ -1951,15 +1951,15 @@
     "tradeoff": "缓存/预计算 trending（容忍几分钟延迟，省掉重复 fan-out）vs 每次都现查所有 shard（强实时但成本很高）",
     "optionExplanations": [
       "错误，删除功能是逃避，而不是解决方案。",
-      "错误，每次 fan-out 到 64 个 shard 会大幅增加延迟和数据库压力。",
+      "错误，每次 fan-out 到 64 个 shard 会大幅增加延迟和数据库压力，'绝对最新'不值这个代价。",
       "正确，trending 内容通常允许几分钟延迟，缓存或预计算能避免每次 fan-out。",
-      "错误，boolean key 会导致倾斜，不能解决跨 shard 查询问题。"
+      "错误，boolean key 会导致倾斜，跟这里的跨 shard 查询延迟是两个不相干的问题。"
     ],
     "optionExplanations_en": [
       "Incorrect; deleting the feature is avoidance, not a design solution.",
-      "Incorrect; fanning out to sixty-four shards on every request causes significant latency.",
+      "Incorrect; fanning out to sixty-four shards on every request causes significant latency; 'always fresh' isn't worth that cost.",
       "Correct; trending tolerates slight staleness, so caching avoids expensive fan-out on every request.",
-      "Incorrect; boolean keys cause imbalance and do not solve cross-shard query problems."
+      "Incorrect; boolean keys cause imbalance, an unrelated problem from the cross-shard query latency here."
     ],
     "termDefinitions": [
       {
@@ -1985,16 +1985,16 @@
     "q": "为什么 sharding 会让原本简单的数据库事务变复杂？",
     "q_en": "Why does sharding make formerly simple database transactions more complex?",
     "options": [
-      "索引在分片后完全无法用于事务",
-      "分片后数据库彻底不再支持任何写入操作",
+      "索引在分片后完全无法用于事务，每次都要全表扫描",
+      "分片后数据库彻底不再支持任何写入操作，只能读",
       "相关数据分落不同 shard，单库事务盖不住",
-      "分片后所有查询都被迫变成只读模式"
+      "分片后所有查询都被迫变成只读模式，写入被禁用"
     ],
     "options_en": [
-      "Indexes can never be used in transactions after sharding.",
-      "The database completely stops supporting any writes after sharding.",
+      "Indexes can never be used in transactions after sharding, forcing a full scan every time.",
+      "The database completely stops supporting any writes after sharding — reads only.",
       "Related data may live on different shards, so a single-database transaction can't cover all of them.",
-      "Every query is forced to become read-only after sharding."
+      "Every query is forced into read-only mode after sharding, with writes disabled."
     ],
     "answer": [
       2
@@ -2007,16 +2007,16 @@
       "sharding"
     ],
     "optionExplanations": [
-      "错误，索引在分片后的单 shard 内仍能正常用于事务。",
-      "错误，分片后仍然支持写入，只是写入可能跨多个 shard。",
+      "错误，索引在分片后的单 shard 内仍能正常用于事务，不需要全表扫描。",
+      "错误，分片后仍然支持写入，只是写入可能跨多个 shard，需要协调。",
       "正确，sharding 后相关数据可能在不同数据库，需要跨 shard 协调。",
-      "错误，分片后查询仍可读写，只是可能需要跨 shard 协调。"
+      "错误，分片后查询仍可读写，只是可能需要跨 shard 协调，不是被禁写。"
     ],
     "optionExplanations_en": [
-      "Incorrect; indexes still work normally within a single shard for transactions.",
-      "Incorrect; sharded databases still support writes, though they may span multiple shards.",
+      "Incorrect; indexes still work normally within a single shard for transactions, no full scan needed.",
+      "Incorrect; sharded databases still support writes, though they may span multiple shards and need coordination.",
       "Correct; sharding puts related data on independent databases, breaking single-database transactions.",
-      "Incorrect; sharding does not make queries read-only."
+      "Incorrect; sharding does not disable writes, though it may require cross-shard coordination."
     ],
     "termDefinitions": [
       {
@@ -2430,15 +2430,15 @@
     "q": "一句足够清楚的 sharding 表达是什么？",
     "q_en": "What is a clear enough way to state the sharding design?",
     "options": [
-      "把 user_id 存到日志里但不建表",
-      "DynamoDB 不需要 partition key",
-      "所有用户固定写同一个 partition",
+      "把 user_id 存到日志里，不建表，等以后有空再设计 schema",
+      "DynamoDB 建表时会自动帮你挑一个 partition key，不用自己指定",
+      "所有用户固定写同一个 partition，图简单先跑起来再说",
       "以 user_id 为 partition key 自动路由"
     ],
     "options_en": [
-      "Store user_id in a log without ever creating a table.",
-      "DynamoDB doesn't need a partition key.",
-      "Write every user into the same fixed partition.",
+      "Store user_id in a log without creating a table, and design the schema later.",
+      "DynamoDB automatically picks a partition key for you when you create the table.",
+      "Write every user into the same fixed partition, just to get something running quickly.",
       "Use user_id as the partition key for automatic routing."
     ],
     "answer": [
@@ -2456,15 +2456,15 @@
     "codeSample": "Table: Users\nPartitionKey: user_id (String)\n\nGetItem(TableName=\"Users\", Key={\"user_id\": \"42\"})\n# DynamoDB hashes user_id internally to pick the partition",
     "lang": "text",
     "optionExplanations": [
-      "错——只写日志不建表，连查询模型都没有，更谈不上 partition key 是什么。",
-      "错——DynamoDB 建表时必须指定 partition key，它不是可选项。",
-      "错——把所有用户塞进一个 partition 等于放弃分布，读写都会被这一个分区限速。",
+      "错——只写日志、拖到以后再设计 schema，连查询模型都没有，更谈不上 partition key 是什么。",
+      "错——DynamoDB 建表时必须由你显式指定 partition key，它不会替你自动挑一个。",
+      "错——把所有用户塞进一个 partition 图省事先跑起来，等于放弃分布，读写都会被这一个分区限速。",
       "对，明确把 user_id 设成 partition key，DynamoDB 按它自动路由和扩展，也贴合按用户查询的主路径。"
     ],
     "optionExplanations_en": [
-      "Wrong — writing to a log without a table leaves you no queryable model at all, let alone a partition key.",
-      "Wrong — DynamoDB requires you to declare a partition key when you create the table; it isn't optional.",
-      "Wrong — cramming every user into one partition throws away distribution, so that single partition throttles all reads and writes.",
+      "Wrong — logging without a table and deferring schema design leaves you no queryable model, let alone a partition key.",
+      "Wrong — DynamoDB requires you to explicitly declare a partition key when you create the table; it won't pick one for you.",
+      "Wrong — cramming every user into one partition just to ship fast throws away distribution, throttling all reads and writes.",
       "Right — declaring user_id as the partition key lets DynamoDB route and scale automatically, matching how reads and writes actually target one user at a time."
     ],
     "termDefinitions": [

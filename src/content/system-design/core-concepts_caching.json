@@ -74,8 +74,8 @@
     "q": "默认先提哪一层缓存？",
     "q_en": "Which cache layer should you mention first by default?",
     "options": [
-      "每台应用服务器各自维护本地进程内缓存",
-      "Redis/Memcached 这类外部共享缓存",
+      "每台应用服务器各自维护独立的本地进程内缓存",
+      "Redis/Memcached 外部共享缓存",
       "CDN 边缘缓存所有业务数据",
       "浏览器 HTTP 缓存用户资料"
     ],
@@ -92,7 +92,7 @@
     ],
     "diagram": "flowchart LR\n    App1[\"App A\"] --> Redis[\"Shared Redis\"]\n    App2[\"App B\"] --> Redis\n    Redis --> DB[\"Database\"]",
     "options_en": [
-      "Give every app server its own in-process cache.",
+      "Give every app server its own independent in-process cache.",
       "Use an external shared cache such as Redis or Memcached.",
       "Cache all business data at the CDN edge.",
       "Use browser HTTP caching for user profiles."
@@ -764,8 +764,8 @@
     "options": [
       "缓存未命中时会多付一次数据库查询的延迟",
       "会缓存大量永远不会被读的数据",
-      "写入必须等缓存和数据库都完成",
-      "无法设置 TTL"
+      "写入必须等缓存和数据库都写完才返回",
+      "回填时忘了设 TTL，缓存可能永久不过期"
     ],
     "answer": [
       0
@@ -775,8 +775,8 @@
     "options_en": [
       "A cache miss adds one extra database round trip of latency.",
       "It caches lots of data that is never read.",
-      "Writes must wait for both cache and database to finish.",
-      "It cannot set a TTL."
+      "Writes must wait until both cache and database finish before returning.",
+      "Forgetting to set a TTL on backfill can leave stale entries cached forever."
     ],
     "tags": [
       "caching",
@@ -827,13 +827,13 @@
       "对：miss 要多走一次查库+回填，那次更慢。",
       "说反了：只缓存被读过的，不囤没人读的。",
       "那是 Write-Through 的写路径，不是本缺点。",
-      "错：TTL 照样能设，是标准操作。"
+      "这是回填代码疏忽的 bug，不是模式本身必然的缺点。"
     ],
     "optionExplanations_en": [
       "Right: a miss adds a DB read plus backfill, so that request is slower.",
       "Backwards: it only stores data that's been read, not unused entries.",
       "That's write-through's write path, not this drawback.",
-      "Wrong: TTL still works and is standard."
+      "That's a backfill implementation slip, not an inherent flaw of the pattern."
     ]
   },
   {
@@ -1183,10 +1183,10 @@
     "scenario": "20 个微服务各自写了一份「miss 就查库回填」的代码，团队想把这段逻辑收敛到一处维护。",
     "scenario_en": "Twenty services each reimplement the same miss-then-load-from-DB logic, and the team wants that logic in exactly one place.",
     "options": [
-      "Cache-Aside",
+      "Cache-Aside（旁路缓存）",
       "Read-Through（读穿透）",
-      "Write-Behind",
-      "Write-Through"
+      "Write-Behind（异步回写）",
+      "Write-Through（同步直写）"
     ],
     "answer": [
       1
@@ -1607,10 +1607,10 @@
     "scenario": "一个嵌入式设备上的小缓存只有 4MB 内存和很紧的 CPU 预算，不想为每个 key 维护访问统计。",
     "scenario_en": "An embedded cache has 4MB of memory and a tight CPU budget, so it can't track per-key access statistics.",
     "options": [
-      "按访问频次的高低来淘汰 key",
+      "按访问频次由低到高淘汰，频次最低的 key 最先被淘汰",
       "只按插入时间淘汰最老的，可能删掉仍很热的数据",
-      "和 LRU 完全等价，行为一致",
-      "是真实系统里最常用的淘汰策略"
+      "和 LRU 效果一样，都优先保留最近访问过的数据",
+      "因为实现简单，是真实系统里用得最多的淘汰策略"
     ],
     "answer": [
       1
@@ -1618,10 +1618,10 @@
     "why": "FIFO 只看谁最早进来，用一个简单队列即可，但它忽略访问模式，可能把还很热的数据淘汰掉，所以真实系统里很少单独用。",
     "why_en": "FIFO evicts the oldest by insertion time only, ignoring usage, so it may drop still-hot data and is rarely used in real systems.",
     "options_en": [
-      "Evicts keys by access frequency.",
+      "Evicts by access frequency, low to high — the least-frequently-used key goes first.",
       "Evicts the oldest by insertion time only, so it can drop still-hot data.",
-      "Equivalent to LRU, with identical behavior.",
-      "It is the most common eviction policy in real systems."
+      "Behaves just like LRU: both keep whatever was accessed most recently.",
+      "Because it's simple to implement, it's the most common eviction policy in real systems."
     ],
     "tags": [
       "caching",
@@ -1649,16 +1649,16 @@
       }
     ],
     "optionExplanations": [
-      "错：按访问频次是 LFU 的做法，不是 FIFO。",
+      "错：这是 LFU 的机制，FIFO 不看频次、只看插入顺序。",
       "对：只按进入顺序、不看使用模式，正是 FIFO 的定义。",
-      "错：LRU 看访问时间，FIFO 不看，两者不等价。",
-      "错：最常用的是 LRU；FIFO 因识别不了热点很少单用。"
+      "错：这描述的是 LRU；FIFO 不会因为再次访问就保留数据。",
+      "错：实现简单没错，但它会淘汰热数据，真实系统更常用 LRU/LFU。"
     ],
     "optionExplanations_en": [
-      "Wrong: evicting by frequency is LFU, not FIFO.",
+      "Wrong: that's LFU's mechanism; FIFO ignores frequency and only looks at insertion order.",
       "Right: evicting purely by arrival order regardless of usage is exactly FIFO.",
-      "Wrong: LRU tracks access time, FIFO doesn't, so they aren't equivalent.",
-      "Wrong: LRU is the common default; FIFO is rarely used alone since it can't spot hot keys."
+      "Wrong: that describes LRU; FIFO won't keep a key just because it was accessed again.",
+      "Wrong: it is simple, but it evicts hot data, so real systems favor LRU/LFU instead."
     ]
   },
   {
@@ -1672,7 +1672,7 @@
     "q": "关于 TTL，下面哪种说法最准确？",
     "q_en": "Which statement about TTL is most accurate?",
     "options": [
-      "TTL 是一种独立的淘汰策略，可直接替代 LRU/LFU",
+      "TTL 本身就是一种独立的淘汰策略，可以直接替代 LRU/LFU",
       "TTL 不是淘汰策略，只给 key 设过期，常配 LRU/LFU",
       "TTL 只能用在 CDN 边缘缓存的场景",
       "设了 TTL 之后就不再需要任何淘汰策略"
@@ -1683,7 +1683,7 @@
     "why": "TTL 会删 key，但回答的是「何时过期」，不是内存满时「删谁」。TTL 管新鲜度，LRU/LFU 管容量。",
     "why_en": "TTL can delete keys, but it answers when a key expires, not which key to drop when memory is full. Pair it with LRU/LFU for capacity control.",
     "options_en": [
-      "TTL is a standalone eviction policy that directly replaces LRU/LFU.",
+      "TTL is inherently a standalone eviction policy that can directly replace LRU/LFU.",
       "TTL is not an eviction policy; it sets a per-key expiry and pairs with LRU/LFU.",
       "TTL only works for CDN edge caching.",
       "With a TTL you no longer need any eviction policy."
@@ -1893,7 +1893,7 @@
     "q": "关于「缓存预热」（cache warming）防击穿，正确的是？",
     "q_en": "Which statement about cache warming to prevent stampedes is correct?",
     "options": [
-      "对所有失效方式都同样有效、都能挡住",
+      "无论 TTL 过期还是写时失效，预热都同样有效、能挡住",
       "只对 TTL 过期有效；写时失效时预热挡不住",
       "预热本身会导致缓存数据不一致",
       "预热本质上就等于请求合并这一手段"
@@ -1904,7 +1904,7 @@
     "why": "预热只挡可预测的 TTL 过期；写时失效是写完立刻 delete、不等 TTL，挡不住第一波 miss。",
     "why_en": "Warming refreshes before a known expiry. Write-time invalidation deletes cache right after a write, not when TTL expires; periodic warming only narrows the cold window.",
     "options_en": [
-      "It works equally for every kind of invalidation.",
+      "It works equally well whether it's TTL expiry or write-time invalidation.",
       "Only for TTL expiry; if you invalidate on writes, warming can't stop it.",
       "Warming itself causes cache data inconsistency.",
       "Warming is essentially the same as request coalescing."
@@ -2119,8 +2119,8 @@
     "options": [
       "缓存击穿（过期瞬间）",
       "热 key（hot key）问题",
-      "双写不一致",
-      "内存碎片"
+      "双写不一致（缓存和数据库两边没同步更新）",
+      "内存碎片（大量小对象反复分配释放导致）"
     ],
     "answer": [
       1
@@ -2130,8 +2130,8 @@
     "options_en": [
       "Cache stampede (at the expiry instant).",
       "Hot-key problem.",
-      "Dual-write inconsistency.",
-      "Memory fragmentation."
+      "Dual-write inconsistency (cache and DB updated out of sync).",
+      "Memory fragmentation (from repeatedly allocating and freeing small objects)."
     ],
     "tradeoff": "复制/分摊持续高流量 vs 单点承载",
     "whenOtherWins": "若是过期瞬间同时重建同一 key，那是击穿，用请求合并。",
@@ -2159,14 +2159,14 @@
     "optionExplanations": [
       "击穿是过期瞬间并发重建；这里 key 一直命中。",
       "对：单个 key 流量碾压其他，把它所在节点/分片打满。",
-      "双写讲缓存与库不一致，与单点压垮无关。",
-      "内存碎片是内存管理问题，不是这里症状。"
+      "双写不一致是缓存和库两边没同步更新，跟单点被压垮无关。",
+      "内存碎片是小对象反复分配释放留下的空洞，不是流量集中的症状。"
     ],
     "optionExplanations_en": [
       "Stampede is concurrent rebuild at expiry; here the key keeps hitting.",
       "Right: one key's traffic dwarfs others and saturates its node/shard.",
-      "Dual-write is about inconsistency, not one key overloading a node.",
-      "Memory fragmentation is a memory-management issue, not this."
+      "Dual-write inconsistency is cache and DB going out of sync, unrelated to one node being overloaded.",
+      "Memory fragmentation is holes left by repeated small allocations/frees, not a traffic-concentration symptom."
     ]
   },
   {
@@ -2438,7 +2438,7 @@
     "q": "关于什么时候提缓存，正确的做法是？",
     "q_en": "When should you bring up caching in an interview?",
     "options": [
-      "一上来就加缓存，越早加进架构越好",
+      "一上来就把缓存画进架构图，显得提前考虑了性能",
       "先定位数据库瓶颈、用粗略数字量化，再加缓存",
       "永远不要主动提起缓存，等别人说",
       "只有等面试官明确问到了才提缓存"
@@ -2449,7 +2449,7 @@
     "why": "别一上来就加缓存。先指出具体瓶颈——读多、查询贵、DB CPU 高、或有低延迟要求——用粗略数字量化，再说明缓存怎么解决。先「为什么」后「怎么做」。",
     "why_en": "Do not jump to caching; first identify a database bottleneck, quantify it with rough numbers, and then explain how a cache solves it.",
     "options_en": [
-      "Add a cache right away — the earlier it goes into the design, the better.",
+      "Draw caching into the architecture right away — it looks like you planned ahead for performance.",
       "First pinpoint the DB bottleneck, quantify it roughly, then add caching.",
       "Never bring up caching yourself; wait for someone else.",
       "Only mention caching if the interviewer explicitly asks."
@@ -2473,13 +2473,13 @@
       }
     ],
     "optionExplanations": [
-      "一上来就加缓存是过早优化，还没证明瓶颈。",
+      "错：看起来周全，实际是没有证据支撑的过早优化。",
       "对：先用粗略数字点名 DB 瓶颈，再讲缓存怎么解。",
       "缓存值得在有瓶颈时主动提，不该回避。",
       "等面试官问显得被动，应主动识别问题。"
     ],
     "optionExplanations_en": [
-      "Adding a cache upfront is premature optimization before proving a bottleneck.",
+      "Wrong: it looks thorough, but it's premature optimization with no evidence behind it.",
       "Right: name the DB bottleneck with rough numbers, then show how caching solves it.",
       "Caching is worth raising when there's a bottleneck, not avoiding.",
       "Waiting to be asked looks passive; spot problems yourself."
@@ -2586,8 +2586,8 @@
     "options": [
       "随机生成、只用一次的短信验证码",
       "用户资料：读频繁、少变、每次加载都要",
-      "必须实时精确的库存计数",
-      "只读一次的支付回执凭证"
+      "必须实时精确、不允许出现旧值的库存计数",
+      "只读一次就作废、不会被复用的支付回执凭证"
     ],
     "answer": [
       1
@@ -2597,8 +2597,8 @@
     "options_en": [
       "A randomly generated, single-use SMS verification code.",
       "User profiles: read often, rarely change, needed on every load.",
-      "Real-time exact inventory counts that must be precise.",
-      "A one-time payment receipt read only once."
+      "Real-time exact inventory counts that must never show a stale value.",
+      "A one-time payment receipt that's void after reading and never reused."
     ],
     "tradeoff": "读多/少变/取贵（该缓存） vs 一次性或强一致（不缓存）",
     "whenOtherWins": "库存可容忍近似展示时也能缓存，但下单扣减必须走强一致 DB。",
