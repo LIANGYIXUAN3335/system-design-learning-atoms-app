@@ -34,6 +34,7 @@ const DIR_TRACK_TAG = {
   'low-level-design': 'track:low-level-design',
   'interview-drill': 'track:interview-drill',
   'interview-review': 'track:interview-review',
+  'interview-english': 'track:interview-english',
 };
 const DIR_TRACK_ID = {
   'system-design': 'classic-sd',
@@ -42,6 +43,7 @@ const DIR_TRACK_ID = {
   'low-level-design': 'low-level-design',
   'interview-drill': 'interview-drill',
   'interview-review': 'interview-review',
+  'interview-english': 'interview-english',
 };
 
 const CATEGORY_PREFIXES = [
