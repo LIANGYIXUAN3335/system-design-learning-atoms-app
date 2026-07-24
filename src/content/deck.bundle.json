@@ -609178,6 +609178,124 @@
     "category": "Distributed Rate Limiter"
   },
   {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-002b",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "nfr",
+    "scenario": "上一题定下的目标：每次限流检查最多加约 10ms 延迟，同时要扛住约 1M requests/sec。现在要为热点计数选一种存储。",
+    "scenario_en": "Given the target from the previous card — under about 10ms of added latency per check while sustaining roughly 1M requests/sec — you now pick a store for the hot counter.",
+    "q": "在这个 <10ms 的延迟预算下，分布式限流计数应该放在哪里？",
+    "q_en": "Under this sub-10ms latency budget, where should the distributed rate-limit counter live?",
+    "options": [
+      "内存存储 Redis / Memcached（约 0.2–1ms/次）",
+      "关系型数据库，每次检查做一次 UPDATE 事务",
+      "只用单机进程内内存做全局计数",
+      "写磁盘日志，异步离线统计计数"
+    ],
+    "options_en": [
+      "An in-memory store — Redis / Memcached (about 0.2–1ms per op)",
+      "A relational database with an UPDATE transaction per check",
+      "Only in-process memory on a single machine for the global count",
+      "Append to a disk log and tally the count asynchronously offline"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "10ms 的每次检查预算把慢存储挡在热路径外：内存存储（Redis/Memcached）单次约 0.2–1ms，稳稳在预算内，Redis 还有原子 INCR/Lua 把读-改-写压成一步；关系型数据库单次读-改-写 5–30ms、热点行还会锁争用，1M rps 下直接击穿预算；进程内内存快到 <1µs 但每个节点各记各的，做不了跨节点全局限流。所以默认放 Redis（要原子性）或 Memcached。",
+    "why_en": "A sub-10ms per-check budget keeps slow stores off the hot path. An in-memory store (Redis/Memcached) costs roughly 0.2–1ms per op — well inside budget — and Redis adds atomic INCR/Lua that fold read-modify-write into one step. A relational database's read-modify-write runs 5–30ms with hot-row lock contention and blows the budget at 1M rps. In-process memory is fastest at under a microsecond but is per-node, so it can't enforce a global limit. Default to Redis (for atomicity) or Memcached.",
+    "whenOtherWins": "纯本地、无需跨节点一致的粗限流 → 进程内内存最省；不需要原子自增、只做简单 KV 计数 → Memcached 足够。",
+    "tradeoff": "内存存储的亚毫秒延迟与共享计数能力 vs 数据库的持久化/事务（但延迟和锁争用击穿限流预算）",
+    "tags": [
+      "rate-limiter",
+      "latency",
+      "nfr",
+      "redis",
+      "memcached",
+      "storage-choice",
+      "track:classic-sd"
+    ],
+    "termDefinitions": [
+      {
+        "term": "Redis",
+        "meaning": "内存数据结构存储，支持 INCR、Lua 等原子操作，是分布式限流计数的常用后端。",
+        "meaningEn": "Redis is an in-memory data-structure store whose atomic operations like INCR and Lua scripts make it a common backend for distributed rate-limit counters."
+      },
+      {
+        "term": "Memcached",
+        "meaning": "分布式内存对象缓存，纯 KV，读写亚毫秒级，但没有原生原子自增。",
+        "meaningEn": "Memcached is a distributed in-memory key-value cache with sub-millisecond reads and writes but no native atomic increment."
+      },
+      {
+        "term": "INCR",
+        "meaning": "Redis 的原子自增命令，一步完成读-改-写，避免并发计数竞态。",
+        "meaningEn": "INCR is Redis's atomic increment command that performs read-modify-write in a single step, avoiding concurrent-count races."
+      }
+    ],
+    "table": {
+      "headers": [
+        "存储",
+        "每次检查延迟",
+        "在 10ms 预算内?",
+        "面试短句"
+      ],
+      "rows": [
+        [
+          "进程内内存",
+          "~<0.001ms",
+          "是，但不跨节点",
+          "fastest, per-node only"
+        ],
+        [
+          "Memcached",
+          "~0.2–1ms",
+          "是",
+          "simple KV counter"
+        ],
+        [
+          "Redis",
+          "~0.2–1ms",
+          "是（首选）",
+          "atomic INCR / Lua"
+        ],
+        [
+          "关系型 DB",
+          "~5–30ms",
+          "否（热点行锁）",
+          "too slow at 1M rps"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "内存存储单次操作约 0.2–1ms，远在 10ms 预算内；Redis 还提供原子 INCR/Lua，把读-改-写压成一步，最适合分布式限流计数。",
+      "关系型数据库单次读-改-写常 5–30ms，热点行还会锁争用，1M rps 下直接击穿 10ms 预算。",
+      "进程内内存虽快到 <1µs，但每个节点各记各的，跨节点计数不一致，做不了分布式全局限流。",
+      "走磁盘日志再异步统计有几十毫秒以上延迟且不是实时判定，放不进请求热路径。"
+    ],
+    "optionExplanations_en": [
+      "An in-memory op costs about 0.2–1ms, far inside the 10ms budget, and Redis's atomic INCR/Lua folds read-modify-write into one step — the best fit for a distributed rate-limit counter.",
+      "A relational read-modify-write typically runs 5–30ms with hot-row lock contention, blowing the 10ms budget outright at 1M rps.",
+      "In-process memory is under a microsecond but each node counts on its own, so cross-node totals disagree and it can't enforce a global limit.",
+      "Writing to a disk log and tallying asynchronously adds tens of milliseconds and isn't a real-time decision, so it can't sit on the request hot path."
+    ],
+    "track": "classic-sd",
+    "category": "Distributed Rate Limiter",
+    "numberAnchors": [
+      {
+        "system": "Postgres/MySQL",
+        "unit": "primary / replica / shard",
+        "estimate": "读 10k-50k TPS；写 10k-20k TPS",
+        "risk": "单主写瓶颈、索引/事务变重"
+      },
+      {
+        "system": "Redis",
+        "unit": "instance / shard",
+        "estimate": "100k-200k+ simple ops/s",
+        "risk": "大 value、Lua、ZSET、网络带宽"
+      }
+    ]
+  },
+  {
     "id": "sd-problem-breakdowns-distributed-rate-limiter-003",
     "format": "mcq",
     "atomType": "number",
@@ -610514,6 +610632,221 @@
     ],
     "track": "classic-sd",
     "category": "Distributed Rate Limiter"
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-021b",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "atomicity",
+    "scenario": "多台 gateway 前实现 Token Bucket 检查，同一用户的请求会并发打到不同 gateway。此刻 alice 的桶里只剩 1 个 token。",
+    "scenario_en": "You implement the Token Bucket check behind several gateways, so one user's requests hit different gateways concurrently. Right now alice's bucket holds just 1 token.",
+    "q": "哪种实现能正确避免并发超发（race condition）？",
+    "q_en": "Which implementation correctly avoids the concurrent over-admit (race condition)?",
+    "options": [
+      "HMGET 读出 tokens，在应用层判断后用 MULTI/HSET/EXEC 把写回包成事务",
+      "把「读→补充→判断扣减→写回」整段放进一个 Redis Lua 脚本，在 Redis 内原子执行",
+      "应用层读到值后 sleep 10ms 再写回，用等待错开并发",
+      "拆成两次独立请求：先 HMGET，再 HSET，各自失败重试"
+    ],
+    "options_en": [
+      "HMGET the tokens, decide in app code, then wrap only the write in MULTI/HSET/EXEC",
+      "Put the whole read → refill → check-and-deduct → write sequence in one Redis Lua script, run atomically inside Redis",
+      "Read the value in app code, sleep 10ms, then write back to stagger concurrency",
+      "Split into two independent calls: HMGET first, then HSET, each retried on failure"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "一次检查是 read-modify-write 四步：读 tokens/last_refill → 按时间补充 → 判断并扣减 → 写回。并发下两台 gateway 会同时读到同一个旧值（都看到 1）而都放行，导致超发。MULTI/EXEC 只让「写」原子，读仍在事务外，缝没堵住。Lua 脚本把整段逻辑丢进 Redis 单线程原子执行、中间不可插队，才真正消除竞态。",
+    "why_en": "One check is a four-step read-modify-write: read tokens/last_refill, refill by elapsed time, check-and-deduct, write back. Under concurrency two gateways read the same stale value (both see 1) and both admit, causing over-admit. MULTI/EXEC only makes the write atomic — the read is still outside the transaction, so the gap remains. A Lua script runs the whole sequence atomically in Redis's single thread with no interleaving, which is what actually removes the race.",
+    "whenOtherWins": "单实例、无并发写同一 key 时，简单的 HMGET+HSET 就够；需要跨多个 key 的复杂条件写时，也可用 WATCH/MULTI 乐观锁替代 Lua。",
+    "tradeoff": "Lua 脚本一次往返内原子完成读改写（正确+快） vs 应用层拆分命令（简单，但读写之间留缝导致竞态）",
+    "codeSample": "-- KEYS[1] = 桶的 key（一个 Redis hash），如 \"alice:bucket\"\n-- ARGV: now(ms), capacity, refill_per_ms\n-- 整段脚本在 Redis 内单线程原子执行，其他请求无法插进来\n\nlocal s      = redis.call('HMGET', KEYS[1], 'tokens', 'last_refill')  -- 1. 读\nlocal tokens = tonumber(s[1]) or tonumber(ARGV[2])   -- 冷启动：默认满桶\nlocal last   = tonumber(s[2]) or tonumber(ARGV[1])\nlocal now    = tonumber(ARGV[1])\n\ntokens = math.min(tonumber(ARGV[2]),                 -- 2. 改：补充，封顶 capacity\n                  tokens + (now - last) * tonumber(ARGV[3]))\n\nlocal allowed = 0\nif tokens >= 1 then                                  -- 3. 判断 + 扣\n  tokens  = tokens - 1\n  allowed = 1\nend\n\nredis.call('HSET', KEYS[1], 'tokens', tokens, 'last_refill', now)  -- 4. 写回\nredis.call('PEXPIRE', KEYS[1], 3600000)              -- 闲置 TTL 回收\nreturn allowed                                       -- 1=放行, 0=拒绝→429",
+    "lang": "lua",
+    "diagram": "sequenceDiagram\n  participant A as Gateway A\n  participant B as Gateway B\n  participant R as Redis (tokens=1)\n  A->>R: HMGET tokens\n  R-->>A: 1\n  B->>R: HMGET tokens\n  R-->>B: 1 (旧值！A 还没写回)\n  A->>R: HSET tokens=0 (放行)\n  B->>R: HSET tokens=0 (也放行 → 超发)",
+    "termDefinitions": [
+      {
+        "term": "read-modify-write",
+        "meaning": "先读出当前值、在其基础上计算、再写回的一组操作；并发下若不原子会互相覆盖。",
+        "meaningEn": "Read-modify-write is reading a value, computing a new one from it, then writing it back; without atomicity, concurrent runs clobber each other."
+      },
+      {
+        "term": "Lua script (EVAL)",
+        "meaning": "通过 EVAL 发给 Redis 的一段脚本，在服务端单线程内一次性原子执行，中途不被其他命令打断。",
+        "meaningEn": "A Lua script sent to Redis via EVAL runs atomically in one pass on the server's single thread, uninterrupted by other commands."
+      },
+      {
+        "term": "race condition",
+        "meaning": "多个并发操作因交错执行顺序而产生错误结果，这里表现为两请求都读到旧值而超发。",
+        "meaningEn": "A race condition is a wrong result caused by interleaved concurrent operations — here, two requests reading the stale value and both admitting."
+      }
+    ],
+    "tags": [
+      "rate-limiter",
+      "atomicity",
+      "redis",
+      "lua",
+      "concurrency",
+      "token-bucket",
+      "track:classic-sd"
+    ],
+    "optionExplanations": [
+      "MULTI/EXEC 只把「写」这一步包成原子，但 HMGET 读取发生在事务外——两台 gateway 仍可能同时读到旧值 1、各自判断可放行，缝没堵住。",
+      "把读→补充→判断扣减→写回整段塞进一个 Lua 脚本，Redis 单线程一次跑完、中途不可插队，两个并发请求被强制串行，第二个读到的是已扣减的新值，正确拒绝。",
+      "sleep 10ms 只是让应用层等一会儿，完全不影响 Redis 里那几步会不会被别的请求插进来，治标都算不上。",
+      "拆成两次独立请求把「读」和「写」分得更开，中间的窗口更大，两台 gateway 更容易都读到旧值，反而放大了竞态。"
+    ],
+    "optionExplanations_en": [
+      "MULTI/EXEC makes only the write atomic, but the HMGET read is outside the transaction — both gateways can still read the stale 1 and each decide to admit. The gap isn't closed.",
+      "Folding read → refill → check-and-deduct → write into one Lua script forces Redis's single thread to run it end-to-end without interleaving, so the second concurrent request reads the already-deducted value and correctly rejects.",
+      "Sleeping 10ms just makes app code wait; it does nothing to stop another request from interleaving with the read-modify-write inside Redis.",
+      "Splitting read and write into two separate calls widens the window between them, making it more likely both gateways read the stale value — it amplifies the race."
+    ],
+    "track": "classic-sd",
+    "category": "Distributed Rate Limiter",
+    "numberAnchors": [
+      {
+        "system": "Redis",
+        "unit": "instance / shard",
+        "estimate": "100k-200k+ simple ops/s",
+        "risk": "大 value、Lua、ZSET、网络带宽"
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-distributed-rate-limiter-021c",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "atomicity",
+    "scenario": "接着 020：你不想写 Lua，想只用 Redis 事务实现同样安全的读改写。MULTI/EXEC 只让「写」原子，读还在事务外，两台 gateway 仍可能都读到旧值。",
+    "scenario_en": "Continuing from card 020: you'd rather not write Lua and want to do the safe read-modify-write with just a Redis transaction. MULTI/EXEC makes only the write atomic — the read is still outside it, so two gateways can both read the stale value.",
+    "q": "只用 MULTI/EXEC 时，要加哪条 Redis 命令才能堵住 020 里的「读旧值」竞态？",
+    "q_en": "Using only MULTI/EXEC, which Redis command closes the stale-read race from card 020?",
+    "options": [
+      "WATCH bucketKey —— 乐观锁：从 WATCH 到 EXEC 之间 key 若被改动，EXEC 整体返回 nil，重试即可",
+      "EXPIRE bucketKey 60 —— 给 key 设置 60 秒过期时间",
+      "KEYS bucket:* —— 先列出所有相关的 bucket key",
+      "SUBSCRIBE bucket —— 订阅这个 key 的变更消息"
+    ],
+    "options_en": [
+      "WATCH bucketKey — optimistic lock: if the key changes between WATCH and EXEC, EXEC returns nil and you retry",
+      "EXPIRE bucketKey 60 — set a 60-second expiry on the key",
+      "KEYS bucket:* — first list every related bucket key",
+      "SUBSCRIBE bucket — subscribe to change messages for the key"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "MULTI/EXEC 只保证「写」这批命令原子，020 的竞态在于 HMGET 读发生在事务外。WATCH 给读加乐观锁：从 WATCH 到 EXEC 之间只要这个 key 被任何人改过，EXEC 就整体失败返回 nil，你从头重试——这样两台 gateway 不会都基于同一个旧值提交。它和 Lua 是两条等价路线：Lua 服务端一次原子跑完、无需重试；WATCH 是乐观锁 + 冲突重试。EXPIRE/KEYS/SUBSCRIBE 都跟并发读改写的原子性无关。",
+    "why_en": "MULTI/EXEC only makes the queued writes atomic; the race in card 020 is that the HMGET read happens outside the transaction. WATCH puts an optimistic lock on the read: if the key is modified by anyone between WATCH and EXEC, the whole EXEC fails and returns nil, so you retry from the top — two gateways can't both commit off the same stale value. It's the equivalent of Lua by another route: Lua runs atomically server-side with no retry; WATCH is optimistic-lock-plus-retry. EXPIRE, KEYS, and SUBSCRIBE have nothing to do with read-modify-write atomicity.",
+    "whenOtherWins": "低冲突、逻辑简单 → WATCH 乐观锁够用且不用写脚本；高冲突（热点 key 频繁 nil 重试）或逻辑复杂 → 用 Lua 一次原子跑完更省。",
+    "tradeoff": "WATCH 乐观锁（纯命令、冲突时重试） vs Lua 脚本（服务端一次原子、无重试但要写脚本）",
+    "codeSample": "# 乐观锁版：WATCH + 事务，冲突就重试（Lua 之外的另一条路）\nWATCH alice:bucket                      # 盯住这个 key\nHMGET alice:bucket tokens last_refill   # 读（在事务外）\n# —— 应用层：按时间补充 token、判断够不够、算出新值 ——\nMULTI                                   # 开始把写命令排队\n  HSET   alice:bucket tokens 4 last_refill 1700000000000\n  PEXPIRE alice:bucket 3600000\nEXEC\n# EXEC 的返回：\n#   [OK, 1]  → 成功：WATCH 期间没人动过这个 key\n#   (nil)    → 期间被别的 gateway 改过 → 放弃，从 WATCH 整个重来\n\n# 对照：其它常用命令\nHINCRBYFLOAT alice:bucket tokens -1     # 原子地把 token 减 1（省去读+写）\nINCR  alice:count:1700000               # fixed-window：计数 +1，返回新值\nEXPIRE alice:count:1700000 60           # 给这个窗口 key 设 60s TTL\nEVAL  \"<lua 脚本>\" 1 alice:bucket ...    # 021b 的做法：整段一次原子跑完",
+    "lang": "redis",
+    "table": {
+      "headers": [
+        "命令",
+        "语法示例",
+        "在限流里干什么"
+      ],
+      "rows": [
+        [
+          "HMGET",
+          "HMGET key f1 f2",
+          "一次读多个 hash 字段"
+        ],
+        [
+          "HSET",
+          "HSET key f v",
+          "写回 hash 字段"
+        ],
+        [
+          "HINCRBYFLOAT",
+          "HINCRBYFLOAT key f -1",
+          "原子扣减 token（读+写合一）"
+        ],
+        [
+          "INCR",
+          "INCR key",
+          "fixed-window 计数 +1"
+        ],
+        [
+          "PEXPIRE",
+          "PEXPIRE key 3600000",
+          "设窗口 / 闲置 TTL（毫秒）"
+        ],
+        [
+          "WATCH",
+          "WATCH key",
+          "乐观锁：key 变了则 EXEC 返回 nil"
+        ],
+        [
+          "MULTI/EXEC",
+          "MULTI … EXEC",
+          "事务：排队后把写原子执行"
+        ],
+        [
+          "EVAL",
+          "EVAL script 1 key …",
+          "跑 Lua，整段原子（021b）"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "WATCH",
+        "meaning": "Redis 乐观锁命令：盯住一个或多个 key，若在 EXEC 前它们被改动，则该事务的 EXEC 整体失败返回 nil。",
+        "meaningEn": "WATCH is Redis's optimistic-lock command: it watches keys, and if any change before EXEC, that transaction's EXEC fails and returns nil."
+      },
+      {
+        "term": "乐观锁 (optimistic locking)",
+        "meaning": "先不加锁地读和算，提交时再检查期间有没有被人改过；被改过就重试，适合冲突少的场景。",
+        "meaningEn": "Optimistic locking reads and computes without locking, then checks at commit time whether anything changed; if so it retries — best when conflicts are rare."
+      },
+      {
+        "term": "HINCRBYFLOAT",
+        "meaning": "对 hash 字段做原子浮点自增/自减的命令，一步完成读+改+写，适合扣减小数 token。",
+        "meaningEn": "HINCRBYFLOAT atomically increments or decrements a hash field by a float in one read-modify-write step, handy for deducting fractional tokens."
+      },
+      {
+        "term": "MULTI/EXEC",
+        "meaning": "Redis 事务：MULTI 后的命令先排队，EXEC 时作为一个整体原子执行，但排队前的读不在其中。",
+        "meaningEn": "MULTI/EXEC is a Redis transaction: commands after MULTI are queued and run atomically as a block at EXEC, but reads issued before are not part of it."
+      }
+    ],
+    "tags": [
+      "rate-limiter",
+      "atomicity",
+      "redis",
+      "redis-commands",
+      "watch",
+      "concurrency",
+      "track:classic-sd"
+    ],
+    "optionExplanations": [
+      "WATCH 给「读」加了乐观锁：盯住 bucket key，从 WATCH 到 EXEC 之间只要它被改过，EXEC 就整体返回 nil，你重试——正好补上 MULTI/EXEC 没保护到的读，堵住 020 的竞态。",
+      "EXPIRE 只负责给 key 设过期时间，用来回收闲置 bucket，跟并发读改写会不会读到旧值毫无关系。",
+      "KEYS 会扫描整个 keyspace 列出匹配的 key，既慢又危险，而且列出 key 跟原子性一点关系都没有。",
+      "SUBSCRIBE 是发布订阅、异步收变更消息，改变不了「同一时刻两台 gateway 都读到旧值」这个同步竞态。"
+    ],
+    "optionExplanations_en": [
+      "WATCH puts an optimistic lock on the read: it watches the bucket key, and if anything changes between WATCH and EXEC the whole EXEC returns nil so you retry — exactly the guard MULTI/EXEC lacked, closing the card-020 race.",
+      "EXPIRE only sets a time-to-live to reclaim idle buckets; it has nothing to do with whether a concurrent read-modify-write sees a stale value.",
+      "KEYS scans the whole keyspace to list matches — slow and dangerous, and listing keys has nothing to do with atomicity.",
+      "SUBSCRIBE is pub/sub for asynchronous change messages; it can't fix the synchronous race of two gateways reading the stale value at the same instant."
+    ],
+    "track": "classic-sd",
+    "category": "Distributed Rate Limiter",
+    "numberAnchors": [
+      {
+        "system": "Redis",
+        "unit": "instance / shard",
+        "estimate": "100k-200k+ simple ops/s",
+        "risk": "大 value、Lua、ZSET、网络带宽"
+      }
+    ]
   },
   {
     "id": "sd-problem-breakdowns-distributed-rate-limiter-022",
@@ -700063,6 +700396,117 @@
     ],
     "track": "classic-sd",
     "category": "Whatsapp"
+  },
+  {
+    "id": "sd-problem-breakdowns-whatsapp-027b",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "ttl-cleanup",
+    "q": "承接 027：TTL「到期自动删除」到底有多精确？下面哪种理解对？",
+    "q_en": "Following card 027: how precise is TTL's automatic expiry, really? Which understanding is correct?",
+    "options": [
+      "TTL 是精确定时删除，到点那一刻数据就物理消失",
+      "TTL 是近似的后台清理：Redis 保证读不到过期值但物理删除有延迟；DynamoDB 过期条目删除前仍可能被查询返回，最长约 48h",
+      "Redis 和 DynamoDB 的 TTL 都保证过期后立刻既读不到也删掉",
+      "TTL 只是给数据打个过期标记，永远不会真正删除，得手动清理"
+    ],
+    "options_en": [
+      "TTL is a precise scheduled delete — the data physically vanishes at the exact expiry instant",
+      "TTL is approximate background cleanup: Redis guarantees you never read an expired value but physical deletion lags; DynamoDB may still return expired items before deletion, up to about 48h",
+      "Both Redis and DynamoDB TTL guarantee that an expired item is instantly both unreadable and deleted",
+      "TTL only marks data as expired and never actually deletes it, so you must clean up manually"
+    ],
+    "answer": [
+      1
+    ],
+    "why": "TTL 不是精确定时删除，而是后台尽力而为的清理。Redis 用惰性删除（访问时才删）+ 主动采样（每秒约 10 次抽查）：物理删除有延迟，但保证你永远读不到过期值——读精确。DynamoDB 的 TTL 是后台批量删除，最长约 48h 才清掉，而且过期但未删的条目仍可能被 query/scan 返回，要正确性得在查询时自己按时间戳过滤。027 选 TTL，正因为需求只是「控制存储 + 不超必要时长」这种粗粒度目标，近似删除刚好够用且零运维。",
+    "why_en": "TTL is best-effort background cleanup, not a precise scheduled delete. Redis combines lazy deletion (only on access) with active sampling (~10 times/sec): physical removal lags, yet it guarantees you never read an expired value — read-precise. DynamoDB's TTL deletes in background batches up to about 48h after expiry, and expired-but-undeleted items can still be returned by queries/scans, so correctness needs a timestamp filter at query time. Card 027 picks TTL precisely because the requirement is only coarse — control storage, don't retain beyond necessary — which approximate deletion satisfies with zero ops.",
+    "tradeoff": "TTL 的零运维、自动过期 vs 删除时机不精确（DynamoDB 还需查询端按时间戳过滤才能保证正确性）",
+    "table": {
+      "headers": [
+        "维度",
+        "Redis TTL",
+        "DynamoDB TTL"
+      ],
+      "rows": [
+        [
+          "物理删除时机",
+          "懒删 + 每秒采样，近似",
+          "后台批删，最长约 48h 延迟"
+        ],
+        [
+          "过期后能读到吗",
+          "读不到（读精确）",
+          "可能读到，需按时间戳过滤"
+        ],
+        [
+          "精确定时删除?",
+          "否",
+          "否"
+        ],
+        [
+          "适合",
+          "缓存 / 会话过期",
+          "省存储 / 留存上限"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "TTL",
+        "fullName": "Time To Live",
+        "meaning": "数据的存活时长，到期后由存储层自动过期/清理，但清理时机通常是近似的，而非精确到点。",
+        "meaningEn": "TTL is how long data lives; the store expires it automatically afterward, though the actual cleanup timing is usually approximate rather than exact."
+      },
+      {
+        "term": "惰性删除 (lazy expiration)",
+        "meaning": "只有在下次访问某个 key 时才检查并删除已过期的数据，没人访问就可能一直留着。",
+        "meaningEn": "Lazy expiration checks and removes expired data only when the key is next accessed, so an untouched key may linger."
+      },
+      {
+        "term": "DynamoDB TTL",
+        "meaning": "DynamoDB 的按条目过期机制：后台批量删除（最长约 48h），且过期未删的条目仍会出现在读结果里。",
+        "meaningEn": "DynamoDB's per-item expiry: it deletes in background batches (up to ~48h) and still returns expired-but-undeleted items in reads."
+      }
+    ],
+    "tags": [
+      "whatsapp",
+      "ttl",
+      "redis",
+      "dynamodb",
+      "storage",
+      "expiration",
+      "track:classic-sd"
+    ],
+    "optionExplanations": [
+      "TTL 从来不是精确到点删除，物理清理都是后台懒删 + 采样，会有延迟，这个理解错了。",
+      "对：Redis 读精确（永远读不到过期值）、物理删除近似；DynamoDB 更粗——过期条目在删除前仍可能被查询返回，最长约 48h 才清掉。",
+      "恰恰相反，两者物理删除都不是即时的；DynamoDB 连「过期后读不到」都不保证，反而要你在查询端自己过滤。",
+      "TTL 会真正删除数据，只是时机近似、有延迟，并不是只打标记不删。"
+    ],
+    "optionExplanations_en": [
+      "TTL is never an exact scheduled delete; physical cleanup is always background lazy-delete plus sampling, so it lags — this understanding is wrong.",
+      "Correct: Redis is read-precise (never returns an expired value) with approximate physical deletion; DynamoDB is coarser — expired items can still be returned by queries until deleted, up to about 48h.",
+      "The opposite is true: neither deletes instantly, and DynamoDB doesn't even guarantee an expired item is unreadable — you must filter it out at query time.",
+      "TTL does really delete the data; the timing is just approximate and delayed — it's not a mark-only-never-delete scheme."
+    ],
+    "track": "classic-sd",
+    "category": "Whatsapp",
+    "numberAnchors": [
+      {
+        "system": "Redis",
+        "unit": "instance / shard",
+        "estimate": "100k-200k+ simple ops/s",
+        "risk": "大 value、Lua、ZSET、网络带宽"
+      },
+      {
+        "system": "DynamoDB",
+        "unit": "physical partition",
+        "estimate": "3k RCU / 1k WCU 每物理分区",
+        "risk": "AWS 管扩展，但 hot key 仍会限流"
+      }
+    ]
   },
   {
     "id": "sd-problem-breakdowns-whatsapp-028",
