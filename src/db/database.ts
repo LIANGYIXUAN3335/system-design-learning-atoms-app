@@ -233,6 +233,23 @@ export async function seedTracksOnce(db: Db, seeds: Track[]): Promise<void> {
       "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '2') ON CONFLICT(key) DO UPDATE SET value = '2'",
     );
   }
+
+  if (currentVersion < 3) {
+    const interviewEnglish = seeds.find((t) => t.id === 'interview-english');
+    if (interviewEnglish) {
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        interviewEnglish.id,
+        interviewEnglish.name,
+        JSON.stringify(interviewEnglish.include),
+        JSON.stringify(interviewEnglish.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '3') ON CONFLICT(key) DO UPDATE SET value = '3'",
+    );
+  }
 }
 
 export async function loadTracks(db: Db): Promise<Track[]> {

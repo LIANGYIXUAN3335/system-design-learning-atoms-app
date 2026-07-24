@@ -388,16 +388,17 @@ console.log('tracks');
   t('ALL_TRACK matches everything', filterDeck([a, b, c, d], ALL_TRACK).length === 4);
   t('filterDeck unions correctly', filterDeck([a, b, c], llmTrack).map((x) => x.id).join(',') === 'c');
   t(
-    'seed tracks: 6, ids stable',
-    seedTracks.length === 6 &&
+    'seed tracks: 7, ids stable',
+    seedTracks.length === 7 &&
       seedTracks.map((x) => x.id).join(',') ===
-        'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill,interview-review',
+        'ai-coding,classic-sd,llm-sd,low-level-design,interview-drill,interview-review,interview-english',
   );
   t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
   t('bundle covers llm-sd seed track', filterDeck(bundle, seedTracks[2]).length >= 300);
   t('bundle covers low-level-design seed track', filterDeck(bundle, seedTracks[3]).length >= 700);
   t('bundle covers interview-review seed track', filterDeck(bundle, seedTracks[5]).length >= 250);
+  t('bundle covers interview-english seed track', filterDeck(bundle, seedTracks[6]).length >= 200);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
   const classicDeck = filterDeck(bundle, seedTracks[1]);
   const categories = buildCategoryStats(classicDeck, new Map());
