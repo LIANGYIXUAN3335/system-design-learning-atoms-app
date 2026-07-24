@@ -570257,6 +570257,9 @@
         ]
       ]
     },
+    "diagram": "flowchart LR\n  P[\"生产者\"] --> Q[\"主队列 jobs\"]\n  Q --> W[\"worker\"]\n  W -->|\"成功: 删除 / ack\"| OK[\"完成\"]\n  W -->|\"失败: 不删 / nack\"| Q\n  Q -->|\"失败次数达上限\"| DLQ[\"死信队列 jobs-dlq\"]\n  DLQ --> H[\"人工排查 / 重放\"]",
+    "codeSample": "# ── SQS：redrive policy 是【挂在主队列上的属性】，指向 DLQ + 重收上限 ──\naws sqs set-queue-attributes --queue-url $MAIN_Q --attributes '{\n  \"RedrivePolicy\": \"{\\\"deadLetterTargetArn\\\":\\\"arn:aws:sqs:...:jobs-dlq\\\",\n                       \\\"maxReceiveCount\\\":\\\"5\\\"}\"\n}'\n# worker 失败时【不删除】消息；SQS 自动重投。\n# 同一条被收满 5 次仍没删 → SQS 自动搬去 jobs-dlq。全程零应用代码。\n\n# ── RabbitMQ：dead letter exchange 是【单独声明的交换机】，主队列指过去 ──\nch.exchange_declare('dlx', 'direct')            # 1. 死信交换机\nch.queue_declare('jobs-dlq')                    # 2. 死信队列\nch.queue_bind('jobs-dlq', 'dlx', 'jobs')        # 3. 绑定路由键\n\nch.queue_declare('jobs', arguments={            # 4. 主队列指向 DLX\n    'x-dead-letter-exchange': 'dlx',\n    'x-dead-letter-routing-key': 'jobs',\n    'x-delivery-limit': 5,       # quorum queue：投递超 5 次 → 死信\n})\n# worker 失败时 basic_nack(requeue=False) → 消息被死信到 dlx → jobs-dlq。",
+    "lang": "sqs / rabbitmq",
     "track": "classic-sd",
     "category": "Long Running Tasks"
   },
