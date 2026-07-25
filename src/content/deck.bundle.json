@@ -568291,6 +568291,8 @@
       "WebSocket, DNS records, and CSS animation are equally mismatched — just noise dressed up as options.",
       "TCP teardown refers to closing a connection, which is a different concern from a queue deciding whether a worker is alive."
     ],
+    "codeSample": "# 三个产品对「判断 worker 是否还活着」的三种写法（概念相同，叫法/层次不同）\n\n# ① SQS —— visibility timeout（消息级『租约』，隐式判活）\nmsg = sqs.receive(queue, VisibilityTimeout=30)   # 收到后这条消息隐身 30s\n#   30s 内 delete → 我活着且干完了；没 delete → SQS 认为你挂了，消息重新可见给别人\nwhile still_working:                              # 长任务要『续命』= SQS 版心跳\n    sqs.change_message_visibility(msg, VisibilityTimeout=30)  # 每 <30s 续一次\n    sleep(20)\nsqs.delete(msg)                                  # 干完才删\n\n# ② RabbitMQ —— heartbeat（连接级『心跳帧』）\nconn = connect(rabbit, heartbeat=30)             # 约定 30s 一个心跳周期\n#   客户端库后台自动每 ~15s 发一帧；broker 连续两周期(~60s)没收到 → 判连接死\n#   → 关连接 → 这个 consumer 未 ack 的消息 requeue 给别人\nch.basic_consume(queue, on_message)\nch.basic_ack(delivery_tag)                       # 处理完 ack；没 ack 的会被 requeue\n\n# ③ Kafka —— session timeout（消费组级『心跳』）\nconsumer = KafkaConsumer(topic, group_id='workers',\n                         session_timeout_ms=45000,      # 45s 没心跳 → 算你死\n                         heartbeat_interval_ms=15000)   # 每 15s 发一次心跳\nfor record in consumer:            # poll 循环内部自动发心跳\n    do_work(record)\n    consumer.commit()              # 提交进度(offset)\n#   coordinator 45s 没收到心跳 → 认为该 consumer 死 → rebalance，把它的 partition 分给别人",
+    "lang": "sqs / rabbitmq / kafka",
     "track": "classic-sd",
     "category": "Long Running Tasks"
   },
