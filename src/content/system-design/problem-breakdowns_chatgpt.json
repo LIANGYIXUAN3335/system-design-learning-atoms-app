@@ -1190,6 +1190,110 @@
     "diagram": "flowchart LR\nClient[Client] -->|prompt| Chat[Chat Service]\nChat --> Queue[Bounded Queue]\nQueue --> GPU[GPU Worker]\nGPU -->|XADD deltas| Stream[(Redis Stream)]\nChat -->|XREAD| Stream\nChat -->|SSE| Client"
   },
   {
+    "id": "sd-problem-breakdowns-chatgpt-022b",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "streaming",
+    "scenario": "一条答案播到一半,Chat Service 实例 A 被 deploy 换掉,浏览器 3 秒后自动重连、落到实例 B。",
+    "scenario_en": "Mid-answer, Chat Service instance A is replaced by a deploy; the browser auto-reconnects three seconds later onto instance B.",
+    "q": "关于 SSE 和 Redis Stream 各自的职责,哪个理解是对的?",
+    "q_en": "Which understanding of the roles of SSE vs the Redis Stream is correct?",
+    "options": [
+      "SSE 是 Chat Service→浏览器的传输管道(随 A 死掉);Redis Stream 是后端存 token 的持久缓冲(A 死了它还在)。B 拿 Last-Event-ID 去 Redis Stream 从断点续读",
+      "token 就存在 SSE 连接里,A 死了靠浏览器本地缓存恢复,不需要 Redis",
+      "Redis Stream 直接连浏览器推送,Chat Service 只做鉴权、不参与转发",
+      "SSE 和 Redis Stream 是二选一的两种方案,选一个即可"
+    ],
+    "options_en": [
+      "SSE is the Chat Service to browser transport pipe (dies with A); the Redis Stream is the backend durable buffer of tokens (survives A). B takes the Last-Event-ID and resumes from the Redis Stream at that point",
+      "Tokens live inside the SSE connection, and when A dies the browser's local cache restores them, so no Redis is needed",
+      "The Redis Stream pushes to the browser directly and Chat Service only does auth, never relaying",
+      "SSE and the Redis Stream are two alternative options; pick one"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "SSE 和 Redis Stream 在【不同的层】、干不同的活,不是二选一。SSE 是浏览器↔服务端的传输协议(一条会断的 HTTP 长连接,绑在实例 A 上,A 死就断);Redis Stream 是后端存 token delta 的持久缓冲(独立服务,A 死了它还在,可从任意 id 重放)。Chat Service 只是中继:一头 XREAD Redis Stream、一头写进 SSE。所以 A 被 deploy 换掉后,浏览器重连到 B,B 拿浏览器自动回传的 Last-Event-ID 去 Redis Stream XREAD 续读——Last-Event-ID 这个书签管用,正是因为 Redis 里真有货。",
+    "why_en": "SSE and the Redis Stream sit at different layers and do different jobs; they are not alternatives. SSE is the browser-to-server transport (a breakable long-lived HTTP connection bound to instance A, which dies with A), while the Redis Stream is the backend durable buffer of token deltas (a separate service that survives A and can replay from any id). The Chat Service is only a relay: it XREADs the Redis Stream and writes to the SSE connection. So after A is replaced, the browser reconnects to B, and B uses the Last-Event-ID the browser resends to XREAD the Redis Stream onward — the bookmark works precisely because the tokens are durably in Redis.",
+    "whenOtherWins": "只要 buffer 窗口够大能覆盖断线时长即可;若断得太久超出 Redis Stream 的 MAXLEN/TTL 窗口(见 051),就补不回来,只能等生成完从 Postgres 整段重取。",
+    "tradeoff": "SSE(送货管道,断了能重建但不存历史) + Redis Stream(存货仓库,存得住能重放) 两层配合,而不是二选一",
+    "lang": "python / js",
+    "table": {
+      "headers": [
+        "维度",
+        "SSE",
+        "Redis Stream"
+      ],
+      "rows": [
+        [
+          "是什么",
+          "浏览器↔服务端传输协议",
+          "后端存 token 的持久缓冲"
+        ],
+        [
+          "在哪一段",
+          "Chat Service → 浏览器",
+          "worker → Redis ← Chat Service"
+        ],
+        [
+          "A 挂了",
+          "连接断掉",
+          "不受影响,仍在"
+        ],
+        [
+          "存历史吗",
+          "不存,推过就没",
+          "存,可 XREAD 重放"
+        ],
+        [
+          "角色",
+          "送货管道",
+          "存货仓库"
+        ]
+      ]
+    },
+    "codeSample": "# ── Chat Service:浏览器的 EventSource 连这里  GET /stream/{runId} ──\ndef stream(runId, request):\n    # 浏览器重连时【自动】带上这个头;首连为空 → 从头开始\n    last_id = request.headers.get(\"Last-Event-ID\", \"0\")\n    response.headers[\"Content-Type\"] = \"text/event-stream\"   # 声明这是 SSE\n\n    while not generation_done(runId):\n        # 从 Redis Stream 读 last_id 【之后】的新 token(阻塞等新条目)\n        for entry_id, fields in redis.xread({f\"gen:{runId}\": last_id}, block=5000):\n            response.write(f\"id: {entry_id}\\n\")          # 这个 id = 断点书签\n            response.write(f\"data: {fields['token']}\\n\\n\")\n            last_id = entry_id                            # 记住推到哪了\n\n# ── 浏览器侧:几乎全是内置的,你不用写重连逻辑 ──\n# const es = new EventSource(`/stream/${runId}`)\n# es.onmessage = e => appendToken(e.data)\n# 连接断了? EventSource 自动重连,并自动把 e.lastEventId 放进 Last-Event-ID 头\n#\n# A 死后浏览器重连到 B:B 跑同一段代码,拿 Last-Event-ID 去 Redis Stream\n# XREAD 续读 → 写进【新的】SSE 连接。全靠 Redis 里有货,B 才接得上。",
+    "termDefinitions": [
+      {
+        "term": "SSE",
+        "fullName": "Server-Sent Events",
+        "meaning": "一种服务端单向持续向浏览器推送文本事件的协议,本质是一条不关闭、持续写 data: 的 HTTP 响应。",
+        "meaningEn": "Server-Sent Events is a protocol where the server continuously pushes text events to the browser one-way, essentially an HTTP response that never closes and keeps writing data: lines."
+      },
+      {
+        "term": "Redis Stream",
+        "meaning": "Redis 的 append-only 日志类型,worker 用 XADD 追加、消费方用 XREAD 从任意 id 往后读,这里用作 token delta 的短期重放缓冲。",
+        "meaningEn": "A Redis Stream is Redis's append-only log type where producers XADD and consumers XREAD from any id onward, used here as a short-term replay buffer for token deltas."
+      },
+      {
+        "term": "Last-Event-ID",
+        "meaning": "SSE 里浏览器自动记住的最后一条事件 id,重连时作为 HTTP 头自动回传,服务端据此从断点续推。",
+        "meaningEn": "Last-Event-ID is the id of the last SSE event the browser remembers and automatically resends as an HTTP header on reconnect, letting the server resume from the break."
+      }
+    ],
+    "tags": [
+      "chatgpt",
+      "sse",
+      "redis-streams",
+      "streaming",
+      "reconnect",
+      "stateless"
+    ],
+    "optionExplanations": [
+      "对:SSE 是会断的传输管道、绑在 A 上;Redis Stream 是独立的持久缓冲、A 死了还在。B 靠 Last-Event-ID 去 Redis Stream 续读,书签管用全因 Redis 里有货。",
+      "token 若只活在 SSE 连接/A 的内存里,A 一死就全没了,浏览器本地也只有已渲染的部分、补不回断点之后的,这正是要 Redis 的原因。",
+      "浏览器不能也不该直连 Redis;必须由 Chat Service 做中继(XREAD 后写进 SSE),它还承担鉴权和编排。",
+      "两者在不同层、各司其职:Redis Stream 负责存得住能重放,SSE 负责送到浏览器、断了能重建,缺一不可,不是二选一。"
+    ],
+    "optionExplanations_en": [
+      "Correct: SSE is a breakable transport pipe bound to A, while the Redis Stream is a separate durable buffer that survives A; B resumes via Last-Event-ID, and the bookmark works only because the tokens are in Redis.",
+      "If tokens lived only in the SSE connection or A's memory, they'd be gone when A dies, and the browser only has what it already rendered — it can't recover what came after the break, which is exactly why Redis is needed.",
+      "The browser cannot and should not connect to Redis directly; the Chat Service must relay (XREAD then write to SSE) and also handles auth and orchestration.",
+      "They sit at different layers with distinct jobs: the Redis Stream stores and replays, SSE delivers to the browser and rebuilds on reconnect — both are needed, not one or the other."
+    ]
+  },
+  {
     "id": "sd-problem-breakdowns-chatgpt-023",
     "format": "cloze",
     "atomType": "fact",
