@@ -3374,7 +3374,9 @@
         "meaning": "模型服务层：负责收请求、组批、调度 GPU 并把 token 吐回去的那层软件。",
         "meaningEn": "The serving layer accepts requests, forms batches, schedules GPUs and streams tokens back."
       }
-    ]
+    ],
+    "codeSample": "# 核心洞察:生成是【逐 token 迭代】的,一次 forward pass 只让批里每条各出一个 token。\n# 所以\"把新请求加进正在跑的批\"= 在两次 forward pass 之间(step 边界)改 running 列表,\n# 不是打断某一次正在算的计算。这叫 iteration-level(迭代级)调度。\n\nrunning = []                 # 当前批里正在生成的序列\nqueue   = incoming_requests  # 排队等待进批的新请求\n\nwhile True:\n    # ── 1. 补位:step 之间,只要有空槽 + KV cache 显存放得下,就从队列拉新请求进批 ──\n    while len(running) < MAX_BATCH and queue and kv_cache_has_room():\n        req = queue.pop()\n        req.state = prefill(req.prompt)   # 新请求先 prefill:整段 prompt 过一遍、建好 KV cache,\n        running.append(req)               #   才能加入逐 token 的 decode  ← \"加入正在跑的批\"就这两行\n\n    # ── 2. 一次 forward pass:批里每条序列各前进【一个】token ──\n    logits = model.forward(running)       # 一次读权重、服务【整批】—— 这就是 batching 省钱的点\n    for req in running:\n        tok = sample(logits[req])\n        req.emit(tok)                     # 把这个 token delta 立刻推给客户端(SSE)\n\n    # ── 3. 清理:做完的序列【立刻】离开,腾出槽位和显存 ──\n    for req in list(running):\n        if req.hit_eos() or req.len >= req.max or req.cancelled:\n            req.finish()\n            running.remove(req)\n            free_kv_cache(req)            # 释放它的 KV cache → 下一轮补位就能用这块显存\n\n# 代价(本题答案):worker 从\"跑一条 prompt\"变成要管【变长序列随时进出】的调度器,\n#   且 prompt 长度参差时批内仍有算力浪费。好在这套复杂度多由推理框架(vLLM/TGI)替你扛。",
+    "lang": "python"
   },
   {
     "id": "sd-problem-breakdowns-chatgpt-062",
