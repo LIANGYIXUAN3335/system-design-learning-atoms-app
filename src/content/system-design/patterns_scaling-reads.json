@@ -12,14 +12,14 @@
     "options": [
       "因为写操作天生就比读操作慢，跟流量规模无关",
       "因为数据库默认不支持并发读，请求只能排队等待",
-      "因为写产生数据、读消费数据，读流量天然远快于写流量",
+      "因为写产生数据、读消费数据，一条数据被读很多次，读流量远多于写流量",
       "因为读操作根本没法用索引优化，只能对整张表逐行做全表扫描"
     ],
     "answer": [
       2
     ],
-    "why": "打开 Instagram 首页就是 100+ 次读（图片元数据、用户信息、点赞数、评论预览），而你一天可能只发一张照片（一次写）。读消费数据，天然比写多得多。",
-    "why_en": "Writes create data while reads consume it, so in content-heavy applications read traffic grows far faster than write traffic.",
+    "why": "打开首页就是 100+ 次读（图片元数据、用户信息、点赞数、评论预览），而一个人一天大约只发一张照片（一次写）。一条数据写一次、被读很多次，所以内容型应用的读流量远多于写流量，读这一侧先撞上数据库的容量上限。",
+    "why_en": "Opening the feed fires 100+ reads (photo metadata, user info, like counts, comment previews), while a person posts about once a day (one write). Each item is written once and read many times, so read traffic far exceeds write traffic in content-heavy apps, and the read side hits the database's capacity first.",
     "tags": [
       "scaling-reads",
       "read-write-ratio"
@@ -27,7 +27,7 @@
     "options_en": [
       "Writes are inherently slower than reads, regardless of traffic scale.",
       "Databases don't support concurrent reads by default, so requests queue up.",
-      "Writes create data while reads consume it, so read traffic grows far faster than write traffic.",
+      "Writes create data while reads consume it, and each item is read many times, so read traffic far exceeds write traffic.",
       "Reads can't be optimized with indexes at all, so every read does a full row-by-row table scan."
     ],
     "optionExplanations": [
@@ -93,21 +93,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "bottleneck",
-    "q": "读流量把数据库压垮时，为什么通常「不是能调试解决的软件问题」？",
-    "q_en": "Why is a database overwhelmed by read traffic usually not just a debuggable software bug?",
-    "scenario": "单库扛 5 万读 QPS，CPU 长期 100%、磁盘 I/O 打满，慢查询日志里却没有异常 SQL。",
-    "scenario_en": "A single database is taking 50k read QPS with CPU pinned at 100% and disk I/O saturated, yet the slow-query log shows nothing unusual.",
+    "q": "在这种情况下，为什么继续调试 SQL 已经解决不了问题？",
+    "q_en": "In this situation, why won't more SQL debugging fix the problem?",
+    "scenario": "单库扛 5 万读 QPS，CPU 长期 100%、磁盘 I/O 打满。团队已经按总耗时排查过 top queries，热点查询都走了合适的索引，也没有 N+1，但流量还在继续涨。",
+    "scenario_en": "A single database is taking 50k read QPS with CPU pinned at 100% and disk I/O saturated. The team has already reviewed the top queries by total time, the hot queries all use appropriate indexes, there are no N+1 patterns, and traffic keeps growing.",
     "options": [
       "因为数据库代码是闭源的，所以没法自己修复",
       "因为 SQL 优化器不可控，写代码也没法干预它",
       "因为问题一定出在网络层，跟数据库本身无关",
-      "因为撞上了物理极限：CPU/内存/磁盘都有硬上限"
+      "因为撞上了物理极限：单机 CPU/内存/磁盘 I/O 都有硬上限"
     ],
     "answer": [
       3
     ],
-    "why": "CPU、内存、磁盘 I/O 都是物理约束，到顶后再聪明的代码也无济于事，只能靠架构手段（索引、副本、缓存）绕开。",
-    "why_en": "At scale you hit physics: CPU instructions per second, memory capacity, and disk I/O are hard limits that more code cannot overcome.",
+    "why": "题面已经排除了查询层的问题：热点查询都走索引、没有 N+1。剩下的是单机 CPU、内存、磁盘 I/O 的物理上限，到顶后再改 SQL 也没用，只能靠架构手段把读流量分出去：read replicas、缓存。注意：「慢查询日志没异常」本身不够下这个结论，大量很快但很频繁的查询也能打满 CPU，所以要先按总耗时排查。",
+    "why_en": "The scenario has already ruled out the query layer: hot queries use indexes and there are no N+1 patterns. What remains is a single machine's CPU, memory, and disk I/O ceiling; once you hit it, more SQL tweaks won't help, and you need architecture to offload reads — read replicas and caches. Note that a clean slow-query log alone isn't enough to conclude this: many fast but very frequent queries can also pin the CPU, so check top queries by total time first.",
     "tags": [
       "scaling-reads",
       "bottleneck",
@@ -117,7 +117,7 @@
       "It's because database code is closed-source, so you can't patch it yourself.",
       "It's because the SQL optimizer is out of your control, so no code change can steer it.",
       "It's because the problem must be in the network layer, unrelated to the database itself.",
-      "It's because you've hit a physical limit: CPU, memory, and disk I/O all have hard ceilings."
+      "It's because you've hit a physical limit: a single machine's CPU, memory, and disk I/O all have hard ceilings."
     ],
     "optionExplanations": [
       "开源闭源跟性能瓶颈没关系，这是转移话题的干扰项。",
@@ -230,8 +230,8 @@
     "answer": [
       2
     ],
-    "why": "索引把线性扫描变成对数查找：100 万行的表大约只需 20 次索引比较就能定位，这是读优化里性价比最高的一步。",
-    "why_en": "An index turns a linear scan into a logarithmic lookup, roughly twenty index checks instead of scanning a million rows.",
+    "why": "B-tree 索引把线性扫描变成对数查找：1000 万行大约 23-24 次比较就能定位（因为扇出很大，实际只读 3-4 层页面），这是读优化里性价比最高的一步。",
+    "why_en": "A B-tree index turns a linear scan into a logarithmic lookup: about 23 to 24 comparisons for ten million rows (only 3 to 4 page levels thanks to high fan-out), the cheapest big win in read optimization.",
     "table": {
       "headers": [
         "方案",
@@ -242,12 +242,12 @@
         [
           "无索引",
           "O(n)",
-          "扫 100 万行"
+          "扫 1000 万行"
         ],
         [
           "B-tree 索引",
           "O(log n)",
-          "约 20 次比较"
+          "约 23 次比较"
         ]
       ]
     },
@@ -255,8 +255,8 @@
       "indexing",
       "numbers"
     ],
-    "scenario": "users 表有 1000 万行，按 email 精确匹配查询；你要判断加索引后复杂度能改善多少。",
-    "scenario_en": "The users table has 10 million rows and queries look up users by exact email match; you need to judge how much an index improves complexity.",
+    "scenario": "users 表有 1000 万行，按 email 精确匹配查询；你要判断在 email 上加 B-tree 索引后复杂度能改善多少。",
+    "scenario_en": "The users table has 10 million rows and queries look up users by exact email match; you need to judge how much a B-tree index on email improves complexity.",
     "options_en": [
       "O(n) versus O(n), no difference.",
       "Both become O(1).",
@@ -273,13 +273,13 @@
     "optionExplanations": [
       "如果真没差别，加索引就没有意义了，但实测差距是数量级的。",
       "O(1) 意味着不管数据多大都一次命中，B-tree 索引做不到这一点，它是对数级。",
-      "对，B-tree 把线性扫描压成对数级比较，百万行只需约 20 次。",
+      "对，B-tree 把线性扫描压成对数级比较，千万行只需约 23 次。",
       "没有哪种索引能把复杂度往上抬到平方级，这个方向本身就错了。"
     ],
     "optionExplanations_en": [
       "If there were really no difference, indexing would be pointless — the real gap is an order of magnitude.",
       "O(1) means one lookup regardless of size; a B-tree index doesn't do that, it's logarithmic.",
-      "Right — a B-tree turns a linear scan into log-time lookups, about 20 comparisons for a million rows.",
+      "Right — a B-tree turns a linear scan into log-time lookups, about 23 comparisons for ten million rows.",
       "No indexing technique makes complexity worse than what you started with — this direction is backwards."
     ]
   },
@@ -347,8 +347,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "indexing",
-    "scenario": "社交应用：用户经常按 hashtag 搜索帖子，商品页常按价格排序；读压力刚开始出现。",
-    "scenario_en": "In a social app, users often search posts by hashtag and product pages often sort by price; read pressure is just starting to show.",
+    "scenario": "社交应用：用户经常按 hashtag 搜索帖子，商品页常按价格排序；读压力刚开始出现。EXPLAIN 显示这两类查询都在做全表扫描，相关列上没有索引。",
+    "scenario_en": "In a social app, users often search posts by hashtag and product pages often sort by price; read pressure is just starting to show. EXPLAIN shows both queries doing full table scans, with no index on the relevant columns.",
     "q": "读扩展的第一步该做什么？",
     "q_en": "What should be the first read-scaling move?",
     "options": [
@@ -360,8 +360,8 @@
     "answer": [
       1
     ],
-    "why": "第一步永远是给频繁查询、排序的列（如 hashtag、价格）加索引——先吃掉单库内的余量，再谈基础设施。",
-    "why_en": "The first move is indexing the columns you frequently query, join on, or sort by, before adding any infrastructure.",
+    "why": "EXPLAIN 已经说明这两类查询在全表扫描、列上没有索引。这时给高频查询、排序的列（如 hashtag、价格）加索引是成本最低的第一步：先吃掉单库内的余量，再谈缓存、副本、分片这些基础设施。",
+    "why_en": "EXPLAIN already shows both queries doing full table scans with no index on those columns. Indexing the frequently queried and sorted columns (such as hashtag and price) is then the cheapest first move: use up the headroom inside the single database before adding infrastructure like caches, replicas, or sharding.",
     "whenOtherWins": "若已有合理索引仍逼近 5-10 万读/秒，才轮到缓存或读副本——索引是第一步而不是全部。",
     "tags": [
       "indexing",
@@ -485,15 +485,15 @@
     "q_en": "What does SSDs' random-I/O advantage over spinning disks imply for scaling?",
     "options": [
       "提升其实相当有限（1-2倍），不值得当作独立的扩展手段",
-      "提升是数量级的（10-100倍），常是最快的第一步",
+      "提升至少是一个数量级（具体倍数看延迟还是 IOPS、SATA 还是 NVMe），常是最快的第一步",
       "提升虽大但只影响写，不影响读扩展",
       "两者没有区别，应直接上分布式存储"
     ],
     "answer": [
       1
     ],
-    "why": "SSD 没有机械寻道，随机 I/O 比机械盘快 10-100 倍，是买读扩展喘息空间最快的一步。",
-    "why_en": "SSDs eliminate mechanical seek time, giving roughly ten to one hundred times faster random I/O, often the fastest way to buy read-scaling headroom.",
+    "why": "SSD 没有机械寻道：单次随机读延迟从毫秒级降到约百微秒级，随机 IOPS 差距更大（几百到上千倍，取决于 SATA/NVMe 和队列深度）。数字是量级锚点不是常数，但结论不变——换 SSD 往往是买读扩展喘息空间最快的一步。",
+    "why_en": "SSDs have no mechanical seek: random-read latency drops from milliseconds to roughly a hundred microseconds, and the random-IOPS gap is even larger (hundreds to thousands of times, depending on SATA vs NVMe and queue depth). Treat these as order-of-magnitude anchors, not constants; the conclusion holds — swapping in SSDs is often the fastest way to buy read-scaling headroom.",
     "tags": [
       "hardware",
       "numbers",
@@ -503,19 +503,19 @@
     "scenario_en": "Random reads are bottlenecked on spinning disks, and you are evaluating how much leverage SSDs would add.",
     "options_en": [
       "The gain is quite modest (one to two times), not worth treating as a standalone scaling move.",
-      "The gain is an order of magnitude (ten to one hundred times), often the fastest first step.",
+      "The gain is at least an order of magnitude (the exact factor depends on latency vs IOPS and SATA vs NVMe), often the fastest first step.",
       "The gain is real but only helps writes, not reads.",
       "There's no real difference; go straight to distributed storage."
     ],
     "optionExplanations": [
       "1-2 倍的提升配不上\"没有机械寻道\"这个结构性优势，实际差距大得多。",
-      "对，去掉机械寻道后随机 I/O 快一到两个数量级，往往是最快能拿到的提升。",
+      "对，去掉机械寻道后随机 I/O 至少快一个数量级（按 IOPS 算差距更大），往往是最快能拿到的提升。",
       "SSD 的随机读优势同样直接改善读路径，不是只对写有用。",
       "差距明明存在，跳过 SSD 直接上分布式存储是在放弃唾手可得的收益。"
     ],
     "optionExplanations_en": [
       "A 1-2x gain undersells the structural advantage of removing seek time — the real gap is much bigger.",
-      "Right — eliminating seek time buys one to two orders of magnitude on random I/O, often the fastest win available.",
+      "Right — eliminating seek time buys at least an order of magnitude on random I/O (more when measured in IOPS), often the fastest win available.",
       "SSDs' random-read advantage directly speeds up the read path too, not just writes.",
       "The gap is real and cheap to capture; skipping straight to distributed storage throws away an easy win."
     ]
@@ -786,42 +786,42 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "capacity",
-    "q": "这个阈值信号最支持哪个判断？",
-    "q_en": "What judgment does this threshold signal support?",
+    "q": "这个读 QPS 最支持哪个判断？",
+    "q_en": "What judgment does this read QPS level support?",
     "options": [
-      "这个读 QPS 远低于任何需要关注的阈值，完全不用管",
-      "已经严重超出经验阈值了，必须立刻分片才行",
-      "接近 5-10 万/秒的经验阈值，该扩展或加缓存了",
+      "这个读 QPS 远低于需要关注的阈值，完全不用管",
+      "已经严重超出上限了，必须立刻分片才行",
+      "已接近实测上限，该开始规划读扩展（缓存或只读副本）了",
       "这说明索引本身配置有问题，应该立刻重建索引"
     ],
     "answer": [
       2
     ],
-    "why": "5-10 万读/秒是粗略经验值，实际取决于读模式、数据模型和硬件；面试里粗估足以支撑「该扩展了」这个判断。",
-    "why_en": "As a rule of thumb, a well-indexed single database needs horizontal scaling or a cache beyond roughly fifty to one hundred thousand reads per second.",
+    "why": "4 万/5 万 = 80%，已接近这台库的实测上限，该提前规划缓存或只读副本。注意上限要靠自己的压测或监控得出：单库读能力常见在数万/秒量级，但随硬件、查询复杂度、行大小、buffer 命中率可以差好几倍，不是固定门槛。",
+    "why_en": "40k out of 50k is 80% of this box's measured ceiling, so plan a cache or read replicas now. The ceiling must come from your own load test or monitoring: a single database's read capacity is often in the tens of thousands per second, but it varies several-fold with hardware, query complexity, row size, and buffer-cache hit rate — it is not a fixed threshold.",
     "tags": [
       "numbers",
       "capacity",
       "scaling-reads"
     ],
-    "scenario": "线上监控显示，已经加好索引的单库读 QPS 持续攀升，正朝着经验阈值靠近。",
-    "scenario_en": "Monitoring shows a well-indexed single database's read QPS keeps climbing toward the rule-of-thumb threshold.",
+    "scenario": "线上监控显示，已经加好索引的单库读 QPS 持续攀升；你们压测得到的这台库的读上限约为 5 万/秒（取决于这批查询和硬件），当前已到 4 万/秒且还在涨。",
+    "scenario_en": "Monitoring shows a well-indexed single database's read QPS keeps climbing; your own load test put this box's read ceiling at about 50k/sec for this query mix and hardware, and it's now at 40k/sec and rising.",
     "options_en": [
-      "This read QPS is far below any threshold worth worrying about, nothing to do here.",
-      "It's already way over the rule-of-thumb budget, so shard immediately.",
-      "Close to the 50,000-100,000 reads/sec rule of thumb — time to scale horizontally or add a cache.",
-      "This means the indexes themselves are misconfigured and need rebuilding right away."
+      "This read QPS is far below anything worth worrying about; nothing to do.",
+      "It's already way over the ceiling, so shard immediately.",
+      "It's close to the measured ceiling — time to start planning read scaling (a cache or read replicas).",
+      "This means the indexes are misconfigured and need rebuilding right away."
     ],
     "optionExplanations": [
-      "已加好索引的单库还没到经验阈值前不必担心，但监控显示正在逼近它。",
-      "还没真正越过阈值就宣布必须立刻分片，是在没证据时上重手段。",
-      "对，逼近 5-10 万/秒的经验阈值意味着该考虑水平扩展或加缓存了。",
+      "已加好索引的单库在 4 万/5 万这个水位上不能说\"远低于\"，已经用掉约 80% 的实测上限。",
+      "还没真正越过实测上限就宣布必须立刻分片，是在没证据时上重手段。",
+      "对，已用到实测上限的约 80%，该提前规划缓存或只读副本。",
       "QPS 攀升是流量增长的信号，不代表索引本身配置有问题。"
     ],
     "optionExplanations_en": [
-      "A well-indexed single database isn't worrying below the rule-of-thumb threshold, but monitoring shows it's approaching it.",
-      "Declaring an immediate shard before actually crossing the threshold reaches for a heavy tool without evidence.",
-      "Right — approaching the 50k-100k reads/sec rule of thumb means it's time to consider scaling out or adding a cache.",
+      "At 40k of a 50k ceiling you can't call it \"far below\" — about 80% of the measured limit is already used.",
+      "Declaring an immediate shard before actually crossing the measured ceiling reaches for a heavy tool without evidence.",
+      "Right — about 80% of the measured ceiling is used, so plan a cache or read replicas ahead of time.",
       "Climbing QPS signals rising traffic, not that the indexes themselves are misconfigured."
     ]
   },
@@ -1365,15 +1365,15 @@
     "q_en": "What is the response-time order of magnitude for a cache hit versus an optimized database query?",
     "options": [
       "都在 100ms 以上",
-      "缓存亚毫秒级 vs 数据库几十毫秒",
+      "缓存亚毫秒级 vs 数据库通常毫秒级（读盘或复杂查询时到几十毫秒）",
       "数据库查询通常反而比缓存命中更快一些",
       "两者都在 1 微秒以内"
     ],
     "answer": [
       1
     ],
-    "why": "缓存从 RAM 直接返回预计算结果；数据库要读盘 + 执行查询。亚毫秒 vs 几十毫秒是量化「为什么加缓存」的关键数字。",
-    "why_en": "A cache serves precomputed results from RAM in under a millisecond, versus tens of milliseconds for even a well-optimized database query.",
+    "why": "同机房缓存命中是一次内存查找加一次网络往返，亚毫秒级；数据库即使索引良好，也要解析/执行查询，常在毫秒级，一旦读盘或查询复杂会到几十毫秒。差距随场景从几倍到几十倍，这就是「为什么加缓存」的量化依据。",
+    "why_en": "An in-datacenter cache hit is one memory lookup plus a network round trip, sub-millisecond. Even a well-indexed database query must parse and execute, typically taking milliseconds, and tens of milliseconds once it hits disk or gets complex. The gap ranges from several times to tens of times, which is the quantitative case for a cache.",
     "tags": [
       "caching",
       "numbers",
@@ -1383,19 +1383,19 @@
     "scenario_en": "You are designing a high-read profile page and deciding whether to put a cache in front of the database.",
     "options_en": [
       "Both are over 100 milliseconds.",
-      "Cache hits are sub-millisecond versus tens of milliseconds for the database.",
+      "Cache hits are sub-millisecond versus typically milliseconds for the database (tens of milliseconds when it hits disk or runs a complex query).",
       "The database query is usually actually faster than a cache hit.",
       "Both are under 1 microsecond."
     ],
     "optionExplanations": [
       "把两者都放到 100ms 以上级别，明显高估了缓存该有的响应速度。",
-      "对，缓存直接从内存吐出结果，亚毫秒级；数据库要读盘执行查询，通常是几十毫秒。",
+      "对，缓存直接从内存吐出结果，亚毫秒级；数据库要解析执行查询，通常毫秒级，读盘或复杂查询时到几十毫秒。",
       "这个方向反了——绕过磁盘 I/O 走内存的缓存，天然比数据库查询快得多。",
       "微秒级对多数生产环境的缓存来说也偏乐观，通常是亚毫秒而非微秒。"
     ],
     "optionExplanations_en": [
       "Placing both above 100 milliseconds badly overstates how slow a cache response should be.",
-      "Right — a cache returns straight from memory in sub-millisecond time, while the database has to read disk and run a query, typically tens of milliseconds.",
+      "Right — a cache returns straight from memory in sub-millisecond time, while the database has to parse and run a query, typically milliseconds and tens of milliseconds on disk reads or complex queries.",
       "This has it backwards — skipping disk I/O for memory makes the cache inherently faster than a database query.",
       "Microsecond-level is optimistic for most production caches too; sub-millisecond is the realistic range, not microseconds."
     ]
@@ -1776,7 +1776,7 @@
     "q": "缓存 TTL 应该怎么定？",
     "q_en": "How should you choose cache TTLs?",
     "options": [
-      "由陈旧性需求驱动：搜索 30 秒、资料 5 分钟",
+      "由陈旧性需求驱动：搜索不超过 30 秒、资料不超过 5 分钟",
       "统一都设成 1 小时，图个省事从此再也不用多想",
       "全部设成 1 秒，反正越短肯定越好",
       "随便挑一个数字设上，出问题以后再调整"
@@ -1784,28 +1784,28 @@
     "answer": [
       0
     ],
-    "why": "理想的 TTL 由非功能需求的 staleness 上限直接给出：这让一致性保证有界，缓存决策不用拍脑袋。",
-    "why_en": "Drive TTLs from your staleness requirements, so a thirty-second staleness budget means exactly a thirty-second TTL.",
+    "why": "staleness 上限直接给出 TTL 的上界：搜索 ≤30 秒、资料 ≤5 分钟。如果链路上还有副本复制延迟或多层缓存，要从预算里扣掉，TTL 设得比上限略小。",
+    "why_en": "The staleness budget sets an upper bound on the TTL: at most 30 seconds for search and 5 minutes for profiles. If replication lag or additional cache layers also add staleness, subtract them from the budget and set the TTL a bit below it.",
     "whenOtherWins": "若需求是「写后立即可见」，多短的 TTL 都不够，要改用主动失效或版本化 key。",
     "tags": [
       "ttl",
       "requirements"
     ],
     "options_en": [
-      "Drive it directly from staleness requirements: 30 seconds for search, 5 minutes for profiles.",
+      "Drive it from staleness requirements: at most 30 seconds for search, at most 5 minutes for profiles.",
       "Set one hour everywhere for simplicity and never think about it again.",
       "Set one second everywhere, since shorter always has to be better.",
       "Pick a number at random and just fix it later if something breaks."
     ],
     "tradeoff": "一致性保证 vs 缓存收益",
     "optionExplanations": [
-      "对，30 秒和 5 分钟直接对应各自的陈旧容忍上限，TTL 就该照这个设。",
+      "对，30 秒和 5 分钟分别是各自陈旧容忍的上限，TTL 不应超过它（链路上还有复制延迟等就再往下扣）。",
       "统一 1 小时会让搜索结果的陈旧远超 30 秒的要求，违反了给定约束。",
       "全设 1 秒会让缓存命中率暴跌，等于交了缓存的税却没拿到缓存的好处。",
       "拍脑袋定 TTL 意味着一致性保证是不确定的，出问题时说不清是哪里错了。"
     ],
     "optionExplanations_en": [
-      "Right — 30 seconds and 5 minutes map directly to each item's staleness budget, so set TTLs from that.",
+      "Right — 30 seconds and 5 minutes are each item's staleness ceiling, so the TTL should not exceed it (subtract replication lag or other layers if present).",
       "A blanket 1-hour TTL would leave search results stale far past the required 30 seconds, violating the given constraint.",
       "Setting everything to one second would tank the hit rate — paying caching's overhead without getting its benefit.",
       "Picking TTLs arbitrarily means the consistency guarantee is undefined, so failures are hard to trace back to a cause."
@@ -1925,14 +1925,14 @@
     "answer": [
       1
     ],
-    "why": "商品页、公开资料、搜索结果这类多人共读的内容都能边缘化，命中的请求完全不到源站，降 90%+ 很常见。",
-    "why_en": "For read-heavy applications CDN caching can offload ninety percent or more of origin traffic.",
+    "why": "源站卸载比 ≈ 可缓存流量占比 × 命中率 = 95% × 95% ≈ 90%。这个比例不是 CDN 的固定能力：个性化流量多或长尾内容多时会低得多。",
+    "why_en": "Origin offload ≈ cacheable share × hit rate = 95% × 95% ≈ 90%. This is not a fixed property of a CDN; with lots of personalized or long-tail traffic it is far lower.",
     "tags": [
       "cdn",
       "numbers"
     ],
-    "scenario": "读密集应用给公开内容加上 CDN 边缘缓存后，你要向团队量化能省下多少源站压力。",
-    "scenario_en": "After adding CDN edge caching for public content in a read-heavy app, you need to quantify the origin-load reduction.",
+    "scenario": "读密集应用里，约 95% 的读请求是多人共读的公开内容（商品页、公开资料），你给这些内容加上 CDN 边缘缓存，预计命中率在 95% 左右；你要向团队量化能省下多少源站压力。",
+    "scenario_en": "In a read-heavy app, about 95% of read requests are shared public content (product pages, public profiles). You put CDN edge caching on that content and expect a hit rate around 95%; you need to quantify the origin-load reduction.",
     "options_en": [
       "About 10%.",
       "90% or more.",
@@ -1941,13 +1941,13 @@
     ],
     "optionExplanations": [
       "10% 低估了共享型公开内容能被边缘化命中的比例，实际收益比这大得多。",
-      "对，商品页、公开资料这类多人共读内容命中缓存后完全不打源站，降 90%+ 很常见。",
+      "对，95% 可缓存流量 × 约 95% 命中率 ≈ 90%：命中的请求完全不打源站。个性化流量多时这个比例会低得多。",
       "配好 CDN 后源站流量基本不变说明缓存根本没生效，跟题设矛盾。",
       "读密集内容的命中率通常远高于 50%，\"正好一半\"低估了 CDN 的效果。"
     ],
     "optionExplanations_en": [
       "10% understates how much shared, publicly-read content gets offloaded to the edge — the real gain runs much higher.",
-      "Right — shared content like product pages and public profiles never touches the origin on a cache hit, so 90%+ reduction is common.",
+      "Right — 95% cacheable traffic × ~95% hit rate ≈ 90%: a hit never touches the origin. With more personalized traffic this ratio would be much lower.",
       "Origin traffic staying essentially unchanged would mean the CDN isn't actually caching anything — contradicts the premise.",
       "Read-heavy content typically sees a hit rate well above 50%; 'exactly half' undersells what a CDN delivers."
     ]
@@ -2681,14 +2681,14 @@
     "options": [
       "读请求的延迟会因此大幅上升",
       "缓存命中率会因此必然下降",
-      "内存占用成倍增加，失效要清掉所有副本",
+      "这条热数据的内存占用变成约 10 倍，数据更新时要让所有副本一起失效",
       "所有的写入操作都会因此被直接阻塞卡住"
     ],
     "answer": [
       2
     ],
-    "why": "扇出用冗余换可用性：多份拷贝多占内存、失效要全清；但在热 key 威胁可用性时，这点冗余是保命的小代价。",
-    "why_en": "Fanout costs extra memory for duplicate copies and makes invalidation harder since every copy must be cleared, a small price for staying online.",
+    "why": "扇出用冗余换可用性：这条热数据要多存 9 份，更新时 10 个副本都要失效或等 TTL 过期。B 错在「必然」：命中率是否下降取决于内存余量——内存紧张时多出的副本会挤掉别的 key、每个副本也要各自冷启动一次，所以可能下降，但不是必然。",
+    "why_en": "Fanout trades redundancy for availability: the hot item is stored nine extra times, and every update must invalidate (or wait out the TTL of) all ten copies. B is wrong because of \"bound to\": whether hit rate drops depends on memory headroom — under memory pressure the extra copies can evict other keys and each copy cold-misses once, so it may drop, but it is not guaranteed.",
     "tags": [
       "hot-key",
       "fanout",
@@ -2697,19 +2697,19 @@
     "options_en": [
       "Read latency rises sharply as a result.",
       "Hit rate is bound to drop because of this.",
-      "Memory usage multiplies since data is duplicated, and invalidation must clear every copy.",
+      "This hot item now takes about ten times the memory, and every update must invalidate all copies.",
       "All write operations end up getting directly blocked as a result."
     ],
     "optionExplanations": [
       "扇出后单次读仍然只打一个副本，读延迟本身不会因此变慢。",
-      "命中率不会因为多存了几份同样数据而下降，读的仍然是同一份内容。",
-      "对，十份拷贝占十倍内存，数据一变还要把所有副本都清掉，这是扇出真正的代价。",
+      "「必然」说过头了：内存紧张时副本可能挤掉别的 key 导致命中率下降，但这不是扇出的必然结果。",
+      "对，这条热数据要多存 9 份、占约十倍内存，数据一变还要把所有副本都清掉，这是扇出真正的代价。",
       "扇出只影响读路径的分布，跟写入是否被阻塞没有关系。"
     ],
     "optionExplanations_en": [
       "After fanout, a single read still hits just one copy — read latency itself doesn't get worse from this.",
-      "Hit rate doesn't drop just because the same data is stored under more keys — clients still find the same content.",
-      "Right — ten copies means ten times the memory, and any update has to clear every one of them — that's the real cost.",
+      "'Bound to' overstates it: under memory pressure the copies may evict other keys and lower hit rate, but that isn't a guaranteed result of fanout.",
+      "Right — this hot item is stored nine extra times (about ten times the memory), and any update has to invalidate every copy — that is the real cost.",
       "Fanout only changes how reads are distributed; it has nothing to do with whether writes get blocked."
     ]
   },

@@ -2135,8 +2135,8 @@
     "answer": [
       0
     ],
-    "why": "队列的作用是削峰：超出处理能力的 800 个请求先在队列里等着，稍后被消费——延迟增加但请求不丢。",
-    "why_en": "With a queue the eight hundred excess requests simply wait to be processed instead of being dropped.",
+    "why": "队列削峰：容量足够、不过期，多出的 800 个请求先排队，worker 按 200/s 约 4 秒消化完——延迟增加但不丢。若队列有界且被打满，或消息设了 TTL，超出部分仍会被拒绝或丢弃。",
+    "why_en": "A queue smooths the spike: with ample capacity and no expiry, the 800 excess requests wait and workers drain them at 200/s in about 4 seconds — more latency, no loss. If the queue were bounded and full, or messages had a TTL, the excess could still be rejected or dropped.",
     "tags": [
       "queue",
       "numbers",
@@ -2160,8 +2160,8 @@
       "The queue is absorbing the load here, so overload doesn't mean an instant crash - it just means a longer wait in line.",
       "A queue can't conjure extra processing capacity out of nowhere; the 1000/s spike still gets worked down at the real 200/s rate."
     ],
-    "scenario": "订单系统稳定处理能力 200 req/s，秒杀开始的那一秒涌入 1000 个下单请求。",
-    "scenario_en": "An order system steadily handles 200 requests per second when a flash sale sends 1,000 requests in a single second."
+    "scenario": "订单系统下游 worker 稳定处理能力 200 req/s，前面有一个容量足够大（远超 1000 条）、消息不设过期的持久化队列。秒杀开始的那一秒涌入 1000 个下单请求，之后流量回落。",
+    "scenario_en": "An order system's downstream workers steadily handle 200 requests per second behind a durable queue with ample capacity (far more than 1,000 messages) and no message expiry. A flash sale sends 1,000 order requests in a single second, then traffic drops back."
   },
   {
     "id": "sd-in-a-hurry-key-technologies-036",
@@ -2218,15 +2218,15 @@
     "q_en": "What happens if you put a queue on a synchronous path with a latency target under 500 ms?",
     "options": [
       "延迟反而更稳",
-      "几乎必然突破延迟约束",
+      "排队等待计入响应时间，积压时很容易突破 500ms 预算",
       "只要队列够大就没问题",
       "队列会自动变成同步调用"
     ],
     "answer": [
       1
     ],
-    "why": "队列天生异步：消息要排队等消费。同步且有强延迟要求的链路（如 <500ms）加队列，几乎保证打破约束——这是面试常见的反模式提醒。",
-    "why_en": "Adding a queue to a synchronous workload with strict latency requirements almost guarantees you break the latency constraint.",
+    "why": "接口要同步等消费者处理完，排队时间就直接加在用户延迟上。题面说明高峰会积压几秒，这时 500ms 预算必然被打穿；即使平时队列很快，尾延迟也不再可控。队列本身的投递开销通常只有毫秒级，问题出在排队等待，而不是「队列天生慢」。",
+    "why_en": "Because the endpoint waits synchronously for the consumer, queue wait adds directly to user latency. The scenario says peak backlog reaches seconds, which blows the 500 ms budget; even off-peak, tail latency is no longer under control. The queue's own delivery overhead is usually milliseconds — the problem is waiting in line, not that queues are inherently slow.",
     "tags": [
       "queue",
       "latency",
@@ -2234,24 +2234,24 @@
     ],
     "options_en": [
       "Latency actually becomes more stable",
-      "It will almost certainly break the latency budget",
+      "Queue wait counts toward response time, so backlog can easily break the 500 ms budget",
       "It's fine as long as the queue is big enough",
       "The queue automatically becomes a synchronous call"
     ],
     "optionExplanations": [
-      "队列天生要排队等消费，这只会让延迟变得更不稳定，说延迟反而更稳是说反了。",
-      "对，同步链路一旦加了队列，消息就要排队等消费者处理，这几乎必然打破 500ms 这类强延迟约束。",
+      "队列要排队等消费，积压时延迟只会更不稳定，说延迟反而更稳是说反了。",
+      "对，接口要同步等消费者处理完，积压时排队等待直接计入响应时间，很容易突破 500ms 预算。",
       "队列再大也改变不了它异步排队的本质，容量变大只是能扛更多积压，不会让延迟达标。",
       "队列不会因为链路是同步的就自动变成同步调用，它的行为始终是投递后异步消费。"
     ],
     "optionExplanations_en": [
-      "A queue inherently makes things wait to be consumed, which makes latency less stable, not more - this gets it backwards.",
-      "Right - once a queue sits on a synchronous path, messages must wait for a consumer, which almost certainly breaks a strict target like 500ms.",
+      "A queue makes work wait to be consumed, and with backlog latency becomes less stable, not more - this gets it backwards.",
+      "Right - the endpoint waits synchronously for the consumer, so queue wait counts toward response time and backlog can easily break the 500 ms budget.",
       "A bigger queue doesn't change its asynchronous nature - more capacity just means it can hold more backlog, not that latency stays on target.",
       "A queue doesn't turn into a synchronous call just because the surrounding path is synchronous; it still delivers and consumes asynchronously."
     ],
-    "scenario": "一个用户点击后必须 500ms 内返回结果的同步接口，有人提议在中间加一个消息队列。",
-    "scenario_en": "Someone proposes putting a message queue inside a synchronous endpoint that must return to the user within 500 ms."
+    "scenario": "一个用户点击后必须 500ms 内返回结果的同步接口，有人提议在中间加一个消息队列，接口要等队列后面的消费者处理完才能返回。高峰时这个队列可能积压几秒的消息。",
+    "scenario_en": "Someone proposes putting a message queue inside a synchronous endpoint that must return to the user within 500 ms; the endpoint would wait for the consumer behind the queue to finish before replying. At peak, the queue can build up several seconds of backlog."
   },
   {
     "id": "sd-in-a-hurry-key-technologies-038",
@@ -2365,8 +2365,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "backpressure",
-    "q": "系统处理能力 200/s，持续进来 300/s——队列越积越多。正确的应对是？",
-    "q_en": "The system handles 200/s but receives a steady 300/s, so the queue keeps growing. What is the right response?",
+    "q": "处理能力扩不上去，持续进来 300/s——队列越积越多。正确的应对是？",
+    "q_en": "Capacity can't be raised, yet 300/s keeps arriving and the queue keeps growing. What is the right response?",
     "options": [
       "把队列的存储容量直接调大十倍",
       "再加一个队列串联",
@@ -2376,8 +2376,8 @@
     "answer": [
       2
     ],
-    "why": "队列最大的坑：它掩盖了「容量不够」的事实，永远处理不完。答案是背压——队列过载时放慢生产速度或拒绝新消息，把压力传导回上游。",
-    "why_en": "When demand permanently exceeds capacity, apply backpressure by slowing or rejecting new messages instead of letting the queue grow forever.",
+    "why": "队列最大的坑是掩盖「容量不够」：进 300/s、出 200/s，积压只会无限增长。能扩处理能力时应先扩 consumer；本题处理能力被下游限速卡死，所以要用背压——队列过载时放慢或拒绝新消息，把压力传导回上游，让容量缺口显性化。",
+    "why_en": "A queue can hide a capacity shortfall: with 300/s in and 200/s out, the backlog grows forever. If you could add processing capacity, you would scale consumers first; here capacity is capped by the downstream rate limit, so apply backpressure — slow or reject new messages when overloaded, pushing pressure upstream so the shortfall becomes visible.",
     "tags": [
       "queue",
       "backpressure",
@@ -2409,8 +2409,8 @@
       "Right - the fix is backpressure: slow or reject new messages when overloaded, pushing pressure back upstream so the real capacity shortfall surfaces.",
       "Silently dropping messages does stop the queue from growing, but at the cost of data loss, and upstream never even sees the problem."
     ],
-    "scenario": "系统稳定处理能力 200/s，上游持续以 300/s 投递，队列积压已经涨到几百万条且还在涨。",
-    "scenario_en": "The system processes 200 per second while producers keep pushing 300 per second, and the backlog has grown into the millions and is still climbing."
+    "scenario": "系统稳定处理能力 200/s，瓶颈在下游第三方接口的限速，短期内无法再加处理能力；上游却持续以 300/s 投递，队列积压已经涨到几百万条且还在涨。",
+    "scenario_en": "The system processes 200 per second, capped by a downstream third-party rate limit, so processing capacity cannot be increased in the short term; producers keep pushing 300 per second, and the backlog has grown into the millions and is still climbing."
   },
   {
     "id": "sd-in-a-hurry-key-technologies-041",
@@ -2429,8 +2429,8 @@
     "answer": [
       1
     ],
-    "why": "Kafka 是分布式流平台、可以当队列使；SQS 是 AWS 的全托管队列服务。Kafka 还支持超越 FIFO 的更复杂顺序保证（按优先级或时间）。",
-    "why_en": "The most common queueing technologies are Kafka, a distributed streaming platform usable as a queue, and SQS, a fully managed AWS queue.",
+    "why": "SD 面试里最常见的两个队列选型：Kafka（分布式流平台，自己或托管服务运维，可当队列用，保证单 partition 内有序）和 SQS（AWS 全托管队列，FIFO 队列按 message group 保序）。Redis、Postgres 也能被改造成简易队列，但它们是缓存/关系库，不是专用队列产品；NGINX/HAProxy 是负载均衡器，S3/DynamoDB 是存储。",
+    "why_en": "The two most common queue choices in SD interviews are Kafka (a distributed streaming platform you operate or buy as a managed service, usable as a queue, ordered within a partition) and SQS (a fully managed AWS queue; FIFO queues keep order per message group). Redis and Postgres can be bent into simple queues, but they are a cache and a relational database, not dedicated queue products; NGINX/HAProxy are load balancers and S3/DynamoDB are storage.",
     "tags": [
       "queue",
       "kafka",
@@ -2502,19 +2502,19 @@
       ]
     },
     "optionExplanations": [
-      "Redis 和 Postgres 分别是缓存和关系型数据库，不是队列产品，别把它们当成队列选型。",
+      "Redis 和 Postgres 虽然能被改造成简易队列，但本质是缓存和关系库，不是最常见的专用队列选型。",
       "对，最常见的两个队列选型是 Kafka（分布式流平台，可当队列用）和 SQS（AWS 的全托管队列）。",
       "NGINX 和 HAProxy 是负载均衡器，负责分发流量到服务，不承担消息排队的职责。",
       "S3 和 DynamoDB 是存储服务，一个存大文件一个存结构化数据，都不是队列产品。"
     ],
     "optionExplanations_en": [
-      "Redis and Postgres are a cache and a relational database respectively, not queue products - don't mistake them for queue choices.",
+      "Redis and Postgres can be bent into simple queues, but they are a cache and a relational database, not the go-to dedicated queue choices.",
       "Right - the two most common queue choices are Kafka, a distributed streaming platform usable as a queue, and SQS, a fully managed AWS queue.",
       "NGINX and HAProxy are load balancers that distribute traffic to services, not something responsible for queueing messages.",
       "S3 and DynamoDB are storage services - one for large files, one for structured data - neither is a queue product."
     ],
-    "scenario": "设计里需要一个队列做异步处理，面试官问你具体选什么、由谁负责运维。",
-    "scenario_en": "Your design needs a queue for asynchronous processing, and the interviewer asks which one you'd pick and who operates it."
+    "scenario": "设计里需要一个队列做异步处理，面试官问你：业界最常被拿来做队列的两个技术是什么，一个自管、一个云托管。",
+    "scenario_en": "Your design needs a queue for asynchronous processing, and the interviewer asks which two technologies are most commonly used as queues — one you operate yourself and one that is cloud-managed."
   },
   {
     "id": "sd-in-a-hurry-key-technologies-042",

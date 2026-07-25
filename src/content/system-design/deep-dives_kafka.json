@@ -467,21 +467,21 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "queue-vs-stream",
-    "scenario": "同一个 Kafka 集群，团队里有人当它是「队列」用，有人当它是「流」用，你要讲清两者的差别。",
-    "scenario_en": "The same Kafka cluster is used as a queue by one team and as a stream by another; you need to explain the difference.",
+    "scenario": "同一个 Kafka 集群（两个团队都用经典 consumer group，不用 share group），一个团队当它是「队列」用，另一个当它是「流」用，你要讲清两者的差别。",
+    "scenario_en": "On the same Kafka cluster (both teams use classic consumer groups, not share groups), one team uses it as a queue and another as a stream; you need to explain the difference.",
     "q": "Kafka「当队列用」和「当流用」的关键区别在哪？",
     "q_en": "What is the key difference between using Kafka as a queue and as a stream?",
     "options": [
       "队列模式不使用 offset 追踪进度，把两种模式的追踪机制想成不一样",
-      "消费模式不同：队列一次性处理，流保留可重放、多组独立读",
+      "消费模式不同：当队列用是一个组内分摊、每条消息在这组处理一次即完成；当流用是多个组各自按 offset 独立读同一份保留日志、可重放",
       "流模式不保证分区内顺序，把消费方式和顺序保证混为一谈",
       "队列模式的吞吐天生更高，把用法差异误当成性能差异"
     ],
     "answer": [
       1
     ],
-    "why": "两种模式都靠 offset 提交追踪进度，区别只在消费方式：一次性处理 vs 保留重放、多组独立读。",
-    "why_en": "Both modes track progress with offset commits; as a queue each message is handled once by one group, while as a stream the retained log can be replayed by many independent groups.",
+    "why": "在经典 consumer group 下，两种用法都靠各组提交的 offset 记录进度，消息也都按 retention 保留、不会因被读而删除。差别只在消费模式：队列用法是一个组内多个消费者分摊 partition，每条消息在这组里处理一次就算完成；流用法是多个组各自独立读、可以把 offset 拨回去重放。",
+    "why_en": "With classic consumer groups, both usages track progress through each group's committed offsets, and messages are kept by retention rather than deleted on read. The only difference is the consumption pattern: as a queue, consumers in one group share partitions and a message is done once that group handles it; as a stream, many groups read independently and can rewind offsets to replay.",
     "tradeoff": "队列模式换来简单的一次性处理 vs 流模式换来可重放和多消费组独立读",
     "tags": [
       "kafka",
@@ -498,7 +498,7 @@
       "rows": [
         [
           "当队列用",
-          "处理完即消费掉",
+          "组内处理一次即完成（日志仍按 retention 保留）",
           "异步任务、顺序队列"
         ],
         [
@@ -510,7 +510,7 @@
     },
     "options_en": [
       "Queue mode does not use offsets to track progress, imagining the two modes track progress differently.",
-      "The consumption pattern differs: a queue processes once, a stream retains and replays for many independent groups.",
+      "The consumption pattern differs: as a queue, one group shares the work and each message is done once that group handles it; as a stream, many groups read the same retained log independently by offset and can replay.",
       "Stream mode does not guarantee order within a partition, conflating consumption pattern with ordering guarantees.",
       "Queue mode inherently has higher throughput, mistaking a usage difference for a performance difference."
     ],
@@ -528,13 +528,13 @@
     ],
     "optionExplanations": [
       "两种模式底层其实都靠 offset 提交记录进度，追踪机制并没有不同。",
-      "这才是真正的分界线：队列场景处理完就算完成，流场景允许保留日志反复重放、多组各自独立读。",
+      "这才是真正的分界线：队列用法是一个组内分摊、每条消息在这组处理一次即完成；流用法是多个组各自独立读保留日志、可重放。",
       "分区内的顺序保证在两种模式下完全一致，跟消费方式无关，这个说法把两件事混了。",
       "吞吐取决于分区数和硬件，不取决于把 Kafka 当队列还是流用，这个因果关系不成立。"
     ],
     "optionExplanations_en": [
       "Both modes actually track progress the same way, through offset commits — the tracking mechanism doesn't differ.",
-      "This is the real dividing line: queue-style treats a message as done once processed, stream-style keeps the log around for replay and lets multiple groups read independently.",
+      "This is the real dividing line: as a queue, one group shares the work and a message is done once that group handles it; as a stream, many groups read the retained log independently and can replay.",
       "Ordering within a partition holds the same way in both modes; it has nothing to do with how you consume.",
       "Throughput depends on partition count and hardware, not on whether you're using Kafka as a queue or a stream — that causal link doesn't hold."
     ]
@@ -1704,12 +1704,12 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "use-cases",
-    "scenario": "Ticketmaster 抢票的虚拟等待队列：用户必须严格按到达顺序被放进购票页。",
-    "scenario_en": "Ticketmaster's virtual waiting room must let users into the purchase page strictly in arrival order.",
+    "scenario": "Ticketmaster 抢票的虚拟等待队列：同一场演出的所有排队请求以「场次 ID」作 key 写入 Kafka（因此落在同一个 partition），用户必须严格按「写入排队系统的先后」被放进购票页。",
+    "scenario_en": "Ticketmaster's virtual waiting room writes every queue request for one show to Kafka keyed by show ID (so they all land in the same partition), and users must be admitted strictly in the order their requests were written to the queue.",
     "q": "为什么 Kafka 适合承载这条等待队列？",
     "q_en": "Why is Kafka a good fit for this virtual waiting queue?",
     "options": [
-      "分区内消息严格有序，天然实现「先到先服务」",
+      "单个 partition 内按写入顺序追加并分配递增 offset，同一场次的请求天然先到先服务",
       "因为 Kafka 存储成本低，适合把等待的用户长期堆在队列里",
       "因为 Kafka 自带消费者组，能自动把排队用户均分给多个消费者",
       "因为 Kafka 吞吐量高，能扛住排队洪峰时的写入压力"
@@ -1717,8 +1717,8 @@
     "answer": [
       0
     ],
-    "why": "需要按序处理是队列的第二个经典信号：Kafka 分区就是有序日志，进队顺序即处理顺序。",
-    "why_en": "Kafka partitions are strictly ordered logs, so users are admitted in exactly the order they arrived.",
+    "why": "Kafka 的顺序保证以 partition 为单位：同一 partition 内按写入顺序分配 offset，跨 partition 没有全局顺序。题面用场次 ID 作 key，同一场的请求都进同一个 partition，offset 顺序就是排队顺序。若改用 user ID 作 key，请求会被打散到多个 partition，只剩「每个用户自己的顺序」，严格 FIFO 就没了。B、C、D 说的是存储、并行、吞吐，都不回答「严格按顺序放人」。注意这里的「先到」是写入 broker 的先后，不是用户点击的时间。",
+    "why_en": "Kafka's ordering guarantee is per partition: offsets follow write order inside one partition, and there is no global order across partitions. Keying by show ID puts every request for that show in one partition, so offset order is the queue order. Keying by user ID would scatter requests across partitions and leave only per-user order, which breaks strict FIFO. B, C and D are about storage, parallelism and throughput; none of them gives strict ordering. \"First\" here means first written to the broker, not first clicked by the user.",
     "whenOtherWins": "若不需要顺序、但需要每条消息独立重试和延迟投递，SQS 这类队列服务更省事。",
     "tradeoff": "分区有序换来严格先到先服务 vs 放弃顺序换来更灵活的独立重试",
     "tags": [
@@ -1727,7 +1727,7 @@
       "ordering"
     ],
     "options_en": [
-      "Within a partition, messages are strictly ordered, giving first-come-first-served for free.",
+      "Within a single partition records are appended in write order with increasing offsets, so requests for one show are naturally first-come-first-served.",
       "Because Kafka storage is cheap, so waiting users can pile up in the queue for a long time.",
       "Because Kafka's consumer groups automatically spread queued users across consumers.",
       "Because Kafka's high throughput can absorb the write spikes of a queue surge."
@@ -1746,13 +1746,13 @@
       }
     ],
     "optionExplanations": [
-      "分区内消息严格按写入顺序处理，用用户到达序号或用户 ID 作 key，天然实现先到先服务。",
+      "同一 partition 内消息严格按写入顺序处理；题面以场次 ID 作 key，同一场的请求都进同一个 partition，所以天然先到先服务。若以 user ID 作 key 会被打散到多个 partition，丢失全局顺序。",
       "存储便宜是真的，但等待队列的关键是顺序,不是能不能堆积。",
       "消费者组解决的是并行消费，不保证「先到先服务」的顺序。",
       "高吞吐扛得住流量,但和先到先服务的顺序保证是两码事。"
     ],
     "optionExplanations_en": [
-      "Messages within a partition process strictly in write order; keying by arrival sequence or user ID naturally gives first-come-first-served.",
+      "Messages within one partition are processed strictly in write order; with show ID as the key, all requests for a show land in the same partition, giving first-come-first-served. Keying by user ID would scatter them across partitions and lose the global order.",
       "Cheap storage is real, but a waiting queue is about ordering, not how long items can pile up.",
       "Consumer groups give parallelism, not the first-come-first-served ordering the queue needs.",
       "High throughput handles load, but that's unrelated to the first-come-first-served guarantee."
@@ -1951,38 +1951,38 @@
     "q": "面试要点：Kafka 单条消息该压在什么体积以内，才不会拖累内存和网络利用率？",
     "q_en": "For interview purposes, how small should one Kafka message stay to avoid hurting memory and network use?",
     "options": [
-      "偏小：10KB，超过就必须拆分，会强制把结构化事件拆得过碎",
-      "推荐上限：1MB，没有硬限制，但建议压在这以下",
-      "偏大：100MB，接近视频文件也能塞，已经逼近建议上限的十倍以上",
-      "过大：1GB，可以直接放小视频，等同于把整段小视频直接塞进消息"
+      "10KB：超过就必须拆分",
+      "约 1MB：这是 broker 默认的单条消息上限（message.max.bytes，可调），实践中也建议压在这以下",
+      "100MB：够塞一个小视频",
+      "1GB：可以直接放整段视频"
     ],
     "answer": [
       1
     ],
-    "why": "没有硬限制但建议压在 1MB 以下：这不是随口的推荐值，而是约束——超过它就该像视频这类大文件一样改存 S3、Kafka 只放指针，否则内存压力和网络利用率会明显变差。",
-    "why_en": "There is no hard limit, but keeping messages under roughly one megabyte is the recommendation, because anything bigger should move to S3 with only a pointer left in Kafka.",
+    "why": "Kafka broker 默认 message.max.bytes 约 1MB，超过会被拒收；虽然可以调大，但大消息会加重 broker 内存、复制和网络压力。所以视频这类大文件应存 S3，Kafka 只传对象 key/URL 这种指针。",
+    "why_en": "Kafka brokers cap a message at about 1MB by default (message.max.bytes) and reject anything larger; you can raise it, but large messages strain broker memory, replication, and network. Large files like videos belong in S3, with Kafka carrying only a pointer such as the object key or URL.",
     "tags": [
       "kafka",
       "message-size",
       "numbers"
     ],
     "options_en": [
-      "Too small: 10KB, and anything larger must be split, forcing structured events to be chopped up unnecessarily.",
-      "Recommended ceiling: 1MB — no hard limit, but this is the practical cap.",
-      "Too large: 100MB, large enough to fit even a small video, already an order of magnitude past the recommended ceiling.",
-      "Way too large: 1GB, enough to hold a short video directly, equivalent to stuffing an entire short video into one message."
+      "10KB: anything larger must be split.",
+      "About 1MB: the broker's default per-message cap (message.max.bytes, configurable), and the practical size to stay under.",
+      "100MB: big enough for a small video.",
+      "1GB: enough to hold a whole video."
     ],
     "optionExplanations": [
       "10KB 会强制把结构化事件拆得过碎，超过这个阈值本不必要地牺牲了消息完整性。",
-      "没有硬限制，但压在这个量级以下能兼顾内存占用和网络吞吐——这是本题该记的经验值。",
-      "100MB 已经逼近视频级体积，会明显拖慢分区处理和网络传输，早该改存对象存储。",
+      "broker 默认 message.max.bytes 约 1MB，超过会被拒收；可以调大，但压在这个量级以下才能兼顾内存占用和网络吞吐。",
+      "100MB 已经是视频级体积，远超默认上限，会明显拖慢分区处理和网络传输，早该改存对象存储。",
       "1GB 基本等于直接把小视频塞进消息，是最该避免的反模式体积。"
     ],
     "optionExplanations_en": [
       "10KB forces structured events to be chopped up unnecessarily fine, sacrificing message integrity for no real gain.",
-      "No hard ceiling exists, but staying under roughly this size keeps memory pressure and network throughput in check — the number worth remembering.",
-      "100MB is already video-sized territory; it visibly drags down partition throughput and network transfer, and should move to object storage instead.",
-      "1GB is basically stuffing a small video straight into a message — exactly the anti-pattern this budget exists to prevent."
+      "The broker's default message.max.bytes is about 1MB and larger messages are rejected; it can be raised, but staying under this size keeps memory pressure and network throughput in check.",
+      "100MB is video-sized territory, far above the default cap; it visibly drags down partition throughput and network transfer, and should move to object storage instead.",
+      "1GB is basically stuffing a small video straight into a message -- exactly the anti-pattern this budget exists to prevent."
     ],
     "termDefinitions": [
       {
@@ -2089,12 +2089,12 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "capacity",
-    "scenario": "面试官问你的设计需不需要担心 Kafka 集群规模，你要先估个单 broker 的承载量级再判断。",
-    "scenario_en": "The interviewer asks whether your design needs to worry about Kafka cluster size, so you first estimate one broker's capacity.",
+    "scenario": "面试官问你的设计需不需要担心 Kafka 集群规模。假设消息约 1KB、producer 批量发送、broker 用常见服务器硬件，你要先报一个单 broker 的粗略锚点再判断。",
+    "scenario_en": "The interviewer asks whether your design needs to worry about Kafka cluster size. Assuming ~1KB messages, batched producers, and commodity server hardware, you first quote a rough single-broker anchor.",
     "q": "经验数量级：一台好硬件的 Kafka broker 大约能承载多少？",
     "q_en": "As a rough order of magnitude, what can one strong Kafka broker handle?",
     "options": [
-      "存 ~1TB、处理 ~100 万条/秒",
+      "存储 TB 量级（由磁盘决定）、吞吐约几十万到 100 万条/秒",
       "存 ~10GB、处理 ~1 千条/秒",
       "存 ~1PB、处理 ~10 亿条/秒",
       "存 ~1MB、处理 ~100 条/秒"
@@ -2102,15 +2102,15 @@
     "answer": [
       0
     ],
-    "why": "粗略锚点：单 broker ~1TB 存储、~1M 消息/秒（取决于消息大小和硬件）。你的估算量级如果远低于这个数，扩展性就不是这轮面试要深入的重点。",
-    "why_en": "A single broker on good hardware stores roughly a terabyte and handles up to about a million messages per second, a hand-wavy but useful anchor for deciding whether scaling deserves deep discussion.",
+    "why": "在 ~1KB 消息、批量写入的前提下，单 broker 粗略锚点是 TB 级存储（取决于挂多少盘）、几十万到百万条/秒。这是数量级锚点不是保证：消息变大、关闭批量或开 acks=all 跨机房复制，吞吐都会明显下降。你的估算远低于这个量级时，扩展性就不是这轮面试的重点。",
+    "why_en": "With ~1KB messages and batched writes, a rough single-broker anchor is terabytes of storage (depending on attached disks) and hundreds of thousands to about a million messages per second. It is an order-of-magnitude anchor, not a guarantee: larger messages, no batching, or acks=all with cross-zone replication cut throughput noticeably. If your estimate is far below this, scaling is not the focus of the round.",
     "tags": [
       "kafka",
       "capacity",
       "numbers"
     ],
     "options_en": [
-      "Store ~1TB, handle ~1M messages/sec",
+      "Storage on the order of terabytes (set by disks), throughput roughly hundreds of thousands to ~1M messages/sec.",
       "About 10GB stored, about 1 thousand messages per second.",
       "About 1PB stored, about 1 billion messages per second.",
       "About 1MB stored, about 100 messages per second."
@@ -3301,21 +3301,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "performance",
-    "scenario": "生产者要连续发送三条消息，你在纠结是三次单独 send() 还是合成一次调用。",
-    "scenario_en": "A producer needs to send three messages in a row, and you are choosing between three sends and one batched call.",
+    "scenario": "生产者（用 KafkaJS 客户端）要连续发送三条消息，你在纠结是三次单独 send() 还是合成一次调用。",
+    "scenario_en": "A producer using the KafkaJS client needs to send three messages in a row, and you are choosing between three sends and one batched call.",
     "q": "提升 Kafka 生产端吞吐的第一个常规手段是？",
     "q_en": "What is the first common way to improve Kafka producer throughput?",
     "options": [
-      "每条消息都单独 send() 以保证实时，让每条消息各自承担一次完整的网络往返",
-      "批量发送：一次 send() 携带多条消息（生产者本来也会在网络层自动攒批）",
+      "每条消息都单独 send() 并等它返回再发下一条，让每条消息各自承担一次完整的网络往返",
+      "批量发送：一次 send() 携带多条消息（其他客户端里等价于调大 batch.size / linger.ms 让 producer 攒批）",
       "增加消费者数量，加消费者并不会让生产端发送更快",
       "把消息格式改成 XML，格式更冗长通常会拖慢而非提升吞吐"
     ],
     "answer": [
       1
     ],
-    "why": "批量摊薄每条消息的网络开销；跨多个 topic 还可以用 sendBatch() 一次发送。",
-    "why_en": "Batching multiple messages into one send call amortizes per-message network overhead, and producers naturally batch under the hood anyway.",
+    "why": "批量把多条消息装进一个 produce request，摊薄的是每次请求的网络往返、请求头和 broker 处理开销，还能让压缩更有效。KafkaJS 里是一次 send() 传 messages 数组；Java 客户端则由 batch.size / linger.ms 在后台按 partition 攒批。",
+    "why_en": "Batching packs many messages into one produce request, spreading per-request round-trip, header and broker-side costs, and making compression more effective. In KafkaJS you pass a messages array to one send(); the Java client batches per partition in the background according to batch.size and linger.ms.",
     "tags": [
       "kafka",
       "performance",
@@ -3324,10 +3324,10 @@
     "codeSample": "await producer.send({\n  topic: 'my_topic',\n  messages: [\n    { key: 'key1', value: 'message1' },\n    { key: 'key2', value: 'message2' },\n  ],\n});",
     "lang": "javascript",
     "options_en": [
-      "Call send() per message for realtime, making each message pay a full network round-trip.",
-      "Batch sends: one send() call carrying multiple messages (producers also batch automatically at the network layer).",
-      "Add more consumers, adding consumers does not make the producer send any faster.",
-      "Switch the message format to XML, a more verbose format usually slows throughput rather than raising it."
+      "Call send() per message and await each before the next, making each message pay a full network round-trip.",
+      "Batch sends: one send() call carrying multiple messages (in other clients, the equivalent is tuning batch.size / linger.ms so the producer batches).",
+      "Add more consumers; adding consumers does not make the producer send any faster.",
+      "Switch the message format to XML; a more verbose format usually slows throughput rather than raising it."
     ],
     "termDefinitions": [
       {
@@ -3338,13 +3338,13 @@
     ],
     "optionExplanations": [
       "逐条 send 每条都吃一次网络往返,吞吐最差;批量才是提吞吐的第一步。",
-      "一次 send() 携带多条消息，摊薄了连接和序列化的固定开销——这是最基础的吞吐优化手段。",
+      "批量把多条消息装进一个 produce request，摊薄每次请求的网络往返、请求头和 broker 处理开销，还能让压缩更有效。",
       "生产端吞吐由生产者和 broker 决定，加消费者不会让发送更快。",
       "XML 比常见的 JSON/二进制格式更冗长，通常会拖慢而不是提升吞吐。"
     ],
     "optionExplanations_en": [
       "Per-message send pays a round-trip each time, the worst for throughput; batching is the first step up.",
-      "One send() carrying multiple messages spreads the fixed cost of connection and serialization across all of them — the most basic throughput lever.",
+      "Batching packs many messages into one produce request, spreading per-request round-trip, header and broker-side costs, and making compression more effective.",
       "Producer-side throughput is decided by the producer and broker; adding consumers doesn't make sending any faster.",
       "XML is more verbose than the usual JSON or binary formats, so it typically hurts rather than helps throughput."
     ]

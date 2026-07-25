@@ -266,13 +266,13 @@
     "optionExplanations": [
       "对：发布者不用关心谁在监听，订阅者上下线也不影响发布方，天然适合聊天这种多对多推送。",
       "把所有用户接到一台服务器只在极小规模或本地原型能扛住，用户量一涨这台机器就是单点故障和容量天花板。",
-      "定时全量拉取延迟高、写库压力大，实时性要求越高这套方案越吃不消。",
+      "定时全量拉取延迟取决于轮询间隔，而且每个客户端反复查库，大部分查询拿不到新消息，带来大量无效读压力；实时性要求越高越吃不消。",
       "CDN 边缘节点是为可缓存的静态内容设计的，逐用户的实时消息路由不是它的强项。"
     ],
     "optionExplanations_en": [
       "Right: publishers never need to know who is listening, and subscribers can connect or drop without touching the publish side, which fits many-to-many chat delivery.",
       "Pinning every user to one server only survives tiny scale or a local prototype; growth turns that box into a single point of failure and a hard capacity ceiling.",
-      "Periodic full pulls add latency and heavy database write load, and the pain grows with how realtime the feature needs to be.",
+      "Periodic full pulls add latency bounded by the poll interval, and every client repeatedly querying the database mostly returns nothing new, creating heavy wasted read load that worsens as the realtime requirement tightens.",
       "CDN edge nodes are built for cacheable static content, not per-user realtime message routing."
     ]
   },
@@ -396,7 +396,7 @@
     "q": "\"管理长任务\"模式的核心做法是？",
     "options": [
       "把 HTTP 请求超时调成 10 分钟",
-      "立即确认+后台处理：入队后秒级返回 job ID",
+      "立即确认+后台处理：校验入队后毫秒级返回 job ID",
       "让客户端一直保持 HTTP 连接，直到后台任务完全跑完",
       "把任务全部放进数据库触发器里跑"
     ],
@@ -409,8 +409,8 @@
     "answer": [
       1
     ],
-    "why": "长任务模式 = 即时确认 + 后台处理：Web 服务器校验请求、把作业推进队列，毫秒级返回 job ID；独立的 worker 池从队列拉活执行。",
-    "why_en": "Split long operations into immediate acknowledgment and background processing: enqueue a job, return a job ID in milliseconds, and let workers execute it.",
+    "why": "长任务模式 = 即时确认 + 后台处理：Web 服务器校验请求、把作业推进队列，毫秒级返回 job ID（常用 202 Accepted），客户端再轮询或通过 SSE/WebSocket 拿结果；独立的 worker 池从队列拉活执行。",
+    "why_en": "The long-running-task pattern is immediate acknowledgment plus background processing: the web server validates the request, enqueues the job, and returns a job ID in milliseconds (typically 202 Accepted); the client then polls or receives the result via SSE/WebSocket, while a separate worker pool executes the job.",
     "whenOtherWins": "作业本来就短时别急着塞队列：同步返回结果架构更简单、背压更清晰、用户体验更好。",
     "tradeoff": "响应快、可独立扩缩 vs 多一层队列和状态跟踪的运维复杂度",
     "tags": [
@@ -430,13 +430,13 @@
     "q_en": "What is the core move in the long-running-task pattern?",
     "scenario_en": "Users submit work such as video transcoding, report generation, or bulk operations. Each job takes far longer than a few seconds, so the request must not wait synchronously.",
     "optionExplanations": [
-      "调大超时只能扛住几十秒级的延迟，分钟级的转码或报表任务照样会撞上新的上限。",
+      "调大超时治标不治本——任务时长不可预知，负载均衡器、代理和移动网络往往有更短的空闲超时，连接一断结果就丢了，而且每个等待中的请求都占着连接资源。",
       "对：请求校验完立刻入队、毫秒级返回 job ID，真正的执行交给独立 worker 池，响应快且两层能各自扩缩。",
       "长连接只适合等待时间短、并发量低的场景，分钟级任务会占满连接池、拖垮并发能力。",
       "数据库触发器适合小数据量的约束检查，塞进耗时业务逻辑既难调试也无法独立扩容。"
     ],
     "optionExplanations_en": [
-      "A longer timeout only buys you tens of seconds; a minute-long transcode or report job will hit a new ceiling anyway.",
+      "A longer timeout treats the symptom — job duration is unpredictable, load balancers, proxies, and mobile networks often enforce shorter idle timeouts, a dropped connection loses the result, and every waiting request ties up connection resources.",
       "Right: validate and enqueue immediately, return the job ID in milliseconds, and let a separate worker pool do the real work, so both layers scale independently.",
       "Holding the connection open only fits short waits with low concurrency; a minute-long job will exhaust the connection pool.",
       "Database triggers fit small constraint checks; stuffing long business logic into one is hard to debug and cannot scale on its own."
@@ -765,14 +765,14 @@
     "q_en": "Which techniques belong in the contention-handling toolbox? (Select all that apply.)",
     "optionExplanations": [
       "挡住单库内的竞态：悲观锁先占住行阻塞别人，OCC 先假设不冲突、写时校验版本号再重试。",
-      "挡住跨服务/跨库的不一致：分布式锁协调共享资源，2PC 让所有参与者先准备好再统一提交。",
-      "挡住乱序执行：把并发请求排进一条队列逐个处理，用牺牲并发度换来严格顺序。",
+      "挡住跨服务/跨库的竞争与不一致：分布式锁让多节点对同一资源互斥访问；2PC 是原子提交协议，让所有参与者先 prepare 再统一 commit 或 abort。",
+      "挡住并发写竞态：把同一资源的请求排进一条队列由单个消费者逐个处理，根本不存在并发写，用吞吐换简单。",
       "只是掩盖了用户感知到的延迟，数据本身该冲突还是会冲突，什么都没挡住。"
     ],
     "optionExplanations_en": [
       "Blocks contention inside one database: pessimistic locking holds a row so others wait, while OCC assumes no conflict and checks a version at write time before retrying.",
-      "Blocks inconsistency across services or databases: distributed locks coordinate a shared resource, and two-phase commit waits for every participant to prepare before committing.",
-      "Blocks out-of-order execution: it funnels concurrent requests through one queue and trades concurrency for strict ordering.",
+      "Blocks contention and inconsistency across services or databases: a distributed lock gives nodes mutually exclusive access to one resource, and two-phase commit is an atomic-commit protocol where every participant prepares before all commit or all abort.",
+      "Blocks concurrent-write races: requests for the same resource go through one queue handled by a single consumer, so there are no concurrent writes at all — trading throughput for simplicity.",
       "This only hides latency the user perceives; the underlying data can still race and corrupt exactly as before."
     ],
     "scenario": "演唱会开票瞬间，同一个座位被上千个请求同时争抢，不能超卖。",
@@ -831,13 +831,13 @@
     "sub": "contention",
     "q": "把数据过早拆分到多个数据库，会带来什么后果？",
     "options": [
-      "把数据库原本替你解决的竞争难题全部揽到了自己身上",
+      "跨分片的事务和锁保障没了，原本单库替你兜住的跨分片竞争与一致性问题要自己解决",
       "性能一定提升，没有任何代价",
       "数据会自动跨库保持一致",
       "只会影响备份和恢复的速度，对数据一致性没有任何影响"
     ],
     "options_en": [
-      "You take on all the contention problems the database was designed to solve for you.",
+      "Transactions and locks no longer span shards, so the cross-shard contention and consistency problems one database used to handle become yours.",
       "Performance always improves with no downside.",
       "Data automatically stays consistent across databases.",
       "It only affects backup and recovery speed and has no impact whatsoever on data consistency."
@@ -845,8 +845,8 @@
     "answer": [
       0
     ],
-    "why": "数据库本身就是围绕竞争问题设计的；一旦拆库，事务、锁等保障就没了，这些难题都归你。拆分有时合理，但别过早——面试官会深挖你是否理解代价。",
-    "why_en": "Splitting data across databases means taking on all the contention problems databases were designed to solve, so avoid doing it prematurely.",
+    "why": "数据库本身就是围绕竞争问题设计的；拆库后，同一个分片内的事务和锁照常可用，但跨分片的操作不再有单库事务和锁兜底，这些难题都归应用自己。拆分有时合理，但别过早——面试官会深挖你是否理解代价。",
+    "why_en": "Databases are built around contention; after a split, transactions and locks still work within one shard, but operations spanning shards lose that single-database protection and the application must handle them. Splitting is sometimes right, just not prematurely — interviewers will probe whether you understand the cost.",
     "tags": [
       "contention",
       "sharding",
@@ -854,13 +854,13 @@
     ],
     "q_en": "What happens if you split data across multiple databases too early?",
     "optionExplanations": [
-      "对：单库时事务和锁替你兜住的竞争问题，拆库后全部变成应用自己要重新解决的难题。",
+      "对：单分片内事务照常，跨分片的事务和锁保障消失，这部分要应用自己重新解决。",
       "拆库常常引入跨库事务和锁的新开销，性能不会无条件变好。",
       "跨库一致性恰恰是拆分后最难的部分，不会自动保持。",
       "拆库影响的不只是备份，事务边界和锁的保障范围也跟着变了。"
     ],
     "optionExplanations_en": [
-      "Right: transactions and locks that a single database handled for you become problems the application must reimplement after a split.",
+      "Right: transactions still work inside one shard, but cross-shard transaction and lock guarantees disappear, and the application must reimplement them.",
       "Splitting often adds cross-database transaction and locking overhead, so performance does not improve unconditionally.",
       "Cross-database consistency is exactly the hardest part after a split; it does not stay consistent on its own.",
       "A split changes more than backups; transaction boundaries and locking guarantees shift too."
@@ -900,21 +900,21 @@
     "q": "典型应用的读写比大约是多少，这对架构投入意味着什么？",
     "options": [
       "1:1，读写投入应该对半开",
-      "起步约 10:1，常达 100:1 以上",
+      "经验上起步约 10:1，常达 100:1 以上，优先投入读路径回报更大",
       "写远多于读，应当优先把预算投到写路径优化上",
       "2:1 封顶，读写优化力度接近"
     ],
     "options_en": [
       "About one to one, so split effort evenly between reads and writes.",
-      "Starting around ten to one and often exceeding one hundred to one, so optimizing the read path pays off far more than the write path.",
+      "As a rule of thumb, starting around ten to one and often exceeding one hundred to one, so optimizing the read path pays off far more.",
       "Writes far outnumber reads, so you should put your budget into optimizing the write path first.",
       "It caps around two to one, so give reads and writes similar effort."
     ],
     "answer": [
       1
     ],
-    "why": "读写比 = 每次写触发的读次数，通常从 10:1 起步、往往到 100:1 以上。想想 Instagram：刷几十张照片要几百次查询，你一天可能只发一帖；这个比例决定了要优先投入读路径（索引、副本、缓存），而不是写路径。",
-    "why_en": "Read-to-write ratios start around ten to one and often exceed one hundred to one, as in Instagram, which tells you to prioritize the read path first.",
+    "why": "图片社交这类 C 端应用，经验上读写比从 10:1 起步、常到 100:1 以上：刷几十张照片触发几百次查询，一天可能只发一帖。所以优先投读路径（索引、副本、缓存）。日志采集、IoT 上报这类写多型系统不适用这个经验值。",
+    "why_en": "For consumer apps like photo sharing, read-to-write ratios typically start around 10:1 and often exceed 100:1 — scrolling fires hundreds of queries while you post once a day — so invest in the read path first (indexes, replicas, caches). Write-heavy systems like log ingestion or IoT telemetry don't follow this rule of thumb.",
     "tags": [
       "scaling-reads",
       "numbers",
@@ -976,7 +976,7 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "scaling-reads",
-    "scenario": "应用从几百用户涨到百万用户，读流量成了第一个瓶颈，你要给出第一步应对措施。",
+    "scenario": "应用从几百用户涨到百万用户，读流量成了第一个瓶颈：压力集中在数据库上的按用户个性化查询，慢查询日志显示几条高频查询在做全表扫描。你要给出第一步应对措施。",
     "q": "最该先做的是？",
     "options": [
       "立刻把数据库水平拆分成多个分片来扩容写入吞吐",
@@ -993,8 +993,8 @@
     "answer": [
       3
     ],
-    "why": "读扩展从库内优化开始：索引和反范式化最便宜、见效快，然后才是只读副本和外部缓存。分片是写扩展的大招，别为读瓶颈先掏出来。",
-    "why_en": "Start scaling reads by optimizing inside the database with indexing and denormalization before replicas or external caches.",
+    "why": "读扩展从库内优化开始：慢查询在全表扫描，加索引和反范式化最便宜、见效最快，然后才是只读副本和外部缓存。分片是写扩展的大招；CDN 对公开静态内容有用，但缓存不了这里的个性化动态查询。",
+    "why_en": "Start scaling reads inside the database: the hot queries are doing full table scans, so indexing and denormalization are the cheapest, fastest wins before replicas or external caches. Sharding is the write-scaling heavy hammer, and a CDN helps public static content but cannot cache these personalized dynamic queries.",
     "whenOtherWins": "库内优化和副本都到位后仍扛不住，或有全球静态内容分发需求时，Redis 缓存与 CDN 才是下一步。",
     "tradeoff": "改动小、见效快 vs 需要引入新组件和运维复杂度",
     "tags": [
@@ -1037,7 +1037,7 @@
       ]
     },
     "q_en": "What should you do first?",
-    "scenario_en": "An application grows from hundreds of users to millions, read traffic becomes the first bottleneck, and you need to propose the first response.",
+    "scenario_en": "An application grows from hundreds of users to millions, and read traffic becomes the first bottleneck: the load sits on per-user personalized database queries, and the slow-query log shows several hot queries doing full table scans. You need to propose the first response.",
     "optionExplanations": [
       "分片适合数据量或写吞吐已经超过单库边界，这里读优化和副本都还没用上，成本明显超前。",
       "重写微服务解决的是团队协作和部署边界问题，要花几个月，扛不住眼前的读压力。",
@@ -1094,15 +1094,15 @@
     "q_en": "What are the three key challenges in scaling reads? (Select all that apply.)",
     "optionExplanations": [
       "挡不住就会读到过期数据：必须定义缓存什么时候失效、谁来触发失效。",
-      "挡不住就会读到落后写入的数据：副本从主库同步总有延迟，要接受或主动处理这个滞后。",
+      "挡不住就会读到落后写入的数据：只读副本通常走异步复制，总会落后主库一段；改同步复制能消除但写延迟上升，所以要么接受滞后，要么对关键读走主库。",
       "挡不住就会打垮单个节点：热门内容被海量并发集中访问同一个 key，这个节点会先扛不住。",
-      "现代云存储的碎片整理通常是托管服务自己处理的，不是读扩展要操心的层面。"
+      "碎片整理是存储层的维护问题，不是读扩展要解决的核心难点。"
     ],
     "optionExplanations_en": [
       "Leave this unhandled and reads return stale data: you must define when the cache invalidates and who triggers it.",
-      "Leave this unhandled and reads fall behind writes: replication from primary to replica always lags, so you must accept or actively manage that gap.",
+      "Leave this unhandled and reads fall behind writes: read replicas usually replicate asynchronously and trail the primary; synchronous replication removes the gap at the cost of write latency, so either accept the lag or route critical reads to the primary.",
       "Leave this unhandled and one node gets crushed: massive concurrent traffic concentrates on a single popular key faster than anything else fails.",
-      "Modern managed storage handles defragmentation itself; it is not a layer read-scaling design needs to worry about."
+      "Defragmentation is a storage-maintenance concern, not a core read-scaling challenge."
     ],
     "scenario": "新闻门户首页读写比约 1000:1，一条头条可能被上百万用户在同一分钟打开。",
     "scenario_en": "A news portal home page has a read-to-write ratio around a thousand to one, and one headline can be opened by millions of users within the same minute."
@@ -1186,13 +1186,13 @@
     ],
     "q_en": "What two properties should a good partition key satisfy?",
     "optionExplanations": [
-      "自增键保证唯一和递增，但新写入总落在最后一个分片，反而制造出热点。",
+      "全局唯一自增只解决「标识」问题；按范围分区时它还会让新写入全挤到最后一个分片，而即便用哈希分区摊匀了，同一会话的消息也会被打散到不同分片，拉整段历史就要跨片查询。",
       "短整数类型省存储空间，但和负载是否均匀分布完全是两回事。",
       "对：既要让写入均匀摊开避免热点分片，又要让相关数据落在同一片避免跨片查询，两头都顾到才是好键。",
       "按时间排序对范围查询友好，但高并发写入会挤在同一个时间段，同样会造热点。"
     ],
     "optionExplanations_en": [
-      "An auto-increment key guarantees uniqueness and ordering, but every new write lands on the last shard, which creates a hot spot.",
+      "A globally unique auto-increment key only solves identity; under range partitioning it also piles every new write onto the last shard, and even when hashed to spread load it scatters one conversation's messages across shards, forcing cross-shard reads to pull a history.",
       "A short integer type saves storage space, but that has nothing to do with whether load spreads evenly.",
       "Right: spread writes evenly to avoid a hot shard while keeping related rows on the same shard to avoid cross-shard joins — a good key does both.",
       "Sorting by time helps range queries, but high-concurrency writes then pile into the same time window and create the same kind of hot spot."
@@ -1360,13 +1360,13 @@
       "应用代理适合小文件、低流量场景，GB 级字节全部穿服务器只会把它拖成瓶颈。",
       "数据库不是为大二进制设计的，把视频切碎存进表里会让库迅速膨胀变慢。",
       "对：服务器只签发限时授权的预签名 URL，字节直接在客户端和存储之间走，服务器负载和文件大小脱钩。",
-      "FTP 中转缺少断点续传、进度跟踪这些现代对象存储自带的能力，只适合遗留系统过渡。"
+      "FTP 中转只是把瓶颈从应用服务器挪到 FTP 服务器，字节仍要穿过一台中转机；它也没有浏览器原生支持、限时限范围的授权和 CDN 分发，只适合遗留系统过渡。"
     ],
     "optionExplanations_en": [
       "App proxying fits small, low-traffic files; routing gigabyte-scale bytes through the server turns it into the bottleneck.",
       "Databases are not built for large binaries; chopping video into table rows bloats and slows the database fast.",
       "Right: the server only issues a time-limited presigned URL, bytes flow directly between client and storage, and server load stops scaling with file size.",
-      "FTP relaying lacks resumable uploads and progress tracking that modern object storage gives you for free; it only fits legacy transition periods."
+      "An FTP relay just moves the bottleneck from the app server to the FTP server — bytes still pass through a middle box — and it lacks native browser support, time-limited scoped authorization, and CDN distribution; it only fits legacy transitions."
     ]
   },
   {
@@ -1377,13 +1377,13 @@
     "sub": "large-blobs",
     "q": "大文件模式（客户端直传 + CDN 下载）的关键挑战是什么？如何缓解？",
     "options": [
-      "元数据与存储状态同步，靠事件通知对齐",
+      "元数据与存储状态不同步（含上传失败留下的半成品），靠存储事件通知对齐、再用对账兜底",
       "预签名 URL 永远不会过期",
       "CDN 从架构上根本无法支持大文件的分发下载",
       "客户端从架构上无法直连 S3"
     ],
     "options_en": [
-      "Keeping database metadata in sync with blob storage and handling upload failures, mitigated by storage event notifications.",
+      "Database metadata drifting from blob storage (including half-finished failed uploads), mitigated by storage event notifications plus a reconciliation job as backstop.",
       "Presigned URLs never expire.",
       "CDNs are architecturally unable to support distributing and downloading large files.",
       "Clients are architecturally unable to connect directly to S3."
@@ -1391,22 +1391,22 @@
     "answer": [
       0
     ],
-    "why": "文件本体绕过了服务器，数据库里的元数据就可能与存储脱节：要处理上传失败、生命周期管理，并靠存储服务的事件通知把应用状态拉齐。",
-    "why_en": "The key challenges are keeping database metadata in sync with blob storage and handling upload failures, mitigated by storage event notifications.",
+    "why": "文件字节绕过了服务器，数据库里的元数据就可能和存储里的真实对象脱节（上传失败、半途放弃都会留下不一致）。主手段是让存储服务在对象写入后发事件通知、由后端更新元数据状态；事件可能延迟或丢失，所以再配一个定期对账 job 兜底。",
+    "why_en": "Because file bytes bypass the server, database metadata can drift from the real objects in storage, including after failed or abandoned uploads. The main fix is storage event notifications that let the backend update metadata state once an object lands; since events can be delayed or lost, a periodic reconciliation job acts as a backstop.",
     "tags": [
       "large-blobs",
       "state-sync",
       "event-notifications"
     ],
-    "q_en": "What is the key challenge in the large-blob pattern, and how do you mitigate it?",
+    "q_en": "What is the key challenge in the large-blob pattern (direct client upload plus CDN download), and how do you mitigate it?",
     "optionExplanations": [
-      "对：字节走的是另一条路，数据库这边保存的记录容易和存储里的真实情况脱钩，需要靠事件通知去对齐。",
+      "对：字节走的是另一条路，数据库这边保存的记录容易和存储里的真实情况脱钩，需要靠事件通知去对齐，再用对账 job 兜底事件丢失或延迟。",
       "预签名 URL 应该短期有效，长期不过期反而会留下访问控制漏洞。",
       "CDN 恰恰是给大文件下载做全球分发用的，这个说法是反的。",
       "客户端直连对象存储正是这套模式的核心动作，说它连不上是错的。"
     ],
     "optionExplanations_en": [
-      "Right: bytes bypass the server, so database metadata can drift from actual storage state, and you need event notifications to reconcile the two.",
+      "Right: bytes bypass the server, so database metadata can drift from actual storage state; use event notifications to reconcile the two, with a reconciliation job as backstop for lost or delayed events.",
       "Presigned URLs should be short-lived; staying valid forever would leave an access-control hole instead of fixing anything.",
       "CDNs exist precisely to distribute large-file downloads globally, so this claim is backwards.",
       "Direct client-to-storage connection is the core move of this pattern, so claiming it cannot connect is wrong."
@@ -1420,26 +1420,26 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "multi-step-processes",
-    "scenario": "订单履约流程横跨多个服务、耗时长，必须扛得住失败、重试和外部依赖抖动，还要保证不重复执行。",
-    "q": "现代的推荐方案是？",
+    "scenario": "订单履约流程横跨多个服务、耗时长，必须扛得住失败、重试和外部依赖抖动；每个外部调用都做了幂等，团队希望失败后能从断点自动恢复，而不是各服务自己手写重试。",
+    "q": "哪种做法最符合这些约束？",
     "options": [
       "每个服务都各自存一份状态、手工编写重试与错误处理的逻辑",
-      "用工作流引擎（如 Temporal）自动管理状态和重试",
+      "用持久化工作流引擎（如 Temporal、AWS Step Functions）管理状态、失败恢复和重试",
       "用 cron 每分钟检查一遍所有订单",
       "把整个流程塞进一个数据库事务"
     ],
     "options_en": [
       "Each service stores its own copy of state and hand-writes its own retry and error-handling logic.",
-      "Use a workflow engine like Temporal or AWS Step Functions to automatically manage state, failure recovery, and retries.",
+      "Use a durable workflow engine such as Temporal or AWS Step Functions to manage state, failure recovery, and retries.",
       "Use a cron job that checks every order once a minute.",
       "Squeeze the entire flow into a single database transaction."
     ],
     "answer": [
       1
     ],
-    "why": "从状态散落各处、手工错误处理，转向声明式工作流：系统持久化状态、自动恢复和重试，并保留完整审计轨迹。外部 activity 仍可能重试，端到端效果要靠幂等或补偿才能接近 exactly-once。",
-    "why_en": "Workflow engines like Temporal manage durable state, recovery, and retries automatically, though activities still need idempotency for exactly-once-like effects.",
-    "whenOtherWins": "流程简单、只在单服务内时，简单的单机编排就够了；事件溯源则是让每步发事件触发下一步的分布式替代方案。",
+    "why": "工作流引擎把每一步的状态持久化下来，失败后从断点自动恢复和重试，还自带完整执行历史。注意引擎对 activity 是 at-least-once，会重试；端到端「不重复副作用」要靠 activity 自身幂等，这正是题面给出的前提。",
+    "why_en": "A workflow engine durably persists each step's state, resumes and retries automatically after failures, and keeps a full execution history. Activities are still at-least-once and may be retried, so end-to-end \"no duplicate effects\" relies on the activities being idempotent, which the scenario states.",
+    "whenOtherWins": "流程简单、只在单服务内时，简单的单机编排就够了；若想不要中心引擎，可用事件驱动的编舞式编排（choreography）：每步发事件触发下一步。",
     "tradeoff": "自动状态管理和审计 vs 引入工作流引擎的学习和运维成本",
     "tags": [
       "multi-step-processes",
@@ -1501,8 +1501,8 @@
         "meaningEn": "Idempotency means repeating the same operation multiple times has the same effect as doing it once, which is essential for safe retries in distributed systems."
       }
     ],
-    "q_en": "What is the modern recommended approach?",
-    "scenario_en": "An order-fulfillment flow spans multiple services, runs for a long time, and must survive failures, retries, and flaky external dependencies without duplicate effects.",
+    "q_en": "Which approach best fits these constraints?",
+    "scenario_en": "An order-fulfillment flow spans multiple services, runs for a long time, and must survive failures, retries, and flaky external dependencies; every external call is already idempotent, and the team wants automatic resume-from-checkpoint after failures instead of each service hand-writing its own retries.",
     "optionExplanations": [
       "手写状态适合短流程、失败率低的场景，外部依赖一抖动，各服务各自为政就容易状态不一致。",
       "对：把状态、重试、恢复都交给引擎持久化管理，还自带完整执行历史，比手写错误处理靠谱得多。",
@@ -1522,7 +1522,7 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "multi-step-processes",
-    "q": "事件溯源如何实现多步流程的分布式协调？",
+    "q": "不引入中心协调者时，事件驱动的编舞式编排（choreography）如何推进多步流程？",
     "options": [
       "每一步轮询数据库检查前一步是否完成",
       "由一台中心服务器同步调用每一步",
@@ -1538,13 +1538,13 @@
     "answer": [
       2
     ],
-    "why": "事件溯源提供了分布式的编排方式：每个步骤发出事件，事件再触发下一步——没有中心协调者，链条自然向前推进。",
-    "why_en": "With event sourcing each step emits events that trigger the subsequent steps, coordinating the workflow in a distributed way.",
+    "why": "编舞式编排（choreography）里，每个服务完成自己那一步就发出事件，下游服务订阅并触发下一步，链条自然向前推进，没有中心协调者。注意它和 event sourcing（把状态存成事件日志、靠回放得到当前状态）是两个层次的概念，可以组合使用，但不能互相替代。",
+    "why_en": "In event-driven choreography each service emits an event when its step finishes, and downstream services subscribe and trigger the next step, so the chain advances without a central coordinator. This is a different layer from event sourcing, which stores state as an event log and derives the current state by replay; the two can be combined but are not the same thing.",
     "tags": [
       "multi-step-processes",
       "event-sourcing"
     ],
-    "q_en": "How does event sourcing coordinate a multi-step process in a distributed way?",
+    "q_en": "Without a central coordinator, how does event-driven choreography move a multi-step process forward?",
     "optionExplanations": [
       "轮询要不断查数据库确认上一步是否完成，引入延迟还加重数据库负担。",
       "中心节点同步调用每一步会让这台服务器变成单点瓶颈，跟去中心化的初衷相反。",
@@ -1567,9 +1567,9 @@
     "topic": "system-design",
     "sub": "multi-step-processes",
     "q": "补全多步流程模式的关键洞见：",
-    "text": "从散落的状态管理和手工错误处理，转向{{声明式}}的工作流定义：系统持久化状态和重试，业务侧通过{{幂等}}让 effect 接近 exactly-once，并维护完整的{{审计}}轨迹。",
-    "why": "这是多步流程模式的精髓：把状态、重试、恢复从业务代码里抽走，交给工作流系统统一管理；外部副作用仍要靠幂等、事务或补偿保证业务效果。订单履约、用户注册、支付处理都是典型场景。",
-    "why_en": "The key insight is moving to declarative workflows where the system manages durable state and retries, while idempotent activities keep the effect exactly-once-like.",
+    "text": "从散落在各服务的状态和手写错误处理，转向由{{工作流引擎}}统一编排：它持久化每一步状态并自动重试；由于步骤可能被重试，业务侧要让每个外部调用满足{{幂等}}，effect 才能接近 exactly-once；引擎还保留完整的执行历史，作为{{审计}}轨迹。",
+    "why": "多步流程模式的精髓是把状态、重试、恢复从业务代码里抽走，交给工作流引擎（Temporal 是代码定义的工作流，Step Functions 是声明式状态机）。引擎会重试步骤，所以外部副作用要靠幂等（或补偿）才能接近 exactly-once；执行历史天然就是审计轨迹。",
+    "why_en": "The essence of the multi-step-process pattern is pulling state, retries, and recovery out of business code into a workflow engine (Temporal defines workflows in code, Step Functions as a declarative state machine). Because the engine retries steps, external side effects need idempotency (or compensation) to get exactly-once-like effects, and the execution history doubles as an audit trail.",
     "tags": [
       "multi-step-processes",
       "exactly-once",
@@ -1737,32 +1737,32 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "proximity",
-    "scenario": "决定是否要为一个按位置搜索的功能引入专门的地理空间索引，而不是直接扫描全部实体。",
+    "scenario": "一个按位置搜索的功能，查询频率中等、延迟要求宽松；要不要为它额外部署一个专用的地理空间索引服务（如 Elasticsearch geo），而不是在现有存储里直接扫描全部实体算距离？",
     "q": "实体数量到什么量级，专门的地理空间索引才开始划算？",
     "options": [
-      "只要超过 10 个实体就必须上专用索引",
-      "上千个就必须上专用索引",
-      "几十万到百万级才划算；约 1000 条全扫更简单",
-      "任何规模都必须无条件上专用的地理空间索引服务才行"
+      "只要超过 10 个实体就必须上专用索引服务",
+      "上千个就必须上专用索引服务",
+      "经验上约 1000 条全扫更简单；通常到几十万~百万级，专用索引服务才划算",
+      "任何规模都必须无条件上专用的地理空间索引服务"
     ],
     "options_en": [
-      "You must add a dedicated index as soon as you pass ten entities.",
-      "You must add a dedicated index once you pass a thousand entities.",
-      "It pays off at hundreds of thousands to millions of entities; around a thousand, a full scan is simpler and cheaper.",
-      "You must always use a dedicated geospatial index at any scale, unconditionally."
+      "You must add a dedicated index service as soon as you pass ten entities.",
+      "You must add a dedicated index service once you pass a thousand entities.",
+      "As a rule of thumb, around a thousand entities a full scan is simpler; a dedicated index service usually pays off at hundreds of thousands to millions.",
+      "You must always use a dedicated geospatial index service at any scale, unconditionally."
     ],
     "answer": [
       2
     ],
-    "why": "门槛在规模：约 1000 条时全表扫描 O(n) 距离计算本身够快，专用索引的部署运维开销不划算；几十万到百万级时，索引才能把候选实体从全量降到附近几个区，这个量级是决定要不要引入专用索引的基准。",
-    "why_en": "Geospatial indexes only pay off at hundreds of thousands or millions of items; with about a thousand items a full scan is better and simpler.",
+    "why": "在查询频率中等的前提下，约 1000 条时全扫 O(n) 算距离足够快，额外部署一个索引服务的运维成本不划算；通常到几十万~百万级，索引能把候选从全量缩到附近几个格子，收益才盖过成本。查询 QPS 很高时阈值会更低；如果数据库自带地理索引（如 PostGIS），建索引成本很低，可以更早用。",
+    "why_en": "With moderate query volume, a full O(n) distance scan over about a thousand entities is fast enough, so running a separate index service isn't worth its ops cost; at hundreds of thousands to millions, the index narrows candidates to nearby cells and finally pays off. High query rates lower the threshold, and a built-in database geo index (like PostGIS) is cheap enough to use earlier.",
     "tags": [
       "proximity",
       "numbers",
       "overengineering"
     ],
     "q_en": "At what scale does a dedicated geospatial index start to pay off?",
-    "scenario_en": "You are deciding whether a location-search feature needs a dedicated geospatial index instead of scanning all entities.",
+    "scenario_en": "A location-search feature has moderate query volume and a relaxed latency target. Should you stand up a separate geospatial index service (for example Elasticsearch geo) instead of scanning all entities in your existing store and computing distances?",
     "optionExplanations": [
       "十条左右上专用索引纯属过度设计，全表扫描的开销比部署一个地理索引服务低得多。",
       "千级规模全表扫描本身已经够快，这时候引入专用索引换来的是运维成本而非收益。",
@@ -1967,24 +1967,24 @@
     "topic": "system-design",
     "sub": "contention",
     "scenario": "订票系统里用户点选座位后有 5 分钟结账窗口，期间这个座位必须对别人显示为不可订，防止双订。",
-    "q": "该用原子操作/事务，还是显式锁来防双订？",
+    "q": "要在结账窗口内占住座位、防止双订，该用哪种机制？",
     "options": [
-      "用一条原子事务做条件更新：余量>0 才减一",
-      "用显式锁把座位标记为「保留中」，占住整个结账窗口",
+      "用一条原子条件更新直接把座位写成「已售」，结账窗口里不保留",
+      "给座位设一个带过期时间（TTL）的「保留中」状态或锁，占住整个结账窗口，到期自动释放",
       "什么协调都不加，读到有票就直接写已售",
       "上分布式两阶段提交（2PC），跨服务锁定座位"
     ],
     "options_en": [
-      "Use one atomic transaction with a conditional update: decrement only if remaining > 0.",
-      "Use an explicit lock that marks the seat 'reserved' for the whole checkout window.",
+      "Use one atomic conditional update to mark the seat 'sold' immediately, with no hold during checkout.",
+      "Put the seat into a 'reserved' state or lock with a TTL that holds it for the whole checkout window and auto-releases on expiry.",
       "Add no coordination at all and just write 'sold' once you read that a seat is free.",
       "Use two-phase commit (2PC) to lock the seat across services."
     ],
     "answer": [
       1
     ],
-    "why": "能用一条条件更新表达的变更就用原子事务；但要在跨多步、含用户等待的结账窗口占住座位，单事务开着不现实，得用显式锁/预留。代价：锁的获取、释放、超时(TTL)全归你管，忘释放会卡死座位。",
-    "why_en": "Use an atomic transaction for a single conditional write; to hold a seat across a multi-step checkout window you need an explicit lock, and you own its release and timeout.",
+    "why": "需求是「先占位、几分钟后再确认」，所以要的是一个跨多步、带过期时间的预留，而不是一次性的售出写。预留通常就用条件写来抢：只有座位是 available 或旧预留已过期时才能写成 reserved。别用持有 5 分钟的数据库事务或行锁。代价是 TTL、释放、过期清理都归你管。",
+    "why_en": "The requirement is \"hold now, confirm minutes later\", so you need a multi-step reservation with an expiry rather than a one-shot sold write. The reservation itself is usually claimed with a conditional write that succeeds only if the seat is available or the old hold has expired. Do not hold a database transaction or row lock for five minutes. The cost is that you own the TTL, release, and expiry cleanup.",
     "whenOtherWins": "若整个变更能压成一步条件写（如秒杀里直接把库存原子减一、没有用户等待窗口），原子事务反而更好，省掉锁的生命周期。",
     "tradeoff": "单步原子写、无锁生命周期 vs 能跨多步等待窗口占住资源、但要管获取/释放/超时",
     "tags": [
@@ -1992,7 +1992,7 @@
       "locking",
       "transactions"
     ],
-    "q_en": "Atomic operation/transaction, or an explicit lock, to prevent double-booking?",
+    "q_en": "Which mechanism holds the seat through the checkout window and prevents double-booking?",
     "termDefinitions": [
       {
         "term": "原子操作",
@@ -2019,14 +2019,14 @@
     ],
     "scenario_en": "In a ticketing system, after a user picks a seat they get a 5-minute checkout window during which that seat must appear unavailable to everyone else to prevent double-booking.",
     "optionExplanations": [
-      "原子条件更新（余量>0 才减一）适合一步完成的库存扣减；但它占不住「先保留、几分钟后再确认」的结账窗口，本题正需要跨步保留。",
-      "对：座位要在整个结账窗口对别人显示为已占，这种跨多步、含等待的资源保留只能靠显式锁/预留来占位。",
+      "原子条件更新直接写成已售适合一步完成的扣减；但它不保留，占不住「先保留、几分钟后再确认」的结账窗口，本题正需要跨步保留。",
+      "对：座位要在整个结账窗口对别人显示为已占，需要一个带 TTL 的预留（通常用条件写来抢占），到期自动释放；不要靠持有数据库事务或行锁 5 分钟。",
       "不加协调会让两个请求都读到有票并都写成已售，直接超卖，正是要避免的竞态。",
       "2PC 用于跨多个数据库/服务的原子提交；这里座位数据在单库内，引入 2PC 是过度设计，徒增协调开销与延迟。"
     ],
     "optionExplanations_en": [
-      "An atomic conditional decrement fits a one-shot stock deduction, but it cannot hold a 'reserve now, confirm minutes later' checkout window, which is exactly what this case needs.",
-      "Right: the seat must show as taken to others for the entire checkout window, and that kind of multi-step, wait-bearing reservation can only be held by an explicit lock or reservation.",
+      "An atomic conditional update that writes 'sold' fits a one-shot deduction, but it holds nothing, so it cannot cover a 'reserve now, confirm minutes later' checkout window, which is exactly what this case needs.",
+      "Right: the seat must show as taken to others for the whole checkout window, which calls for a reservation with a TTL (usually claimed with a conditional write) that auto-releases on expiry; do not hold a database transaction or row lock for five minutes.",
       "Adding no coordination lets two requests both read a free seat and both write 'sold', oversell directly, the race this pattern exists to prevent.",
       "2PC is for atomic commits across multiple databases or services; here the seat data lives in one database, so 2PC is over-engineering that only adds coordination overhead and latency."
     ]

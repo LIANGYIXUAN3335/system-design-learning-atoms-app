@@ -1154,25 +1154,25 @@
     "options": [
       "查询涉及的表越多、聚合越复杂，就该预留更低的吞吐预算",
       "简单索引查找的绝对数字可以直接当作生产 SLA 承诺",
-      "全表扫描的成本主要取决于数据是否能装进内存",
+      "全表扫描的成本随扫描行数增长，数据是否已在内存会显著改变它的速度",
       "多表 join 一定比简单索引查找快，因为省掉了多次查询"
     ],
     "answer": [
       0,
       2
     ],
-    "why": "这些是粗略估算锚点，不是精确 SLA：join/聚合越复杂，该留的吞吐预算越低；全表扫描快不快，关键在数据是否装得进内存。",
-    "why_en": "These are rough interview anchors, not SLAs: heavier joins need a lower throughput budget, and full-scan speed depends on whether data fits in memory.",
+    "why": "这些是估算锚点，不是 SLA：join/聚合越复杂，吞吐预算越低；全表扫描先看扫多少行，再看数据在内存还是在磁盘——同样的行数，读磁盘会慢得多。B 把估算当承诺，D 把更重的 join 说成更快。",
+    "why_en": "These are estimation anchors, not SLAs: heavier joins and aggregates need a lower throughput budget; full-scan cost depends first on rows scanned and then on whether data is in memory or on disk, with disk reads being much slower for the same rows. B treats an estimate as a commitment, and D calls the heavier join faster.",
     "tags": [
       "postgres",
       "numbers",
       "read-performance"
     ],
-    "scenario": "已知：单核简单索引查找约 5万+/秒，多表 join 约千到万级/秒，复杂聚合仅百到低千级/秒（粗略基准，非精确值）。",
+    "scenario": "已知（粗略基准，非精确值）：单核简单索引查找约 5 万+/秒，多表 join 约千到万级/秒，复杂聚合仅百到低千级/秒；全表扫描的耗时随扫描行数增长，数据已在内存（shared_buffers/OS cache）时比需要读磁盘快得多。",
     "options_en": [
       "Expect a lower throughput budget as a query touches more tables and aggregation.",
       "Treat the raw indexed-lookup number as a guaranteed production SLA.",
-      "Full-scan cost mainly depends on whether the data fits in memory.",
+      "Full-scan cost grows with rows scanned, and whether the data is already in memory changes its speed significantly.",
       "A multi-table join is always faster than a simple indexed lookup because it saves round trips."
     ],
     "termDefinitions": [
@@ -1184,17 +1184,17 @@
       }
     ],
     "q_en": "What design judgments follow from these Postgres throughput anchors?",
-    "scenario_en": "Assume rough anchors: about 50k+ simple indexed lookups per second on one core, thousands to tens of thousands per second for multi-table joins, and hundreds to low thousands per second for complex aggregates.",
+    "scenario_en": "Rough anchors (not exact): about 50k+ simple indexed lookups per second on one core, thousands to tens of thousands per second for multi-table joins, and hundreds to low thousands per second for complex aggregates; full-scan time grows with rows scanned and is much faster when the data is already in memory (shared_buffers / OS cache) than when it must be read from disk.",
     "optionExplanations": [
       "join、聚合越复杂，涉及的表和计算越多，能扛住的吞吐自然要往下调，不能直接套简单查找的数字。",
       "这些是粗略基准，不是对外承诺；把它写进 SLA 等于把估算当成保证。",
-      "全表扫描快不快，关键看数据能不能整个装进内存——装得下就是内存速度，装不下就要挨着吃磁盘 I/O。",
+      "全表扫描的成本首先随扫描行数增长，其次看数据是在内存还是要读磁盘——同样的行数，装得进内存时快得多，要读磁盘就慢得多。",
       "多表 join 要额外做表连接和匹配，比单次索引查找更重，不会因为「省了几次往返」就更快。"
     ],
     "optionExplanations_en": [
       "The more tables and aggregation a query touches, the lower the sustainable throughput — you can't apply the simple-lookup number to it.",
       "These are rough benchmarks, not a commitment; writing the raw number into an SLA treats an estimate as a guarantee.",
-      "Whether a full scan is fast mostly comes down to whether the data fits in memory — if it does, you get memory speed; if not, you eat disk I/O.",
+      "Full-scan cost grows first with rows scanned, then depends on whether data is in memory or must come from disk -- the same rows run much faster in memory and much slower from disk.",
       "A multi-table join does extra work matching rows across tables, which makes it heavier than a single indexed lookup, not faster."
     ]
   },
@@ -1206,7 +1206,7 @@
     "sub": "scale-limits",
     "q": "这些规模量级对应哪些正确的设计判断？",
     "options": [
-      "working set 超过内存后，性能会明显下降，要考虑加内存或裁剪热数据",
+      "working set 超过内存后性能会明显下降，要考虑加内存或把冷数据归档/分离出去",
       "只要行数不到 1 亿，join 无论多复杂都不会变慢",
       "接近这些量级时该开始评估分区/分片，而不是等硬件顶不住",
       "这些是 Postgres 的硬性上限，超过就必须换数据库"
@@ -1215,16 +1215,16 @@
       0,
       2
     ],
-    "why": "这些是经验参考、不是硬上限：working set 超过内存会明显变慢；接近这些量级就该提前规划分区/分片，而不是等顶不住。",
-    "why_en": "These are rules of thumb, not hard limits — plan partitioning or sharding before you hit them, and watch for the working set exceeding memory.",
+    "why": "这些是经验参考、不是硬上限。热数据超过内存后缓存命中率下降、更多查询落到磁盘，要加内存或把冷数据归档出去；接近这些量级就提前评估分区/分片。B 忽略了 join 复杂度和索引，D 把经验值当硬上限。",
+    "why_en": "These are rules of thumb, not hard limits. Once the hot working set outgrows memory, cache hit rate drops and more queries hit disk, so add memory or archive cold data; approaching these scales is the time to evaluate partitioning or sharding. B ignores join complexity and indexing, and D treats rules of thumb as hard ceilings.",
     "tags": [
       "postgres",
       "numbers",
       "scale"
     ],
-    "scenario": "已知：单表超 1 亿行开始难管理，全文搜索能撑到千万级文档，复杂 join 在千万级行以上更吃力（粗略参考）。",
+    "scenario": "已知（粗略参考）：单表超 1 亿行开始难管理，全文搜索能撑到千万级文档，复杂 join 在千万级行以上更吃力；查询快慢还取决于热数据（working set）能否放进内存。",
     "options_en": [
-      "Once the working set exceeds memory, performance drops noticeably, so add memory or trim hot data.",
+      "Once the working set exceeds memory, performance drops noticeably, so add memory or archive/separate cold data.",
       "As long as row count is under 100 million, joins never get slower no matter how complex.",
       "Near these scales, start evaluating partitioning or sharding instead of waiting until hardware chokes.",
       "These are hard ceilings for Postgres, and you must switch databases once you cross them."
@@ -1237,15 +1237,15 @@
       }
     ],
     "q_en": "What design judgments follow from these Postgres scale anchors?",
-    "scenario_en": "Assume rough anchors: one table above 100 million rows gets hard to manage, built-in full-text search can reach tens of millions of documents, and complex joins get harder above tens of millions of rows.",
+    "scenario_en": "Rough anchors: one table above 100 million rows gets hard to manage, built-in full-text search reaches tens of millions of documents, and complex joins get harder above tens of millions of rows; query speed also depends on whether the hot working set fits in memory.",
     "optionExplanations": [
-      "热数据一旦超过内存容量，缓存命中率下降，查询就要更多碰磁盘，这时该加内存或裁掉冷数据。",
+      "热数据一旦超过内存容量，缓存命中率下降，查询就要更多碰磁盘，这时该加内存，或把冷数据归档/分离出去，让热数据重新装回内存。",
       "行数只是其中一个变量，join 的复杂度、涉及表数和索引情况同样会拖慢查询，不是低于 1 亿就稳。",
       "接近这些量级时提前评估分区或分片，能在硬件顶不住之前就把压力分散开。",
       "这些是经验参考，不是写死的硬上限；很多团队靠优化、分区、分片继续用 Postgres 撑过这些量级。"
     ],
     "optionExplanations_en": [
-      "Once the hot working set outgrows memory, cache hit rate drops and queries hit disk more — that's when you add memory or trim cold data.",
+      "Once the hot working set outgrows memory, cache hit rate drops and queries hit disk more -- that's when you add memory or archive/separate cold data so the hot set fits again.",
       "Row count is only one variable; join complexity, table count, and indexing still slow things down, so staying under 100M rows alone doesn't guarantee speed.",
       "Evaluating partitioning or sharding as you approach these scales spreads the load before hardware actually chokes.",
       "These are rules of thumb, not fixed ceilings; plenty of teams keep running Postgres past these scales with tuning, partitioning, and sharding."
@@ -1380,39 +1380,39 @@
     "options": [
       "事务触碰的表/索引越多，能承受的写入速度就该预期越低",
       "只要不建索引，insert 吞吐就能突破单核千万级/秒",
-      "如果业务写入量明显超过单核这个量级，该考虑 sharding 而不是死磕单节点",
+      "写入量在用满多核、批量写之后仍明显超过单节点上限，才该考虑 sharding",
       "这些数字是精确的生产环境保证值，可以直接写进 SLA"
     ],
     "answer": [
       0,
       2
     ],
-    "why": "这些是粗略基准，不是精确保证：事务碰的表/索引越多，预期吞吐越低；写入量明显超单节点量级时该考虑 sharding。",
-    "why_en": "These are rough benchmarks, not guarantees: expect lower throughput as a transaction touches more tables, and shard once writes clearly exceed one node's ceiling.",
+    "why": "这些是粗略基准：事务碰的表和索引越多，每次写的维护越重，吞吐越低。超过单核数字先用多核并发、批量 insert/COPY；用满单节点仍不够，才考虑 sharding。B 夸大了数量级，D 把估算当承诺。",
+    "why_en": "These are rough benchmarks: the more tables and indexes a transaction touches, the heavier each write and the lower the throughput. Beyond the single-core figure, first use concurrency across cores and batched INSERT/COPY; only when a fully used single node still falls short should you consider sharding. B inflates the scale, and D treats an estimate as a commitment.",
     "tags": [
       "postgres",
       "numbers",
       "write-throughput"
     ],
-    "scenario": "已知：单核简单 insert 约 5000/秒，带索引更新约 1000-2000/秒，复杂多表事务只有几百/秒（粗略基准）。",
+    "scenario": "已知（粗略基准）：单核简单 insert 约 5000/秒，带索引更新约 1000-2000/秒，复杂多表事务只有几百/秒；一台多核主库在批量写、调过 WAL 后，总写入大约是单核的若干倍到十几倍，再往上就是单节点上限。",
     "options_en": [
       "Expect lower sustainable write throughput as a transaction touches more tables and indexes.",
-      "Without any indexes, insert throughput can jump to tens of millions per second per core.",
-      "If write volume clearly exceeds this single-core scale, consider sharding instead of forcing one node.",
+      "Without any indexes, insert throughput can reach tens of millions per second per core.",
+      "Consider sharding only when write volume still clearly exceeds the single-node ceiling after using all cores and batching.",
       "These numbers are exact production guarantees you can write directly into an SLA."
     ],
     "q_en": "What design judgments follow from these Postgres write-throughput anchors?",
-    "scenario_en": "Assume rough anchors: about 5k simple inserts per second on one core, 1k-2k per second with index updates, and only hundreds per second for complex multi-table transactions.",
+    "scenario_en": "Rough anchors: about 5k simple inserts per second on one core, 1k-2k per second with index updates, and only hundreds per second for complex multi-table transactions; a multi-core primary with batched writes and tuned WAL reaches several to a dozen-plus times the single-core figure, which is roughly the single-node ceiling.",
     "optionExplanations": [
       "事务碰的表和索引越多，每次写要做的额外维护就越多，能扛住的写入速度自然要往下调。",
       "不建索引确实能减少维护开销，但单核 insert 冲到千万级/秒明显超出这些粗略基准所在的量级，是夸大的数字。",
-      "写入量明显超出单核这个量级时，说明该考虑 sharding 分摊压力，而不是一直靠优化单节点硬扛。",
+      "超过单核数字先用多核并发和批量写（INSERT 批量/COPY）；用满多核、调过 WAL 后仍明显超出单节点上限，才该考虑 sharding。",
       "这些数字只是粗略参考，不该当成精确保证——写进 SLA 等于把估算当成了承诺。"
     ],
     "optionExplanations_en": [
       "The more tables and indexes a transaction touches, the more extra maintenance each write does, so the sustainable write rate should be expected to drop.",
       "Skipping indexes does cut maintenance overhead, but jumping to tens of millions of single-core inserts per second is well beyond the scale these rough benchmarks describe — an inflated number.",
-      "Once write volume clearly exceeds this single-core scale, that's the signal to consider sharding rather than continuing to force a single node.",
+      "Beyond the single-core figure, first use concurrency across cores and batched INSERT/COPY; only when write volume still clearly exceeds the single-node ceiling after that should you consider sharding.",
       "These are rough benchmarks, not exact guarantees — writing them directly into an SLA treats an estimate as a commitment."
     ]
   },

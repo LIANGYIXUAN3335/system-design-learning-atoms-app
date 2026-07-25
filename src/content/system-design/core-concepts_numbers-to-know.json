@@ -67,27 +67,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "common-mistakes",
-    "scenario": "系统写入约 5k WPS，候选人立刻想加消息队列来「缓冲这么高的写吞吐」。",
-    "scenario_en": "The system writes about 5k WPS, and a candidate immediately wants a queue to buffer that write rate.",
+    "scenario": "系统写入约 5k WPS，都是单行简单 insert、全天平稳；调优良好的单机 Postgres 简单写入参考量级是 20k+ WPS。候选人想加消息队列，理由只有一个：「缓冲这么高的写吞吐」。",
+    "scenario_en": "The system writes about 5k WPS, all simple single-row inserts at a steady rate; a well-tuned single Postgres is roughly 20k+ simple WPS as a reference. A candidate wants a message queue for one reason only: \"to buffer this high write rate.\"",
     "q": "这个判断的问题在于？",
     "q_en": "What is wrong with that judgment?",
     "options": [
-      "对，5k WPS 必须马上加队列缓冲",
-      "错，单机 20k+ WPS 能扛，加队列过度设计",
-      "错，应该直接把数据库分库分表，而不是加消息队列",
-      "错，应直接换成 NoSQL 存储"
+      "没问题，5k WPS 必须马上加队列缓冲",
+      "5k 远低于单机参考量级，只为缓冲吞吐加队列是过度设计",
+      "应该直接把数据库分库分表，而不是加消息队列",
+      "应直接换成 NoSQL 存储"
     ],
     "answer": [
       1
     ],
-    "why": "5k WPS 远在单机 Postgres 20k+ 的能力之内，加队列是过度设计。先考虑批量写、优化索引/schema、连接池、异步提交等更简单手段。",
-    "why_en": "At 5k writes per second a message queue is over-engineering, since a single Postgres handles 20k+; simpler tuning suffices.",
+    "why": "5k 简单写入远低于调优单机 Postgres 的 20k+ 参考量级，只为缓冲吞吐加队列是过度设计；先用批量写、精简索引、连接池等更简单的手段。参考量级取决于硬件、payload、索引和 durability 配置。若需要可靠投递、解耦或吸收超出单机能力的尖峰，队列才值得。",
+    "why_en": "5k simple writes is well under a tuned single Postgres's ~20k+ reference, so a queue just for buffering is over-engineering; try batching, leaner indexes, and connection pooling first. The reference depends on hardware, payload, indexes, and durability settings. A queue earns its place for reliable delivery, decoupling, or absorbing spikes beyond single-node capacity.",
     "whenOtherWins": "当需要可靠投递（下游故障不丢）、事件溯源、写尖峰超过单机能力（>20k WPS），或要解耦生产者/消费者时，队列才真正值得。",
     "options_en": [
-      "Yes, 5k WPS already needs a queue.",
-      "No, a single node handles 20k+ WPS; adding a queue is over-engineering.",
-      "No, you should shard the database directly instead of adding a message queue.",
-      "No, you should switch to NoSQL instead."
+      "Nothing wrong — 5k WPS already needs a queue.",
+      "5k is well under the single-node reference, so adding a queue just to buffer throughput is over-engineering.",
+      "You should shard the database directly instead of adding a message queue.",
+      "You should switch to NoSQL instead."
     ],
     "termDefinitions": [
       {
@@ -108,13 +108,13 @@
     ],
     "optionExplanations": [
       "错，5k 还在单机承载范围内，急着加队列只是多一层要维护的组件。",
-      "对，单机能扛到 20k+，这时候加队列是没必要的额外基础设施。",
+      "对，5k 远低于调优单机的 20k+ 参考量级，只为缓冲吞吐加队列是没必要的额外基础设施。",
       "错，分片解决的是容量或吞吐瓶颈，5k WPS 根本还没到那个门槛。",
       "错，换存储引擎不解决过度设计的问题，先看能不能靠调优撑住。"
     ],
     "optionExplanations_en": [
       "Wrong, 5k is still inside single-node capacity, so rushing to add a queue just means one more component to maintain.",
-      "Right, a single node handles 20k+, so a queue here is unnecessary extra infrastructure.",
+      "Right, 5k is well under a tuned single node's 20k+ reference, so a queue just to buffer throughput is unnecessary extra infrastructure.",
       "Wrong, sharding solves a capacity or throughput ceiling, and 5k WPS is nowhere near that line.",
       "Wrong, swapping storage engines doesn't fix over-engineering; tuning the current one is the first move."
     ]
@@ -125,8 +125,8 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个订单详情页用主键查询 Postgres；同样的行有时命中缓存，有时要走磁盘。",
-    "scenario_en": "An order-detail page reads Postgres by primary key; the row may be cached or may require disk access.",
+    "scenario": "一个订单详情页按主键查询 Postgres，读量约 1k QPS（单机远未饱和），延迟目标 p99 < 50ms；同样的行有时在数据库 buffer cache 里，有时要读磁盘。",
+    "scenario_en": "An order-detail page reads Postgres by primary key at about 1k QPS (far from saturating one node) with a p99 target under 50 ms; a row may be in the database's buffer cache or may require a disk read.",
     "q": "这组延迟量级最支持哪条设计判断？",
     "q_en": "What design decision do these latency numbers support?",
     "options": [
@@ -138,8 +138,8 @@
     "answer": [
       2
     ],
-    "why": "缓存命中约 1-5ms，磁盘读约 5-30ms，带索引的简单行查询本身已是毫秒级；为它单独加缓存层往往是多余复杂度。",
-    "why_en": "Indexed lookups are already 1-5ms cached or 5-30ms from disk, so adding a cache just for simple row reads is often unnecessary.",
+    "why": "参考量级：数据库内存命中约 1-5ms，读磁盘约 5-30ms（依硬件），外部缓存命中约 1ms。主键索引查询本身已在 p99 50ms 目标之内，1k QPS 也没压到数据库，单独加缓存层是多余复杂度。读量逼近数据库上限或延迟目标更紧时，才值得加缓存。",
+    "why_en": "Reference magnitudes: a database read from memory is about 1-5 ms, from disk about 5-30 ms depending on hardware, and an external cache hit about 1 ms. An indexed primary-key lookup already fits the 50 ms p99 target and 1k QPS doesn't stress the database, so a dedicated cache is extra complexity. Add one when read load nears the database's limit or the latency target is much tighter.",
     "options_en": [
       "A database read is always slower than a cache call made over the network.",
       "Disk reads are basically as fast as cache hits.",
@@ -184,13 +184,13 @@
     },
     "optionExplanations": [
       "错，这是绝对化说法；带索引查询本身就能到毫秒级，未必比网络慢。",
-      "错，磁盘读约 5-30ms、缓存约 1-5ms，两者差距还在，不能划等号。",
+      "错，数据库读磁盘约 5-30ms、外部缓存命中约 1ms，两者差距还在，不能划等号。",
       "对，主键索引查询本身已是毫秒级，为它单独搭缓存是多余的一层。",
       "错，索引查询同样能到毫秒级，缓存不是拿到低延迟的唯一路径。"
     ],
     "optionExplanations_en": [
       "Wrong, that's too absolute; an indexed lookup alone can already hit millisecond speed, sometimes faster than a network hop.",
-      "Wrong, disk reads run about 5-30ms versus 1-5ms for cache hits, so they're still meaningfully apart.",
+      "Wrong, a database disk read runs about 5-30ms versus about 1ms for an external cache hit, so they're still meaningfully apart.",
       "Right, an indexed primary-key lookup is already millisecond-fast, so a dedicated cache on top is extra weight.",
       "Wrong, an indexed query reaches millisecond latency too, so a cache isn't the only path to that speed."
     ]
@@ -201,8 +201,8 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个电商订单服务预计稳定在 8k TPS 读写；候选人在判断要不要一开始就上多主分布式数据库。",
-    "scenario_en": "An e-commerce order service expects a steady 8k TPS of reads and writes, and the candidate is considering multi-primary distribution upfront.",
+    "scenario": "一个电商订单服务预计稳定在 8k TPS（约 5k 读、3k 写，都是短事务），跑在大规格实例上；候选人在判断要不要一开始就上多主分布式数据库。",
+    "scenario_en": "An e-commerce order service expects a steady 8k TPS (about 5k reads and 3k writes, all short transactions) on a large instance, and the candidate is considering multi-primary distribution upfront.",
     "q": "这组吞吐量级最支持哪条设计判断？",
     "q_en": "What design decision do these throughput numbers support?",
     "options": [
@@ -214,8 +214,8 @@
     "answer": [
       3
     ],
-    "why": "单机 Aurora/RDS 读最高约 50k TPS、写约 10-20k TPS；8k TPS 在这之内，先调优单机比一开始上分布式更直接。",
-    "why_en": "A single Aurora or RDS node reaches up to 50k read TPS and 10-20k write TPS, so 8k TPS fits comfortably without going distributed.",
+    "why": "参考量级（依实例规格、事务复杂度、索引而变）：单机 Aurora/RDS 读可到数万 TPS、写约 1-2 万 TPS。5k 读 + 3k 短事务写在这个范围内，先调优单主 + 只读副本，比一开始上多主分布式更直接。",
+    "why_en": "As reference magnitudes that vary with instance size, transaction complexity, and indexes, a single Aurora or RDS primary can reach tens of thousands of read TPS and roughly 10-20k write TPS. 5k reads plus 3k short write transactions fit, so tune a single primary with read replicas before going multi-primary.",
     "options_en": [
       "8k TPS is already far beyond what a single relational database instance can process.",
       "Higher TPS always means the database must switch to NoSQL storage.",
@@ -245,13 +245,13 @@
       "throughput"
     ],
     "optionExplanations": [
-      "错，8k 只是单机读 50k、写 10-20k 参考值的一小部分，远没到上限。",
+      "错，5k 读 + 3k 短事务写只是单机读数万、写 1-2 万 TPS 参考量级里的一部分，远没到上限。",
       "错，TPS 高低不是切换存储类型的判据，先看具体瓶颈在哪一层。",
       "错，实例规格直接决定连接数和处理能力，两者显然相关。",
       "对，8k 落在单机读写能力之内，先调优比直接上分布式更省事。"
     ],
     "optionExplanations_en": [
-      "Wrong, 8k is only a fraction of the roughly 50k read and 10-20k write reference range, nowhere near the ceiling.",
+      "Wrong, 5k reads plus 3k short-transaction writes is only a fraction of the reference range of tens of thousands of reads and 10-20k writes on one node, nowhere near the ceiling.",
       "Wrong, TPS alone isn't the trigger for switching storage types; look at where the actual bottleneck sits first.",
       "Wrong, instance size directly shapes connection limits and processing power, so the two are clearly linked.",
       "Right, 8k sits comfortably inside single-node read/write capacity, so tuning first beats going distributed."
@@ -263,8 +263,8 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个内容平台数据量正逼近 8TB，团队在争论是否要现在就分库。",
-    "scenario_en": "A content platform is approaching 8TB of data, and the team is debating whether to split the database now.",
+    "scenario": "一个内容平台跑在 Amazon RDS for PostgreSQL 上，数据量正逼近 8TB，团队在争论要不要「因为存储快满了」现在就分库。",
+    "scenario_en": "A content platform runs on Amazon RDS for PostgreSQL and is approaching 8TB; the team is debating whether to split the database now \"because storage is filling up.\"",
     "q": "这组存储上限最支持哪条设计判断？",
     "q_en": "What design decision does this storage ceiling support?",
     "options": [
@@ -276,8 +276,8 @@
     "answer": [
       0
     ],
-    "why": "多数引擎单实例可到 64 TiB，Aurora 到 256 TiB；8TB 远在其内，「100GB 就要拆库」是过时的教科书直觉。",
-    "why_en": "Most engines handle up to 64 TiB per instance, and Aurora up to 256 TiB, so 8TB is nowhere near the limit that would force sharding.",
+    "why": "RDS for PostgreSQL / MySQL 单实例存储上限是 64 TiB，Aurora 更高（128 TiB 以上，视版本）；8TB 远在其内，「存储快满了」不是现在分库的理由，「100GB 就要拆」是过时直觉。不过 8TB 的备份恢复时长、副本重建时间仍要单独评估。",
+    "why_en": "RDS for PostgreSQL and MySQL allow up to 64 TiB per instance and Aurora more (128 TiB or higher depending on version), so 8TB is far below the ceiling and \"storage is filling up\" isn't a reason to split now; \"split at 100GB\" is an outdated instinct. Backup-restore and replica-rebuild time at 8TB still deserve a separate look.",
     "options_en": [
       "8TB is well under the single-instance ceiling, so don't shard yet.",
       "A single database instance tops out around 100GB, so it's overdue.",
@@ -320,26 +320,26 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "要判断一个关系型数据库是否该分片（sharding）。",
-    "scenario_en": "You are deciding whether a relational database has reached the point where sharding is justified.",
+    "scenario": "你在评估一个跑在 RDS for PostgreSQL 上的数据库是否到了该分片（sharding）的时候。",
+    "scenario_en": "You are deciding whether a relational database on RDS for PostgreSQL has reached the point where sharding is justified.",
     "q": "下面哪个才是真正该考虑分片的信号？",
     "q_en": "Which signal truly justifies considering sharding?",
     "options": [
       "数据量约 500GB，规模上还远远没到瓶颈",
-      "数据量近 50TiB 或写超 10k TPS",
+      "数据量逼近单实例存储上限（如 50TiB，接近 64TiB），或持续写入已逼近单主的实测上限",
       "用户规模刚刚达到 100 万出头而已",
       "系统里开始频繁出现 JOIN 查询"
     ],
     "answer": [
       1
     ],
-    "why": "分片信号是硬指标：数据量近 50TiB、写持续 >10k TPS、跨地域或备份窗口过长。仅几百 GB 或百万用户远不够格。",
-    "why_en": "Consider sharding when data nears 50 TiB or write throughput exceeds 10k TPS, not merely at a few hundred gigabytes or a million users.",
+    "why": "分片的信号是容量或吞吐逼近单机上限：数据量接近托管单实例存储上限（RDS 64 TiB），或持续写入接近单主在这套硬件和负载下的实测上限（简单写入参考量级 1-2 万 TPS 以上，复杂事务会低得多）。几百 GB、百万用户、出现 JOIN 都不构成信号；在此之前先用只读副本、索引、缓存。",
+    "why_en": "Sharding is signaled when capacity or throughput nears single-node limits: data approaching the managed per-instance storage ceiling (64 TiB on RDS), or sustained writes approaching the primary's measured limit on this hardware and workload (simple writes reach the 10-20k+ TPS range; complex transactions far less). A few hundred GB, a million users, or JOINs aren't signals; use read replicas, indexes, and caching first.",
     "whenOtherWins": "在这些硬指标出现前，先用只读副本、索引优化、缓存等手段——它们比分片简单得多。",
     "tradeoff": "硬扩展指标（数据量/吞吐/合规） vs 表面信号（用户数/GB 数/查询语法）",
     "options_en": [
       "About 500GB of data, nowhere near a bottleneck at that scale.",
-      "Data nears 50TiB, or writes exceed 10k TPS.",
+      "Data nears the single-instance storage ceiling (say 50 TiB against 64 TiB), or sustained writes approach the primary's measured write limit.",
       "The user base has only just reached about a million.",
       "The system has just started seeing JOIN queries show up often."
     ],
@@ -367,13 +367,13 @@
     ],
     "optionExplanations": [
       "500GB 只是几百分之一的量级，容量还早，不构成分片信号。",
-      "数据量逼近 50TiB 或写入持续破万 TPS 时，才是真正该分片的硬指标。",
+      "数据量逼近单实例存储上限，或持续写入逼近单主的实测上限时，才是真正该分片的容量/吞吐信号。",
       "用户数不是分片依据，同样 100 万用户的数据量可能差几十倍。",
       "出现 JOIN 只是查询变复杂，能靠优化查询和索引解决，不代表要分片。"
     ],
     "optionExplanations_en": [
       "500GB is only a fraction of the real ceiling, so capacity isn't the constraint yet.",
-      "Data nearing 50TiB or writes sustaining past 10k TPS is the actual hard trigger for sharding.",
+      "Data nearing the single-instance ceiling, or sustained writes nearing the primary's measured limit, is the actual capacity/throughput trigger for sharding.",
       "User count isn't the right proxy, since two products with a million users can differ in data size by dozens of times.",
       "A JOIN showing up just means the query got more complex, which query tuning or indexing can fix without sharding."
     ]
@@ -384,25 +384,25 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "common-mistakes",
-    "scenario": "设计 Yelp：1000 万个商家，每个约 1KB 数据，候选人一上来就讲要按哪个列分片。",
-    "scenario_en": "In a Yelp design, there are 10 million businesses at about 1KB each, but the candidate jumps straight to sharding keys.",
+    "scenario": "设计 Yelp：1000 万个商家，每个约 1KB；评论等关联数据约是商家数据的 10 倍。读写 QPS 都在单机数据库能力内。候选人一上来就讲要按哪个列分片。",
+    "scenario_en": "In a Yelp design, there are 10 million businesses at about 1KB each, and reviews and related data add roughly 10x that. Read and write QPS are well within a single database's capacity. The candidate jumps straight to sharding keys.",
     "q": "先算一下数据量，正确判断是？",
     "q_en": "After doing the size math first, what is the right call?",
     "options": [
       "数据看起来量这么大，必须立刻上手做分片处理",
       "商家数据量大，必须上分布式数据库",
-      "算下来约 100GB，单机够用，不用分片",
+      "算下来约 10GB，加评论约 100GB，单机装得下，先不用分片",
       "这类数据量太复杂，根本没法估算"
     ],
     "answer": [
       2
     ],
-    "why": "10M × 1KB ≈ 10GB，加评论约 100GB——单机轻松装下。过早分片是常见错误：先算术，再决定要不要分。",
-    "why_en": "Ten million businesses at about one kilobyte each is only ten gigabytes, roughly a hundred with reviews, so sharding is unnecessary.",
+    "why": "10M × 1KB ≈ 10GB，按题面评论约 10 倍 ≈ 100GB，单机存储装得下；题面也说 QPS 在单机能力内，所以先不分片。过早分片是常见错误：先算存储和吞吐，再决定要不要分。",
+    "why_en": "Ten million times one kilobyte is about ten gigabytes, and about a hundred with the stated 10x for reviews, which fits on one node; since QPS is also within single-node capacity, sharding is unnecessary for now.",
     "options_en": [
       "That looks like so much data that it must be sharded right away.",
       "Business data at this volume must go on a distributed database.",
-      "It works out to about 100GB, a single node handles it, no sharding needed.",
+      "About 10GB, roughly 100GB with reviews; it fits on one node, so no sharding yet.",
       "This kind of data volume is too complex to even estimate."
     ],
     "tags": [
@@ -411,15 +411,15 @@
       "yelp"
     ],
     "optionExplanations": [
-      "错，没算过量级就下结论，其实这批数据加起来才百 GB 级。",
-      "错，「必须」是想当然，实际算出来的量级根本用不上分布式。",
-      "对，先做算术再判断：约 100GB 单机绰绰有余，不必分片。",
+      "错，没算过量级就下结论，其实这批数据加上评论才百 GB 级。",
+      "错，「必须」是想当然，实际算出来的量级和题面的 QPS 根本用不上分布式。",
+      "对，先算存储和吞吐再判断：约 100GB 单机装得下，QPS 也在能力内，先不分片。",
       "错，条数 × 单条大小就是最基础的估算，并不复杂。"
     ],
     "optionExplanations_en": [
-      "Wrong, that's a conclusion without doing the math; the total actually lands around a hundred gigabytes.",
-      "Wrong, 'must' is an assumption; the computed size doesn't come close to needing distribution.",
-      "Right, doing the math first: roughly 100GB fits comfortably on one node, no sharding needed.",
+      "Wrong, that's a conclusion without doing the math; with reviews the total lands around a hundred gigabytes.",
+      "Wrong, 'must' is an assumption; the computed size and the stated QPS don't call for distribution.",
+      "Right, do storage and throughput math first: roughly 100GB fits on one node and QPS is within capacity, so no sharding yet.",
       "Wrong, count times size per record is the most basic estimate, nothing complex about it."
     ]
   },
@@ -429,13 +429,13 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "estimation",
-    "scenario": "面试被问到 Design Yelp，候选人还没算过数据量就想先讲分片方案。",
-    "scenario_en": "In a Yelp design interview, the candidate wants to discuss sharding before estimating the data size.",
+    "scenario": "面试被问到 Design Yelp，候选人还没算过数据量就想先讲分片方案。假设读写 QPS 都在单机数据库能力内，只从存储量判断。",
+    "scenario_en": "In a Yelp design interview, the candidate wants to discuss sharding before estimating the data size. Assume read and write QPS are within a single database's capacity, and judge from storage size only.",
     "q": "补全 Yelp 的容量估算：",
     "q_en": "Complete the Yelp capacity estimate:",
-    "text": "1000 万商家 × 每个约 1KB ≈ {{10GB}}；再 ×10 计入评论 ≈ {{100GB}}，这个量级单机{{无需分片}}。",
-    "why": "把「条数 × 每条大小」算成总量级，是判断要不要分片的第一步；100GB 完全在单机能力内。",
-    "why_en": "Ten million times one kilobyte is about ten gigabytes, and roughly a hundred with reviews, which fits a single node.",
+    "text": "1000 万商家 × 每个约 1KB ≈ {{10GB}}；再 ×10 计入评论 ≈ {{100GB}}，单从存储看这个量级单机{{无需分片}}。",
+    "why": "把「条数 × 每条大小」算成总量级，是判断要不要分片的第一步；100GB 远在单机存储能力内。题面已设定 QPS 也在单机能力内，所以结论是先不分片。",
+    "why_en": "Ten million times one kilobyte is about ten gigabytes, and roughly a hundred with reviews; that fits a single node, and with QPS also stated to be within single-node capacity, there is no need to shard yet.",
     "tags": [
       "numbers",
       "estimation",
@@ -461,7 +461,7 @@
         ],
         [
           "1 TB+",
-          "single-node limit"
+          "check per-instance storage & ops limits"
         ]
       ]
     }
@@ -472,27 +472,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "common-mistakes",
-    "scenario": "面试者一上来就说要给主键查询加缓存层，理由是数据库延迟太高。",
-    "scenario_en": "A candidate proposes caching primary-key lookups immediately because they assume database reads are too slow.",
+    "scenario": "面试者一上来就说要给主键查询加缓存层，理由是数据库延迟太高；当前读 QPS 远在数据库能力内。",
+    "scenario_en": "A candidate proposes caching primary-key lookups immediately because they assume database reads are too slow; current read QPS is well within the database's capacity.",
     "q": "这个判断哪里错了？",
     "q_en": "Where is this reasoning wrong?",
     "options": [
-      "SSD 查询要几百毫秒，必须加缓存",
+      "数据库在 SSD 上做主键查询要几百毫秒，必须加缓存",
       "所有查询都该无脑加缓存",
       "数据库根本做不了主键查询",
-      "索引主键查询已是毫秒级，无需单独加缓存"
+      "索引主键查询本身已是亚毫秒到毫秒级，单凭「延迟高」不足以加缓存"
     ],
     "answer": [
       3
     ],
-    "why": "带索引的简单行查询是亚毫秒到几毫秒，已经很快；为它单独加缓存层是多余复杂度。复杂 join/聚合查询仍值得缓存。",
-    "why_en": "Indexed row lookups are sub-millisecond to a few milliseconds, so adding a cache just for them is unnecessary infrastructure.",
+    "why": "带索引的简单行查询是亚毫秒到几毫秒，「延迟太高」这个理由不成立；题面又说读 QPS 远在能力内，所以为它单独加缓存层是多余复杂度。若读 QPS 逼近上限、或是复杂 join/聚合，缓存仍值得。",
+    "why_en": "Indexed row lookups take sub-millisecond to a few milliseconds, so the latency argument fails, and with read QPS well within capacity a cache just for them is unnecessary infrastructure; high read QPS or expensive joins can still justify caching.",
     "whenOtherWins": "如果是跨多表 join、聚合的昂贵查询，那仍然值得缓存——快的只是「带索引的简单行查询」。",
     "options_en": [
-      "SSD lookups take hundreds of milliseconds, so you must cache them.",
+      "A primary-key lookup on SSD takes hundreds of milliseconds, so you must cache it.",
       "You should blindly cache every query.",
       "Databases cannot serve primary-key lookups at all.",
-      "Indexed primary-key lookups are already millisecond-fast, so no extra cache is needed."
+      "Indexed primary-key lookups are already sub-millisecond to millisecond, so \"latency is too high\" alone does not justify a cache."
     ],
     "termDefinitions": [
       {
@@ -515,13 +515,13 @@
       "错，SSD 上带索引的查询是亚毫秒到几毫秒，远没到几百毫秒那么慢。",
       "错，无脑加缓存会让简单查询多一层要维护和保持一致的状态。",
       "错，主键查询正是数据库最擅长、最快的操作之一。",
-      "对，主键索引查询已经够快，为它加缓存只是多余的复杂度。"
+      "对，主键索引查询已经够快，单凭「延迟高」这个理由为它加缓存只是多余的复杂度。"
     ],
     "optionExplanations_en": [
       "Wrong, an indexed SSD lookup runs sub-millisecond to a few milliseconds, nowhere near hundreds of milliseconds.",
       "Wrong, blindly caching everything adds a layer of state you now have to keep consistent for no benefit.",
       "Wrong, a primary-key lookup is exactly what databases are fastest and best at.",
-      "Right, an indexed primary-key lookup is already fast enough that a cache on top is unnecessary complexity."
+      "Right, an indexed primary-key lookup is already fast, so the latency argument alone does not justify a cache."
     ]
   },
   {
@@ -530,12 +530,12 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "一个红包系统预计缓存层要扛 60k ops/s 的读写峰值；候选人在判断一个 Redis/ElastiCache 实例是否够用。",
-    "scenario_en": "A red-packet service expects a cache peak of 60k ops/s, and the candidate is deciding whether one Redis or ElastiCache instance is enough.",
+    "scenario": "一个红包系统预计缓存层要扛 60k ops/s 的读写峰值，基本都是小 value 的简单 GET/SET（无 Lua、无大 key）；候选人在判断一个 Redis/ElastiCache 实例是否够用。",
+    "scenario_en": "A red-packet service expects a cache peak of 60k ops/s, almost all simple GET/SET on small values (no Lua, no big keys), and the candidate is deciding whether one Redis or ElastiCache instance is enough.",
     "q": "这组吞吐量级最支持哪条设计判断？",
     "q_en": "What design decision do these throughput numbers support?",
     "options": [
-      "单实例 100k-200k+ ops/s 够覆盖，暂不用分片",
+      "简单命令下单实例参考量级约 100k+ ops/s，60k 在范围内，先不分片（上线前压测确认）",
       "缓存单实例吞吐一般只有几百 ops/s，早该马上扩容分片了",
       "ops/s 数值越高，就说明必须换成磁盘存储",
       "缓存的吞吐能力和实例规格完全没有关系"
@@ -543,10 +543,10 @@
     "answer": [
       0
     ],
-    "why": "现代内存缓存单实例约 100k-200k+ ops/s，60k 在其内；扩容瓶颈通常是 ops/s 或带宽，不是内存大小。",
-    "why_en": "A modern in-memory cache instance handles roughly 100k to 200k+ operations per second, so 60k ops/s fits one instance.",
+    "why": "小 value 的简单命令下，内存缓存单实例参考量级约 100k+ ops/s，60k 在范围内；这是经验量级，大 value、Lua、复杂 ZSET 或网卡带宽都会把它压低，所以要以压测为准。",
+    "why_en": "For simple commands on small values, a single in-memory cache instance is in the ~100k+ ops/s range, so 60k fits; this is a ballpark that big values, Lua, complex sorted-set work or network bandwidth can lower, so confirm with a load test.",
     "options_en": [
-      "A single instance's 100k-200k+ ops/s reference covers it, no sharding needed yet.",
+      "For simple commands a single instance is in the ~100k+ ops/s range, so 60k fits; no sharding yet (confirm with a load test).",
       "A single cache instance usually does only a few hundred ops/s, so it's overdue to scale out and shard now.",
       "The higher the ops/s value, the more it means you must switch to disk storage.",
       "A cache's throughput capacity has nothing at all to do with instance size."
@@ -569,13 +569,13 @@
       "throughput"
     ],
     "optionExplanations": [
-      "对，60k 落在单实例 100k-200k+ 的参考区间内，一个实例通常就够。",
+      "对，60k 落在简单命令下单实例约 100k+ 的参考量级内，先不分片，但要压测确认。",
       "错，几百 ops/s 太低估了，现代内存缓存单实例常能到十万级以上。",
       "错，ops/s 高低和存储介质无关，那是内存与磁盘方案的选择问题。",
       "错，实例规格直接决定能扛多少 ops/s，二者关系密切。"
     ],
     "optionExplanations_en": [
-      "Right, 60k sits inside the 100k-200k+ range one instance typically covers.",
+      "Right, 60k sits inside the ~100k+ ballpark for simple commands on one instance, so no sharding yet, but confirm with a load test.",
       "Wrong, a few hundred ops/s badly underestimates it; a modern in-memory cache instance often reaches six figures.",
       "Wrong, ops/s level has nothing to do with storage medium, that's a separate memory-versus-disk decision.",
       "Wrong, instance size directly shapes how many ops/s it can sustain, so the two are closely linked."
@@ -587,24 +587,24 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "一个视频推荐服务打算把整份 300GB 特征数据全部放进一个内存缓存实例。",
-    "scenario_en": "A video recommendation service wants to put a full 300GB feature dataset into one in-memory cache instance.",
+    "scenario": "一个视频推荐服务打算把整份 300GB 特征数据全部放进一个内存缓存实例。已知托管缓存最大节点内存约 400GB 级，自建 Redis 可用更大内存的机型。",
+    "scenario_en": "A video recommendation service wants to put a full 300GB feature dataset into one in-memory cache instance. The largest managed cache nodes have roughly 400GB of memory, and self-managed Redis can use larger-memory machines.",
     "q": "这组延迟和内存量级最支持哪条设计判断？",
     "q_en": "What design decision do these latency and memory numbers support?",
     "options": [
       "缓存单实例内存通常封顶 32GB，300GB 根本装不下",
-      "单实例内存可达约 1TB，300GB 可以整份放进去",
+      "大内存实例能整份放下 300GB，但要给持久化和碎片留余量",
       "缓存读延迟通常有几十毫秒，不比数据库快多少",
       "内存缓存只能存小于 1GB 的数据"
     ],
     "answer": [
       1
     ],
-    "why": "缓存读同区 <1ms，内存实例可到约 1TB；300GB 完全能整份放入，「全缓存」常比精细分层缓存更省工程时间。",
-    "why_en": "In-memory cache reads are under a millisecond and instances reach about a terabyte of memory, so 300GB fits comfortably in one instance.",
+    "why": "同区缓存读通常 <1ms；大内存节点可到数百 GB（托管约 400GB 级，自建更高），300GB 能整份放进一个实例，「全缓存」常比精细分层更省工程时间；但要为 fork、复制缓冲和碎片留余量。",
+    "why_en": "Same-region cache reads are under a millisecond, and large-memory nodes reach hundreds of gigabytes, so 300GB fits in one instance and full caching often saves engineering time, as long as you leave headroom for forks, replication buffers and fragmentation.",
     "options_en": [
       "A single cache instance usually caps out at 32GB of memory, so 300GB simply will not fit.",
-      "A single instance can reach about 1TB, so 300GB fits entirely.",
+      "A large-memory instance can hold all 300GB, with headroom left for persistence and fragmentation.",
       "Cache reads typically take tens of milliseconds, barely faster than a database.",
       "An in-memory cache can only hold under 1GB of data."
     ],
@@ -614,14 +614,14 @@
       "latency"
     ],
     "optionExplanations": [
-      "错，32GB 是旧经验值，现在内存优化型实例能到约 1TB 级别。",
-      "对，单实例内存可到约 1TB，300GB 整份放进去完全没问题。",
+      "错，32GB 是旧经验值，现在大内存实例已能到数百 GB 乃至更高。",
+      "对，大内存实例能整份放下 300GB，但要给持久化 fork、复制缓冲和碎片留余量。",
       "错，同区缓存读通常在 1ms 以内，比磁盘读快一个数量级。",
       "错，1GB 远低于现在内存实例的真实容量，这个说法过时了。"
     ],
     "optionExplanations_en": [
-      "Wrong, 32GB is an old rule of thumb; memory-optimized instances now reach roughly 1TB.",
-      "Right, a single instance can hold about 1TB, so 300GB fits in as one piece with room to spare.",
+      "Wrong, 32GB is an old rule of thumb; large-memory instances now reach hundreds of gigabytes or more.",
+      "Right, a large-memory instance can hold all 300GB, as long as you leave headroom for persistence forks, replication buffers and fragmentation.",
       "Wrong, same-region cache reads typically stay under a millisecond, an order of magnitude faster than disk.",
       "Wrong, 1GB is far below what memory instances actually hold today, that figure is outdated."
     ]
@@ -632,26 +632,26 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "一个缓存实例已经有 900GB 内存，接近上限，但读写还在稳定增长。",
-    "scenario_en": "A cache instance already holds 900GB, close to the memory ceiling, while reads and writes keep growing.",
+    "scenario": "一个缓存实例内存约 1TB 级，当前数据集稳定在 200GB 左右不再增长，但请求率持续上升，已接近单实例压测的 ops/s 上限，网卡流量也在走高。",
+    "scenario_en": "A cache instance with roughly 1TB-class memory holds a dataset that is stable at about 200GB, but request rate keeps climbing toward the single-instance benchmarked ops/s limit, and network traffic is rising too.",
     "q": "此时最先卡住扩容的通常是什么？",
     "q_en": "What usually becomes the scaling bottleneck first here?",
     "options": [
       "内存空间不够用了",
       "磁盘容量见顶",
-      "ops/s 或带宽先见顶",
-      "CPU 核数会最先撑爆掉"
+      "ops/s 或网络带宽先见顶",
+      "数据集大小很快会撑爆实例"
     ],
     "answer": [
       2
     ],
-    "why": "缓存内存已能到 TB 级，扩容瓶颈往往是 ops/s 或网络带宽，而非内存——与几年前的直觉相反。",
-    "why_en": "With terabyte-scale memory, the cache bottleneck is usually operations per second or network bandwidth, not memory size.",
+    "why": "题面里数据集稳定在 200GB、远低于约 1TB 的内存，而请求率已逼近压测 ops/s 上限、网卡流量走高，所以先卡住的是 ops/s 或带宽，不是内存。",
+    "why_en": "The dataset is stable at about 200GB, far below the roughly 1TB of memory, while request rate is nearing the benchmarked ops/s limit and network traffic is rising, so throughput or bandwidth is the first bottleneck, not memory.",
     "options_en": [
       "Memory space runs out first.",
       "Disk capacity is the limit.",
       "Ops/s or network bandwidth hits the ceiling first.",
-      "CPU cores are the first thing to blow out."
+      "The dataset size will soon overflow the instance."
     ],
     "termDefinitions": [
       {
@@ -666,16 +666,16 @@
       "bottleneck"
     ],
     "optionExplanations": [
-      "错，内存已到 900GB 但实例可到 TB 级，还没真到瓶颈。",
+      "错，数据集稳定在 200GB，远低于约 1TB 的内存，内存不是先见顶的。",
       "错，内存缓存的场景里磁盘容量通常不是限制因素。",
-      "对，内存实例做大之后，真正先卡住的常是吞吐或带宽而不是容量。",
-      "错，CPU 核数一般不是内存型缓存实例最先撞到的墙。"
+      "对，数据集稳定而请求率逼近压测上限、网卡流量走高，先卡住的是吞吐或带宽。",
+      "错，题面说数据集稳定在 200GB 不再增长，不会很快撑爆实例。"
     ],
     "optionExplanations_en": [
-      "Wrong, memory is at 900GB but instances scale into the terabyte range, so it isn't actually maxed out yet.",
+      "Wrong, the dataset is stable at 200GB, far below roughly 1TB of memory, so memory isn't what tops out first.",
       "Wrong, disk capacity typically isn't the limiting factor in an in-memory cache setup.",
-      "Right, once memory instances get large, throughput or bandwidth is usually what saturates first, not capacity.",
-      "Wrong, CPU core count usually isn't the first wall a memory-heavy cache instance hits."
+      "Right, with a stable dataset, request rate nearing the benchmarked limit and rising network traffic, throughput or bandwidth saturates first.",
+      "Wrong, the dataset is stated to be stable at 200GB and not growing, so it won't soon overflow the instance."
     ]
   },
   {
@@ -684,28 +684,28 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "判断一个内存缓存该不该扩容。",
-    "scenario_en": "You are deciding whether an in-memory cache should be scaled out.",
+    "scenario": "判断一个内存缓存该不该扩容（加节点或分片）。",
+    "scenario_en": "You are deciding whether an in-memory cache should be scaled out by adding nodes or shards.",
     "q": "下面哪组是合理的扩容触发信号？",
     "q_en": "Which set of signals is a reasonable trigger to scale the cache?",
     "options": [
       "缓存里目前存了超过 100 个 key 而已",
       "缓存命中率现在已经高于 90%",
       "只要项目技术栈里用了 Redis 就该扩容",
-      "数据集近 1TB 或吞吐超 100k ops/s"
+      "数据集逼近本实例内存上限（大实例约 1TB），或吞吐持续逼近实测上限（简单命令约 100k+ ops/s）"
     ],
     "answer": [
       3
     ],
-    "why": "缓存扩容触发：数据集近 1TB、持续 100k+ ops/s，或读延迟要求 <0.5ms。在这些之前单实例通常够用。",
-    "why_en": "Scale a cache when the dataset nears a terabyte, throughput sustains 100k+ ops per second, or reads must stay below half a millisecond.",
-    "whenOtherWins": "还没到这些阈值时，单个大缓存实例就够，不必急着分片或加节点。",
+    "why": "扩容要看硬指标是否逼近本实例上限：内存（大实例可到约 1TB）和吞吐（简单命令约 100k+ ops/s，以压测为准）。key 数量、命中率高、用了 Redis 都不是扩容信号。",
+    "why_en": "Scale when hard metrics near this instance's limits: memory (about 1TB on large instances) or throughput (about 100k+ ops/s for simple commands, confirmed by load tests); key count, a high hit rate, or merely using Redis are not signals.",
+    "whenOtherWins": "还没逼近本实例的内存或实测吞吐上限时，单个大缓存实例就够，不必急着分片或加节点。",
     "tradeoff": "扩容信号（容量/吞吐/延迟硬指标） vs 表面信号（key 数量/命中率）",
     "options_en": [
       "The cache currently holds just over a hundred keys, nothing more.",
       "The cache hit rate is already above 90% right now.",
       "As long as the tech stack uses Redis somewhere, it should scale.",
-      "Dataset nears 1TB, or throughput exceeds 100k ops/s."
+      "The dataset nears this instance's memory limit (about 1TB on large instances), or throughput stays near its measured limit (about 100k+ ops/s for simple commands)."
     ],
     "termDefinitions": [
       {
@@ -723,13 +723,13 @@
       "100 个 key 完全不是量级问题，这个数字对扩容判断没有意义。",
       "命中率高恰恰说明当前配置在起作用，反而不该急着扩容。",
       "用不用 Redis 不是触发条件，扩不扩容要看容量和吞吐硬指标。",
-      "数据集逼近 1TB 或吞吐持续破十万，才是真正该扩容的信号。"
+      "数据集逼近本实例内存上限，或吞吐持续逼近实测上限，才是真正该扩容的信号。"
     ],
     "optionExplanations_en": [
       "A hundred keys says nothing about scale, that number is meaningless for a scaling decision.",
       "A high hit rate actually shows the current setup is working well, which argues against scaling now.",
       "Using Redis isn't the trigger; scaling should follow hard capacity and throughput numbers.",
-      "Dataset nearing 1TB or throughput sustaining past a hundred thousand ops/s is the real signal to scale."
+      "The dataset nearing this instance's memory limit, or throughput sustaining near its measured limit, is the real signal to scale."
     ]
   },
   {
@@ -738,12 +738,12 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "common-mistakes",
-    "scenario": "LeetCode 排行榜：10 万场比赛 × 每场最多 10 万用户，每条约 36B ID + 4B 评分。",
-    "scenario_en": "For a LeetCode leaderboard, estimate 100k contests times up to 100k users, with about 36B of ID plus 4B of score per entry.",
+    "scenario": "LeetCode 排行榜：10 万场比赛 × 每场最多 10 万用户，每条约 36B ID + 4B 评分。假设可用的最大缓存实例约 1TB 内存。",
+    "scenario_en": "For a LeetCode leaderboard, estimate 100k contests times up to 100k users, with about 36B of ID plus 4B of score per entry. Assume the largest available cache instance has about 1TB of memory.",
     "q": "算完约 400GB，正确结论是？",
     "q_en": "After estimating about 400GB, what is the right conclusion?",
     "options": [
-      "约 400GB，单实例装得下，无需分片",
+      "原始数据上界约 400GB，和 1TB 级单实例同一量级，先不急着分片，但要按数据结构开销留余量并核算",
       "数据量看着太大了，必须马上分片缓存",
       "缓存装不下，只能放弃缓存",
       "必须全部落到磁盘存储"
@@ -751,10 +751,10 @@
     "answer": [
       0
     ],
-    "why": "100k × 100k × 40B ≈ 400GB，仍在单个大缓存（可达 1TB）之内，不用分片。先算术，再决定。",
-    "why_en": "The leaderboard is about 400 gigabytes, which still fits in a single large cache instance without sharding.",
+    "why": "100k × 100k × 40B ≈ 400GB，是原始数据上界，和约 1TB 的单实例在同一量级，不必一上来就分片；但 ZSET 每元素有额外指针/哈希开销，实际占用会更高，要按实测开销再决定是否分片或只缓存活跃比赛。",
+    "why_en": "100k times 100k times 40 bytes is about 400GB of raw data at most, the same order as a 1TB instance, so sharding isn't the first move; sorted-set overhead makes real usage higher, so verify it before deciding to shard or cache only active contests.",
     "options_en": [
-      "About 400GB fits on one large cache instance, no sharding needed.",
+      "The raw upper bound is about 400GB, the same order as a 1TB-class instance, so don't rush to shard, but budget for data-structure overhead and verify.",
       "The data looks too big, so the cache must be sharded right away.",
       "The cache cannot hold it, so drop caching entirely.",
       "Everything must be pushed to disk storage instead."
@@ -765,16 +765,16 @@
       "leetcode"
     ],
     "optionExplanations": [
-      "对，算出来约 400GB，还在单实例可到 1TB 的容量之内，不用分片。",
-      "错，没做算术就下结论；实际量级远没到需要分片的地步。",
-      "错，400GB 单实例完全放得下，不存在装不下要放弃缓存的问题。",
-      "错，这个量级用内存缓存完全可行，不必退回纯磁盘方案。"
+      "对，原始上界约 400GB，和 1TB 级单实例同一量级，先不急着分片，但要为 ZSET 结构开销留余量并核算。",
+      "错，没做算术就下结论；原始数据量级还没到一上来就必须分片的地步。",
+      "错，400GB 原始数据和 1TB 级实例同一量级，不存在装不下就必须放弃缓存的问题。",
+      "错，这个量级用内存缓存可行，不必退回纯磁盘方案。"
     ],
     "optionExplanations_en": [
-      "Right, the math works out to about 400GB, still inside a single instance's terabyte-level capacity, so no sharding needed.",
-      "Wrong, that's a conclusion without doing the math; the actual size is nowhere near sharding territory.",
-      "Wrong, 400GB fits comfortably on one instance, there's no capacity problem forcing you to drop caching.",
-      "Wrong, this size is well within what an in-memory cache can handle, no need to fall back to disk only."
+      "Right, the raw upper bound is about 400GB, the same order as a 1TB-class instance, so don't rush to shard, but budget for sorted-set overhead and verify.",
+      "Wrong, that's a conclusion without doing the math; the raw size isn't at the point where sharding is forced up front.",
+      "Wrong, 400GB raw is the same order as a 1TB-class instance, so there's no capacity problem forcing you to drop caching.",
+      "Wrong, this size is workable for an in-memory cache, no need to fall back to disk only."
     ]
   },
   {
@@ -783,24 +783,24 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "message-queue",
-    "scenario": "一个订单事件系统预计稳定在 300k 条/秒的消息量；候选人在判断一个 Kafka broker 是否够用。",
-    "scenario_en": "An order-event system expects a steady 300k messages per second, and the candidate is deciding whether one Kafka broker is enough.",
+    "scenario": "一个订单事件系统预计稳定在 300k 条/秒，消息约 1KB、批量发送并开压缩；候选人只从吞吐角度判断：要不要因为这个量级马上扩成大集群（高可用另算，生产仍按 3 副本部署）。",
+    "scenario_en": "An order-event system expects a steady 300k messages per second at about 1KB each, sent in batches with compression; judging throughput only, the candidate asks whether this volume forces a large cluster right away (HA is separate; production still runs 3 replicas).",
     "q": "这组吞吐量级最支持哪条设计判断？",
     "q_en": "What design decision do these throughput numbers support?",
     "options": [
-      "消息队列单节点吞吐一般只有几千条/秒，必须立刻扩容集群",
-      "单 broker 约 100 万条/秒，300k 通常够用",
+      "消息队列单节点吞吐一般只有几千条/秒，必须立刻扩成大集群",
+      "按经验量级单 broker 约数十万到百万条/秒（依赖消息大小、批量、acks），300k 不必因吞吐马上扩成大集群，需压测确认",
       "吞吐越高说明消息必须变成同步调用",
       "broker 数量和吞吐量没有关系"
     ],
     "answer": [
       1
     ],
-    "why": "现代 Kafka 单 broker 可达约 100 万条/秒，300k 在其内，一个 broker 通常就够，不必急着扩集群。",
-    "why_en": "A modern Kafka broker can reach about one million messages per second, so 300k per second usually fits one broker.",
+    "why": "Kafka 单 broker 经验量级约 0.3M-1M 条/秒，强依赖消息大小、batch、acks 和复制；题面是 1KB、批量+压缩，300k 不必因吞吐马上扩成大集群，但要压测，且高可用仍需按复制因子部署至少 3 个 broker。",
+    "why_en": "A Kafka broker's ballpark is about 0.3M to 1M messages per second, heavily dependent on message size, batching, acks and replication; with batched, compressed 1KB messages, 300k doesn't force a large cluster, but load-test it and still run at least 3 brokers for replication.",
     "options_en": [
-      "A single queue node typically handles only a few thousand per second, so scale the cluster immediately.",
-      "A single broker handles about a million per second, so 300k usually fits.",
+      "A single queue node typically handles only a few thousand per second, so scale to a large cluster immediately.",
+      "A broker's ballpark is several hundred thousand to a million messages per second (depending on size, batching and acks), so 300k doesn't force a large cluster yet; confirm with a load test.",
       "Higher throughput means messages must become synchronous calls.",
       "Broker count has no relationship to throughput."
     ],
@@ -822,14 +822,14 @@
       "throughput"
     ],
     "optionExplanations": [
-      "错，几千条/秒严重低估了现代消息队列，单 broker 能到百万级。",
-      "对，单 broker 能到约百万条/秒，300k 完全在一个 broker 能力内。",
+      "错，几千条/秒严重低估了现代消息队列，单 broker 能到数十万乃至百万级。",
+      "对，单 broker 经验量级在数十万到百万条/秒，300k 不必因吞吐马上扩成大集群，但要压测确认。",
       "错，吞吐高低不影响调用是同步还是异步，这是两个维度的问题。",
       "错，broker 数量直接决定整个集群能承担多少总吞吐。"
     ],
     "optionExplanations_en": [
-      "Wrong, a few thousand per second badly underestimates modern queues; a single broker reaches roughly a million.",
-      "Right, one broker handles about a million messages per second, so 300k fits comfortably within one broker.",
+      "Wrong, a few thousand per second badly underestimates modern queues; a single broker reaches hundreds of thousands to a million.",
+      "Right, a broker's ballpark is hundreds of thousands to a million per second, so 300k doesn't force a large cluster, but confirm with a load test.",
       "Wrong, throughput level doesn't determine sync versus async calls, those are separate design dimensions.",
       "Wrong, broker count directly sets how much total throughput the cluster can carry."
     ]
@@ -955,12 +955,12 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "app-server",
-    "scenario": "一个网关服务要支撑 80k 长连接（WebSocket）在线；候选人在判断一台优化过的应用服务器扛不扛得住。",
-    "scenario_en": "A gateway must support 80k live WebSocket connections, and the candidate is deciding whether one tuned app server can handle it.",
+    "scenario": "一个网关服务要支撑 80k 长连接（WebSocket）在线，绝大多数连接空闲、每秒消息量很低；候选人只从容量角度判断一台优化过的应用服务器扛不扛得住（冗余另算）。",
+    "scenario_en": "A gateway must support 80k live WebSocket connections, most of them idle with very low message rates; judging capacity only (redundancy aside), the candidate asks whether one tuned app server can handle it.",
     "q": "这组并发连接量级最支持哪条设计判断？",
     "q_en": "What design decision does this connection-count number support?",
     "options": [
-      "单机 100k+ 并发连接的参考值够覆盖，先别急着加机器",
+      "优化过的单机参考可到 100k+ 并发连接，80k 从容量看先别急着加机器",
       "应用服务器一般每台只能扛 1k 连接，必须马上加机器扩容",
       "连接数超过 1 万就必然是内存瓶颈",
       "并发连接数和服务器优化程度无关"
@@ -968,10 +968,10 @@
     "answer": [
       0
     ],
-    "why": "容量单位是每机并发连接：优化过的单机 ≈ 100k+，机器数 = 80k ÷ 100k < 1，所以一台够。连接本身的内存/fd 只是次要成本，先见顶的是 CPU。",
-    "why_en": "Count capacity per machine in concurrent connections: a tuned server holds roughly 100k+, so 80k divided by that is under one machine; the per-connection memory and file descriptors are a secondary cost, and CPU tops out first.",
+    "why": "优化过（调大 fd 上限、内核参数）的单机参考可撑 100k+ 空闲长连接，80k 在范围内。先见顶的是什么取决于负载：空闲连接多时常是内存/fd，消息密集时是 CPU。生产上仍要至少两台做冗余。",
+    "why_en": "A tuned server (raised file-descriptor limits and kernel settings) can hold roughly 100k+ mostly idle connections, so 80k fits; which resource saturates first depends on load, often memory and descriptors for idle connections and CPU for chatty ones, and production still needs at least two servers for redundancy.",
     "options_en": [
-      "The 100k+ concurrent connection reference covers it, no need to scale out yet.",
+      "A tuned server can reach roughly 100k+ concurrent connections, so on capacity alone 80k doesn't require more machines yet.",
       "Each application server typically handles only 1k connections, so add machines and scale out now.",
       "Past 10k connections it is always a memory bottleneck.",
       "Concurrent connection capacity has nothing to do with server tuning."
@@ -989,15 +989,15 @@
       "connections"
     ],
     "optionExplanations": [
-      "对，80k 落在单机 100k+ 并发连接的参考范围内，先不用加机器。",
+      "对，80k 落在优化过的单机 100k+ 并发连接参考范围内，从容量看先不用加机器。",
       "错，1k 太保守了，优化过的应用服务器常能撑到十万级连接。",
-      "错，连接数走高先撞上的通常是 CPU，不是内存这道墙。",
+      "错，「超过 1 万就必然」太绝对；先见顶的资源取决于负载，空闲连接多时常是内存/fd，消息密集时是 CPU。",
       "错，是否做过连接调优直接决定单机能扛多少并发连接。"
     ],
     "optionExplanations_en": [
-      "Right, 80k falls within the 100k+ concurrent-connection reference for one machine, no need to add hardware yet.",
+      "Right, 80k falls within the 100k+ concurrent-connection reference for one tuned machine, so on capacity alone no need to add hardware yet.",
       "Wrong, 1k is far too conservative, a tuned application server often sustains six-figure connection counts.",
-      "Wrong, rising connections usually hit CPU first, not the memory wall.",
+      "Wrong, 'always past 10k' is too absolute; which resource saturates first depends on load, often memory and descriptors for idle connections and CPU for chatty ones.",
       "Wrong, whether the server has been tuned directly determines how many connections it can hold."
     ]
   },
@@ -1014,18 +1014,18 @@
     "options": [
       "内存",
       "同时的并发连接数",
-      "CPU（不是内存）",
+      "CPU",
       "磁盘"
     ],
     "answer": [
       2
     ],
-    "why": "扩容单位是核：机器数 = QPS × 每请求 CPU 时间 ÷ 单机核数，CPU 先见顶。内存是次要成本，可放心用本地缓存换 CPU。",
-    "why_en": "The scaling unit is CPU cores: machines equal QPS times CPU time per request divided by cores per box, so CPU saturates first and memory is the secondary cost you can happily spend on local caching.",
+    "why": "题面信号是 CPU 持续高、内存富余，所以这台机器的第一瓶颈是 CPU。对很多无状态的计算型服务，确实常按「QPS × 每请求 CPU 时间 ÷ 单机核数」估机器数，富余的内存可以拿来做本地缓存换 CPU；但 I/O 或内存密集的服务不一定如此。",
+    "why_en": "The stated signals, high CPU with spare memory, make CPU the first bottleneck here; for many stateless compute-bound services you size machines as QPS times CPU time per request divided by cores and can spend spare memory on local caching, though I/O- or memory-bound services may differ.",
     "options_en": [
       "Memory.",
       "Concurrent connection count.",
-      "CPU, not memory.",
+      "CPU.",
       "Disk."
     ],
     "tags": [
@@ -1106,25 +1106,25 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "app-server",
-    "scenario": "一个电商大促前，团队在设计自动扩容策略：流量升高就临时加机器，而不是长期超额预置。",
-    "scenario_en": "Before a shopping event, the team designs auto-scaling that adds machines during traffic spikes instead of permanently over-provisioning.",
+    "scenario": "一个电商大促前，团队在设计自动扩容策略：集群预留了空余节点，流量升高就临时多起容器实例，而不是长期超额预置。",
+    "scenario_en": "Before a shopping event, the team designs auto-scaling: the cluster keeps spare nodes, and during traffic spikes it starts more container instances instead of permanently over-provisioning.",
     "q": "容器启动速度这个量级最支持哪条设计判断？",
     "q_en": "What design decision does this container startup time support?",
     "options": [
       "容器启动普遍要好几十分钟，只能靠长期大量超额预置",
       "启动速度和自动扩容策略完全无关",
-      "容器 30-60 秒即可起新实例，可支撑激进自动扩容",
+      "在已有节点上，容器通常几十秒（约 30-60 秒）就能起好，可支撑较激进的自动扩容",
       "容器启动越快，说明可以完全不做健康检查"
     ],
     "answer": [
       2
     ],
-    "why": "容器化应用 30-60 秒即可起新实例，这个速度让「激进自动扩容」成为超额预置之外的可行替代方案。",
-    "why_en": "Containerized apps start in about 30 to 60 seconds, making aggressive auto-scaling practical instead of over-provisioning.",
+    "why": "在已有空余节点上，容器实例通常几十秒级就能就绪（取决于镜像大小、应用初始化和健康检查），这让「临时加实例」成为超额预置之外的可行方案；如果需要新开 VM 节点，通常要分钟级，所以题面预留了节点。",
+    "why_en": "On spare nodes, container instances are typically ready in tens of seconds, depending on image size, app init and health checks, making on-demand scaling a practical alternative to over-provisioning; adding new VM nodes usually takes minutes, which is why the scenario keeps spare nodes.",
     "options_en": [
       "Containers generally take many tens of minutes to start, so only heavy long-term over-provisioning works.",
       "Startup speed has nothing at all to do with auto-scaling strategy.",
-      "Containers start in 30-60 seconds, which can support aggressive auto-scaling.",
+      "On existing nodes, containers usually start in tens of seconds (about 30-60s), which can support fairly aggressive auto-scaling.",
       "The faster a container starts, the more it means health checks can be skipped entirely."
     ],
     "termDefinitions": [
@@ -1142,13 +1142,13 @@
     "optionExplanations": [
       "错，几十分钟是虚拟机时代的旧印象，容器启动通常是几十秒级。",
       "错，启动越快，自动扩容才越敢激进地临时加实例来应对峰值。",
-      "对，30-60 秒的启动速度让「大促时临时加机器」成为现实选项。",
+      "对，在已有节点上几十秒的启动速度让「大促时临时加实例」成为现实选项；需要新开 VM 节点则通常要分钟级。",
       "错，启动快慢和要不要做健康检查是两件事，快启动也需要探活。"
     ],
     "optionExplanations_en": [
       "Wrong, tens of minutes is a leftover VM-era assumption; containers typically start in tens of seconds.",
       "Wrong, faster startup is exactly what makes aggressive auto-scaling safe to lean on during spikes.",
-      "Right, 30-60 second startup makes 'add machines temporarily for the peak' a realistic option.",
+      "Right, on existing nodes, tens-of-seconds startup makes 'add instances temporarily for the peak' a realistic option; new VM nodes usually take minutes.",
       "Wrong, startup speed and health checks are separate concerns; even fast-starting containers still need liveness checks."
     ]
   },
@@ -1166,18 +1166,18 @@
       "跨大洲和同 AZ 内部延迟其实相差无几",
       "只要还在同一个区域内，延迟就一定稳定小于 1ms",
       "网络延迟高低和可用区怎么划分完全无关",
-      "同区跨 AZ 延迟约 1-2ms，是可靠默认架构"
+      "同区跨 AZ 往返通常只有 1-2ms 级，把副本放同区另一 AZ 是延迟可接受的高可用默认做法"
     ],
     "answer": [
       3
     ],
-    "why": "同 AZ 内 <1ms，同区跨 AZ 1-2ms，跨区域 50-150ms；这组数字支撑了同区多 AZ 部署这种可靠架构。",
-    "why_en": "Latency is under a millisecond within an AZ, 1-2ms across AZs in a region, and 50-150ms cross-region, which supports multi-AZ deployment as a reliable default.",
+    "why": "同 AZ 内通常 <1ms，同区跨 AZ 通常 1-2ms 级（AWS 描述为个位数毫秒），跨大洲 50-150ms。所以同区多 AZ 部署能兼顾故障隔离和可接受延迟；报表放在另一个大洲则要接受几十到上百毫秒。",
+    "why_en": "Latency is typically under a millisecond within an AZ, around 1-2ms across AZs in a region (AWS says single-digit milliseconds), and 50-150ms across continents, so same-region multi-AZ gives fault isolation with acceptable latency.",
     "options_en": [
       "Cross-continent and within-AZ latency are basically the same.",
       "As long as you stay inside one region, latency is always steadily under 1ms.",
       "Network latency level has nothing to do with how availability zones are laid out.",
-      "Cross-AZ latency within a region runs about 1-2ms, a reliable default architecture."
+      "Cross-AZ round trips within a region are typically around 1-2ms, so a replica in another AZ of the same region is an acceptable-latency HA default."
     ],
     "termDefinitions": [
       {
@@ -1200,13 +1200,13 @@
       "错，跨大洲要到 50-150ms，和同 AZ 内 <1ms 差了两个数量级，不是没区别。",
       "错，「一定 <1ms」太绝对，跨 AZ 还是有 1-2ms 的额外开销。",
       "错，AZ 之间是否跨机房，直接决定延迟落在哪个数量级。",
-      "对，同区跨 AZ 稳定在 1-2ms，兼顾了隔离性和可接受的延迟。"
+      "对，同区跨 AZ 往返通常在 1-2ms 级（AWS 称个位数毫秒），兼顾了隔离性和可接受的延迟。"
     ],
     "optionExplanations_en": [
       "Wrong, cross-continent runs 50-150ms, two orders of magnitude above the sub-millisecond same-AZ figure, not 'basically the same.'",
       "Wrong, 'always under 1ms' is too strong; crossing AZs still adds roughly 1-2ms of overhead.",
       "Wrong, whether traffic crosses data-center boundaries directly determines which latency tier it lands in.",
-      "Right, cross-AZ latency within a region holds steady around 1-2ms, balancing isolation with acceptable delay."
+      "Right, cross-AZ round trips typically run around 1-2ms (AWS says single-digit milliseconds), balancing isolation with acceptable delay."
     ]
   },
   {
@@ -1260,24 +1260,24 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "hardware",
-    "scenario": "一个日志归档系统单节点数据量已经涨到 40TB 本地磁盘，团队在争论要不要马上上分布式文件系统。",
-    "scenario_en": "A log-archive system has grown to 40TB of local disk on one node, and the team is debating whether to move to a distributed file system now.",
+    "scenario": "一个日志处理节点的本地数据量涨到 40TB，团队在争论要不要因为容量马上上分布式文件系统（数据另有副本/备份，耐久性不在本题讨论内）。",
+    "scenario_en": "A log-processing node has grown to 40TB of local data, and the team is debating whether capacity alone forces a move to a distributed file system now (data is replicated or backed up elsewhere; durability is out of scope).",
     "q": "这组存储量级最支持哪条设计判断？",
     "q_en": "What design decision does this storage-size number support?",
     "options": [
       "本地磁盘普遍封顶 1TB，这个量级早该上分布式了",
-      "本地 SSD/HDD 上限很高，40TB 单机能装下",
+      "本地 SSD/HDD 机型容量上限很高，40TB 单机装得下，容量不是马上分布式的理由",
       "只能用网络存储，本地磁盘不可用",
       "存储容量和实例类型无关"
     ],
     "answer": [
       1
     ],
-    "why": "本地 SSD 可达 60TB（i3en），HDD 达 336TB（D3en）；40TB 单机可行，存储早已不是主要约束。",
-    "why_en": "Modern instances offer up to 60TB of local SSD or 336TB of HDD, so 40TB fits on a single machine without going distributed.",
+    "why": "本地 SSD 机型可到约 60TB（i3en），HDD 可到约 336TB（d3en），40TB 单机装得下，容量不是马上上分布式的理由。注意这些是 instance store，实例停止/终止会丢数据，归档类数据仍要靠副本、备份或对象存储保证耐久。",
+    "why_en": "Local-SSD instances reach about 60TB (i3en) and HDD about 336TB (d3en), so 40TB fits one machine and capacity isn't the reason to distribute; but these are instance stores that lose data when the instance stops or terminates, so archives still need replication, backups or object storage.",
     "options_en": [
       "Local disks typically cap at 1TB, so at this scale it's overdue for distribution.",
-      "Local SSD and HDD ceilings are high, so 40TB fits one machine.",
+      "Local SSD and HDD instance ceilings are high, so 40TB fits one machine and capacity alone isn't a reason to distribute.",
       "Only network storage works; local disks are not usable.",
       "Storage capacity has nothing to do with instance type."
     ],
@@ -1300,13 +1300,13 @@
     ],
     "optionExplanations": [
       "错，1TB 是很旧的经验值，现在本地盘规格已经涨了几十倍。",
-      "对，本地 SSD 可到 60TB、HDD 可到 336TB，40TB 单机完全能装下。",
+      "对，本地 SSD 可到约 60TB、HDD 可到约 336TB，40TB 单机装得下，容量不是马上分布式的理由；耐久性另靠副本或备份。",
       "错，本地磁盘依然可用，很多高吞吐场景反而更偏好本地盘。",
       "错，不同实例类型配的本地盘规格差别很大，两者高度相关。"
     ],
     "optionExplanations_en": [
       "Wrong, 1TB is a stale reference; local disk sizes have grown dozens of times over since then.",
-      "Right, local SSD reaches up to 60TB and HDD up to 336TB, so 40TB fits comfortably on one machine.",
+      "Right, local SSD reaches about 60TB and HDD about 336TB, so 40TB fits on one machine and capacity alone isn't a reason to distribute; durability comes from replicas or backups.",
       "Wrong, local disks are still very usable, and many high-throughput workloads actually prefer them.",
       "Wrong, local disk sizing varies a lot by instance type, so the two are closely tied together."
     ]
@@ -1478,25 +1478,25 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个团队只用一台数据库主实例，没有分片，正在讨论这是不是单点故障。",
-    "scenario_en": "A team uses one primary database instance without sharding and is debating whether that automatically means a single point of failure.",
+    "scenario": "一个团队只用一个数据库主库，没有分片；主库在另外两个可用区各有一个副本，并配置了自动故障转移。大家在讨论「不分片」是不是就等于单点故障。",
+    "scenario_en": "A team runs a single primary database with no sharding; it has one replica in each of two other availability zones with automatic failover configured. They are debating whether \"no sharding\" automatically means a single point of failure.",
     "q": "「单实例数据库」是否就等于单点故障（SPOF）？",
     "q_en": "Does a single database instance automatically mean a SPOF?",
     "options": [
-      "是，只用一个实例就必然是单点故障",
+      "是，只要没分片就必然是单点故障",
       "只有分片才能避免单点",
-      "不是，主库+只读副本能做高可用",
+      "不是，主库加跨 AZ 副本和自动故障转移就能做高可用，分片解决的是容量和吞吐",
       "副本反而会降低可用性"
     ],
     "answer": [
       2
     ],
-    "why": "「不分片」不等于「单点」：主库 + 只读副本（如 Aurora 多 AZ 故障转移）就能做高可用；HA 复制与 scale 分片是两回事。",
-    "why_en": "A single instance is not a single point of failure, since you still run a primary with read replicas for availability, separate from sharding for scale.",
+    "why": "「不分片」不等于「单点」：题面里主库有跨 AZ 副本和自动故障转移，主库挂了副本会被提升，所以不是 SPOF。HA 靠复制+故障转移，分片解决 scale，是两回事。如果真的只有一个实例、没有副本，那才是单点。",
+    "why_en": "No sharding is not the same as a single point of failure: with cross-AZ replicas and automatic failover, a replica is promoted when the primary fails; HA comes from replication plus failover, while sharding is for scale. A truly lone instance with no replica would be a SPOF.",
     "options_en": [
-      "Yes, having just one instance is inherently a single point of failure.",
+      "Yes, without sharding it is inherently a single point of failure.",
       "Only sharding can avoid a single point of failure.",
-      "No, a primary with read replicas provides high availability.",
+      "No, a primary with cross-AZ replicas and automatic failover provides high availability; sharding addresses capacity and throughput.",
       "Replicas actually reduce availability."
     ],
     "termDefinitions": [
@@ -1523,15 +1523,15 @@
       "sharding"
     ],
     "optionExplanations": [
-      "错，「必然」太绝对；单实例配上副本和故障转移就能做到高可用。",
+      "错，「必然」太绝对；不分片的主库配上跨 AZ 副本和自动故障转移，就不是单点。",
       "错，分片解决的是容量和吞吐，避免单点靠的是复制和故障转移。",
-      "对，主库配只读副本、支持自动故障转移，就不再是单点故障。",
+      "对，主库加跨 AZ 副本和自动故障转移就能做高可用，不是单点；分片解决的是容量和吞吐。",
       "错，副本恰恰是提高可用性的手段，不会反过来拖累它。"
     ],
     "optionExplanations_en": [
-      "Wrong, 'inherently' is too absolute; a single instance paired with replicas and failover already achieves high availability.",
+      "Wrong, 'inherently' is too absolute; an unsharded primary with cross-AZ replicas and automatic failover is not a single point of failure.",
       "Wrong, sharding addresses capacity and throughput, avoiding a single point of failure comes from replication and failover.",
-      "Right, a primary with read replicas and automatic failover is no longer a single point of failure.",
+      "Right, a primary with cross-AZ replicas and automatic failover provides high availability and is not a SPOF; sharding is for capacity and throughput.",
       "Wrong, replicas are exactly what raises availability, they don't work against it."
     ]
   },
@@ -1590,9 +1590,9 @@
     "scenario_en": "Cache-estimation anchors are about 1ms hit latency, roughly 100k+ ops/s per instance, and up to about 1TB of memory.",
     "q": "这些缓存数字约束哪个扩容判断？",
     "q_en": "What scaling judgment do these cache numbers constrain?",
-    "text": "这些数字说明：数据集接近 1TB 前先别按内存分片；真正要盯的是 {{ops/s 或网络带宽}}，延迟目标低到亚毫秒时才考虑 {{加节点或分片}}。",
-    "why": "1ms、100k+ ops/s、1TB 是缓存容量估算的锚点，不是要背的孤立数字。它们的下游用途是判断单实例是否够用，以及扩容先看吞吐/带宽还是内存。",
-    "why_en": "These cache numbers are sizing inputs: they tell you whether one instance is enough and whether throughput, bandwidth, or memory is the real bottleneck.",
+    "text": "这些数字说明：数据集接近 1TB 前先别因为内存去分片；更常先撞上的是 {{ops/s 或网络带宽}}，当它们持续逼近单实例上限时再 {{加节点或分片}}。",
+    "why": "1ms、100k+ ops/s、1TB 是缓存容量估算的锚点：数据集远小于 1TB 时内存不是瓶颈，先撞上的通常是 ops/s 或带宽，逼近单实例上限时再加节点或分片。",
+    "why_en": "These cache numbers are sizing inputs: with a dataset well under 1TB, memory isn't the bottleneck, ops/s or bandwidth usually is, and you add nodes or shards when those approach single-instance limits.",
     "tags": [
       "numbers",
       "caching",
@@ -1691,26 +1691,26 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个后台任务系统给数据库直接开了 3k 个短连接，没用连接池；候选人在判断这样是否安全。",
-    "scenario_en": "A background-job system opens 3k short database connections directly without pooling, and the candidate is judging whether that is safe.",
+    "scenario": "一个后台任务系统不经连接池，直接对一台 PostgreSQL 主库开 3k 个短连接（用完即断）；候选人在判断这样是否合理。",
+    "scenario_en": "A background-job system opens 3k short-lived connections directly to one PostgreSQL primary without pooling (connect, query, disconnect), and the candidate is judging whether that is reasonable.",
     "q": "这组并发连接量级最支持哪条设计判断？",
     "q_en": "What design decision does this concurrent-connection number support?",
     "options": [
-      "单实例能扛 5k-20k 连接，3k 安全但该上连接池",
-      "数据库最多只能扛约 100 个连接，3k 早就超了",
-      "并发连接数没有上限，不用管理",
-      "连接数和数据库实例类型无关"
+      "能不能撑住取决于 max_connections 和内存配置；即便调高了上限，PostgreSQL 每连接一个进程、短连接频繁建连都很贵，应该上连接池（如 PgBouncer）收敛连接数",
+      "数据库连接数没有上限，3k 不需要管理",
+      "任何数据库都只能扛约 100 个连接，3k 必然全部被拒",
+      "连接数上限和实例内存、配置完全无关"
     ],
     "answer": [
       0
     ],
-    "why": "单实例数据库约支持 5k-20k 并发连接，3k 在安全范围内；连接数常成为运维约束，这也是用连接池的原因。",
-    "why_en": "A single database instance supports roughly 5,000 to 20,000 concurrent connections, so 3k is safe but still worth pooling.",
+    "why": "PostgreSQL 的连接上限由 max_connections 决定（默认 100，可以调高，云托管常按内存算），每个连接是一个后端进程，占内存且建连要 fork。3k 短连接即使不超上限也很浪费，所以应该用连接池把真实连接收敛到几十到几百个。",
+    "why_en": "PostgreSQL's limit is max_connections (default 100, raisable, and managed services derive it from memory), and each connection is a backend process that costs memory and a fork to open, so 3k short-lived connections are wasteful even under the limit; pool them down to tens or hundreds of real connections.",
     "options_en": [
-      "A single instance handles 5k-20k connections; 3k is safe but should use pooling.",
-      "A database can only handle about 100 connections; 3k is already way over.",
-      "Concurrent connections have no ceiling, so no need to manage them.",
-      "Connection capacity has nothing to do with instance type."
+      "Whether it holds depends on max_connections and memory; even with a raised limit, PostgreSQL's process-per-connection and frequent reconnects are expensive, so use a pooler such as PgBouncer.",
+      "Database connections have no ceiling, so 3k needs no management.",
+      "Every database can only handle about 100 connections, so 3k will definitely all be rejected.",
+      "Connection limits have nothing to do with instance memory or configuration."
     ],
     "termDefinitions": [
       {
@@ -1725,16 +1725,16 @@
       "connections"
     ],
     "optionExplanations": [
-      "对，3k 落在单实例 5k-20k 的安全范围，但没连接池还是浪费资源。",
-      "错，100 是很旧的经验值，现代单实例常能扛到 5k 以上。",
+      "对，上限取决于 max_connections 和内存配置；PostgreSQL 每连接一个进程、短连接频繁建连很贵，应该用连接池收敛连接数。",
       "错，连接数是有硬上限的，撞上限后新连接会直接被拒绝。",
-      "错，实例规格决定了它能维持多少并发连接，两者密切相关。"
+      "错，100 只是 PostgreSQL 的默认值，可以调高，云托管的上限还按内存计算，不是所有数据库的固定上限。",
+      "错，连接上限和实例内存、配置直接相关。"
     ],
     "optionExplanations_en": [
-      "Right, 3k sits inside a single instance's 5k-20k safe range, but skipping pooling still wastes resources.",
-      "Wrong, 100 is a very old reference; a modern single instance commonly handles well above 5k.",
+      "Right, the limit depends on max_connections and memory; PostgreSQL's process-per-connection and frequent reconnects are expensive, so pool to cut the connection count.",
       "Wrong, connection count has a real hard ceiling, and new connections get rejected once you hit it.",
-      "Wrong, instance size determines how many concurrent connections it can sustain, the two are closely linked."
+      "Wrong, 100 is only PostgreSQL's default and can be raised, and managed services derive the limit from memory; it isn't a fixed cap for every database.",
+      "Wrong, the connection limit is directly tied to instance memory and configuration."
     ]
   },
   {
@@ -1743,24 +1743,24 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "message-queue",
-    "scenario": "一个订单事件系统平均消息体约 5KB，要求保留 3 个月历史用于回放和审计。",
-    "scenario_en": "An order-event system has messages around 5KB and must retain three months of history for replay and audit.",
+    "scenario": "一个订单事件系统用 Kafka，平均消息体约 5KB，要求保留 3 个月历史用于回放和审计。",
+    "scenario_en": "An order-event system uses Kafka, with messages around 5KB, and must retain three months of history for replay and audit.",
     "q": "这组消息大小与保留量级最支持哪条设计判断？",
     "q_en": "What design decision do these message size and retention numbers support?",
     "options": [
       "消息队列一般只能处理小于 1KB 的小消息",
-      "队列能高效处理 1KB-10MB，保留数月可行",
+      "5KB 对 Kafka 是常规大小（默认单条上限约 1MB），按 retention 配置保留数月可行，按写入量估算磁盘即可",
       "队列一旦重启数据就会全部丢失，存不了 3 个月",
       "消息大小和保留时长完全互相无关，可以随便设置"
     ],
     "answer": [
       1
     ],
-    "why": "队列可高效处理 1KB-10MB 消息，单 broker 存储达 50TB，保留数周至数月；5KB、3 个月都在能力内。",
-    "why_en": "Modern queues efficiently handle 1KB-10MB messages and retain data for weeks to months, so a 5KB message kept for three months fits easily.",
+    "why": "Kafka 把消息持久化在磁盘日志里，保留时长由 retention.ms / retention.bytes 配置，保留数月可行；5KB 远低于默认约 1MB 的单条上限。需要的磁盘 = 写入速率 × 5KB × 3 个月 × 副本数，按这个算 broker 数。SQS 这类队列最长只保留 14 天，不适合这个需求。",
+    "why_en": "Kafka persists messages in an on-disk log with retention set by retention.ms or retention.bytes, so months of retention works, and 5KB is far below the default ~1MB per-message limit; size disks as write rate times 5KB times three months times replication factor.",
     "options_en": [
       "Message queues typically handle only messages smaller than 1KB.",
-      "Queues efficiently handle 1KB-10MB messages, so months of retention works fine.",
+      "5KB is routine for Kafka (default per-message limit is about 1MB), and months of retention works via retention settings once you size the disk from write volume.",
       "Once the queue restarts, all data is lost, so three months of retention is impossible.",
       "Message size and retention length are totally unrelated, so set them however you like."
     ],
@@ -1801,14 +1801,14 @@
       ]
     },
     "optionExplanations": [
-      "错，<1KB 太窄了，现代队列常规就能处理到 10MB 级的消息。",
-      "对，5KB 消息、3 个月保留都在队列的能力范围内，直接可行。",
+      "错，<1KB 太窄了，5KB 对 Kafka 是常规大小，默认单条上限约 1MB。",
+      "对，5KB 远低于默认约 1MB 的单条上限，retention 配置下保留数月可行，按写入量估算磁盘即可。",
       "错，持久化正是队列的设计目标，重启不会清空已落盘的数据。",
       "错，消息越大、保留越久，占用的存储自然越多，两者是相关的。"
     ],
     "optionExplanations_en": [
-      "Wrong, under 1KB is far too narrow; modern queues routinely handle messages up to 10MB.",
-      "Right, a 5KB message with three months of retention both sit comfortably inside a queue's capability.",
+      "Wrong, under 1KB is far too narrow; 5KB is routine for Kafka, whose default per-message limit is about 1MB.",
+      "Right, 5KB is far below the default ~1MB limit, and months of retention works via retention settings once you size the disk from write volume.",
       "Wrong, durability is exactly what queues are built for, a restart doesn't wipe data already written to disk.",
       "Wrong, bigger messages and longer retention both directly increase the storage footprint, the two are related."
     ]
@@ -1903,13 +1903,13 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "throughput-anchors",
-    "scenario": "面试估算时，你要把关系型数据库、Redis、Kafka 和分区型 NoSQL 的单节点/单分区吞吐粗略对齐。所有数字都是小 payload、同区网络、调优良好时的数量级，不是 SLA。",
-    "scenario_en": "In an interview estimate, you need rough throughput anchors for relational DBs, Redis, Kafka, and partitioned NoSQL. These are ballparks for small payloads, same-region networking, and tuned systems, not SLAs.",
+    "scenario": "面试估算时，你要用本课的锚点表把关系型数据库、Redis、Kafka 和分区型 NoSQL 的单节点/单分区吞吐粗略对齐。所有数字都是小 payload、同区网络、调优良好时的数量级，不是 SLA，也不是硬上限。",
+    "scenario_en": "In an interview estimate, use this lesson's anchor table to roughly align single-node or single-partition throughput for relational DBs, Redis, Kafka, and partitioned NoSQL. These are ballparks for small payloads, same-region networking, and tuned systems — not SLAs or hard limits.",
     "q": "补全常见系统吞吐锚点：",
     "q_en": "Fill in common system throughput anchors:",
-    "text": "第一轮估算：RDBMS 读约 {{10k-50k TPS}}、写约 {{10k-20k TPS}}；Redis 简单命令读写约 {{100k-200k+ ops/s}}；Kafka 单 broker 小消息批量摄入约 {{0.3M-1M msg/s}}；NoSQL 总吞吐靠 {{分区}} 扩展，先防热分区。",
-    "why": "读写不完全对称：关系型单主写通常低于读；Redis 简单命令读写同量级；Kafka 看消息大小、batch、partition 和 broker。",
-    "why_en": "Read and write ceilings are not identical: relational single-primary writes are lower than reads, Redis simple commands are similar order, and Kafka depends on message size, batching, partitions, and brokers.",
+    "text": "按本课锚点做第一轮估算：RDBMS 简单读约 {{10k-50k QPS}}、写约 {{10k-20k TPS}}；Redis 简单命令读写约 {{100k-200k+ ops/s}}；Kafka 单 broker 小消息批量摄入约 {{0.3M-1M msg/s}}；NoSQL 总吞吐靠 {{分区}} 扩展，先防热分区。",
+    "why": "读写不完全对称：关系型单主写通常低于读；Redis 简单命令读写同量级；Kafka 看消息大小、batch、partition 和 broker。这些是本课的第一轮锚点，读的上限尤其依赖索引、缓存命中和查询复杂度，简单点查实测常高于此；容量规划以压测为准。",
+    "why_en": "Read and write ceilings are not identical: relational single-primary writes are lower than reads, Redis simple commands are similar order, and Kafka depends on message size, batching, partitions, and brokers. These are this lesson's first-pass anchors; read ceilings in particular depend on indexes, cache hit rate, and query complexity, and simple point reads often benchmark higher, so capacity planning must rely on load tests.",
     "whenOtherWins": "复杂事务、二级索引、Lua/ZSET、大 value、强一致读、跨区复制、acks=all、小 batch 都会把实际吞吐打下来；容量规划要压测并留 2-5x 峰值余量。",
     "tradeoff": "面试估算锚点 vs 真实压测结果",
     "table": {
@@ -1976,7 +1976,8 @@
       "redis",
       "kafka",
       "database"
-    ]
+    ],
+    "text_en": "First-pass estimate with this lesson's anchors: RDBMS simple reads ~{{10k-50k QPS}}, writes ~{{10k-20k TPS}}; Redis simple commands ~{{100k-200k+ ops/s}}; one Kafka broker ~{{0.3M-1M msg/s}} for small batched messages; NoSQL scales total throughput by {{partitions}}, so guard against hot partitions first."
   },
   {
     "id": "sd-numbers-037",
@@ -1984,13 +1985,13 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "scaling-units",
-    "scenario": "面试里估算数据库、搜索和消息队列的吞吐，不只问「这个系统能扛多少」，还要先说清楚扩展单位：broker、partition、node、shard、physical partition 各是什么意思。",
-    "scenario_en": "In an interview, throughput estimates for databases, search, and queues must name the scaling unit first: broker, partition, node, shard, or physical partition.",
+    "scenario": "面试里估算数据库、搜索和消息队列的吞吐，要先说清扩展单位：Kafka 的 broker / partition、DynamoDB 的 physical partition、CockroachDB 的 range、ClickHouse 的 shard，以及 ClickHouse 写入侧的 part。",
+    "scenario_en": "In an interview, throughput estimates must name the scaling unit first: Kafka brokers and partitions, DynamoDB physical partitions, CockroachDB ranges, ClickHouse shards, plus ClickHouse parts on the write path.",
     "q": "补全常见存储/队列的扩展单位：",
     "q_en": "Fill in common storage and queue scaling units:",
-    "text": "Kafka 的 {{partition}} 是有序日志和并行度单位，{{broker}} 是承载很多 partition 的服务器；DynamoDB 单物理 partition 约 {{3k RCU / 1k WCU}}；CockroachDB 看 {{range / replica}}；ClickHouse 看 {{shard / part}}。",
-    "why": "先说扩展单位再说数字：Kafka 看 partition/broker；DynamoDB 看物理分区；CockroachDB 看 range/Raft；ClickHouse 看 shard/part/merge。",
-    "why_en": "Name the scaling unit before the number: Kafka uses partition/broker, DynamoDB uses physical partitions, CockroachDB uses ranges and Raft replicas, and ClickHouse uses shards, parts, and background merges.",
+    "text": "Kafka 的 {{partition}} 是有序日志和并行度单位，{{broker}} 是承载很多 partition 的服务器；DynamoDB 单物理 partition 约 {{3k RCU / 1k WCU}}；CockroachDB 按 {{range}} 拆分和复制；ClickHouse 横向扩展看 {{shard}}，写入侧还要防小批量插入产生过多 {{part}}。",
+    "why": "先说扩展单位再说数字：Kafka 看 partition/broker；DynamoDB 看物理分区（每个约 3000 RCU / 1000 WCU）；CockroachDB 按 range 拆分，每个 range 由 Raft 副本复制；ClickHouse 靠 shard 横向扩展，part 是每次插入产生的数据片段，太多会压垮后台 merge。",
+    "why_en": "Name the unit before the number: Kafka uses partitions and brokers; DynamoDB uses physical partitions of about 3,000 RCU and 1,000 WCU each; CockroachDB splits data into ranges replicated by Raft; ClickHouse scales out by shards, while parts are per-insert data pieces whose count stresses background merges.",
     "whenOtherWins": "真实容量必须压测。下面数字只适合小 payload、简单读写、同区网络的第一轮估算；强一致、跨区复制、二级索引、大文档、复杂查询都会降低吞吐。",
     "tradeoff": "扩展单位先行 vs 只背系统名数字",
     "table": {
@@ -2090,7 +2091,8 @@
       "mongodb",
       "cockroachdb",
       "clickhouse"
-    ]
+    ],
+    "text_en": "A Kafka {{partition}} is the unit of ordered log and parallelism, and a {{broker}} is the server hosting many partitions; a DynamoDB physical partition handles about {{3k RCU / 1k WCU}}; CockroachDB splits and replicates by {{range}}; ClickHouse scales out by {{shard}} and must avoid too many {{part}}s from small inserts."
   },
   {
     "id": "sd-numbers-038",
@@ -2098,18 +2100,18 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "hardware",
-    "scenario": "一个视频平台的原始素材已累计 3PB，每月还在涨 100TB；团队担心「对象存储会不会存不下」，提议自己搭一套分片存储集群。",
-    "scenario_en": "A video platform has accumulated 3PB of raw footage and adds 100TB a month; the team worries object storage cannot hold it and proposes building a sharded storage cluster.",
+    "scenario": "一个视频平台的原始素材已累计 3PB，每月还在涨 100TB；团队担心「S3 这类托管对象存储会不会存不下」，提议自己搭一套分片存储集群。已知 S3 的总数据量和对象数不设上限，单对象最大 5TB。",
+    "scenario_en": "A video platform has accumulated 3PB of raw footage and adds 100TB a month; the team worries managed object storage like S3 cannot hold it and proposes building a sharded storage cluster. S3 places no limit on total data volume or object count, and a single object can be up to 5TB.",
     "q": "这条容量事实最支持哪条设计判断？",
     "q_en": "What design decision does this capacity fact support?",
     "options": [
-      "对象存储无实际容量上限，3PB 直接放",
+      "容量不该驱动这个设计，3PB 直接放托管对象存储",
       "对象存储每个桶封顶几十 TB，必须自建分片集群才装得下 3PB 素材",
       "先把素材压缩到本地磁盘上限之内，再考虑要不要上云",
       "容量仍是首要约束，应先定期删除旧素材再谈架构"
     ],
     "options_en": [
-      "Object storage has no practical ceiling, so just put the 3PB there.",
+      "Capacity should not drive this design; put the 3PB in managed object storage.",
       "Each object-storage bucket caps at tens of terabytes, so a self-built sharded cluster is required for 3PB.",
       "Compress the footage to fit under the local disk ceiling first, then consider the cloud.",
       "Capacity is still the primary constraint, so purge old footage before designing anything."
@@ -2117,8 +2119,8 @@
     "answer": [
       0
     ],
-    "why": "S3 类对象存储实际无容量上限，PB 级部署是常规做法，存储早已不是主要约束；代价是单次读取延迟远高于本地盘，热素材仍需另配缓存或 CDN。",
-    "why_en": "Object storage like S3 is effectively unlimited and petabyte-scale deployments are routine, so capacity should not drive this design; the tradeoff is much higher per-read latency than local disk.",
+    "why": "S3 不限总量和对象数，PB 级是常规部署，所以「存不下」不是自建集群的理由；真正要算的是成本、存储层级和读延迟（热素材配缓存/CDN）。",
+    "why_en": "S3 limits neither total volume nor object count, and petabyte deployments are routine, so \"it won't fit\" is no reason to build a cluster; the real questions are cost, storage classes, and read latency, with a cache or CDN for hot footage.",
     "optionExplanations": [
       "对，PB 级对象存储是常规部署，容量不该成为架构理由。",
       "错，把块存储的单卷上限套到了对象存储上，两者容量模型不同。",
@@ -2228,18 +2230,18 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "一个读缓存挡在主库前面，命中率从 92% 掉到 65%，但内存用量只有 60%、ops/s 也没涨；团队据此认为「内存没满，不用管」。",
-    "scenario_en": "A read cache in front of the primary database sees its hit rate fall from 92% to 65% while memory sits at 60% and ops per second are flat, so the team concludes nothing is wrong.",
-    "q": "命中率跌破 80% 时，系统实际会怎么坏？",
-    "q_en": "When hit rate falls below 80%, how does the system actually break?",
+    "scenario": "一个读缓存挡在主库前面，命中率从 92% 掉到 65%，但内存用量只有 60%、总读 ops/s 也没涨；团队据此认为「内存没满，不用管」。",
+    "scenario_en": "A read cache in front of the primary database sees its hit rate fall from 92% to 65%, while memory sits at 60% and total read ops per second are flat, so the team concludes nothing is wrong because memory is not full.",
+    "q": "命中率掉到 65% 后，主库这边实际会发生什么？",
+    "q_en": "After the hit rate drops to 65%, what actually happens on the primary database?",
     "options": [
-      "回源请求翻几倍压到主库，热键刚写入就被换出",
+      "未命中从 8% 涨到 35%，回源读约变成原来的 4 倍多，主库可能被压垮",
       "只是少省了一点缓存成本，后端数据库的负载不会有任何变化",
       "缓存服务会自动扩容把命中率补回来，运维侧不需要介入",
       "命中率低只影响写入路径的延迟，读请求完全不受影响"
     ],
     "options_en": [
-      "Origin traffic multiplies onto the primary database, and hot keys get evicted right after being written.",
+      "Misses rise from 8% to 35%, so reads reaching the primary grow more than fourfold and can overload it.",
       "It merely saves a little less on cache cost; database load stays exactly the same.",
       "The cache service auto-scales to restore the hit rate, so operators need not step in.",
       "A low hit rate only affects write-path latency; reads are entirely unaffected."
@@ -2247,18 +2249,18 @@
     "answer": [
       0
     ],
-    "why": "正常时 92% 的读被缓存吃掉；工作集超出可用容量后键刚写入就被换出（churn），命中率跌到 65%，35% 的读全部回源，主库读量翻约 4 倍；恢复靠扩容或缩小工作集，代价是多付一份内存钱。",
-    "why_en": "Normally the cache absorbs 92% of reads; once the working set outgrows capacity, keys are evicted right after being written, the hit rate drops to 65%, and the misses multiply database reads roughly fourfold until you add memory or shrink the working set.",
+    "why": "总读量不变时，回源量 = 总读 × miss 率：35% ÷ 8% ≈ 4.4 倍。所以「内存没满」不代表没事——缓存同时是主库的挡板。内存只用 60% 说明大概率不是容量淘汰，该先查 TTL、key 变更、批量失效或访问模式变化，同时给主库限流或加副本兜底。",
+    "why_en": "With total reads flat, origin traffic equals total reads times the miss rate: 35% over 8% is about 4.4 times. \"Memory is not full\" does not mean things are fine, because the cache also shields the primary. At 60% memory use, capacity eviction is probably not the cause, so check TTL changes, key changes, mass invalidation, or access-pattern shifts while protecting the primary with throttling or replicas.",
     "optionExplanations": [
       "对，miss 从 8% 涨到 35%，主库要接约 4 倍的读。",
       "错，把缓存当成纯省钱手段，忽略了它同时是主库的挡板。",
-      "错，命中率不是自动伸缩指标，churn 必须靠人判断扩容或换淘汰策略。",
+      "错，命中率不是自动伸缩指标，要先查原因，再决定扩容、调 TTL 还是给主库限流。",
       "错，方向搞反了，命中率衡量的是读路径能否绕开数据库。"
     ],
     "optionExplanations_en": [
       "Right, misses climb from 8% to 35%, so the primary absorbs roughly four times the reads.",
       "Wrong, this treats the cache as pure cost savings and forgets it also shields the primary.",
-      "Wrong, hit rate is not an autoscaling signal; churn needs a human call on capacity or eviction policy.",
+      "Wrong, hit rate is not an autoscaling signal; find the cause first, then decide between more capacity, TTL changes, or throttling the primary.",
       "Wrong, the direction is backwards — hit rate measures whether reads can bypass the database at all."
     ],
     "termDefinitions": [
@@ -2296,35 +2298,35 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个下单接口在同一个同步请求里顺序做三次数据库写（订单、扣库存、流水），跑在单节点高性能 Postgres 上，产品给的端到端目标是 p99 < 50ms。",
-    "scenario_en": "A checkout endpoint performs three sequential database writes (order, inventory, ledger) inside one synchronous request on a single-node high-performance Postgres, against a product target of p99 under 50ms.",
+    "scenario": "一个下单接口在同一个同步请求里顺序做三次数据库写（订单、扣库存、流水），每次写都是独立事务、各自 commit；数据库是单节点 Postgres，数据盘是云网络盘，实测单次 commit（含 WAL 刷盘）p99 约 12ms。产品给的端到端目标是 p99 < 50ms。",
+    "scenario_en": "A checkout endpoint performs three sequential database writes (order, inventory, ledger) in one synchronous request, each as its own committed transaction, on a single-node Postgres backed by a cloud network disk where a single commit (including the WAL flush) measures about 12ms at p99. The product target is end-to-end p99 under 50ms.",
     "q": "把提交延迟加起来后，正确判断是？",
     "q_en": "After adding up the commit latencies, what is the right call?",
     "options": [
-      "三次提交占 15-45ms，预算基本被吃光，该合并为一次事务",
+      "三次提交最坏接近 36ms，预算基本被吃光，该合并为一次事务",
       "写提交是亚毫秒级的操作，三次加起来完全可以忽略，延迟预算很宽裕",
       "提交延迟只由网络往返决定，跟一个请求里写了几次没有关系",
       "p99 < 50ms 是公式推导出来的结果，可以按实测情况随时调高"
     ],
     "options_en": [
-      "Three commits take 15-45ms, eating the budget — merge them into one transaction.",
-      "Commit latency is sub-millisecond, so three of them are negligible and the latency budget is roomy.",
+      "Three commits approach 36ms in the worst case, eating the budget — merge them into one transaction.",
+      "Commit latency is sub-millisecond, so three of them are negligible and the budget is roomy.",
       "Commit latency is decided purely by network round trips, unrelated to how many writes a request makes.",
       "The p99 under 50ms figure is derived from a formula, so it can be raised whenever measurements demand."
     ],
     "answer": [
       0
     ],
-    "why": "单节点写提交延迟 5-15ms，三次串行就是 15-45ms；p99 < 50ms 是给定的产品 SLO 而非推导结果，它直接逼你把三次写合并成一次提交，代价是事务变大、锁持有时间变长。",
-    "why_en": "Single-node commit latency runs 5-15ms, so three sequential commits cost 15-45ms; the sub-50ms p99 is a given product target, not a derived number, and it forces you to merge the writes into one commit at the cost of a longer-held lock.",
+    "why": "题面给了实测单次 commit p99 约 12ms，三次串行最坏接近 36ms，留给业务逻辑和网络的只剩十几 ms。合并成一个事务只付一次 WAL 刷盘，代价是事务变大、锁持有时间变长。B 和题面实测矛盾；C 忽略了每次 commit 都要等日志落盘；D 把产品给定的 SLO 当成可以反推的输出。提交延迟强烈依赖存储介质和 synchronous_commit 等配置，本地 NVMe 上可能低一个数量级，所以要用实测数字。",
+    "why_en": "The scenario gives a measured p99 of about 12ms per commit, so three serial commits approach 36ms and leave only a dozen milliseconds for logic and network. One transaction pays a single WAL flush, at the cost of a bigger transaction and longer-held locks. B contradicts the measurement, C ignores that each commit waits for the log flush, and D treats a given SLO as a derived output. Commit latency depends heavily on storage and settings such as synchronous_commit, and can be an order of magnitude lower on local NVMe, so use measured numbers.",
     "optionExplanations": [
-      "对，提交次数是这里唯一能压的变量，合并后只付一次 5-15ms。",
+      "对，提交次数是这里唯一能压的变量，合并后只付一次约 12ms 的提交。",
       "错，把内存读的量级套到了持久化提交上，提交要等日志落盘。",
       "错，同机房网络往返是亚毫秒，真正的开销是每次提交的日志刷盘。",
       "错，SLO 是产品给的输入约束，不是可以随需求反推的输出。"
     ],
     "optionExplanations_en": [
-      "Right, the number of commits is the only variable you can compress here; merging pays 5-15ms once.",
+      "Right, the number of commits is the only variable you can compress here; merging pays the roughly 12ms commit once.",
       "Wrong, this applies memory-read latency to a durable commit, which must wait for the log to hit disk.",
       "Wrong, same-datacenter round trips are sub-millisecond; the real cost is flushing the log on each commit.",
       "Wrong, an SLO is a given input constraint, not an output you can back-solve to fit the design."
@@ -2332,8 +2334,8 @@
     "termDefinitions": [
       {
         "term": "commit latency / 提交延迟",
-        "meaning": "一次写事务从提交到数据库确认持久化所花的时间，单节点高性能配置约 5-15ms。",
-        "meaningEn": "Commit latency is the time from issuing a write transaction to the database confirming durability, about 5-15ms on a tuned single node."
+        "meaning": "一次写事务从提交到数据库确认持久化所花的时间；强烈依赖存储介质和 synchronous_commit 等配置，云网络盘上常是几 ms 到十几 ms，本地 NVMe 上可能低一个数量级。",
+        "meaningEn": "Commit latency is the time from issuing a write transaction to the database confirming durability; it depends heavily on storage and settings such as synchronous_commit, often several to a dozen milliseconds on cloud network disks and possibly an order of magnitude lower on local NVMe."
       },
       {
         "term": "SLO",
@@ -2490,18 +2492,18 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "database",
-    "scenario": "一个 12TiB 的单实例数据库，写只有 3k TPS、未命中读也在 4ms 以内，离常说的分片阈值还远；但全量备份已经要跑 9 小时，一次恢复演练要占掉一整天。",
-    "scenario_en": "A 12TiB single-instance database handles only 3k TPS with sub-4ms uncached reads, far from the usual sharding thresholds, yet a full backup now takes nine hours and a restore drill consumes an entire day.",
+    "scenario": "一个 12TiB 的单实例数据库，写只有 3k TPS、未命中读也在 4ms 以内，离常说的分片阈值还远；但全量备份已经要跑 9 小时，一次恢复演练要占掉一整天，而业务要求的恢复时间目标（RTO）是 2 小时。",
+    "scenario_en": "A 12TiB single-instance database handles only 3k TPS with sub-4ms uncached reads, far from the usual sharding thresholds, yet a full backup takes nine hours and a restore drill takes a full day, while the business requires a recovery time objective (RTO) of two hours.",
     "q": "这算不算真正该拆库的信号？",
     "q_en": "Is this a genuine signal to split the database?",
     "options": [
-      "算，备份与恢复窗口已不可运维，这是运维驱动的拆分",
+      "算，恢复时间远超 RTO，这是运维驱动的拆分信号",
       "不算，数据量和 TPS 都没到常说的阈值，这种情况下就不该动数据库结构",
       "不算，备份慢换更快的磁盘就能解决，跟数据库怎么切分毫无关系",
       "算，因为数据量只要超过 1TiB 就必须立刻分片，这是通用规则"
     ],
     "options_en": [
-      "Yes — the backup and restore window is no longer operable, a scaling driver on its own.",
+      "Yes — restore time far exceeds the RTO, which is an operations-driven reason to split.",
       "No — neither data volume nor TPS has hit the usual thresholds, so the schema should be left alone.",
       "No — a slow backup is fixed by faster disks and has nothing to do with how the database is partitioned.",
       "Yes — any dataset above one tebibyte must be sharded immediately; that is the universal rule."
@@ -2509,8 +2511,8 @@
     "answer": [
       0
     ],
-    "why": "真正的极限不只有数据量和 TPS：备份窗口拉到小时级、恢复演练一天做不完，本身就是该拆的信号；代价是拆完要长期维护跨分片查询、再平衡和分布式事务。",
-    "why_en": "Real limits are not only data volume and throughput — a backup window stretching into hours and a restore drill you cannot finish in a day are themselves reasons to split, at the lasting cost of cross-shard queries and rebalancing.",
+    "why": "真正的极限不只有数据量和 TPS：RTO 是 2 小时，恢复却要一整天，这本身就是该拆（或至少该缩小单库体量）的信号；先评估增量快照、在副本上备份、按时间分区归档能否把恢复压回 2 小时，压不回来再拆，拆完要长期维护跨分片查询和再平衡。",
+    "why_en": "Real limits are not only data volume and throughput: with a two-hour RTO and a full-day restore, that gap alone is a reason to split or at least shrink the single database. First check whether incremental snapshots, replica-side backups, or time-based partition archiving bring restore under two hours; if not, split, accepting the lasting cost of cross-shard queries and rebalancing.",
     "optionExplanations": [
       "对，恢复时间目标做不到，可用性风险已经压过结构简单的收益。",
       "错，把「别过早分片」的正确直觉推到教条，忽略了运维类极限。",

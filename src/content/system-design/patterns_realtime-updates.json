@@ -2619,7 +2619,7 @@
     "q": "这个额外延迟量级更支持哪条判断？",
     "q_en": "What design judgment does this added-latency order of magnitude support?",
     "options": [
-      "Pub/Sub 引入的延迟通常是个位数到十几毫秒，远低于用户能感知的门槛",
+      "多出来的延迟通常是个位数毫秒，远低于用户能感知的门槛",
       "Pub/Sub 会让端到端延迟直接增加好几分钟，几乎完全不能用于任何实时场景",
       "Pub/Sub 延迟接近 1 小时，只适合离线批处理",
       "Pub/Sub 服务必然让系统完全不可用"
@@ -2627,17 +2627,17 @@
     "answer": [
       0
     ],
-    "why": "Pub/Sub 只是多一跳转发，量级通常在 10ms 以内；真正要担心的是它的可用性和分片扩展，而不是这点延迟。",
-    "why_en": "Pub/sub adds only a small extra hop, typically under ten milliseconds, so the real concerns are its availability and sharding, not this added latency.",
+    "why": "同区的 Redis Pub/Sub 只是多一两跳内存转发，增加的延迟通常是个位数毫秒；真正要关心的是它的可用性（Redis Pub/Sub 不持久化，订阅者断开会丢消息）和分片扩展。托管的云 Pub/Sub 服务延迟更高，要按其文档另算。",
+    "why_en": "In-region Redis Pub/Sub adds one or two in-memory hops, usually single-digit milliseconds; the real concerns are availability (Redis Pub/Sub does not persist, so disconnected subscribers miss messages) and sharding. Managed cloud pub/sub services have higher latency and must be estimated from their own docs.",
     "tags": [
       "pubsub",
       "latency",
       "numbers"
     ],
-    "scenario": "端到端消息要经过 Pub/Sub 这一层间接转发；团队担心这层 indirection 会不会让实时性变差。",
-    "scenario_en": "End-to-end messages pass through a Pub/Sub layer, and the team worries this indirection might hurt realtime behavior.",
+    "scenario": "聊天消息要经过同机房的 Redis Pub/Sub 再转发到持有用户连接的服务器；团队担心这一层间接转发会让实时性变差。同区网络一跳通常是亚毫秒到几毫秒。",
+    "scenario_en": "Chat messages pass through an in-region Redis Pub/Sub layer before reaching the server holding the user's connection, and the team worries this indirection hurts realtime behavior. One same-region network hop is typically sub-millisecond to a few milliseconds.",
     "options_en": [
-      "Pub/sub latency is usually single digits to low tens of milliseconds, far below what users can perceive.",
+      "The added latency is usually single-digit milliseconds, far below what users can perceive.",
       "Pub/sub adds several minutes of end-to-end delay, making it nearly unusable for any realtime scenario.",
       "Pub/sub latency is close to an hour, fit only for offline batch.",
       "A pub/sub service inevitably makes the system completely unavailable."
@@ -2651,13 +2651,13 @@
       }
     ],
     "optionExplanations": [
-      "抓住量级：这一跳转发通常只有个位数到十几毫秒，远低于用户能感知的门槛，不是需要担心的点。",
+      "抓住量级：这一跳转发通常只有个位数毫秒，远低于用户能感知的门槛，不是需要担心的点。",
       "夸大了：分钟级延迟远超 Pub/Sub 实际增加的开销，这个量级不成立。",
       "夸大了：小时级延迟是批处理系统的量级，这里只是多经过一层转发，远没有那么慢。",
       "夸大了：多一层间接不等于必然不可用，真正要盯的是它的可用性设计而不是必然失败。"
     ],
     "optionExplanations_en": [
-      "Captures the real order of magnitude: this extra hop is typically single digits to low tens of milliseconds — far below what a user can perceive.",
+      "Captures the real order of magnitude: this extra hop is typically single-digit milliseconds — far below what a user can perceive.",
       "Overstated: minutes of delay is way beyond what pub/sub actually adds — that magnitude doesn't hold up.",
       "Overstated: hour-scale delay is batch-processing territory; this only adds one more layer of forwarding, nowhere near that slow.",
       "Overstated: one more layer of indirection doesn't guarantee unavailability — the real concern is how that layer is made available, not an automatic failure."
@@ -2958,7 +2958,7 @@
     "options": [
       "缓存更新一次，通过层级/区域分发推给本地连接",
       "批量聚合和分层广播，避免单组件直接打满",
-      "对非关键实时性允许稍微延迟或抽样",
+      "允许稍微延迟，或合并掉中间值只推最新库存",
       "同步逐个写入所有用户连接且不做限流"
     ],
     "answer": [
@@ -2966,8 +2966,8 @@
       1,
       2
     ],
-    "why": "极端 fanout 要把压力分层、批处理或缓存。完全同步逐个推送会产生热点。",
-    "why_en": "Massive fanout needs caching, hierarchical distribution, batching, and sometimes relaxed freshness.",
+    "why": "极端 fanout 要把压力分层、批处理或缓存。题面说库存显示允许 1–2 秒延迟、只看最新值，所以可以合并中间更新、稍晚推送，用一点新鲜度换稳定；真正的超卖保护在下单时的服务端扣减里。完全同步逐个推送会产生热点。",
+    "why_en": "Extreme fanout needs layering, batching, or caching. Because the scenario says the display tolerates a 1–2 second delay and only the latest value matters, you can coalesce intermediate updates and push slightly later, trading a little freshness for stability; oversell protection lives in the server-side decrement at checkout. Fully synchronous one-by-one pushes create hotspots.",
     "tags": [
       "celebrity-problem",
       "fanout",
@@ -2977,23 +2977,23 @@
     "options_en": [
       "Cache the update once and distribute it through regional or hierarchical layers of local connections.",
       "Batch and broadcast hierarchically so no single component takes the full hit.",
-      "Allow slight delay or sampling where strict realtime is not critical.",
+      "Allow slight delay, or coalesce intermediate values and push only the latest stock.",
       "Synchronously write to every user connection one by one with no throttling."
     ],
     "optionExplanations": [
       "策略：更新只算/缓存一次，再按区域或层级往下分发给本地连接，避免重复计算。",
       "策略：批量聚合、分层广播，让压力逐层摊开，不会让单个组件直接被打满。",
-      "策略：非关键的实时性可以稍微延迟或抽样，用一点宽松度换系统稳定。",
+      "策略：库存显示可容忍 1–2 秒延迟，合并中间值只推最新库存，用一点新鲜度换系统稳定。",
       "反例：同步逐个写入且不限流，正是会在百万级 fanout 下第一个被打垮的做法。"
     ],
     "optionExplanations_en": [
       "A strategy: compute or cache the update once, then fan it out through regional or hierarchical layers to local connections, avoiding repeated work.",
       "A strategy: batch and broadcast hierarchically so pressure spreads across layers instead of slamming one component.",
-      "A strategy: where strict realtime isn't critical, allow a little delay or sampling in exchange for stability.",
+      "A strategy: since the display tolerates a 1–2 second delay, coalesce intermediate values and push only the latest stock, trading a little freshness for stability.",
       "The failure case: writing to every connection synchronously with no throttling is exactly what collapses first under millions-scale fanout."
     ],
-    "scenario": "大促开场那一秒，一条库存变化要推给同时在线的 300 万个商品页连接。",
-    "scenario_en": "At the opening second of a flash sale, one inventory change must reach three million product-page connections simultaneously."
+    "scenario": "大促开场那一秒，一条库存变化要推给同时在线的 300 万个商品页连接。页面上的库存数字只做展示，允许 1–2 秒延迟、只显示最新值，真正下单时以服务端扣减结果为准。",
+    "scenario_en": "At the opening second of a flash sale, one inventory change must reach three million product-page connections simultaneously. The stock number on the page is display-only: a 1–2 second delay is fine and only the latest value matters, because checkout always relies on the server-side decrement."
   },
   {
     "id": "sd-patterns-realtime-updates-050",
@@ -3629,8 +3629,8 @@
     "answer": [
       0
     ],
-    "why": "公式：90ms 首响应收尾 + 100ms 重发请求 + 100ms 拿到响应 = 290ms（毫秒）。这个推导值是判断该不该升级到 SSE 的门槛。",
-    "why_en": "Ninety milliseconds to finish the first response, one hundred to re-issue the request, one hundred more for the reply — that 290 is the threshold that tells you to move up to SSE.",
+    "why": "公式：90ms 等第一条响应送达 + 100ms 重发请求 + 100ms 拿到响应 = 290ms。更新越密，每条都要等一个请求来回，延迟就越吃亏；当这段额外延迟超出产品能接受的范围，就该考虑 SSE 或 WebSocket 这类常驻连接。",
+    "why_en": "Ninety milliseconds for the first response to land, one hundred to re-issue the request, one hundred more for the reply: 290. The denser the updates, the more each one pays a full request round trip, and once that extra delay exceeds what the product tolerates, a persistent connection such as SSE or WebSocket is the better fit.",
     "tags": [
       "long-polling",
       "numbers",

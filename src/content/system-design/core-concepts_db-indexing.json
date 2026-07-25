@@ -932,7 +932,7 @@
     "sub": "btree",
     "q": "B 树节点的大小通常被设计成正好匹配什么？",
     "options": [
-      "一个磁盘页，典型为 8KB",
+      "一个数据库页（Postgres 默认 8KB）",
       "一个 CPU 缓存行（64 字节）",
       "一个内存页（4KB 固定）",
       "整个表的大小"
@@ -940,8 +940,8 @@
     "answer": [
       0
     ],
-    "why": "8KB 是磁盘页这个硬件给定值，不是公式推导出来的；B 树节点对齐它，一次 I/O 正好读满一个节点，这是后续对比 LSM/哈希索引 I/O 效率的基准。",
-    "why_en": "Eight kilobytes is a given hardware constant, not a derived number; aligning B-tree nodes to it means one I/O reads one full node, the baseline for later I/O comparisons.",
+    "why": "数据库在内存和磁盘之间以「页」为单位读写，Postgres 的页默认 8 KB（编译期参数 BLCKSZ，不是硬件常数；MySQL InnoDB 默认 16 KB）。B 树节点对齐一页，一次 I/O 正好读满一个节点，这是后面对比 LSM / 哈希索引 I/O 效率的基准。",
+    "why_en": "Databases move data between memory and storage in pages; PostgreSQL's page is 8 KB by default (the compile-time BLCKSZ setting, not a hardware constant; InnoDB defaults to 16 KB). Aligning a B-tree node to one page means one I/O reads one full node, the baseline for later LSM and hash-index comparisons.",
     "tags": [
       "btree",
       "numbers",
@@ -949,16 +949,16 @@
     ],
     "scenario": "面试官追问：为什么 Postgres 把 B 树节点大小固定设计成这个数字，而不是随便选。",
     "options_en": [
-      "One disk page, typically eight kilobytes.",
+      "One database page (8 KB by default in PostgreSQL)",
       "One CPU cache line, sixty-four bytes.",
       "One fixed four-kilobyte memory page.",
       "The size of the entire table."
     ],
     "termDefinitions": [
       {
-        "term": "磁盘页 / disk page",
-        "meaning": "数据库读写磁盘的最小单位，典型大小 8KB。",
-        "meaningEn": "A disk page is the smallest unit a database reads or writes on disk, typically eight kilobytes."
+        "term": "数据库页 / database page",
+        "meaning": "数据库读写存储的基本单位，Postgres 默认 8KB。",
+        "meaningEn": "A database page is the basic unit a database reads and writes in storage; PostgreSQL's default is eight kilobytes."
       },
       {
         "term": "I/O",
@@ -985,24 +985,24 @@
     "options": [
       "几十页，需要逐层向下一点点慢慢定位",
       "上百页，几乎等同于把整张表从头到尾完整扫描一遍",
-      "只需 2-3 页：根节点、内部节点、叶节点各一次",
+      "个位数：约 3 个索引页（根→内部→叶）+ 1 个 heap 页",
       "必须读整张表的每一页才能最终确认"
     ],
     "answer": [
       2
     ],
-    "why": "B 树扇出大、树矮，一次点查通常只读根、内部、叶共 2-3 页——这不是背诵数字，而是后面对比 LSM 读放大的基准线。",
-    "why_en": "Thanks to high fanout, a B-tree point lookup typically reads only two to three pages — root, internal, leaf — the baseline for later LSM read-amplification comparisons.",
+    "why": "8 KB 页里放整数主键，扇出大约几百。1000 万行 ÷ 每叶几百条 ≈ 几万个叶页，上面一层几十个内部页，再上面就是根——树高 3 层，读 3 个索引页，再按叶子里的 TID 回表读 1 个 heap 页。表到上亿行时树高也只到 4 左右，所以始终是个位数；实际中根和上层页几乎都在 buffer cache 里，物理读更少。",
+    "why_en": "With integer keys in 8 KB pages the fanout is a few hundred. Ten million rows over a few hundred entries per leaf is tens of thousands of leaves, a few dozen internal pages above them, then the root — height three, so three index pages, plus one heap page fetched by the leaf's TID. Even at hundreds of millions of rows height is about four, so it stays single-digit; in practice the root and upper levels sit in the buffer cache, so physical reads are fewer still.",
     "tags": [
       "btree",
       "numbers",
       "lookup"
     ],
-    "scenario": "面试官问：B 树的高扇出到底能把一次点查的磁盘读次数压到多低。",
+    "scenario": "面试官问：一张约 1000 万行的 PostgreSQL 表，按主键 id=350 用 B 树索引找一行，只算从根到叶的索引页（不考虑缓存命中），再加回表，大概要读多少页？",
     "options_en": [
       "Dozens of pages, needing to narrow it down layer by layer, slowly.",
       "Hundreds of pages, nearly equivalent to a full scan of the entire table from start to end.",
-      "Only two to three pages: root, maybe one internal node, and one leaf node.",
+      "Single digits: about 3 index pages (root → internal → leaf) plus 1 heap page.",
       "The entire table, every page, must be read to be sure."
     ],
     "termDefinitions": [
@@ -1018,17 +1018,17 @@
       }
     ],
     "q_en": "In PostgreSQL, how many disk pages does a B-tree lookup for id=350 usually read?",
-    "scenario_en": "The interviewer asks how low a B-tree's high fanout can push the disk-page reads for one point lookup.",
+    "scenario_en": "The interviewer asks: for a PostgreSQL table of about 10 million rows, a B-tree primary-key lookup for id=350 — counting index pages from root to leaf (ignoring cache hits) plus the heap fetch — reads roughly how many pages?",
     "optionExplanations": [
       "几十页意味着树按层线性慢慢缩小范围；B 树的扇出很大，用不了几十页就能锁定。",
       "上百页已经接近全表扫描的量级，那是没有索引、逐页扫描才会有的代价，不是有索引后的样子。",
-      "对，扇出足够大时，从根到叶最多经过一层内部节点，读盘次数被压到个位数。",
+      "对，扇出有几百，1000 万行的树高约 3 层，3 个索引页加 1 个回表的 heap 页，读页数是个位数。",
       "读整张表是没有索引才会发生的最坏情况，有 B 树索引后不需要这么做。"
     ],
     "optionExplanations_en": [
       "Dozens of pages implies the tree narrows down layer by layer slowly; a B-tree's fanout is high enough to land the target well before that.",
       "Hundreds of pages is already close to full-scan territory — that's the cost of scanning without an index, not an indexed lookup.",
-      "Right — with a large enough fanout, the path from root to leaf crosses at most one internal node, keeping disk reads down to a single digit.",
+      "Right — with a fanout of a few hundred, ten million rows give a tree about three levels tall: three index pages plus one heap page, a single-digit read count.",
       "Reading the whole table is the worst case with no index at all; a B-tree index means you never have to do that."
     ]
   },
@@ -2925,7 +2925,7 @@
     "scenario": "系统设计面试问到索引选型，你想抬出哈希索引来展示深度。",
     "q": "面试中谈哈希索引的正确姿势是？",
     "options": [
-      "知道即可、别过度强调，生产很少用",
+      "知道即可、别过度强调：关系型数据库里显式建哈希索引的场景很少，B 树已覆盖大多数需求",
       "把哈希索引当成默认的答案",
       "声称哈希索引能完全替代 B 树",
       "完全不提，假装从不知道它"
@@ -2933,14 +2933,14 @@
     "answer": [
       0
     ],
-    "why": "哈希索引像买来只用一次的厨房小工具；B 树太全能，覆盖了绝大多数你想用哈希的场合。面试点到为止，别显得不接地气。",
-    "why_en": "Know hash indexes but do not overemphasize them in interviews, since they are rarely used in production and B-trees cover most of their use cases.",
+    "why": "在关系型数据库里，B 树等值、范围、排序都能做，显式建哈希索引的收益很小，面试点到为止就好。注意这只是关系型表上的结论——Redis、Bitcask 这类 KV 存储本身就是靠哈希结构做主索引。",
+    "why_en": "On relational tables B-trees handle equality, range and sort, so an explicit hash index adds little; mention it and move on. This is a relational-table conclusion only — KV stores such as Redis or Bitcask use hash structures as their primary index.",
     "tags": [
       "hash-index",
       "interview-method"
     ],
     "options_en": [
-      "Know it, but don't overemphasize it — rarely used in production.",
+      "Know it, but don't overemphasize it: explicitly created hash indexes are rare in relational databases because B-trees cover most needs.",
       "Treat it as the default answer.",
       "Claim it can fully replace B-trees.",
       "Never mention it, pretend you never knew it."
@@ -2955,13 +2955,13 @@
     "q_en": "What is the right way to discuss hash indexes in an interview?",
     "scenario_en": "A system design interview turns to index choice, and you want to bring up hash indexes to show depth.",
     "optionExplanations": [
-      "对，提一句「知道但生产很少用」既show出你懂它的存在，又不会显得不接地气——它确实是个小众工具。",
+      "对，提一句「知道，但关系型库里显式建哈希索引很少用」既show出你懂它的存在，又不会显得不接地气。",
       "把哈希索引当默认答案风险很大——一旦追问范围查询，这个答案立刻站不住。",
       "哈希索引替代不了 B 树——它天生做不了范围查询和排序，这是结构性限制，不是配置问题。",
       "假装不知道反而显得准备不足；面试官更想看到你知道它、也知道它的局限。"
     ],
     "optionExplanations_en": [
-      "Right — mentioning \"I know it exists, but it's rarely used in production\" shows awareness without overselling it; it genuinely is a niche tool.",
+      "Right — saying \"I know it exists, but explicit hash indexes are rarely used in relational databases\" shows awareness without overselling it.",
       "Treating a hash index as your default answer is risky — the moment there's a follow-up about range queries, it falls apart.",
       "A hash index can't replace a B-tree — it structurally can't do range queries or sorting; that's fundamental, not a config limitation.",
       "Pretending not to know it at all reads as under-prepared; interviewers want to see you know it exists and its limits."
@@ -3870,8 +3870,8 @@
       },
       {
         "term": "geohash",
-        "meaning": "把二维经纬度递归四等分并编码成一维字符串的编码方式，邻近位置通常共享前缀。",
-        "meaningEn": "Geohash recursively subdivides 2D coordinates and encodes them as a 1D string, so nearby locations usually share a prefix."
+        "meaning": "交替对经度、纬度做二分，把二维坐标编码成一维字符串；邻近位置通常共享前缀。",
+        "meaningEn": "Geohash alternately bisects longitude and latitude to encode 2D coordinates as a 1D string, so nearby locations usually share a prefix."
       },
       {
         "term": "R 树 / R-tree",
@@ -3900,7 +3900,7 @@
         ],
         [
           "典型系统",
-          "Redis GEO、ES、DynamoDB",
+          "Redis GEO（geohash 编码存 ZSET）、DynamoDB（应用层把 geohash 存进 GSI）",
           "PostGIS、MySQL、SQLite"
         ],
         [
@@ -4661,19 +4661,19 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "covering-index",
-    "scenario": "一张读密集的表已有普通索引，有人提议把所有热查询都改成覆盖索引。",
-    "q": "2026 年的现实里，覆盖索引该怎么定位？",
+    "scenario": "一张读密集的表已有普通索引，有人提议把所有热查询都改成覆盖索引（把查询要的列都塞进索引，避免回表）。",
+    "q": "覆盖索引在真实系统里该怎么定位？",
     "options": [
       "所有读查询都该用的默认方案",
-      "偏小众优化：普通索引已高效，覆盖索引更贵",
+      "只给少数确实热、且只读少量列的查询做的定向优化：省回表，但每个都要付写放大和存储成本",
       "已被数据库厂商移除的过时特性",
       "覆盖索引只适用于 NoSQL 数据库"
     ],
     "answer": [
       1
     ],
-    "why": "覆盖索引在特定场景（读密集、列少的表）收益显著，但存储和维护成本是真的。现代查询优化器已经很聪明，面试建议优先讲简单索引策略。",
-    "why_en": "Covering indexes are now a niche optimization with real maintenance and storage costs, so favor simpler strategies unless you have a strong specific reason.",
+    "why": "覆盖索引让查询直接从索引拿到所有列，省掉回表，对高 QPS、只读少数列的热查询收益明显；代价是索引更宽、每次写都要多维护一份、占更多存储和缓存。所以它是针对具体热查询的定向优化，不是「所有热查询一律改」的默认方案。面试里先讲普通索引，有明确热点再提覆盖索引。",
+    "why_en": "A covering index lets a query read every column it needs straight from the index and skip the table lookup, which pays off for high-QPS hot queries that touch only a few columns. The cost is a wider index, extra work on every write, and more storage and cache. So it is a targeted optimization for specific hot queries, not a blanket default for every hot query. In an interview, start with ordinary indexes and bring up covering indexes once a concrete hot query justifies it.",
     "tags": [
       "covering-index",
       "tradeoff",
@@ -4681,7 +4681,7 @@
     ],
     "options_en": [
       "The default choice for every read query.",
-      "A niche optimization: regular indexes already do well, and covering indexes cost more.",
+      "A targeted optimization for a few genuinely hot queries that read only a few columns: it saves the table lookup, but each one costs write amplification and storage.",
       "A deprecated feature removed by database vendors.",
       "It only applies to NoSQL databases."
     ],
@@ -4697,17 +4697,17 @@
         "meaningEn": "The query optimizer is the database component that decides how to execute a query."
       }
     ],
-    "q_en": "How should you position covering indexes in real systems in 2026?",
-    "scenario_en": "A read-heavy table already has ordinary indexes, and someone proposes converting every hot query over to covering indexes.",
+    "q_en": "How should you position covering indexes in real systems?",
+    "scenario_en": "A read-heavy table already has ordinary indexes, and someone proposes converting every hot query to a covering index (putting every column the query needs into the index so it never visits the table).",
     "optionExplanations": [
-      "覆盖索引不是所有读查询的默认方案——它有真实的存储和维护成本，得挑读密集、列少的场景用。",
-      "对，覆盖索引在读密集、列少的表上收益明显，但存储和维护是真代价，属于偏小众的优化手段。",
+      "覆盖索引不是所有读查询的默认方案——它有真实的存储和写入维护成本，只该给少数确实热的查询用。",
+      "对，覆盖索引省掉回表，对只读少量列的高 QPS 热查询收益明显，但写放大和存储是真代价，所以是定向优化而不是默认方案。",
       "覆盖索引没有被厂商移除，主流数据库（Postgres、MySQL）现在都还支持这个特性。",
       "覆盖索引不是 NoSQL 专属概念，关系型数据库的索引 INCLUDE 列同样是覆盖索引的实现。"
     ],
     "optionExplanations_en": [
-      "A covering index isn't the default for every read query — it has real storage and upkeep costs, so it's reserved for read-heavy, narrow tables.",
-      "Right — a covering index pays off clearly on read-heavy, narrow tables, but storage and maintenance are real costs, a fairly niche optimization.",
+      "A covering index isn't the default for every read query — it has real storage and write-maintenance costs, so it is reserved for a few genuinely hot queries.",
+      "Right — a covering index skips the table lookup and pays off for high-QPS hot queries reading few columns, but write amplification and storage are real costs, so it is a targeted optimization, not a default.",
       "Covering indexes haven't been removed by any vendor — mainstream databases like Postgres and MySQL still support the feature today.",
       "A covering index isn't a NoSQL-only idea — a relational index's INCLUDE columns are exactly the same covering-index technique."
     ]

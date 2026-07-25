@@ -391,18 +391,18 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "hash-ring",
-    "q": "实际系统中，哈希环的取值空间通常是？",
+    "q": "以下哪个最像生产系统常用的哈希环取值空间？",
     "options": [
       "0 到 100",
-      "0 到 2^32 - 1",
+      "0 到 2^32 - 1（32 位哈希空间；也有系统用 64 位或 128 位）",
       "0 到 1000",
       "0 到 2^8 - 1"
     ],
     "answer": [
       1
     ],
-    "why": "0-100 只是教学简化；生产环境常用 0 到 2^32-1（约 43 亿个刻度）的哈希空间，刻度足够密，几百个虚拟节点也很少互相重合，分布仍然均匀。",
-    "why_en": "Production hash rings typically span zero to two-to-the-32nd-minus-one so even hundreds of virtual nodes rarely collide and stay evenly spread.",
+    "why": "0-100 只是教学简化。生产环境要用足够大的哈希空间，让几百个虚拟节点几乎不撞位置、分布均匀：常见的是 32 位空间 0 到 2^32-1（约 43 亿个位置，如 Ketama），也有更大的——Cassandra 的 Murmur3 token 是 64 位，Dynamo 论文用 MD5 的 128 位。关键是「足够大」，不是固定 32 位。",
+    "why_en": "Zero to one hundred is a teaching simplification. Production rings use a space large enough that hundreds of virtual nodes almost never collide: a 32-bit space (about 4.3 billion positions, as in Ketama) is common, and some go bigger — Cassandra's Murmur3 tokens are 64-bit and the Dynamo paper uses MD5's 128-bit space. The point is \"large enough\", not \"always 32 bits\".",
     "tags": [
       "consistent-hashing",
       "hash-ring",
@@ -410,7 +410,7 @@
     ],
     "options_en": [
       "Zero to one hundred",
-      "Zero to two to the thirty-second power minus one",
+      "Zero to two to the thirty-second minus one (a 32-bit space; some systems use 64 or 128 bits)",
       "Zero to one thousand",
       "Zero to two to the eighth power minus one"
     ],
@@ -421,9 +421,9 @@
         "meaningEn": "The hash space is the full range of possible output values a hash function can produce."
       }
     ],
-    "scenario": "你在实现一致性哈希的环结构，要决定哈希函数输出值的取值范围，这个范围决定了环上能装下多少个不重合的刻度。",
-    "q_en": "In real systems, what value range is usually used for the hash ring?",
-    "scenario_en": "You are implementing a consistent-hashing ring and must choose the hash-function output range, which controls how many distinct ring positions are available."
+    "scenario": "你在实现一致性哈希的环结构，要决定哈希函数输出值的取值范围。这个范围决定环上能装下多少个不重合的位置；你需要几百个虚拟节点也几乎不撞位置。",
+    "q_en": "Which of these looks most like a hash-ring range used in production?",
+    "scenario_en": "You are implementing a consistent-hashing ring and must choose the hash-function output range, which controls how many distinct ring positions exist; you need hundreds of virtual nodes to almost never collide."
   },
   {
     "id": "sd-core-concepts-consistent-hashing-011",
@@ -2148,8 +2148,8 @@
     "answer": [
       0
     ],
-    "why": "16384 = 14 位槽位图，正好能塞进心跳包的合理大小；再大会让每次 gossip 传播的位图变笨重，再小则每个槽扛的 key 太多、负载切分不够细——这是 Redis 给出的折中点。",
-    "why_en": "Redis picked 16384 slots as the sweet spot: enough granularity to split load finely, while keeping the per-node slot bitmap small enough to gossip in every heartbeat without bloating it.",
+    "why": "心跳包里带的槽位图每个槽占 1 bit：16384 个槽是 2 KB，65536 个槽就是 8 KB，每次 gossip 都带一次太重。另一头，Redis Cluster 设计上不预期超过约 1000 个 master 节点，16384 个槽足够把负载切细。两头折中就是 16384。（14 位只是表示一个槽编号所需的位数，不是位图大小。）",
+    "why_en": "Every heartbeat carries a slot bitmap at one bit per slot: 16384 slots is 2 KB, 65536 would be 8 KB on every gossip message. On the other side, Redis Cluster is not expected to exceed about 1000 masters, so 16384 slots already splits load finely. That trade-off lands on 16384. (Fourteen bits is just the size of one slot number, not the bitmap.)",
     "tags": [
       "consistent-hashing",
       "redis-cluster",
@@ -2186,13 +2186,13 @@
     "scenario_en": "Redis Cluster maps keys with CRC16(key) mod 16384, and each node gossips the slot bitmap it owns to other nodes.",
     "optionExplanations": [
       "槽太少每槽扛的 key 太多、切分不精细；槽太多心跳里要广播的槽位图变笨重——16384 正是这个折中点。",
-      "这不是拍脑袋定的：用 14 位就能表示这一万六千多个槽，刚好让心跳包里的位图不臃肿，切分粒度又够细。",
+      "这不是拍脑袋定的：槽位图每槽 1 bit，16384 个槽 = 2 KB，塞进心跳不臃肿（65536 个槽就要 8 KB）；而集群设计上不超过约 1000 个 master，16384 个槽的切分粒度已经够细。",
       "槽数不需要等于物理节点数，一个节点可以认领成百上千个槽，节点数和槽数是两个独立的量。",
       "槽数量本身不直接决定单次哈希计算耗时，16384 是心跳带宽和切分粒度之间的权衡，不是为了最小化计算耗时。"
     ],
     "optionExplanations_en": [
       "Too few slots means each one carries too many keys and coarse splitting; too many makes the gossiped slot bitmap unwieldy — 16384 is that sweet spot.",
-      "This isn't arbitrary — 16384 is a 14-bit bitmap, directly tied to whether it fits cleanly in a gossip heartbeat and how finely load can split.",
+      "Not arbitrary: the slot bitmap uses one bit per slot, so 16384 slots is 2 KB per heartbeat (65536 would be 8 KB), and since clusters are not expected to exceed about 1000 masters, 16384 slots is already fine-grained enough.",
       "The slot count doesn't need to match the physical node count; one node can own hundreds or thousands of slots, they're independent numbers.",
       "The slot count doesn't directly control per-hash compute time; 16384 trades off heartbeat bandwidth against split granularity, not minimizing hash cost."
     ]
@@ -2285,19 +2285,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "interview-method",
-    "scenario": "常规产品系统设计面试：你选了 DynamoDB / Cassandra 做存储，面试官没有要求深入数据分布机制。",
+    "scenario": "常规产品系统设计面试：你选了 DynamoDB / Cassandra 做存储，面试官没有要求深入数据分布机制，但你想用一句话交代「数据量涨了、节点增减时存储怎么扛」。",
     "q": "关于一致性哈希，说到什么程度合适？",
     "options": [
       "在白板上现场从头推导虚拟节点数量对负载方差影响的那一整套完整数学期望公式和证明",
-      "提一句「这些系统底层用一致性哈希（或其变体）处理扩缩容」，然后继续推进",
+      "提一句「这些系统按 partition key 哈希分区、自动处理扩缩容（Cassandra 用一致性哈希的 token ring）」，然后继续推进",
       "画出完整的哈希环，逐一标出每一个虚拟节点的具体位置坐标细节",
       "完全不提一致性哈希这回事，直接跳过这部分设计内容不讲"
     ],
     "answer": [
       1
     ],
-    "why": "现代分布式数据库已把分片托管：常规面试只需点到「底层是一致性哈希」为止——识别「何时深入、何时带过」本身就是加分项。",
-    "why_en": "For managed stores like DynamoDB just note that consistent hashing handles scaling under the hood and move on.",
+    "why": "托管/成熟的分布式数据库已经把分片放置做好了；题面要的只是一句话交代扩缩容，所以点到「按 partition key 哈希分区、自动扩缩容」即可，然后把时间留给业务设计。识别「何时深入、何时带过」本身就是加分项。",
+    "why_en": "Mature distributed stores already handle placement; the prompt only wants one sentence on scaling, so say they hash-partition by partition key and scale automatically, then spend the time on business design.",
     "whenOtherWins": "基础设施向的「从零设计分布式数据库/缓存/消息队列」面试则相反——要能完整展开环、虚拟节点、故障与热点处理。",
     "tags": [
       "consistent-hashing",
@@ -2305,7 +2305,7 @@
     ],
     "options_en": [
       "Derive from scratch on the whiteboard the entire mathematical expectation formula and proof for how virtual-node count affects load variance.",
-      "Note that these systems use consistent hashing (or a variant) under the hood for scaling, then move on.",
+      "Note that these systems hash-partition by partition key and handle scaling automatically (Cassandra uses a consistent-hashing token ring), then move on.",
       "Draw out the full hash ring, labeling every single virtual node's exact position and coordinates in detail.",
       "Skip the whole topic of consistent hashing entirely, moving straight past this part of the design."
     ],
@@ -2313,8 +2313,8 @@
     "termDefinitions": [
       {
         "term": "DynamoDB",
-        "meaning": "AWS 的托管 NoSQL 数据库，内部用一致性哈希做分区路由。",
-        "meaningEn": "DynamoDB is AWS's managed NoSQL database that uses consistent hashing internally for partition routing."
+        "meaning": "AWS 的托管 NoSQL 数据库，按 partition key 的哈希把数据分到分区，并自动拆分分区。",
+        "meaningEn": "AWS's managed NoSQL database, which hashes the partition key to place items in partitions and splits partitions automatically."
       },
       {
         "term": "Cassandra",
@@ -2323,18 +2323,18 @@
       }
     ],
     "q_en": "How deeply should you discuss consistent hashing in this interview?",
-    "scenario_en": "In a regular product-system interview, you chose DynamoDB or Cassandra for storage, and the interviewer did not ask you to go deep on data placement.",
+    "scenario_en": "In a regular product-system interview you chose DynamoDB or Cassandra for storage. The interviewer has not asked you to go deep on data placement, but you want one sentence on how the store copes with growth and nodes joining or leaving.",
     "optionExplanations": [
       "现场推导负载方差公式是研究级细节，普通产品面试里会挤占讲主流程、API、数据模型的时间。",
-      "点一句「底层用一致性哈希处理扩缩容」再往下走，既证明你懂扩缩容基础，又把时间留给业务设计——面试官没深挖时的正确深度。",
+      "点一句「按 partition key 哈希分区、自动扩缩容」再往下走，既交代了扩缩容这一句，又把时间留给业务设计——面试官没深挖时的正确深度。",
       "画出每个虚拟节点的具体位置是教学式细节展示，除非面试官明确要求你从零手写分布层。",
-      "完全不提会让存储选型缺一块解释——为什么 DynamoDB/Cassandra 能扛住节点增减，这点交代不出来。"
+      "完全不提就没有满足「想用一句话交代存储怎么扛扩缩容」这个目标，这一句话几乎不花时间。"
     ],
     "optionExplanations_en": [
       "Deriving the load-variance formula live is research-level depth that eats time better spent on the main flow, APIs, and data model in a normal interview.",
-      "Note that the underlying store uses consistent hashing for scaling, then move on — it shows you know the basics while saving time for the business design, matching what the interviewer actually asked.",
+      "Say the stores hash-partition by partition key and scale automatically, then move on — it gives the one-sentence scaling answer while saving time for the business design, matching what the interviewer actually asked.",
       "Labeling every virtual node's exact position is teaching-level detail, appropriate only if asked to build the placement layer from scratch.",
-      "Skipping it entirely leaves a gap — you can't explain why DynamoDB or Cassandra tolerate nodes joining and leaving."
+      "Skipping it entirely fails the stated goal of giving one sentence on how the store copes with scaling, and that sentence costs almost no time."
     ]
   },
   {
@@ -2343,13 +2343,13 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "interview-method",
-    "scenario": "你在准备系统设计面试，要判断哪些题目里一致性哈希是必须展开的核心，而不是一句带过。",
-    "scenario_en": "Preparing for system-design interviews, you judge in which questions consistent hashing is a core topic rather than a one-line mention.",
-    "q": "哪些面试题里一致性哈希是必须深入讲的核心话题？（多选）",
+    "scenario": "你在准备系统设计面试，要判断哪些题目里「key 怎么分到节点、节点增减时只搬少量数据」是必须展开的核心，而一致性哈希是你要讲的那套方案。",
+    "scenario_en": "Preparing for system-design interviews, you judge in which questions \"how keys map to nodes, and moving only a little data when nodes join or leave\" is a core topic, with consistent hashing as the scheme you would present.",
+    "q": "哪些题里一致性哈希是值得深入讲的核心话题？（多选）",
     "options": [
-      "设计分布式数据库",
-      "设计分布式缓存",
-      "设计分布式消息队列（broker）",
+      "从零设计一个类 Dynamo / Cassandra 的分布式 key-value 存储（无中心协调，节点随时增减）",
+      "从零设计分布式缓存（客户端按 key 选缓存节点，节点经常扩缩容）",
+      "设计一个有状态 WebSocket 网关的路由层：同一 user_id 要落到同一台网关，网关节点经常扩缩容",
       "用托管 Postgres 做一个普通 CRUD 应用"
     ],
     "answer": [
@@ -2357,19 +2357,19 @@
       1,
       2
     ],
-    "why": "从零设计分布式基础设施（数据库/缓存/消息队列）时必须深入；普通业务系统直接用托管方案，点到为止即可。",
-    "why_en": "Consistent hashing is crucial when designing a distributed database, cache, or message broker from scratch.",
+    "why": "三个正确选项的共同点：没有中心分配表、key → 节点要稳定、节点经常增减且希望只搬/只断一小部分——这正是一致性哈希解决的问题。D 的分布层被托管方藏起来了，不需要讲。注意：不是所有分布式系统都用一致性哈希——Spanner/CockroachDB 是 range 分区，Kafka 的 partition 归属由 controller 指派、key → partition 用 hash mod 分区数。",
+    "why_en": "The three correct options share no central assignment table, stable key-to-node mapping, and frequent membership changes where only a small slice should move or reconnect — exactly what consistent hashing solves. D hides distribution inside the managed service. Note that not every distributed system uses it: Spanner and CockroachDB range-partition, and Kafka's controller assigns partitions to brokers while keys map to partitions by hash mod partition count.",
     "tags": [
       "consistent-hashing",
       "interview-method"
     ],
     "options_en": [
-      "Designing a distributed database.",
-      "Designing a distributed cache.",
-      "Designing a distributed message broker.",
-      "Building an ordinary CRUD app on managed Postgres."
+      "Designing a Dynamo/Cassandra-style distributed key-value store from scratch (no central coordinator, nodes join and leave freely)",
+      "Designing a distributed cache from scratch (clients pick a cache node by key, nodes scale often)",
+      "Designing the routing layer for stateful WebSocket gateways: the same user_id must land on the same gateway, and gateways scale often",
+      "Building an ordinary CRUD app on managed Postgres"
     ],
-    "q_en": "In which interviews is consistent hashing a core topic to explain deeply?",
+    "q_en": "In which questions is consistent hashing a core topic worth explaining in depth? (multi-select)",
     "termDefinitions": [
       {
         "term": "broker",
@@ -2384,16 +2384,16 @@
       }
     ],
     "optionExplanations": [
-      "从零设计分布式数据库要自己讲清数据分区、扩缩容、故障后副本怎么接管，一致性哈希是核心机制。",
-      "分布式缓存要讲清 key 到节点的映射、节点变化如何影响缓存命中、热点怎么处理，同样离不开一致性哈希。",
-      "消息队列 broker 分片同样要讲清 topic/partition 到 broker 的稳定归属，机制和数据库分片是同一套原理。",
+      "类 Dynamo / Cassandra 的存储没有中心协调者，要自己讲清数据分区、节点增减、故障后副本怎么接管，一致性哈希是核心机制。",
+      "分布式缓存要讲清 key 到节点的映射、节点变化如何影响缓存命中、热点怎么处理，节点又常扩缩容，同样离不开一致性哈希。",
+      "有状态 WebSocket 网关要让同一 user_id 稳定落到同一台网关，网关扩缩容时又只想断开少量连接，正是一致性哈希的典型用法。",
       "托管 Postgres 已经把分布层藏在云厂商内部，业务方通常不需要、也不该在这类题里深挖一致性哈希。"
     ],
     "optionExplanations_en": [
-      "Designing a distributed database from scratch means explaining partitioning, scaling, and replica takeover after failure — consistent hashing is core here.",
-      "A distributed cache needs the key-to-node mapping explained, how membership changes affect hit rate, and how hot spots get handled — same requirement.",
-      "Sharding a message-queue broker also needs stable topic/partition-to-broker ownership explained, the same underlying mechanism as database sharding.",
-      "Managed Postgres already hides the distribution layer inside the cloud provider, so this kind of question shouldn't need consistent-hashing depth."
+      "A Dynamo/Cassandra-style store has no central coordinator, so you must explain partitioning, membership changes and replica takeover after failure — consistent hashing is the core mechanism.",
+      "A distributed cache needs the key-to-node mapping explained, how membership changes affect hit rate, and how hot spots get handled, and its nodes scale often — consistent hashing fits.",
+      "Stateful WebSocket gateways need the same user_id to land on the same gateway while scaling disconnects only a few connections — a classic consistent-hashing use.",
+      "Managed Postgres hides the distribution layer inside the cloud provider, so this kind of question shouldn't need consistent-hashing depth."
     ],
     "table": {
       "headers": [
@@ -2413,9 +2413,9 @@
           "节点增减最频繁"
         ],
         [
-          "设计消息队列",
+          "WebSocket 网关路由",
           "深入展开",
-          "partition 归属"
+          "会话粘性 + 扩缩容只断少量连接"
         ],
         [
           "托管 Postgres CRUD",
@@ -2783,19 +2783,19 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "interview-method",
-    "scenario": "面试官追问：「你的分布式缓存节点挂了一台，怎么保证既不丢缓存价值又不搬大量数据？」",
+    "scenario": "面试官追问：「你的分布式缓存每个 key 存 2 个副本，现在一个节点挂了，怎么保证既不丢缓存价值、又不在故障当下搬大量数据？」",
     "q": "最完整的回答思路是？",
     "options": [
       "把那台挂掉的节点直接重启一下就行，数据会自动完整恢复回来变正常",
-      "一致性哈希只影响该节点区间 + 虚拟节点摊薄冲击 + 副本直接顶上，无需搬数据",
+      "一致性哈希只影响该节点区间 + 虚拟节点摊薄冲击 + 副本直接接管读写，故障当下无需大规模搬数据（之后后台补齐副本数）",
       "把整个缓存集群里的全部数据统统推倒、从头彻底重建一遍，之后才能继续正常投入使用对外服务",
       "把全部流量都临时切换到数据库上，彻底绕开缓存层不再经过它处理请求"
     ],
     "answer": [
       1
     ],
-    "why": "三层递进：环把影响局部化、虚拟节点把冲击摊薄、复制让故障处理零搬迁——这正是「一致性哈希与复制配合实现容错」的关系。",
-    "why_en": "Combine the ring's localized impact, virtual nodes spreading the load, and replication so failures are absorbed without moving data.",
+    "why": "三层递进：环把影响限制在该节点的区间、虚拟节点把这段区间摊给多个邻居、已有副本直接接管服务，所以故障当下不需要大规模搬数据；之后为了恢复副本数，后台会把这些区间再复制一份到其他节点。",
+    "why_en": "Three layers: the ring confines impact to that node's ranges, virtual nodes spread those ranges across several neighbors, and existing replicas take over serving, so no large move is needed at failure time; afterwards the system re-replicates those ranges in the background to restore the replica count.",
     "whenOtherWins": "若数据可容忍全部重建（纯缓存、回源成本低），也可以接受简单方案：挂了就让相应 key 未命中、自然回填。",
     "tags": [
       "consistent-hashing",
@@ -2805,7 +2805,7 @@
     ],
     "options_en": [
       "Just restart the failed node and its data automatically recovers back to normal completely.",
-      "Consistent hashing limits impact to that node's range, virtual nodes spread the hit, and replicas take over directly with no data movement.",
+      "Consistent hashing limits impact to that node's range, virtual nodes spread the hit, and replicas take over reads and writes, so no large data move is needed at failure time (re-replication catches up in the background).",
       "Tear down all the data across the entire cache cluster and rebuild it from scratch before it can go back into normal service.",
       "Temporarily route every bit of traffic to the database, entirely bypassing the cache layer so it no longer handles requests."
     ],
@@ -2823,7 +2823,7 @@
       }
     ],
     "q_en": "What is the most complete answer path?",
-    "scenario_en": "The interviewer asks: one distributed-cache node failed, so how do you preserve cache value without moving a large amount of data?",
+    "scenario_en": "The interviewer asks: your distributed cache keeps two replicas per key and one node has failed — how do you preserve cache value without moving a large amount of data at failure time?",
     "optionExplanations": [
       "重启只能恢复进程本身，不保证机器真的物理不可用时数据还在，也没解释为什么不用搬大量数据。",
       "一致性哈希把冲击限制在该节点区间，虚拟节点把冲击摊薄给多个邻居，副本直接接管服务——三层叠加才是既保住缓存价值又不搬数据的完整答案。",

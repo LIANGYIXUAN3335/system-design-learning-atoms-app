@@ -371,22 +371,22 @@
     "q": "Message queue 在这个模式中的主要作用是什么？",
     "q_en": "What is the main role of the message queue in this pattern?",
     "options": [
-      "在 Web 与 worker 间缓冲任务，解耦扩缩容",
-      "把 PDF 内容和二进制文件直接暂存到浏览器本地",
+      "在 Web 与 worker 间持久缓冲任务，解耦两边的扩缩容",
+      "把上传的视频文件直接暂存到浏览器本地",
       "完全取代数据库，成为 job 状态的唯一存储",
       "替客户端自动完成所有 HTTP 请求，无需前端调用"
     ],
     "options_en": [
       "Durably buffer jobs between the web server and workers, decoupling their scaling.",
-      "Stash the PDF content and binary files directly in the browser's local storage.",
+      "Stash the uploaded video files directly in the browser's local storage.",
       "Fully replace the database as the only place job status ever lives.",
       "Automatically complete every HTTP request for the client, no frontend call needed."
     ],
     "answer": [
       0
     ],
-    "why": "queue 接收 job_id，让 workers 按自己的速度消费。它还能提供可见的 backlog、retry 和 failure handling。",
-    "why_en": "The queue durably buffers jobs between the web tier and workers, decoupling their scaling.",
+    "why": "queue 持久保存待处理的 job 消息（通常只含 job_id），让 Web tier 只管快速入队，转码 workers 按自己的速度消费，高峰期的多余任务变成可见的 backlog，而不是压垮 worker；它还支撑 retry 和 failure handling。C 错在：queue 里的消息被消费后就删除，job 的权威状态仍要放在数据库里。",
+    "why_en": "The queue durably holds pending job messages (usually just a job_id), so the web tier only enqueues quickly while transcoding workers consume at their own pace; peak overflow becomes a visible backlog instead of overwhelming workers, and the queue also supports retry and failure handling. C is wrong because messages are deleted once consumed — the authoritative job status still belongs in a database.",
     "termDefinitions": [
       {
         "term": "backlog",
@@ -400,15 +400,15 @@
       "decoupling"
     ],
     "optionExplanations": [
-      "queue 只是缓冲通道，让 Web tier 和 worker 各自按自己的节奏扩缩容。",
-      "把二进制文件塞进浏览器本地跟 queue 的职责完全不沾边，也不该这么做。",
-      "queue 不持久保存任务全貌，job 的完整状态还是要落在数据库里。",
+      "queue 持久保存待处理的 job 消息，是缓冲通道，让 Web tier 和 worker 各自按自己的节奏扩缩容。",
+      "把视频文件塞进浏览器本地跟 queue 的职责完全不沾边，也不该这么做。",
+      "queue 存的是待处理消息，消费完就删除；job 的权威状态还是要落在数据库里。",
       "queue 不会替客户端发起 HTTP 请求，它只是服务端内部传递任务的通道。"
     ],
     "optionExplanations_en": [
-      "The queue is just a buffering channel that lets the web tier and workers each scale at their own pace.",
-      "Stashing binary files in the browser has nothing to do with what a queue is for, and shouldn't be done that way.",
-      "A queue doesn't durably hold the job's full picture — the complete status still has to live in a database.",
+      "The queue durably holds pending job messages as a buffering channel, letting the web tier and workers each scale at their own pace.",
+      "Stashing video files in the browser has nothing to do with what a queue is for, and shouldn't be done that way.",
+      "A queue holds pending messages that are deleted once consumed; the authoritative job status still has to live in a database.",
       "A queue never initiates HTTP requests on the client's behalf; it's purely an internal channel for passing jobs."
     ]
   },
@@ -418,8 +418,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "queue-payload",
-    "scenario": "一个任务的输入很大，包含用户参数、文件位置和配置。你要把任务送进 SQS，SQS 有 256KB 消息大小限制。",
-    "scenario_en": "A job has a large input with user parameters, file locations, and config; you need to send it through SQS, which caps messages at 256KB.",
+    "scenario": "一个任务的输入很大，包含用户参数、文件位置和配置，大小可能超过队列单条消息的上限（例如 SQS 有单条消息大小上限，具体数值以 AWS 当前文档为准）。你要把任务送进队列。",
+    "scenario_en": "A job has a large input with user parameters, file locations, and config, and it can exceed the queue's per-message size limit (SQS, for example, caps message size — check current AWS docs for the exact value). You need to send the job through the queue.",
     "q": "queue message 里更应该放什么？",
     "q_en": "What should you put in the queue message?",
     "options": [
@@ -437,16 +437,16 @@
     "answer": [
       0
     ],
-    "why": "queue message 保持小而稳定，job DB 保存完整上下文和状态。SQS 等队列有消息大小限制，且大 payload 会增加重试和传输成本。",
-    "why_en": "Put a small job ID in the queue and store full job details in a durable database.",
+    "why": "queue message 保持小而稳定，job DB 保存完整上下文和状态。大 payload 可能撞上队列的单条消息上限（SQS 等都有），而且每次重试、重投都要重复传输整个对象；只放 job_id 还让 DB 成为唯一事实来源，任务参数改了不用担心队列里的旧副本。",
+    "why_en": "Keep the queue message small and stable and store the full context and status in the job DB. A large payload can hit the queue's per-message limit (SQS and others have one), and every retry or redelivery re-transfers the whole object; sending only the job_id also keeps the DB as the single source of truth, so there is no stale copy sitting in the queue.",
     "whenOtherWins": "如果 job payload 很小且无需持久查询，直接放少量参数也可以，但仍要注意大小和幂等。",
     "tradeoff": "queue message 只放 job_id vs 把完整对象塞进消息体",
     "termDefinitions": [
       {
         "term": "SQS",
         "fullName": "Amazon Simple Queue Service",
-        "meaning": "AWS 托管消息队列服务（SQS），有 256KB 单消息大小限制。",
-        "meaningEn": "SQS is AWS's managed queue service, which caps each message at 256KB."
+        "meaning": "AWS 托管消息队列服务（SQS），对单条消息大小有上限（具体数值以 AWS 当前文档为准）。",
+        "meaningEn": "SQS is AWS's managed queue service, which caps the size of each message (check current AWS docs for the exact value)."
       },
       {
         "term": "payload",
@@ -463,13 +463,13 @@
     ],
     "optionExplanations": [
       "消息体保持小巧稳定，真正的上下文都留在数据库里，worker 按需去查。",
-      "大对象直接塞进消息正文，很容易撞上 SQS 这类队列的 256KB 上限。",
+      "大对象直接塞进消息正文，容易撞上队列单条消息的大小上限。",
       "二进制文件更不该进 queue——体积更大，还会拖慢整个队列的吞吐。",
       "不建 job 记录等于放弃可追踪性，任务丢了都没法排查。"
     ],
     "optionExplanations_en": [
       "Keep the message body small and stable; the real context stays in the database for workers to fetch on demand.",
-      "Stuffing the full object into the message body easily blows past a queue's size cap, like SQS's 256KB limit.",
+      "Stuffing the full object into the message body can easily exceed the queue's per-message size limit.",
       "A binary file is even worse in a queue — bigger payloads drag down throughput for the whole queue.",
       "Skipping the job record means giving up traceability; there's nothing to investigate if the job goes missing."
     ]
@@ -1160,10 +1160,10 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "heartbeat",
-    "scenario": "系统把 worker heartbeat/visibility timeout 设成一个固定区间；间隔本身不是重点，重点是它太短或太长各会出什么问题。",
-    "scenario_en": "A system must choose a worker heartbeat or visibility-timeout interval; the key is what breaks if it is too short or too long.",
-    "q": "为什么很多系统把 heartbeat/visibility timeout 起点设在 10-30 秒，而不是 1 秒或 1 小时？",
-    "q_en": "Why do many systems start heartbeat or visibility timeouts around 10-30 seconds instead of 1 second or 1 hour?",
+    "scenario": "worker 处理任务期间持续发心跳续期 lease；系统要定「多久没收到心跳就判 worker 死亡、把任务重新分配」这个超时。具体数字不是重点，重点是它太短或太长各会出什么问题。",
+    "scenario_en": "Workers keep renewing a lease with heartbeats while processing; the system must choose how long without a heartbeat before a worker is declared dead and its task reassigned. The exact number matters less than what breaks if it is too short or too long.",
+    "q": "为什么很多系统把这个心跳超时起点设在 10-30 秒，而不是 1 秒或 1 小时？",
+    "q_en": "Why do many systems start this heartbeat timeout around 10-30 seconds instead of 1 second or 1 hour?",
     "options": [
       "太短把 GC pause 误判死亡增加重试；太长拖慢真正崩溃的恢复速度",
       "10-30 秒是所有 queue 系统写死的硬编码默认值，任何团队都改不了它",
@@ -1179,8 +1179,8 @@
     "answer": [
       0
     ],
-    "why": "10-30 秒是很多系统的合理起点：太长会拖延故障恢复，太短会增加噪音甚至把 GC pause 误判为宕机。这个区间平衡了恢复速度和误判率，是后续设置重试/告警阈值的基数。",
-    "why_en": "A heartbeat or timeout around 10 to 30 seconds balances fast crash recovery against false positives from brief pauses like garbage collection.",
+    "why": "10-30 秒是很多系统判死超时的合理起点：太短会把 GC pause 等短暂停顿误判为宕机、造成重复执行，太长会拖慢真正崩溃后的恢复。心跳发送间隔通常是这个超时的几分之一（比如每 5-10 秒一次），这样丢一两次心跳不至于误判。",
+    "why_en": "Ten to thirty seconds is a common starting point for the dead-worker timeout: too short mistakes GC pauses for crashes and causes duplicate work, too long delays recovery from real crashes. The heartbeat send interval is usually a fraction of that timeout, such as every five to ten seconds, so one or two lost heartbeats don't trigger a false failure.",
     "termDefinitions": [
       {
         "term": "GC pause",
@@ -1375,18 +1375,18 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "dlq",
-    "scenario": "DLQ 的重试上限要选一个具体数字；这个数字本身不是重点，重点是选 0、选很小、选很大分别会带来什么后果。",
-    "scenario_en": "A DLQ needs a concrete retry limit; the important part is what happens if that number is zero, tiny, or unlimited.",
-    "q": "为什么 DLQ 的重试上限通常设在 3-5 次，而不是 0 次或无限次？",
-    "q_en": "Why are DLQ retry limits often around 3-5 attempts instead of zero or unlimited?",
+    "scenario": "任务失败后会重试，超过上限就移进 DLQ；这个「进入 DLQ 前的最大尝试次数」要选一个具体数字，重点是选 0、选很小、选无限分别会带来什么后果。",
+    "scenario_en": "Failed jobs are retried and moved to a DLQ after a limit; that maximum number of attempts before the DLQ needs a concrete value, and the point is what happens if it is zero, tiny, or unlimited.",
+    "q": "为什么进入 DLQ 前的尝试上限通常设在 3-5 次，而不是 0 次或无限次？",
+    "q_en": "Why is the attempt limit before moving to the DLQ often around 3-5 instead of zero or unlimited?",
     "options": [
-      "0 次误杀抖动，无限次被 poison job 占满",
+      "0 次误杀抖动，无限次让 poison job 反复占用 worker",
       "重试次数必须和 worker 机器数量保持严格一致",
       "重试次数越多永远越安全，完全没有任何代价",
       "DLQ 只是用来存放已经成功完成的历史任务"
     ],
     "options_en": [
-      "0 retries kills jobs on any brief blip; unlimited retries lets a poison job hog every worker.",
+      "0 retries kills jobs on any brief blip; unlimited retries lets a poison job keep tying up workers.",
       "The retry count must always match the number of worker machines.",
       "More retries is always strictly safer with no downside.",
       "A dead letter queue is only where already-completed jobs are stored."
@@ -2746,8 +2746,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "idempotency",
-    "scenario": "报表服务规定：同一用户 5 分钟内的重复提交算同一次业务意图，超过 5 分钟的再次提交要真的重新生成。",
-    "scenario_en": "A report service treats repeat submissions from the same user within five minutes as one intent, but a resubmission after that window must really regenerate.",
+    "scenario": "报表服务规定：按固定的 5 分钟时间窗去重（如 10:00–10:05 算一个窗口），同一用户同一窗口内的重复提交算同一次业务意图；跨窗口的提交要真的重新生成，团队接受窗口边界附近的少量重复。",
+    "scenario_en": "A report service dedups by fixed five-minute windows (for example 10:00–10:05 is one window): repeat submissions from the same user in the same window count as one intent, submissions in a later window must really regenerate, and the team accepts a few duplicates near window boundaries.",
     "q": "用户发起的任务，idempotency key 该怎么构造？",
     "q_en": "How should you build the idempotency key for a user-initiated job?",
     "options": [
@@ -2777,8 +2777,8 @@
       "Too coarse: a legitimate rerun later in the day is also judged a duplicate.",
       "At millisecond precision two clicks almost never collide, so there is no window."
     ],
-    "why": "去重窗口决定 timestamp 的取整粒度，取整到 5 分钟，窗口内的连点才会算出同一个 key。代价是刚好跨过窗口边界的两次点击仍会变成两个 job。",
-    "why_en": "The dedup window sets how coarsely you round the timestamp, so repeated clicks inside the window produce one key; the cost is that clicks straddling a window boundary still create two jobs.",
+    "why": "题面要的是固定时间窗去重，取整粒度就是窗口：同一窗口内的连点算出同一个 key，跨窗口自然分开。代价正是题面接受的那一点：刚好跨过窗口边界的两次点击会变成两个 job。如果要严格的「距上次 5 分钟内」，得改成 key 不带时间、服务端存 key 时设 5 分钟 TTL。",
+    "why_en": "The scenario asks for fixed-window dedup, so the rounding granularity is the window: clicks in the same window produce the same key and later windows separate naturally. The cost is exactly what the team accepts: two clicks straddling a boundary become two jobs. A strict \"within five minutes of the last one\" rule would instead use a time-free key stored server-side with a five-minute TTL.",
     "tradeoff": "窗口取大点防重复 vs 取小点不误杀正常重跑",
     "whenOtherWins": "系统自动产生的任务没有\"用户点击\"语义，这时改用输入数据的 deterministic ID（例如源文件内容 hash）当 key 更准确。",
     "termDefinitions": [
@@ -2816,13 +2816,13 @@
     "q": "除了拆 fast/slow 队列，还能怎么消除这个 head-of-line blocking？",
     "q_en": "Besides splitting into fast and slow queues, how else can you remove this head-of-line blocking?",
     "options": [
-      "把 fanout 按 follower 分批，拆成许多小 job 进同一队列",
+      "把 fanout 按 follower 分批拆成许多小 job，逐批放进同一队列（上一批完成再入下一批）",
       "给这个大 job 单独留一台高内存机器长期常驻",
       "把这个 job 的 retry 上限调高，让它慢慢跑完",
       "让 Web server 同步执行 fanout，绕过队列直接写完所有 feed"
     ],
     "options_en": [
-      "Chunk the fanout by batches of followers into many small jobs on the same queue.",
+      "Chunk the fanout by batches of followers into many small jobs on the same queue, enqueuing the next batch only after the previous one finishes.",
       "Reserve one permanently running high-memory machine just for this big job.",
       "Raise the retry limit on this job and let it grind through slowly.",
       "Let the web server run the fanout synchronously and write every feed directly."
@@ -2831,19 +2831,19 @@
       0
     ],
     "optionExplanations": [
-      "每个小 job 只写一批 follower，占用 worker 的时间回到秒级，队头不再被独占。",
+      "每个小 job 只写一批 follower，占用 worker 的时间回到秒级；逐批入队，普通 fanout 能插进两批之间。",
       "专机方案就是变相的 slow queue，机器闲着也要付钱，正是场景里要避开的。",
       "retry 次数管的是失败重试，跟一个成功但极慢的任务堵队列毫无关系。",
       "同步执行会让 HTTP 请求跑满几十分钟，先撞上 30-60 秒的网关超时。"
     ],
     "optionExplanations_en": [
-      "Each small job writes only one batch, so worker occupancy drops back to seconds.",
+      "Each small job writes only one batch, so worker occupancy drops back to seconds; with batches enqueued one by one, ordinary fanouts can slip in between.",
       "A dedicated box is a slow queue in disguise, and you pay for it while it idles.",
       "Retry limits govern failures, not one successful-but-slow job clogging the line.",
       "Running it inline holds the HTTP request for tens of minutes and hits the gateway timeout first."
     ],
-    "why": "把长任务切成小 chunk 后，它复用同一套队列和 worker，不必再维护第二组机器。代价是要自己记录分批进度，并想清楚失败时只重跑哪一批。",
-    "why_en": "Chunking the long job lets it reuse the same queue and worker pool instead of a second fleet; the cost is tracking batch progress yourself and deciding which batch to redo on failure.",
+    "why": "每个小 job 只写一批 follower，单个 worker 的占用时间回到秒级；逐批入队让普通 fanout 能插在两批之间被处理，队头不再被一个大任务霸占。如果把所有 chunk 一次性全塞进 FIFO 队列，它们仍会排在普通 job 前面。代价是要自己记录分批进度（游标），并想清楚失败时只重跑哪一批。",
+    "why_en": "Each small job writes one batch of followers, so a worker is occupied for seconds again; enqueuing batches one after another lets ordinary fanouts slip in between them, so no single big task owns the head of the queue. If you dumped every chunk into a FIFO queue at once, they would still sit ahead of ordinary jobs. The cost is tracking batch progress (a cursor) yourself and deciding which batch to redo on failure.",
     "tradeoff": "切 chunk 复用单队列 vs 新建 slow queue 独立调优",
     "whenOtherWins": "任务本身切不开时（一次要扫全表聚合的 5 小时年终报表），只能拆 fast/slow 队列，用更少更壮的机器扛。",
     "termDefinitions": [

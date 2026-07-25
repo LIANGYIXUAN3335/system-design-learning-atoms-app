@@ -1409,25 +1409,25 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "pagination",
-    "scenario": "商品列表用 from/size 分页，产品要求支持翻到很深的历史结果页。",
-    "q": "from/size 分页的性能拐点在什么规模？超过后该怎么应对？",
+    "scenario": "商品列表用 from/size 分页，产品要求用户能一页页往下翻到很深的结果（不需要随机跳到第 N 页）。",
+    "q": "from/size 分页默认在多深处会被拦下？顺序深翻页该怎么应对？",
     "options": [
-      "性能拐点在 100 条左右，超过这个规模就要马上换游标分页",
-      "拐点约 10,000 条，之后该换 search_after 游标分页",
-      "拐点要到 1,000 万条以上才出现，在那之前完全不必处理分页深度",
-      "分页效率跟深度完全无关，压根不存在这样一个拐点"
+      "默认上限约 100 条，超过就必须改游标分页",
+      "默认 from+size 上限 10,000（index.max_result_window），深翻页改用 search_after",
+      "要到 1,000 万条以上才有限制，此前不必处理分页深度",
+      "分页代价跟深度无关，不存在这样的限制"
     ],
     "answer": [
       1
     ],
     "options_en": [
-      "The tipping point is around one hundred results, past which you must switch to cursor pagination right away",
-      "The tipping point is around ten thousand results, after which you switch to search_after cursor pagination",
-      "The tipping point only appears past ten million results, so nothing about page depth needs handling before that",
-      "Pagination efficiency has nothing whatsoever to do with depth, so no such tipping point exists at all"
+      "The default cap is about 100 results, beyond which cursor pagination is required.",
+      "from+size is capped at 10,000 by default (index.max_result_window); use search_after for deep paging.",
+      "No limit applies until past ten million results, so depth needs no handling before that.",
+      "Paging cost is unrelated to depth, and no such limit exists."
     ],
-    "why": "超过约 10,000 条后，集群每次都要取回并排序前面所有文档，代价高得难以接受——这个规模起就该换 search_after 之类的游标分页。",
-    "why_en": "Beyond roughly ten thousand results, from-size pagination becomes prohibitively expensive because all preceding documents must be fetched and sorted, which is the point to switch to a cursor like search_after.",
+    "why": "from/size 每次都要让每个 shard 取回并排序前 from+size 条再在协调节点合并，越深越贵；ES 用 index.max_result_window（默认 10,000）挡住深分页。顺序深翻页应改用 search_after（通常配合 point in time）；调大上限只是推迟问题。",
+    "why_en": "With from/size, every shard must fetch and sort the top from+size hits and the coordinating node merges them, so cost grows with depth; Elasticsearch blocks deep paging with index.max_result_window (default 10,000). For sequential deep paging, switch to search_after (usually with a point in time); raising the cap only postpones the problem.",
     "tags": [
       "elasticsearch",
       "pagination",
@@ -1445,19 +1445,19 @@
         "meaningEn": "Search-after paginates by using the previous page's last sort values as the starting point for the next page."
       }
     ],
-    "q_en": "At what scale does from/size pagination become painful, and what should replace it?",
-    "scenario_en": "A product list uses from/size pagination, and the product requirement says users can jump deep into historical result pages.",
+    "q_en": "At what depth does from/size pagination get blocked by default, and what should replace it for sequential deep paging?",
+    "scenario_en": "A product list uses from/size pagination, and the product requirement is that users can keep paging forward into very deep results (no random jump to page N needed).",
     "optionExplanations": [
-      "100 条量级远没到深分页真正变贵的地方，拐点被大幅低估。",
-      "约 10,000 条起，取回排序前面全部文档的代价就明显爬升，该换游标分页。",
-      "拖到 1,000 万条才处理，中间已经积累了大量深分页请求，代价被严重低估。",
-      "深度其实直接决定了要排序和丢弃多少文档，不存在「和深度无关」这回事。"
+      "100 条远低于默认的 10,000 上限，数字被大幅低估。",
+      "默认 index.max_result_window 为 10,000，from+size 超过会直接报错；顺序深翻页改用 search_after。",
+      "这个上限在 1,000 万很久之前就会生效，拖到那时才处理会让深分页请求越积越多。",
+      "深度直接决定每个 shard 要取回并排序多少文档，不存在「和深度无关」这回事。"
     ],
     "optionExplanations_en": [
-      "100 rows is well below where deep paging actually gets expensive — this understates the threshold badly.",
-      "Past roughly 10,000 rows, the cost of retrieving and sorting everything before that page climbs sharply — time to switch to cursor-based paging.",
-      "Waiting until 10 million rows lets a huge number of expensive deep-page requests pile up first — this threshold is way too high.",
-      "Depth is exactly what determines how many documents get sorted and discarded — there's no such thing as depth not mattering."
+      "100 results is far below the default cap of 10,000 -- this badly understates it.",
+      "The default index.max_result_window is 10,000 and from+size beyond it errors out; for sequential deep paging use search_after.",
+      "The default cap kicks in long before ten million; waiting that long lets expensive deep-page requests pile up.",
+      "Depth is exactly what determines how many documents each shard must fetch and sort -- there is no such thing as depth not mattering."
     ]
   },
   {
@@ -2561,8 +2561,8 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "replication",
-    "scenario": "线上一个 primary shard 独立能扛住 X 的查询 TPS，运维给这个索引配置了 Y 个 replica。",
-    "q": "这时集群大致能扛住多少查询 TPS？",
+    "scenario": "一个 primary shard 独占一个节点时能扛 X 查询 QPS。运维给这个索引配置 Y 个 replica，并保证每个 replica 落在各自独立、同规格的节点上；查询能在所有拷贝间均匀分布，写入负载可忽略。",
+    "q": "这时集群大致能扛住多少查询 QPS？",
     "options": [
       "X + Y",
       "X * (Y + 1)",
@@ -2578,8 +2578,8 @@
       "Still just X",
       "(X plus one) times Y"
     ],
-    "why": "TPS 是每秒查询数；1 个 primary shard + Y 个 replica shard 共有 Y+1 份可服务读的拷贝，所以搜索读容量近似 X*(Y+1)。这个数只用来估算查询吞吐，写入和复制开销不享受这层加成。",
-    "why_en": "TPS means requests per second; one primary plus Y replicas gives Y+1 read-serving copies, so read capacity is roughly X times Y+1.",
+    "why": "1 个 primary + Y 个 replica 共 Y+1 份可服务查询的拷贝，每份在独立节点上、负载均匀时，读容量近似 X×(Y+1)。如果节点数不变只加副本，副本会争抢同一批硬件，容量不会线性增长；写入和复制也不享受这层加成。",
+    "why_en": "One primary plus Y replicas gives Y+1 query-serving copies; with each on its own node and load spread evenly, read capacity is roughly X×(Y+1). Adding replicas without adding nodes makes them compete for the same hardware, so capacity does not scale linearly, and writes and replication get no such boost.",
     "tags": [
       "elasticsearch",
       "replication",
@@ -2608,17 +2608,17 @@
         "meaningEn": "TPS means transactions per second; here it approximates how many search requests the cluster can serve each second."
       }
     ],
-    "q_en": "Roughly how much query TPS can this setup handle?",
-    "scenario_en": "One primary shard can independently serve X query TPS, and operations configures Y replicas for this index.",
+    "q_en": "Roughly how much query QPS can this setup handle?",
+    "scenario_en": "One primary shard on its own node can serve X query QPS. Operations configures Y replicas for this index, each placed on its own separate node of the same spec; queries spread evenly across all copies, and write load is negligible.",
     "optionExplanations": [
-      "把 TPS 和副本数直接相加，单位都对不上，也漏掉了每个副本是一份完整可读拷贝。",
-      "这把 primary 本身和 Y 个 replica 都算进读副本池；前提是查询能大致均匀分散。",
+      "把 QPS 和副本数直接相加，单位都对不上，也漏掉了每个副本是一份完整可读拷贝。",
+      "这把 primary 本身和 Y 个 replica 都算进读副本池；前提是每份拷贝有独立节点、查询大致均匀分散。",
       "只算主分片吞吐，等于假设副本完全不接查询流量，忽视了 replica 的读扩展作用。",
       "把 +1 加错了对象：是 primary 让可读拷贝数变成 Y+1，不是给单副本吞吐 X 加一。"
     ],
     "optionExplanations_en": [
-      "Adding TPS to a replica count mixes units and misses that each replica is a full readable copy.",
-      "This counts the primary plus Y replicas in the read pool, assuming queries spread roughly evenly.",
+      "Adding QPS to a replica count mixes units and misses that each replica is a full readable copy.",
+      "This counts the primary plus Y replicas in the read pool, assuming each copy has its own node and queries spread roughly evenly.",
       "Counting only the primary assumes replicas serve no query traffic, which ignores their read-scaling role.",
       "The +1 is attached to the wrong number: the primary makes the readable copies Y+1, you do not add one to the per-shard throughput X."
     ]
@@ -4165,7 +4165,7 @@
     "scenario": "商品搜索要在结果上做 faceting（按品类、价格区间统计计数），数据分布在多个 shard 上；团队在纠结是直接基于 Lucene 自建，还是上 Elasticsearch。",
     "q": "跨分片的 faceting/聚合由哪一层提供，这也是选 Elasticsearch 的核心动机之一？",
     "options": [
-      "Elasticsearch 协调层把各 shard 局部聚合合并成全局 facet，Lucene 不参与",
+      "ES 协调节点把各 shard 的局部聚合结果合并成全局 facet；Lucene 只在单个 shard 内提供底层数据，不懂跨 shard",
       "Lucene 内核本身就能跨分片做全局聚合，Elasticsearch 只不过把查询请求原样转发过去罢了而已",
       "由客户端应用层把全部命中文档拉回本地，再自己遍历统计出每一类的计数",
       "由 master 主节点负责，它专门编排聚合任务、并合并来自各分片的局部结果"
@@ -4174,13 +4174,13 @@
       0
     ],
     "options_en": [
-      "Elasticsearch's coordinating layer merges each shard's local aggregation into a global facet; Lucene does none of that",
+      "Elasticsearch's coordinating node merges each shard's local aggregation into a global facet; Lucene only supplies per-shard data structures and has no notion of shards.",
       "The Lucene core natively performs the global cross-shard aggregation, and Elasticsearch merely forwards the query along",
       "The client application layer pulls every matching document back and then iterates locally to tally each category's count",
       "The master node is responsible, since it is dedicated to orchestrating aggregation tasks and merging each shard's results"
     ],
-    "why": "聚合/faceting 是 Elasticsearch 编排层的活：协调节点把各 shard 的局部计数合并成全局 facet，Lucene 只管单机内核。需要跨分片 faceting 才选 ES 而非裸 Lucene。",
-    "why_en": "Aggregation and faceting live in Elasticsearch's orchestration layer — the coordinating node merges each shard's local counts into a global facet, while Lucene only owns the single-node search core, and that's a core reason to pick Elasticsearch over raw Lucene.",
+    "why": "每个 shard 在自己的 Lucene 索引上算出局部聚合（借助 doc values 等结构），协调节点再把这些局部结果 reduce 成全局 facet。Lucene 本身有单索引内的 facet 能力，但没有「多个 shard 分布在多台机器」的概念；跨分片 fan-out 和合并是 ES 编排层的活，这是选 ES 而非裸 Lucene 的核心原因。",
+    "why_en": "Each shard computes a local aggregation on its own Lucene index (using structures like doc values), and the coordinating node reduces those partial results into a global facet. Lucene can facet within a single index but has no notion of shards spread across machines; cross-shard fan-out and merge belong to Elasticsearch's orchestration layer, which is the core reason to pick it over raw Lucene.",
     "tags": [
       "elasticsearch",
       "aggregation",

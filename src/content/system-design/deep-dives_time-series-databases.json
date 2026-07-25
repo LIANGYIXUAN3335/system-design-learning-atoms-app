@@ -98,43 +98,43 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "scale",
-    "scenario": "云监控系统有 100,000 台服务器，每台每 10 秒上报 5 个指标（CPU/内存/磁盘/网络），算下来约 50,000 点/秒、一天约 43 亿点。",
-    "scenario_en": "A cloud monitoring system has 100,000 servers, each reporting 5 metrics every 10 seconds, which is about 50,000 points per second and 4.3 billion points per day.",
-    "q": "这个写入量级对存储引擎的设计意味着什么？",
-    "q_en": "What does this write scale imply for the storage engine design?",
+    "scenario": "云监控系统有 100,000 台服务器，每台每 10 秒上报 5 个指标，约 50,000 点/秒、一天约 43 亿点；原始数据保留 30 天（约 1300 亿点）。当前方案是单机关系库逐行 INSERT，并为每行维护两个 B-tree 索引。",
+    "scenario_en": "A cloud monitoring system has 100,000 servers, each reporting 5 metrics every 10 seconds — about 50,000 points/s and 4.3 billion points/day — and raw data is kept for 30 days (about 130 billion points). The current design inserts row by row into a single relational database and maintains two B-tree indexes per row.",
+    "q": "这个写入量级和保留规模对存储引擎设计意味着什么？",
+    "q_en": "What does this write rate and retention imply for the storage engine design?",
     "options": [
-      "这个量级下单机 Postgres 加两个索引就能长期稳定支撑，不需要改变写入方式",
+      "单机关系库逐行写入加两个索引就能长期稳定支撑，不需要改变写入方式",
       "这个量级只影响读延迟，写入可以随意排队，不需要特别设计",
-      "这个量级下随机原地更新和逐行索引维护会撑不住，写路径必须转向顺序追加和批量整理",
+      "索引远超内存后逐行 B-tree 维护会变成随机 I/O，写路径宜改为批量、顺序追加 + 后台合并/压缩（LSM、按时间分块）",
       "只要磁盘足够大，这个量级对存储引擎设计没有实质影响"
     ],
     "answer": [
       2
     ],
-    "why": "50,000 点/秒、一天 43 亿点意味着随机 I/O 和逐行索引会先被拖垮；这正是 append-only + LSM 这类设计存在的原因。",
-    "why_en": "At roughly 50,000 points per second and 4.3 billion points a day, random I/O and per-row indexing become the bottleneck, which is exactly why append-only and LSM-style engines exist.",
+    "why": "5 万点/秒靠批量写入单机也可能扛住，真正的问题是保留 30 天约 1300 亿点：B-tree 索引远超内存后，每次逐行插入都要随机读写索引页。顺序追加 + 批量整理（LSM / 按时间分块）把随机写换成顺序写，这正是 TSDB 写路径的设计动机。这是设计建议而非唯一方案（例如分区 + 批量 COPY 的关系库扩展也是一种实现）。",
+    "why_en": "50k points/s alone might be absorbed by one machine with batched writes; the real problem is ~130 billion points over 30 days: once B-tree indexes far exceed memory, every row insert does random index-page I/O. Sequential appends with batched reorganization (LSM, time-chunked storage) turn random writes into sequential ones — the motivation behind TSDB write paths. It is a design recommendation, not the only option (e.g. a partitioned relational extension with batched COPY is another implementation).",
     "tags": [
       "tsdb",
       "numbers",
       "scale"
     ],
     "options_en": [
-      "At this scale, a single Postgres instance with two indexes can support it indefinitely without changing how writes work.",
-      "At this scale, only read latency is affected, so writes can queue freely without special design.",
-      "At this scale, in-place random updates and per-row index maintenance can't keep up, so the write path must shift to sequential appends with batched reorganization.",
-      "As long as disks are big enough, this scale has no real effect on storage engine design."
+      "A single relational DB with row-by-row inserts and two indexes can support this indefinitely without changing how writes work",
+      "Only read latency is affected, so writes can queue freely without special design",
+      "Once indexes outgrow memory, per-row B-tree maintenance turns into random I/O, so the write path should move to batched sequential appends with background compaction (LSM, time-chunked storage)",
+      "As long as disks are big enough, this scale has no real effect on storage engine design"
     ],
     "optionExplanations": [
-      "两个索引解决不了根本问题——50000 点/秒会让索引维护和随机写成为长期瓶颈，不是加索引能兜住的。",
-      "写入排队本身也要吃资源，忽略写路径设计等于没看见随机 I/O 和索引维护的代价。",
-      "对，量级已经决定写路径必须转向顺序追加+批量整理，原地更新和逐行索引撑不住这个吞吐。",
-      "磁盘再大也救不了随机 I/O 和索引维护的开销，这个瓶颈是访问模式问题，不是容量问题。"
+      "错：逐行插入加两个 B-tree 索引，在 30 天约 1300 亿点的规模下，索引远超内存，维护会变成长期的随机 I/O 瓶颈。",
+      "错：写入排队本身也要吃资源，忽略写路径设计等于没看见随机 I/O 和索引维护的代价。",
+      "对：保留规模让索引远超内存，逐行维护变随机 I/O；批量、顺序追加加后台合并能把随机写换成顺序写。这是设计建议，不是唯一方案。",
+      "错：磁盘再大也救不了随机 I/O 和索引维护的开销，瓶颈在访问模式，不在容量。"
     ],
     "optionExplanations_en": [
-      "Two indexes don't fix the root cause — at 50k points/sec, index maintenance and random writes become the long-run bottleneck no index tuning saves.",
-      "Queuing writes still consumes resources, so ignoring the write path misses the real cost of random I/O and index upkeep.",
-      "Right — at this volume the write path has to shift to sequential appends with batch reorganization, because updating in place and indexing every row individually can't keep up.",
-      "More disk space doesn't fix random I/O or index overhead — this bottleneck is about access pattern, not capacity."
+      "Wrong: row-by-row inserts with two B-tree indexes over ~130 billion points push indexes far beyond memory, making maintenance a long-run random-I/O bottleneck.",
+      "Wrong: queuing writes still consumes resources, so ignoring the write path misses the real cost of random I/O and index upkeep.",
+      "Right: the retention scale pushes indexes far beyond memory so per-row maintenance becomes random I/O; batched sequential appends with background compaction turn random writes into sequential ones. It is a design recommendation, not the only option.",
+      "Wrong: bigger disks don't fix random I/O or index overhead; the bottleneck is access pattern, not capacity."
     ]
   },
   {
@@ -397,31 +397,31 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "io",
-    "scenario": "为高吞吐指标流选型时，需要判断随机写和顺序写在机械硬盘上的量级差异。",
-    "scenario_en": "When choosing storage for a high-throughput metric stream, you need to judge the order-of-magnitude gap between random and sequential writes on spinning disks.",
-    "q": "机械硬盘上，随机 I/O 相比顺序 I/O 的数量级差异大致是什么？",
-    "q_en": "On spinning disks, roughly how different are random I/O and sequential I/O?",
+    "scenario": "为高吞吐指标流选型时，需要判断 7200 rpm 机械硬盘上 4KB 随机写和顺序写的吞吐差异。",
+    "scenario_en": "When choosing storage for a high-throughput metric stream, you need to judge the throughput gap between 4 KB random writes and sequential writes on a 7200 rpm spinning disk.",
+    "q": "机械硬盘上，随机 I/O 相比顺序 I/O 的差异大致是什么量级？",
+    "q_en": "Roughly how large is the gap between random and sequential I/O on a spinning disk?",
     "options": [
-      "随机 I/O 永远比顺序 I/O 快 100 倍，写路径不用特意设计",
-      "SSD 上随机和顺序完全一样，机械盘也没有差别",
-      "随机约百级 ops/s，顺序写能高出一到两个数量级",
+      "随机 I/O 比顺序 I/O 快约 100 倍，写路径不用特意设计",
+      "4KB 随机写约 100–200 IOPS（≈ 0.4–0.8MB/s），顺序写约 100–200MB/s，按字节算差两个数量级以上",
+      "两者差距在 2 倍以内，寻道延迟可忽略",
       "磁盘 I/O 模式和数据库写入路径的设计无关"
     ],
     "answer": [
-      2
+      1
     ],
-    "why": "机械硬盘随机操作受限于磁头寻道，通常百级 ops/s；顺序写能到万级甚至更高。这个差距正是 append-only 设计存在的理由。",
-    "why_en": "Spinning disks are limited to roughly hundreds of random operations per second because of head seeks, while sequential writes can reach far higher throughput, which is exactly why append-only design pays off.",
+    "why": "机械硬盘每次随机 I/O 要付寻道 + 旋转延迟（毫秒级），所以小块随机写只有百级 IOPS；顺序写省掉寻道，吞吐达百 MB/s。按字节比，差距两个数量级以上，具体倍数取决于 I/O 块大小和盘型号。这正是 append-only / LSM 设计的出发点。",
+    "why_en": "Each random I/O on a spinning disk pays seek plus rotational latency (milliseconds), so small random writes manage only hundreds of IOPS, while sequential writes skip the seek and reach hundreds of MB/s. By bytes the gap exceeds two orders of magnitude; the exact ratio depends on I/O size and drive model. This is why append-only and LSM designs exist.",
     "tags": [
       "tsdb",
       "numbers",
       "io"
     ],
     "options_en": [
-      "Random I/O is always 100x faster than sequential, so the write path needs no special design.",
-      "On SSDs random and sequential are identical, and spinning disks are no different either.",
-      "Random ops sit around a few hundred per second; sequential writes run one to two orders of magnitude higher.",
-      "Disk I/O patterns have nothing to do with how a database designs its write path."
+      "Random I/O is about 100x faster than sequential, so the write path needs no special design",
+      "4 KB random writes reach ~100–200 IOPS (≈0.4–0.8 MB/s) while sequential writes reach ~100–200 MB/s — over two orders of magnitude apart by bytes",
+      "The gap is within 2x; seek latency is negligible",
+      "Disk I/O pattern has nothing to do with how a database designs its write path"
     ],
     "termDefinitions": [
       {
@@ -433,14 +433,14 @@
     ],
     "optionExplanations": [
       "方向说反了——机械盘上顺序 I/O 才比随机快得多，不是随机比顺序快。",
-      "SSD 没有寻道臂，但顺序访问依然比随机友好，不是完全无差别。",
-      "对，机械盘随机操作大约百级 ops/s，顺序写能高出一到两个数量级——这正是顺序 I/O 被优先选用的原因。",
+      "对：小块随机写受寻道和旋转延迟限制只有百级 IOPS（不到 1MB/s），顺序写能到百 MB/s，按字节差两个数量级以上，具体倍数取决于块大小和盘型号。",
+      "错：机械盘每次随机 I/O 都要付毫秒级寻道，差距远不止 2 倍，寻道延迟是主因。",
       "磁盘 I/O 模式恰恰是很多存储引擎设计的出发点，append-only、LSM 这些结构都是为了适配它。"
     ],
     "optionExplanations_en": [
-      "That has it backwards — on spinning disks, sequential I/O is the one that's much faster than random, not the other way around.",
-      "SSDs have no seek arm, but sequential access is still friendlier than random — they are not identical.",
-      "Right — a mechanical drive manages roughly a few hundred random ops per second, and sequential writes beat that by one or two orders of magnitude.",
+      "That has it backwards — on spinning disks, sequential I/O is the one that's much faster than random.",
+      "Right: small random writes are limited by seek and rotational latency to hundreds of IOPS (under 1 MB/s), while sequential writes reach hundreds of MB/s — over two orders of magnitude by bytes; the exact ratio depends on I/O size and drive model.",
+      "Wrong: every random I/O on a spinning disk pays millisecond seeks, so the gap is far more than 2x and seek latency is the main cause.",
       "I/O pattern is actually the starting point for a lot of storage-engine design — append-only and LSM structures exist specifically to work with it."
     ]
   },
@@ -1324,43 +1324,43 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "rollups",
-    "scenario": "Dashboard 把一天历史数据用 5 分钟粒度的 rollup 展示，而不是原始 10 秒采样点。",
-    "scenario_en": "A dashboard shows one day of history using 5-minute rollups instead of raw 10-second samples.",
-    "q": "相比直接扫描原始 10 秒采样点，用 5 分钟 rollup 回答“过去一天趋势”的查询，设计上带来了什么？",
-    "q_en": "Compared with scanning raw 10-second samples, what does a 5-minute rollup change for a past-day trend query?",
+    "scenario": "Dashboard 把一天历史数据用 5 分钟粒度的预计算 rollup 展示，而不是原始 10 秒采样点。",
+    "scenario_en": "A dashboard shows one day of history from precomputed 5-minute rollups instead of raw 10-second samples.",
+    "q": "相比直接扫描原始 10 秒采样点，用 5 分钟 rollup 回答单条 series「过去一天趋势」的查询，设计上带来了什么？",
+    "q_en": "Compared with scanning raw 10-second samples, what does a 5-minute rollup change for a past-day trend query on one series?",
     "options": [
       "扫描的数据点数量完全不变，只是换了一种展示方式而已",
-      "扫描点数下降两个数量级，代价是牺牲时间精度",
-      "rollup 会让查询变慢，因为每次都得重新做一遍聚合计算",
+      "扫描点数从 8,640 降到 288，约 30 倍（一个多数量级），代价是失去桶内时间精度",
+      "rollup 会让查询变慢，因为每次查询都得重新做一遍聚合计算",
       "rollup 只影响存储成本，不影响查询要扫描多少数据"
     ],
     "answer": [
       1
     ],
-    "why": "原始 10 秒采样一天有 8,640 点，5 分钟 rollup 只有 288 个桶，两个数量级的差距直接决定长范围查询要扫多少数据。",
-    "why_en": "Raw 10-second sampling produces 8,640 points a day while 5-minute rollups produce only 288 buckets, and that order-of-magnitude gap is what makes long-range queries fast.",
+    "why": "86,400 秒 ÷ 10 秒 = 8,640 点；86,400 ÷ 300 = 288 桶；8,640 ÷ 288 = 30 倍。rollup 在写入时或后台已经预先聚合好，查询直接读 288 个结果，不需要每次重算（所以 C 错）；代价是看不到 5 分钟桶内的尖峰。",
+    "why_en": "86,400 s ÷ 10 s = 8,640 points; 86,400 ÷ 300 = 288 buckets; 8,640 ÷ 288 = 30x. Rollups are pre-aggregated at write time or by a background job, so the query reads 288 stored results without recomputing (which is why C is wrong); the cost is losing spikes inside each 5-minute bucket.",
     "tags": [
       "tsdb",
       "numbers",
       "rollups"
     ],
     "options_en": [
-      "The number of points scanned is unchanged; only the presentation differs.",
-      "Points scanned drop by two orders of magnitude, at the cost of time resolution.",
-      "Rollups make queries slower because the aggregation has to be recomputed each time.",
-      "Rollups only affect storage cost, not how much data a query has to scan."
+      "The number of points scanned is unchanged; only the presentation differs",
+      "Points scanned drop from 8,640 to 288 — about 30x (over one order of magnitude) — at the cost of intra-bucket time resolution",
+      "Rollups make queries slower because each query must recompute the aggregation",
+      "Rollups only affect storage cost, not how much data a query scans"
     ],
     "optionExplanations": [
-      "点数其实变了——一天 8640 个原始点压成 288 个 5 分钟桶，不是单纯换个展示方式。",
-      "对，桶数比原始点数少了两个数量级，大范围查询明显更快，代价是看不到桶内的瞬时波动。",
-      "聚合计算通常边读边做（streaming），不会让查询变慢，反而是扫描量骤减带来提速。",
-      "rollup 直接减少了要扫描的数据点数，不只是省存储，查询路径本身也受益。"
+      "点数其实变了——一天 8,640 个原始点压成 288 个 5 分钟桶，不是单纯换个展示方式。",
+      "对：8,640 ÷ 288 = 30 倍，扫描量降了一个多数量级（不是两个），大范围查询明显更快，代价是看不到桶内的瞬时波动。",
+      "错：rollup 是预先聚合好的，查询直接读结果，不会每次重算；真正的收益是扫描量骤减。",
+      "错：rollup 直接减少了查询要扫描的数据点数，不只是省存储，查询路径本身也受益。"
     ],
     "optionExplanations_en": [
-      "The point count really does change — 8,640 raw points a day collapse into 288 five-minute buckets, it's not just a different display.",
-      "Right — the bucket count is orders of magnitude smaller than raw points, so scanning a long time window gets much faster, at the cost of intra-bucket detail.",
-      "Aggregation is usually streamed while reading, not a slow-down step — the real win is scanning far fewer points.",
-      "A rollup directly cuts how many points a query has to scan — it's not just a storage saving, the read path benefits too."
+      "The point count really does change — 8,640 raw points a day collapse into 288 five-minute buckets; it's not just a different display.",
+      "Right: 8,640 ÷ 288 = 30x, over one order of magnitude (not two), so long-window queries get much faster, at the cost of intra-bucket detail.",
+      "Wrong: rollups are pre-aggregated, so queries read stored results instead of recomputing; the real win is scanning far fewer points.",
+      "Wrong: a rollup directly cuts how many points a query scans — it's not just a storage saving, the read path benefits too."
     ]
   },
   {
@@ -2302,43 +2302,43 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "performance",
-    "scenario": "面试官问，把写入、时间分区、压缩、索引这些优化叠加后，TSDB 相比通用数据库大概能快多少。",
-    "scenario_en": "The interviewer asks roughly how much faster a TSDB can be than a general-purpose database after stacking write-path, time-partitioning, compression, and indexing optimizations.",
+    "scenario": "面试官问：对 append-mostly、按时间范围做聚合查询的指标 workload，把写入路径、时间分区、列式压缩、索引这些优化叠加后，TSDB 相比未针对时序优化的通用数据库，在时间范围聚合查询上的收益大致是什么量级（按常见 benchmark 经验）？",
+    "scenario_en": "The interviewer asks: for an append-mostly metrics workload queried by time-range aggregations, after stacking write-path, time-partitioning, columnar compression, and indexing optimizations, roughly how large is a TSDB's gain on time-range aggregation queries over a general-purpose database not tuned for time series (per common benchmark experience)?",
     "q": "对目标 workload 而言，TSDB 相比通用数据库的性能收益大致是什么量级？",
     "q_en": "For the target workload, what order of performance gain can a TSDB have over a general-purpose database?",
     "options": [
-      "永远只快 1%，几乎感觉不到任何差别",
-      "永远慢 100x，专用系统反而比通用库更差",
-      "通常快一到两个数量级，即 10-100x",
-      "只影响 UI 展示，不影响存储或查询本身"
+      "只快约 1%，几乎感觉不到差别",
+      "反而慢约 100 倍，因为专用系统牺牲了通用索引",
+      "常见 benchmark 中可达一到两个数量级（约 10–100 倍），具体取决于数据和查询",
+      "对任何 workload 都稳定快 1000 倍以上"
     ],
     "answer": [
       2
     ],
-    "why": "这个收益来自多种设计叠加：append-only、LSM、压缩、时间分区、Bloom filter、rollup 和 block pruning。前提是 workload 符合 TSDB 假设。",
-    "why_en": "For the right workload, time-series databases can deliver order-of-magnitude improvements such as 10 to 100 times better performance.",
+    "why": "收益来自多种设计叠加：顺序追加、时间分区裁剪、列式压缩减少扫描字节、预聚合 rollup。常见 benchmark 中时间范围聚合可快 10–100 倍，但这是经验区间，依赖数据形态、查询类型和对比库的调优程度；workload 不符合时序假设（大量随机更新、跨实体 join）时收益会消失。",
+    "why_en": "The gain comes from stacked designs: sequential appends, time-partition pruning, columnar compression that cuts bytes scanned, and pre-aggregated rollups. Common benchmarks show 10–100x on time-range aggregations, but that is an empirical range that depends on data shape, query type, and how well the baseline is tuned; if the workload breaks time-series assumptions (heavy random updates, cross-entity joins), the gain disappears.",
     "tags": [
       "tsdb",
       "numbers",
       "performance"
     ],
     "options_en": [
-      "It's always just 1% faster, a difference nobody notices.",
-      "It's always 100x slower, so the purpose-built system is actually worse.",
-      "Typically one to two orders of magnitude faster, roughly 10-100x.",
-      "It only changes the UI presentation, not storage or query itself."
+      "Only about 1% faster, a difference nobody notices",
+      "About 100x slower, because the specialized system gives up general indexing",
+      "Common benchmarks show one to two orders of magnitude (about 10–100x), depending on data and queries",
+      "Consistently over 1000x faster for any workload"
     ],
     "optionExplanations": [
-      "1% 太保守了——写入、压缩、索引这些优化叠加起来，实际收益通常是数量级级别的。",
-      "方向说反了，这些优化本来就是为了让专用系统更快，不是让它变慢。",
-      "对，写入路径、压缩、索引这些优化叠加后，典型收益是一到两个数量级，比如 10 到 100 倍。",
-      "它同样改变了底层的存储和查询效率，不只是 UI 好不好看的问题。"
+      "1% 太保守了——写入、压缩、分区、索引这些优化叠加起来，常见 benchmark 里收益是数量级级别的。",
+      "方向说反了，这些优化本来就是为了让专用系统在时序 workload 上更快。",
+      "对：常见 benchmark 中时间范围聚合可快一到两个数量级（约 10–100 倍），但这是经验区间，随数据、查询和基线调优程度变化。",
+      "错：1000 倍以上且对任何 workload 都成立是绝对化说法；workload 不符合时序假设时收益会消失。"
     ],
     "optionExplanations_en": [
-      "One percent is far too conservative — stacking write-path, compression, and indexing gains typically nets an order-of-magnitude improvement, not a rounding error.",
-      "That has it backwards — these optimizations exist specifically to make the specialized system faster, not slower.",
-      "Right — stack up the write-path, compression, and indexing gains and you typically land one to two orders of magnitude ahead, roughly 10-100x.",
-      "It changes the underlying storage and query efficiency itself — this is not just about how the UI looks."
+      "One percent is far too conservative — stacked write-path, compression, partitioning, and indexing gains typically reach an order of magnitude in common benchmarks.",
+      "That has it backwards — these optimizations exist to make the specialized system faster on time-series workloads.",
+      "Right: common benchmarks show one to two orders of magnitude (about 10–100x) on time-range aggregations, but it is an empirical range that varies with data, queries, and baseline tuning.",
+      "Wrong: over 1000x for any workload is an absolute claim; the gain disappears when the workload breaks time-series assumptions."
     ]
   },
   {
