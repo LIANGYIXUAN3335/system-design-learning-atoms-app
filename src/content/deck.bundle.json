@@ -602371,6 +602371,8 @@
       "Rendering Chinese text is an encoding concern, unrelated to whether one instance holds both streams.",
       "The GPU doesn't go idle just because service topology changes — its business is only whether there are tokens left to generate."
     ],
+    "codeSample": "# ❌ 坏设计(本题警告的):一个实例把 SSE + worker 流都攥在自己内存里\ndef handle(req):                        # 跑在 Chat Service 实例 A 上\n    wstream = grpc_worker.generate(req.prompt)   # 直连 worker,流只活在 A 的内存\n    for token in wstream:\n        sse_conn.write(token)                    # 直接转发给浏览器\n# A 一崩:worker 流断 + SSE 断 + 内存里的进度全丢\n#   → 没有任何别的实例接得住(状态只在 A 脑子里)\n#   → 也【没人能重新 assign】,因为根本没地方续\n\n# ✅ 好设计:runId + Redis Stream 解耦,实例无状态,谁都能接手\ndef worker_generate(runId, prompt):     # 生成侧:worker 只认 runId,不管谁在读\n    for token in model.generate(prompt):\n        redis.xadd(f\"gen:{runId}\", {\"token\": token})   # 只往 Redis Stream 写\n\ndef stream(runId, request):             # 连接侧:任意 Chat Service 实例,只做中继\n    last_id = request.headers.get(\"Last-Event-ID\", \"0\")\n    for entry_id, f in redis.xread({f\"gen:{runId}\": last_id}, block=5000):\n        sse.write(f\"id: {entry_id}\\ndata: {f['token']}\\n\\n\")\n\n# ── 实例 A 崩溃时:怎么重新 assign?谁来 assign? ──\n# 1. worker 不受影响,继续 XADD 到 gen:{runId}(它根本不知道 A 死了)\n# 2. 浏览器 EventSource 【自动重连】        —— 客户端是\"触发者\"\n# 3. 负载均衡器把这条【新连接】路由到实例 B —— LB 是\"分配的人\"\n# 4. B 用 Last-Event-ID XREAD gen:{runId} 续读 —— 无需任何中央协调\n#\n# 结论:【没有】协调者去重新分配工作。\n#   靠「无状态 + Redis 共享态 + 客户端重连 + LB 路由」天然接管,\n#   这正是\"别把 SSE+worker 攥在一个实例里\"换来的好处。",
+    "lang": "python",
     "track": "classic-sd",
     "category": "Chatgpt",
     "numberAnchors": [
