@@ -650350,6 +650350,77 @@
     "category": "Job Scheduler"
   },
   {
+    "id": "sd-problem-breakdowns-job-scheduler-069b",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "idempotency",
+    "scenario": "调度器要为周期性 Job 展开执行实例;队列只保证至少一次投递;任务带转账、发欢迎邮件等副作用。",
+    "scenario_en": "The scheduler expands recurring jobs into execution instances, the queue only guarantees at-least-once delivery, and tasks have side effects like transfers and welcome emails.",
+    "q": "哪种组合能同时防住「重复创建」和「重复执行」?",
+    "q_en": "Which combination prevents both duplicate creation and duplicate execution?",
+    "options": [
+      "创建端用唯一约束/幂等键去重 + 执行端用条件操作让任务幂等",
+      "只要在执行端加一把锁就够,创建端不用管",
+      "把任务里的「加 1」到处多写几遍就自然幂等了",
+      "全靠队列保证 exactly-once,应用层什么都不用做"
+    ],
+    "options_en": [
+      "Dedup at creation with a unique constraint / idempotency key, plus idempotent tasks via conditional operations at execution",
+      "A lock at execution time is enough; creation needs nothing",
+      "Just repeating the +1 in the task makes it idempotent",
+      "The queue guarantees exactly-once, so the app layer needs nothing"
+    ],
+    "answer": [
+      0
+    ],
+    "why": "防重复要分两层。创建端:执行实例靠 Executions 复合主键 (execution_time+job_id) 唯一,重复插入被约束挡下;Job 定义靠提交端幂等键,命中就复用不新建。执行端:队列 at-least-once 免不了重投,所以任务本身要幂等——用条件操作(pending→running 才生效、发信前先查标志位)而不是「加 1」这种累积操作。exactly-once 队列在分布式下基本不现实,别指望它替你兜底。",
+    "why_en": "Dedup has two layers. Creation: execution instances are unique via the Executions composite key (execution_time+job_id), so a duplicate insert is rejected; job definitions are deduped by an idempotency key at submit. Execution: at-least-once delivery means redelivery is unavoidable, so the task must be idempotent using conditional operations (only pending->running takes effect, check a flag before sending) rather than accumulating '+1'. Exactly-once queues are essentially impractical in distributed systems, so do not rely on them.",
+    "whenOtherWins": "副作用调用的是外部幂等 API(自带幂等键,如 Stripe)时,任务层可以更薄;但创建端的唯一约束仍是最省事的第一道防线。",
+    "tradeoff": "唯一约束/条件操作(把去重下沉到数据库和任务,最省事)vs 去重表/分布式锁(要额外维护、有竞态窗口)",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "唯一约束 (unique constraint)",
+        "meaning": "数据库对某组列强制唯一,重复插入直接报错——用它做「重复创建」的第一道防线最省事。",
+        "meaningEn": "A unique constraint forces a set of columns to be unique so a duplicate insert fails outright — the cheapest first line of defense against duplicate creation."
+      },
+      {
+        "term": "条件操作 (conditional write)",
+        "meaning": "带前提的写,如「仅当 status=pending 时改为 running」;重复执行时前提已不成立,天然幂等。",
+        "meaningEn": "A conditional write carries a precondition, e.g. set running only if status=pending; on a repeat the precondition no longer holds, making it naturally idempotent."
+      },
+      {
+        "term": "at-least-once",
+        "meaning": "消息至少投递一次(可能多次)的投递语义,因此消费端必须自己做幂等。",
+        "meaningEn": "At-least-once delivery means a message is delivered one or more times, so the consumer must handle idempotency itself."
+      }
+    ],
+    "tags": [
+      "job-scheduler",
+      "idempotency",
+      "unique-constraint",
+      "at-least-once",
+      "dedup",
+      "track:classic-sd"
+    ],
+    "optionExplanations": [
+      "对:创建端(唯一主键 + 提交幂等键)挡「重复创建」,执行端(条件操作让任务幂等)挡「重复执行的副作用」,两层各司其职。",
+      "只在执行端加锁挡不住重复创建的行,也没解决副作用幂等;而且分布式锁本身有故障与租约难题。",
+      "「加 1」是累积操作,执行几次就加几次,重复写多遍只会更糟;幂等要用「设为 X」这种条件操作。",
+      "分布式队列基本给不了真正的 exactly-once;指望它替你兜底,重投时照样重复转账。"
+    ],
+    "optionExplanations_en": [
+      "Correct: creation-side (unique key + submit idempotency key) blocks duplicate rows, and execution-side (conditional ops making tasks idempotent) blocks duplicate side effects — two layers, distinct jobs.",
+      "A lock at execution alone neither prevents duplicate creation nor makes side effects idempotent, and distributed locks bring failure and lease problems.",
+      "'+1' is accumulating — it adds once per run, and repeating it is worse; idempotency needs 'set to X' style conditional operations.",
+      "Distributed queues essentially cannot deliver true exactly-once; relying on it still double-transfers on redelivery."
+    ],
+    "codeSample": "# ── 层1:创建【执行实例】—— 靠复合主键唯一挡重(card 020)──\n# Executions 主键 = (time_bucket, execution_time + job_id):同一 (job, 时刻) 只能一行\ndef create_execution(job_id, execution_time):\n    try:\n        db.insert_execution(                    # 唯一约束:重复插入直接失败\n            time_bucket   = floor_to_hour(execution_time),\n            execution_time= execution_time,\n            job_id        = job_id,\n            status        = \"pending\")\n    except UniqueViolation:\n        pass   # 已存在 → 什么都不做,天然幂等,不会创建第二条\n\n# ── 层2:创建【Job 定义】—— 靠幂等键挡客户端重试 ──\ndef submit_job(idem_key, spec):\n    ok = db.insert_idempotency_key(idem_key, status=\"pending\")  # UNIQUE(idem_key) 原子占坑\n    if not ok:                                  # 已存在 → 复用旧 job,不新建\n        return db.get_by_key(idem_key).job_id\n    job_id = db.create_job(spec)\n    db.update_key(idem_key, job_id=job_id, status=\"created\")\n    return job_id\n\n# ── 层3:执行 —— 队列 at-least-once 会重投,任务本身要幂等(card 069)──\ndef run(execution):\n    # ✅ 条件操作(而不是\"无脑执行\"):只有 pending→running 才生效\n    claimed = db.update_execution(execution.id,\n                                  set_status=\"running\",\n                                  where_status=\"pending\")\n    if not claimed:\n        return              # 别人已经跑过 / 正在跑 → 幂等跳过,不重复执行\n\n    # 副作用也必须幂等:条件操作 + 先查标志位,别用\"加 1\"这种累积操作\n    if not user.welcome_email_sent:             # 发信前先查标志位\n        send_email(user)\n        user.welcome_email_sent = True\n    db.update_execution(execution.id, set_status=\"done\")",
+    "track": "classic-sd",
+    "category": "Job Scheduler"
+  },
+  {
     "id": "sd-problem-breakdowns-job-scheduler-070",
     "format": "chain",
     "atomType": "fit",
