@@ -254,8 +254,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "mental-model",
-    "scenario": "聊天集群的每台服务器都要读到同一份最新的路由与配置视图，才能把消息发对地方。",
-    "scenario_en": "Every server in the chat cluster needs the same up-to-date view of routing and config, otherwise messages go to the wrong place.",
+    "scenario": "聊天集群的每台服务器都要从同一个协调服务读路由与配置，且不能出现「不同服务器看到互相矛盾的版本历史」，配置变更要在短时间内传到所有服务器。",
+    "scenario_en": "Every server in the chat cluster reads routing and config from one coordination service; no server may observe a contradictory version history, and config changes must reach all servers within a short bounded time.",
     "q": "理解 ZooKeeper 最好的心智模型是？",
     "q_en": "What is the best mental model for ZooKeeper?",
     "options": [
@@ -273,8 +273,8 @@
     "answer": [
       1
     ],
-    "why": "ZK 像一棵所有参与者共享、保持一致的元数据树——这份跨服务器的一致视图正是它做协调的能力来源。",
-    "why_en": "Think of ZooKeeper as a synchronized metadata filesystem where every connected node shares the same consistent view.",
+    "why": "ZK 像一棵所有参与者共享的元数据树：写经 leader 全序提交，任一客户端无论连哪台 server 都看到同一条更新顺序（single system image），并在有界时间内追上。注意读由本地 server 服务，可能略旧；要读最新需先 sync()。",
+    "why_en": "ZooKeeper is like a shared metadata tree: writes are totally ordered through the leader, every client sees the same update order regardless of which server it connects to (single system image), and catches up within bounded time. Reads are served locally and may be slightly stale; call sync() first if you need the latest value.",
     "tags": [
       "zookeeper",
       "mental-model",
@@ -2052,9 +2052,9 @@
     "sub": "consistency",
     "q": "补全 ZooKeeper 的一致性保证：",
     "q_en": "Fill in ZooKeeper's consistency guarantees.",
-    "text": "五大保证：{{顺序一致性}}（同一客户端的更新按发送顺序生效）、{{原子性}}（更新要么全成要么全败）、{{单一系统映像}}（连哪台服务器看到的视图一致）、{{持久性}}（确认过的更新不会丢）、及时性（客户端视图在有界时间内更新）。",
-    "why": "这五条是 ZK 可以被信任为「协调真相源」的原因；实现上全靠写走 leader 的全序 + quorum 持久化。",
-    "why_en": "ZooKeeper guarantees sequential consistency, atomicity, a single system image, durability, and timeliness.",
+    "text": "五大保证：{{顺序一致性}}（同一客户端的更新按发送顺序生效）、{{原子性}}（更新要么全成要么全败）、{{单一系统映像}}（连哪台服务器看到的视图一致）、{{可靠性 / Reliability}}（已应用的更新会一直保留，直到被覆盖）、及时性（客户端视图在有界时间内更新）。",
+    "why": "这五条是 ZK 能当「协调真相源」的原因；主要依靠写经 leader 全序 + quorum 持久化（ZAB），客户端重连时按 zxid 拒绝连到落后 server 保证不会看到更旧的视图。",
+    "why_en": "These five guarantees make ZooKeeper trustworthy as a coordination source of truth. They rely mainly on leader-ordered writes with quorum persistence (ZAB), plus zxid checks on reconnect so a client never sees an older view.",
     "tags": [
       "zookeeper",
       "consistency",
@@ -3024,27 +3024,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "hierarchical-locks",
-    "scenario": "分布式文件系统需要「目录及其文件」的嵌套锁获取，要防死锁，还要能监控整个锁层级的变化。",
-    "scenario_en": "A distributed file system needs nested locks for directories and files. It must avoid deadlocks and watch changes across the whole lock hierarchy.",
-    "q": "为什么这里 ZooKeeper 严格优于 Redis？",
-    "q_en": "Why is ZooKeeper strictly better than Redis in this case?",
+    "scenario": "分布式文件系统需要「目录及其文件」的嵌套锁获取，要防死锁，还要能可靠监控整个锁层级的变化。",
+    "scenario_en": "A distributed file system needs nested locks for directories and files. It must avoid deadlocks and reliably watch changes across the whole lock hierarchy.",
+    "q": "为什么这里 ZooKeeper 比 Redis 更合适？",
+    "q_en": "Why is ZooKeeper the better fit than Redis here?",
     "options": [
       "因为部署 ZooKeeper 集群的机器成本比部署 Redis 更加便宜",
-      "ZK 的层级命名空间天然表达父子锁结构，能同时 watch 多个节点监控整个锁层级；Redis 缺少层级与联动通知",
+      "ZK 的层级命名空间原生表达父子锁结构，可对子节点变化设 watch 监控整个锁层级；Redis 只能用 key 前缀模拟层级，keyspace 通知也是 fire-and-forget、不保证送达",
       "因为 Redis 这个产品根本就没有实现过分布式锁的能力",
       "因为 ZooKeeper 锁的整体写入吞吐量比 Redis 锁要高出许多，纯粹的加解锁性能才是这里唯一需要考虑的决定因素"
     ],
     "options_en": [
       "Because running a ZooKeeper cluster costs less hardware than running Redis.",
-      "ZooKeeper's hierarchical namespace naturally expresses parent-child lock structure and can watch multiple nodes across the whole hierarchy; Redis lacks that hierarchy and linked notification.",
+      "ZooKeeper's hierarchical namespace natively models parent-child locks and can watch child changes across the hierarchy; Redis can only emulate hierarchy with key prefixes, and its keyspace notifications are fire-and-forget with no delivery guarantee.",
       "Because Redis as a product has never implemented any distributed-lock capability.",
       "Because ZooKeeper locks have far higher write throughput than Redis locks, and raw lock/unlock performance is the only factor that matters here."
     ],
     "answer": [
       1
     ],
-    "why": "资源有父子关系、锁获取要尊重层级时，ZK 的树形结构 + 多点 watch 是量身定制；Redis 锁是平面的。",
-    "why_en": "ZooKeeper's hierarchical namespace and multi-node watches express nested directory-file locks with deadlock prevention, which flat Redis locks cannot.",
+    "why": "资源有父子关系、锁获取要尊重层级时，ZK 的树形结构 + 子节点 watch 是原生能力；Redis 的 key 空间是平面的，层级要靠前缀约定，通知（keyspace notifications/Pub/Sub）断连即丢，不适合做可靠的层级监控。",
+    "why_en": "When resources have parent-child relationships and locking must respect the hierarchy, ZooKeeper's tree plus child watches are native features. Redis has a flat key space, so hierarchy is a prefix convention, and its keyspace notifications/Pub/Sub are lost on disconnect, which makes reliable hierarchy monitoring hard.",
     "whenOtherWins": "普通的单资源短锁（订单、座位）Redis 又快又简单，是默认选择。",
     "tradeoff": "ZooKeeper 的层级命名空间+多点 watch（表达父子锁结构）vs Redis 的平面 key 空间（无天然层级）",
     "codeSample": "# 目录锁和文件锁按路径天然嵌套\ncreate -e /locks/dir-a lock-owner\ncreate -e /locks/dir-a/file-1 lock-owner\n\n# 同时 watch 父路径和子路径，任一层变化都能感知\nzk.exists(\"/locks/dir-a\", true);\nzk.exists(\"/locks/dir-a/file-1\", true);\n# Redis 的 key 空间是平面的，没有等价的父子层级可 watch",
@@ -3086,13 +3086,13 @@
     ],
     "optionExplanations": [
       "机器成本从来不是这道题的决定性约束，问的是『能不能表达父子锁层级』这个能力差异。",
-      "对：ZK 的层级命名空间天然表达父子锁结构，能同时 watch 多个节点监控整个锁层级；Redis 是平面 key 空间，没有这种天然层级。",
+      "对：ZK 的层级命名空间原生表达父子锁结构，可对子节点变化设 watch 监控整个锁层级；Redis 只能用 key 前缀模拟层级，通知也是 fire-and-forget、不保证送达。",
       "Redis 完全能做分布式锁（SETNX/TTL），说它『没实现过』是事实错误。",
       "吞吐量恰恰是 ZK 锁的弱项而不是优势，这道题赢在能表达父子锁层级，而不是速度。"
     ],
     "optionExplanations_en": [
       "Hardware cost was never the decisive constraint here — the question is about the ability to express parent-child lock hierarchy.",
-      "Right: ZooKeeper's hierarchical namespace naturally expresses parent-child lock structure and can watch multiple nodes to monitor the whole hierarchy; Redis's flat key space has no such native hierarchy.",
+      "Right: ZooKeeper's hierarchical namespace natively models parent-child locks and can watch child changes across the hierarchy; Redis can only emulate hierarchy with key prefixes, and its notifications are fire-and-forget with no delivery guarantee.",
       "Redis can absolutely do distributed locks with SETNX and TTL — claiming it never implemented locking is factually wrong.",
       "Throughput is actually a weakness of ZK locks, not a strength; this case is won by expressing parent-child lock hierarchy, not by speed."
     ]

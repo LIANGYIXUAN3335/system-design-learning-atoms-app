@@ -7,27 +7,27 @@
     "sub": "why-btree-fails",
     "q": "\"找出年龄在 20-25 之间的用户\"为什么在数据库里毫秒级返回?",
     "q_en": "Why can a database answer \"find users aged 20 to 25\" in milliseconds?",
-    "scenario": "1 亿行用户表,age 上有 B-tree 索引,冷缓存下第一次查 20-25 岁仍是毫秒返回。",
-    "scenario_en": "You have a 100-million-row users table with a B-tree on age, and even on a cold cache the very first 20-to-25 range query comes back in milliseconds.",
+    "scenario": "1 亿行用户表，有一个 (age, user_id) 的 B-tree 复合索引。查询是 `SELECT user_id FROM users WHERE age BETWEEN 20 AND 25 ORDER BY age LIMIT 100`，冷缓存下第一次执行也只要几毫秒（走 index-only scan，不回表）。",
+    "scenario_en": "A 100-million-row users table has a composite B-tree index on (age, user_id). The query is `SELECT user_id FROM users WHERE age BETWEEN 20 AND 25 ORDER BY age LIMIT 100`, and even the first run on a cold cache takes only a few milliseconds (an index-only scan, no table lookups).",
     "options": [
       "年龄这一列取值范围小,所以扫描起来更快",
-      "B-tree 把排序键打包同页,一次寻道加顺序读",
+      "B-tree 按键排序、相邻键挤在同一批叶子页：从根下降几层找到 age=20 的起点，再顺序读叶子页拿够 100 条",
       "这条查询结果恰好被数据库缓存住了",
       "年龄是整数类型,整数比较比字符串快,所以范围查询才这么快"
     ],
     "answer": [
       1
     ],
-    "why": "B-tree 里 20 挨着 21 挨着 22,同页存放,范围查询变成一次寻道加短顺序读——这是现代数据库最擅长的事。",
-    "why_en": "A B-tree packs sorted keys together on disk, so a range query becomes one seek plus a short sequential read.",
+    "why": "B-tree 叶子页里键是有序紧挨着的：先从根往下读几层页定位到 age=20 的第一条，再沿叶子页顺序往后读，凑够 LIMIT 100 就停；(age, user_id) 覆盖了要返回的列，不用回表。所以读的页数只和「树高 + 要返回的行数」有关，和表有 1 亿行无关。注意：去掉 LIMIT、要返回上千万行时，就不再是毫秒级，优化器甚至会改走全表扫描。",
+    "why_en": "In a B-tree, keys sit sorted and adjacent in leaf pages: read a few levels from the root to find the first age=20 entry, then scan leaf pages sequentially and stop after LIMIT 100; the (age, user_id) index covers the returned column, so no table lookups are needed. Pages read depend on tree height plus rows returned, not on the 100M table size. Without the LIMIT, returning tens of millions of rows is not millisecond-fast, and the planner may switch to a sequential scan.",
     "tags": [
       "btree",
       "range-query",
       "indexing"
     ],
     "options_en": [
-      "The age column just doesn't have much data.",
-      "A B-tree packs sorted keys onto the same page, so a range query is one seek plus a sequential read.",
+      "The age column has few distinct values, so scanning it is faster",
+      "A B-tree keeps keys sorted with neighbors packed into the same leaf pages: descend a few levels to the first age=20 entry, then read leaf pages sequentially until 100 rows are collected",
       "The database happened to cache this query's result.",
       "Age is an integer type, and integer comparisons beat string ones, so the range query is this fast."
     ],
@@ -41,13 +41,13 @@
     ],
     "optionExplanations": [
       "把速度归因于年龄取值少,但决定范围查询快慢的是索引页里的排序局部性,不是基数高低。",
-      "本质是索引页里排序键紧挨着存放,查一个区间只需跳一次再顺着往下读,不必逐行扫表。",
+      "索引页里键按序紧挨着：从根下降几层找到起点，再顺着叶子页往下读，凑够 LIMIT 就停；因为索引覆盖了所要返回的列，不必回表。",
       "缓存能加速重复查询,但冷缓存或换一个新区间照样很快,说明真正原因不是缓存命中。",
       "整数比较确实便宜,可真正贵的是磁盘寻道,没有索引时类型再快也救不了大范围扫描。"
     ],
     "optionExplanations_en": [
       "This blames the speed on age having few distinct values, but it's really sorted locality inside index pages that matters.",
-      "Sorted keys sit packed together on the same page, so a range query just seeks once and reads sequentially from there.",
+      "Sorted keys sit adjacent in index pages: descend a few levels to the starting entry, then read leaf pages onward and stop at the LIMIT; since the index covers the returned columns, no table lookups are needed.",
       "Caching would help repeat queries, but a cold cache or a brand-new range is just as fast, so caching isn't the real reason.",
       "Integer comparisons are cheap, but disk seeks are the expensive part — type alone can't save an unindexed scan."
     ]

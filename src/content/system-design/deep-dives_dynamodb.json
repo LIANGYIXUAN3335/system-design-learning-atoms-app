@@ -7,9 +7,9 @@
     "sub": "positioning",
     "q": "补全 DynamoDB 的三个关键词定位：",
     "q_en": "Fill in DynamoDB's three positioning keywords:",
-    "text": "DynamoDB 是 AWS 提供的{{全托管}}（AWS 负责硬件、配置、打补丁、扩缩容）、{{高可扩展}}（自动扩缩、无停机）、{{键值}}模型的 NoSQL 数据库服务。",
-    "why": "三个 buzzword 各有实义：全托管=运维外包给 AWS，高可扩展=自动伸缩无性能退化，键值=非关系模型、存取灵活。",
-    "why_en": "DynamoDB is a fully managed, highly scalable key-value NoSQL service where AWS handles all operations and scaling automatically.",
+    "text": "DynamoDB 是 AWS 提供的{{全托管}}（AWS 负责硬件、配置、打补丁、扩缩容）、{{高可扩展}}（按分区水平扩展；on-demand 模式自动适应流量）、{{键值}}/文档模型的 NoSQL 数据库服务。",
+    "why": "三个关键词各有实义：全托管 = 运维交给 AWS；高可扩展 = 按分区水平扩展，但单个热点 partition key 仍受每分区吞吐上限约束；键值（及文档）= 非关系模型、按主键存取。",
+    "why_en": "Each keyword has real meaning: fully managed = operations handled by AWS; highly scalable = horizontal scaling by partition, though a single hot partition key is still bounded by per-partition throughput; key-value (and document) = non-relational, accessed by primary key.",
     "tags": [
       "dynamodb",
       "positioning"
@@ -293,8 +293,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "primary-key",
-    "scenario": "做一个群聊应用：最常见的查询是「取某个群的所有消息并按时间排序展示」。",
-    "scenario_en": "Building a group chat app: the most common query is 'fetch all messages for a chat, sorted by time.'",
+    "scenario": "做一个群聊应用：最常见的查询是「取某个群的所有消息并按时间排序展示」。message_id 是按时间单调递增的 ID（如 Snowflake）。",
+    "scenario_en": "Building a group chat app: the most common query is 'fetch all messages for a chat, sorted by time.' message_id is a time-ordered, monotonically increasing ID (e.g., Snowflake).",
     "q": "主键应该怎么设计？",
     "q_en": "How should the primary key be designed?",
     "options": [
@@ -306,8 +306,8 @@
     "answer": [
       2
     ],
-    "why": "按 chat_id 分区让一个群的消息聚在一起，一次 Query 即可取出；单调递增的 message_id 作 sort key 提供时间顺序。分区键永远围绕最常见查询模式选。",
-    "why_en": "Partitioning by chat id with a monotonically increasing message id sort key lets one query fetch a chat's messages in chronological order.",
+    "why": "按 chat_id 分区让一个群的消息聚在同一分区，一次 Query 即可取出；题面给出 message_id 按时间单调递增，作 sort key 就天然给出时间顺序。分区键围绕最常见查询模式选。",
+    "why_en": "Partitioning by chat_id keeps one chat's messages in the same partition so a single Query fetches them; since message_id is given as time-ordered and increasing, using it as the sort key yields chronological order. Choose the partition key around the most common access pattern.",
     "whenOtherWins": "若最常见查询是「某用户跨群的全部消息」，那 user_id 才是合适的分区维度——可用 GSI 补充。",
     "tags": [
       "dynamodb",
@@ -397,13 +397,12 @@
       "随机 UUID v4"
     ],
     "answer": [
-      0,
       1,
       2,
       3
     ],
-    "why": "前四种都能给出时间有序且唯一的 ID；UUID v4 是纯随机的，唯一但不可按时间排序，不满足需求。",
-    "why_en": "Per-partition counters, UUID v7, snowflake IDs, and ULIDs all provide sortable unique IDs, unlike random UUID v4.",
+    "why": "UUID v7、Snowflake、ULID 都把时间戳编码在高位，再拼随机位或机器号+序列号，多台服务器并发生成也能全局唯一、按时间大致有序（k-sortable）。每分区计数器只在单个分区内递增，不同分区的值会重复、跨分区不可比，且需要原子更新一个计数器 item，并发写时成为热点；UUID v4 纯随机，不可按时间排序。",
+    "why_en": "UUID v7, Snowflake, and ULID all put a timestamp in the high bits followed by random bits or machine id + sequence, so many servers can mint IDs concurrently that are globally unique and roughly time-ordered (k-sortable). A per-partition counter only increases within one partition — values repeat across partitions and can't be compared — and it needs atomic updates to a counter item that becomes a hot spot under concurrent writes; UUID v4 is purely random and not time-sortable.",
     "tags": [
       "dynamodb",
       "id-generation"
@@ -435,21 +434,21 @@
       }
     ],
     "optionExplanations": [
-      "分区内严格递增，能保证同一分区里的排序和唯一性，但不保证跨分区全局有序。",
+      "只在分区内递增，不同分区的值会重复、顺序不可比，满足不了「全局唯一 + 全局按时间排序」。",
       "时间戳编码在最前面，字符串字典序就是时间序，还不像 v1 那样暴露 MAC 地址。",
-      "拼上机器号和序列号，多节点并发生成也不会撞车，天然全局有序。",
+      "时间戳 + 机器号 + 序列号，多节点并发不撞车，整体按时间大致有序（同一毫秒跨机器的顺序取决于机器号，且受时钟漂移影响）。",
       "时间戳编码进前缀、字典序可排序，常以 26 位 Base32 字符串呈现。",
       "纯随机生成不带任何时间信息，字典序和时间毫无关系，满足不了可排序的要求。"
     ],
     "optionExplanations_en": [
-      "Strictly increasing within a partition, guaranteeing order and uniqueness there, though not global cross-partition order.",
+      "It only increases within a partition; values repeat across partitions and aren't comparable, so it fails \"globally unique + globally time-sortable\".",
       "The timestamp sits up front, so string ordering equals time ordering, without leaking a MAC address the way v1 does.",
-      "Combining a machine id with a sequence number avoids collisions across concurrent generators and stays globally ordered.",
+      "Timestamp + machine id + sequence avoids collisions across concurrent generators and is roughly time-ordered overall (same-millisecond order across machines depends on machine id and is subject to clock skew).",
       "The timestamp is encoded in the prefix, sorting lexicographically, typically rendered as a 26-character Base32 string.",
       "Purely random with no time information at all, so its lexicographic order has nothing to do with time -- it fails the sortability requirement."
     ],
-    "scenario": "多台应用服务器并发写同一张事件表，主键要全局唯一且能按时间排序取最近记录。",
-    "scenario_en": "Many app servers write one event table concurrently; keys must be globally unique and sortable by time to read the newest rows."
+    "scenario": "多台应用服务器并发写同一张事件表，主键里的 ID 值本身要在整张表全局唯一，且能跨所有写入方大致按时间排序、取最近记录。",
+    "scenario_en": "Many app servers write one event table concurrently; the ID value itself must be globally unique across the whole table and roughly sortable by time across all writers, so the newest rows can be read."
   },
   {
     "id": "sd-deep-dives-dynamodb-012",
@@ -516,13 +515,13 @@
     "tradeoff": "v7 的排序性与隐私优势 vs v1 的历史兼容性",
     "optionExplanations": [
       "v7 和 v1 编码长度基本一样，长度从来不是它被推荐的原因。",
-      "v1 同样带毫秒级时间戳，精度从来不是问题所在。",
+      "v1 的时间戳是 100 纳秒精度的 60 位 Gregorian 时间，精度比 v7 的毫秒还细；它不能按字符串排序，是因为时间戳被拆成低/中/高三段且低位排在最前，问题在字段顺序，不在精度。",
       "时间戳前置带来字符串可排序，加上不含 MAC 地址避免隐私泄露，这两点才是真正被推荐的理由。",
       "v7 是 RFC 9562 定义的公开标准，任何系统都能生成，跟 AWS 或 DynamoDB 没关系。"
     ],
     "optionExplanations_en": [
       "v7 and v1 encode to roughly the same length -- length was never why it's recommended.",
-      "v1 also carries a millisecond timestamp, so precision was never the real issue.",
+      "v1 carries a 60-bit Gregorian timestamp in 100-nanosecond units — finer than v7's milliseconds. It doesn't sort as a string because the timestamp is split into low/mid/high fields with the low bits first; the problem is field order, not precision.",
       "Putting the timestamp first makes the string sortable, and dropping the MAC address avoids the privacy leak -- those are the two real reasons to prefer it.",
       "v7 is defined in the public RFC 9562 standard, generatable by any system -- it has nothing to do with AWS."
     ],
@@ -546,8 +545,8 @@
     "answer": [
       3
     ],
-    "why": "概念上仍类似一致性哈希，但实现从 P2P 环换成了中心化的 partition map + placement service；该元数据服务还负责分区的自动拆分与合并。",
-    "why_en": "Modern DynamoDB uses a centralized partition map and placement service consulted by request routers, unlike the peer-to-peer hash ring in the original Dynamo paper.",
+    "why": "概念上仍按分区键哈希分布，但定位方式从论文里的点对点哈希环换成了中心化的分区元数据服务：request router 查询它找到存放该分区的存储节点。这个元数据层也负责分区在大小或吞吐到顶时自动拆分（split）。",
+    "why_en": "Conceptually data is still hash-distributed by partition key, but location moved from the paper's peer-to-peer hash ring to a centralized partition metadata service: request routers consult it to find the storage nodes for a partition. That metadata layer also handles automatic partition splits when size or throughput hits the limit.",
     "tags": [
       "dynamodb",
       "partitioning",
@@ -573,13 +572,13 @@
       "点对点哈希环其实是 2007 年论文的设计，现代实现早就换掉了。",
       "方向说反了：论文才是更去中心化的一端，现代版改用的是中心化服务而非 gossip。",
       "底层原理还是接近一致性哈希，但具体实现早就升级换代了，并非原地踏步。",
-      "现代实现靠中心化的分区映射服务定位节点，还顺带包揽了分区的自动拆分与合并；论文描述的才是点对点哈希环。"
+      "现代实现靠中心化的分区元数据服务定位节点，并负责分区的自动拆分；论文描述的才是点对点哈希环。"
     ],
     "optionExplanations_en": [
       "The peer-to-peer hash ring is actually the 2007 paper's design -- the modern implementation replaced it long ago.",
       "This reverses the direction: the paper is the more decentralized end, and the modern version moved to a centralized service, not gossip.",
       "Conceptually it's still like consistent hashing, but the implementation actually evolved substantially -- it didn't stand still.",
-      "The modern implementation locates nodes via a centralized partition-map service that also handles automatic splitting and merging; the paper described the peer-to-peer ring."
+      "The modern implementation locates nodes via a centralized partition metadata service, which also handles automatic splits; the paper described the peer-to-peer ring."
     ]
   },
   {
@@ -679,15 +678,15 @@
     "q_en": "What is the definition of a GSI (Global Secondary Index)?",
     "options": [
       "分区键与主表相同、只是排序键不同的索引",
-      "分区键与主表不同，存在独立分区并单独复制",
+      "分区键（和排序键）可以与主表不同，存在独立分区并单独复制",
       "只能在建表时创建、之后无法新增的索引",
       "对全表内容做全文检索的倒排索引"
     ],
     "answer": [
       1
     ],
-    "why": "GSI 换了分区维度，所以它本质上是一张独立的内部表：自己的分区、自己的副本，让你能按非主键属性高效查询。",
-    "why_en": "A global secondary index uses a different partition key from the table and lives on entirely separate physical partitions replicated independently.",
+    "why": "GSI 可以换一个分区维度（也可以沿用主表分区键只换排序键），本质上是一张独立的内部表：自己的分区、自己的副本，异步跟随主表更新，让你能按非主键属性高效查询。选项 A 是 LSI 的定义：LSI 必须沿用主表分区键。",
+    "why_en": "A GSI can use a different partition dimension (or keep the table's partition key with a different sort key); it is essentially a separate internal table with its own partitions and replicas, updated asynchronously, so you can query efficiently on non-key attributes. Option A is the LSI definition: an LSI must keep the base table's partition key.",
     "tags": [
       "dynamodb",
       "gsi",
@@ -695,14 +694,14 @@
     ],
     "options_en": [
       "An index with the same partition key as the base table, only a different sort key.",
-      "Its partition key differs from the base table's; it sits in its own partitions and replicates separately.",
+      "Its partition key (and sort key) can differ from the base table's; it sits in its own partitions and replicates separately.",
       "An index that can only be created at table creation and never added later.",
       "An inverted index for full-text search across the whole table."
     ],
     "termDefinitions": [
       {
-        "meaning": "全局二级索引：分区键与主表不同，独立物理分区，只支持最终一致读。",
-        "meaningEn": "A Global Secondary Index has its own partition key and its own physical partitions, and it only supports eventually consistent reads.",
+        "meaning": "全局二级索引：分区键可与主表不同，独立物理分区，只支持最终一致读。",
+        "meaningEn": "A Global Secondary Index can have a partition key different from the table's, lives on its own physical partitions, and only supports eventually consistent reads.",
         "fullName": "Global Secondary Index",
         "term": "GSI"
       },
@@ -719,13 +718,13 @@
     ],
     "optionExplanations": [
       "同分区键、只换排序键的是 LSI 的定义，这里被套用到了 GSI 上。",
-      "分区维度变了，GSI 本质上是一张自带分区和副本的独立内部表，能按非主键属性高效查询。",
+      "GSI 的分区键和排序键可以与主表不同，本质上是一张自带分区和副本的独立内部表，能按非主键属性高效查询。",
       "创建时机受限的是 LSI，GSI 反而可以随时添加或删除。",
       "DynamoDB 本身不做全文检索，那通常要接 Elasticsearch/OpenSearch 之类的外部服务。"
     ],
     "optionExplanations_en": [
       "Same partition key, different sort key is LSI's definition, misapplied to GSI here.",
-      "Because the partition dimension changes, a GSI is essentially its own internal table with separate partitions and replicas, enabling efficient queries on non-key attributes.",
+      "A GSI's partition key and sort key can differ from the base table's; it is essentially its own internal table with separate partitions and replicas, enabling efficient queries on non-key attributes.",
       "It's LSI that's locked to creation time -- a GSI can actually be added or dropped anytime.",
       "DynamoDB itself does no full-text search; that usually means bolting on something like Elasticsearch or OpenSearch."
     ],
@@ -887,22 +886,22 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "secondary-index",
-    "scenario": "同一个聊天应用：想在某个群（同一 chat_id 分区）内，按「附件数量 num_attachments」查出附件最多的消息。",
-    "scenario_en": "Same chat app: within one group (the same chat_id partition), you want to find the messages with the most attachments, sorted by num_attachments.",
+    "scenario": "同一个聊天应用还在建表设计阶段（表尚未创建）。除了主表的按时间取消息，还要能在某个群（同一 chat_id 分区）内按「附件数量 num_attachments」查出附件最多的消息。预估单个群的消息总量远小于 10 GB。",
+    "scenario_en": "The same chat app is still in the table-design phase (the table hasn't been created yet). Besides reading messages by time, you also need to find the messages with the most attachments within one group (the same chat_id partition), sorted by num_attachments. Each group's total message data is expected to stay far below 10 GB.",
     "q": "最合适的索引是？",
     "q_en": "What's the most suitable index here?",
     "options": [
       "再建一张新表",
-      "GSI on num_attachments",
+      "建 GSI，分区键设为 num_attachments",
       "全表 Scan",
-      "LSI，排序键换成新维度。"
+      "LSI，沿用 chat_id 分区键、排序键换成 num_attachments"
     ],
     "answer": [
       3
     ],
-    "why": "查询仍在同一分区内、只是换了排序维度——这正是 LSI 的用武之地：同分区共存、开销小。注意 LSI 只能建表时定义，要提前规划。",
-    "why_en": "Sorting within the same partition on a different attribute is exactly what a local secondary index is for.",
-    "whenOtherWins": "若要跨所有群按附件数全局查询（分区维度变了），就必须用 GSI。",
+    "why": "查询仍在同一 chat_id 分区内、只换排序维度，且表还没建——正好可以在建表时定义 LSI：与主表同分区共存、共享主表容量、还能强一致读。前提是每个群的数据（主表 + LSI）不超过 10 GB 的 item collection 上限。如果表已经上线，LSI 加不上，就用 GSI（分区键 chat_id、排序键 num_attachments）；若单个群可能超过 10 GB，也应改用 GSI。",
+    "why_en": "The query stays within one chat_id partition and only changes the sort dimension, and the table hasn't been created — so you can define an LSI at creation: co-located with the base table, sharing its capacity, and supporting strongly consistent reads. This relies on each group's data (base table + LSI) staying under the 10 GB item-collection limit. If the table is already live, an LSI can't be added — use a GSI (partition key chat_id, sort key num_attachments); also use a GSI if a single group might exceed 10 GB.",
+    "whenOtherWins": "若表已经上线、单个群可能超过 10 GB，或要跨所有群按附件数全局查询（分区维度变了），就必须用 GSI。",
     "tags": [
       "dynamodb",
       "lsi",
@@ -911,9 +910,9 @@
     "tradeoff": "同分区排序维度用 LSI vs 换分区维度用 GSI",
     "options_en": [
       "Create an entirely new table.",
-      "A GSI on num_attachments.",
+      "A GSI with num_attachments as its partition key.",
       "A full table scan.",
-      "An LSI with the sort key switched to a new dimension."
+      "An LSI that keeps chat_id as the partition key and switches the sort key to num_attachments."
     ],
     "table": {
       "headers": [
@@ -953,15 +952,15 @@
     ],
     "optionExplanations": [
       "新建表要自己维护数据同步，比原地加个索引复杂得多，没必要。",
-      "分区维度根本没变，为它单独开 GSI 要多付独立读写容量，属于过度设计。",
+      "以 num_attachments 为分区键会把不同群的消息按附件数混在一起，无法按群查询；即便改成 chat_id + num_attachments 的 GSI 也能用，但要多付独立容量且只能最终一致，在建表阶段不如 LSI。",
       "Scan 全表再排序，代价随表增长而增长，同分区内其实有更省的办法。",
-      "分区维度不变、只是换个排序维度做同分区内的检索，这正是 LSI 该出场的场景，还能直接复用主表容量。"
+      "分区维度不变、只是换个排序维度做同分区内的检索，且表在建表阶段，这正是 LSI 该出场的场景，还能复用主表容量（前提是单群数据不超过 10 GB）。"
     ],
     "optionExplanations_en": [
       "A new table would need its own sync logic, far more complex than just adding an index in place -- unnecessary here.",
-      "The partition dimension hasn't changed, so a dedicated GSI would burn separate capacity for no reason -- overkill.",
+      "Making num_attachments the partition key mixes messages from different groups by attachment count, so you can't query per group. A GSI keyed chat_id + num_attachments would work, but it costs separate capacity and is eventually consistent only — worse than an LSI at design time.",
       "Scanning and sorting afterward grows costlier as the table grows, when a cheaper same-partition option exists.",
-      "The partition stays fixed and only the sort dimension changes for a lookup within it -- exactly what an LSI is for, and it reuses the base table's capacity."
+      "The partition stays fixed and only the sort dimension changes for a lookup within it, and the table is at design time — exactly what an LSI is for, reusing the base table's capacity (provided each group stays under 10 GB)."
     ]
   },
   {
@@ -1851,8 +1850,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "consistency",
-    "q": "默认（最终一致）模式下，DynamoDB 在 CAP 里的行为倾向是？",
-    "q_en": "Under the default (eventually consistent) mode, where does DynamoDB sit in CAP?",
+    "q": "默认（最终一致）读模式下，这条读路径在 CAP 里的倾向是？",
+    "q_en": "Under the default (eventually consistent) read mode, which way does this read path lean in CAP terms?",
     "options": [
       "AP：可用性优先，可能读到旧数据",
       "CP：一致性优先，分区时牺牲可用性",
@@ -1862,8 +1861,8 @@
     "answer": [
       0
     ],
-    "why": "默认最终一致时 DynamoDB 表现为 AP/BASE：读可以由任意副本服务，可能略陈旧；需要时再按请求切强一致。",
-    "why_en": "With default eventual consistency DynamoDB generally behaves as an available AP system with BASE properties.",
+    "why": "默认最终一致读可以由任意副本服务，副本落后时也能返回（可能略旧）的数据——这条读路径偏 AP。注意写路径仍要经过分区 leader 并由多数副本确认，所以不能把整个 DynamoDB 简单称为 AP 系统；需要时可按请求切强一致读。",
+    "why_en": "Default eventually consistent reads can be served by any replica and still return (possibly slightly stale) data when a replica lags — this read path leans AP. Writes still go through the partition leader and need a quorum of replicas, so DynamoDB as a whole isn't simply \"an AP system\"; you can switch to strongly consistent reads per request.",
     "tags": [
       "dynamodb",
       "cap",
@@ -2116,8 +2115,8 @@
     "answer": [
       2
     ],
-    "why": "最终一致读可以打到任意副本（低延迟、省容量），但 follower 的数据是 leader 异步推的，可能落后一拍——这就是「可能读不到最新写」的来源。",
-    "why_en": "Eventually consistent reads can be served by any of the three replicas, and followers may lag because the leader replicates asynchronously.",
+    "why": "最终一致读可以打到任意副本（低延迟、只耗一半 RCU）。写入在 leader 和多数副本（3 个里的 2 个）持久化后就确认，剩下那个副本可能还没追上——读请求恰好落到它上面，就会读到旧值。",
+    "why_en": "Eventually consistent reads can hit any replica (lower latency, half the RCU). A write is acknowledged once the leader and a quorum of replicas (2 of 3) persist it, so the remaining replica may not have caught up — a read that lands on it returns the old value.",
     "tags": [
       "dynamodb",
       "replication",
@@ -2140,13 +2139,13 @@
     "optionExplanations": [
       "只由 leader 服务是强一致读的行为，最终一致读为了低延迟反而会打到任意副本。",
       "没有磁盘快照这回事，读的是副本当下的实时数据。",
-      "为了低延迟，最终一致读可以打到任意副本，而副本上的数据是从 leader 异步同步过来的，落后一拍就会读到旧值。",
+      "为了低延迟，最终一致读可以打到任意副本；写入只需多数副本确认，落后的那个副本被读到时就会返回旧值。",
       "DAX 才是可选的额外缓存层，不是最终一致读的默认实现方式。"
     ],
     "optionExplanations_en": [
       "Being served only by the leader is strong-read behavior; eventual reads hit any replica precisely for lower latency.",
       "There's no disk snapshot involved -- it reads a replica's current live data.",
-      "For lower latency, eventual reads can hit any replica, and since followers get data pushed asynchronously from the leader, a lagging one can return a stale value.",
+      "For lower latency, eventual reads can hit any replica; writes only need a quorum to acknowledge, so a read that lands on the lagging replica returns a stale value.",
       "DAX is the optional extra caching layer, not the default mechanism behind eventual reads."
     ],
     "scenario": "刚写完的用户资料马上用默认读模式读回来，偶尔拿到的还是旧值。",
@@ -2477,15 +2476,15 @@
     "q_en": "Which statement about DynamoDB's encryption is correct?",
     "options": [
       "需要手动开启静态加密",
-      "静态加密默认开启，TLS 强制传输。",
+      "静态加密默认开启；SDK 默认通过 HTTPS（TLS）传输。",
       "只加密传输途中的数据，落盘存储时并不加密",
-      "加密需要额外付费开通"
+      "不付额外费用就无法加密"
     ],
     "answer": [
       1
     ],
-    "why": "静态加密和传输加密是两件事：数据写入持久存储前默认已加密；TLS 则保护到 DynamoDB API 路上的请求和响应。",
-    "why_en": "Split it into two layers: encryption at rest is on by default before data reaches durable storage, and TLS protects requests and responses on the way to the DynamoDB API.",
+    "why": "静态加密和传输加密是两件事：所有表落盘前默认加密（默认用 AWS owned key，不额外收费；改用 KMS 管理的密钥才有 KMS 费用）；SDK 默认走 HTTPS 端点，用 TLS 保护请求和响应。要「强制」只走 TLS，可在 IAM / VPC endpoint policy 里加 aws:SecureTransport 条件。",
+    "why_en": "Encryption at rest and in transit are separate layers: every table is encrypted at rest by default (with an AWS owned key at no extra charge; choosing a KMS-managed key adds KMS charges), and the SDK uses HTTPS endpoints so TLS protects requests and responses. To truly enforce TLS-only access, add an aws:SecureTransport condition in IAM or VPC endpoint policies.",
     "tags": [
       "dynamodb",
       "security",
@@ -2493,9 +2492,9 @@
     ],
     "options_en": [
       "You must manually enable encryption at rest.",
-      "Encryption at rest is on by default and TLS is enforced in transit.",
+      "Encryption at rest is on by default, and the SDK uses HTTPS (TLS) in transit by default.",
       "Only data in transit is encrypted; data at rest on disk is not.",
-      "Encryption requires an extra paid add-on."
+      "Encryption is impossible without paying for an add-on."
     ],
     "termDefinitions": [
       {
@@ -2527,19 +2526,19 @@
       }
     ],
     "diagram": "flowchart LR\n  App[\"应用/服务\"] -->|\"TLS / HTTPS\\n传输中加密\"| API[\"DynamoDB API\"]\n  API -->|\"服务端静态加密\\n写入前加密\"| Store[\"密文数据\\n表 / 索引 / 备份\"]\n  KMS[\"KMS / wrapping key\"] -->|\"加密 data key\"| DK[\"encrypted data key\"]\n  DK -.-> Store",
-    "scenario": "系统里存有用户的敏感信息。",
-    "scenario_en": "The system stores sensitive user information.",
+    "scenario": "系统里存有用户的敏感信息，团队用 AWS SDK 默认配置访问 DynamoDB。",
+    "scenario_en": "The system stores sensitive user information, and the team accesses DynamoDB through the AWS SDK with default settings.",
     "optionExplanations": [
       "静态加密其实从建表起就默认打开，不需要用户手动做任何配置。",
-      "落盘前默认做静态加密，加上 API 路上强制走 TLS，两层保护同时覆盖存储和传输。",
+      "落盘前默认做静态加密，SDK 默认走 HTTPS（TLS）端点，两层保护同时覆盖存储和传输。",
       "这只说对了一半，静态加密同样是默认行为，不是只加密传输。",
-      "两层加密都不额外收费，是服务默认自带的能力。"
+      "默认加密不额外收费，只有选用 KMS 管理的密钥时才产生 KMS 费用，所以「不付费就不能加密」不成立。"
     ],
     "optionExplanations_en": [
       "Encryption at rest is actually on by default from the moment the table is created -- no manual setup required.",
-      "Data is encrypted by default before it's written to storage, and TLS is enforced for every API call, covering both storage and transit.",
+      "Data is encrypted at rest by default before it's written to storage, and the SDK uses HTTPS (TLS) endpoints by default, covering both storage and transit.",
       "This only gets half right -- encryption at rest is equally the default, not just transit.",
-      "Neither layer costs extra -- both come included with the service by default."
+      "Default encryption costs nothing extra; only opting into KMS-managed keys incurs KMS charges, so \"no encryption without paying\" is false."
     ]
   },
   {
@@ -2548,11 +2547,11 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "security",
-    "q": "DynamoDB 提供哪些访问控制/网络安全手段？（多选）",
-    "q_en": "Which access-control/network-security mechanisms does DynamoDB provide? (select all)",
+    "q": "DynamoDB 原生提供哪些手段能满足这三条要求？（多选）",
+    "q_en": "Which native DynamoDB mechanisms meet these three requirements? (select all)",
     "options": [
       "IAM 集成：细粒度策略控制谁能访问、能做什么操作",
-      "VPC endpoint：从 VPC 内安全访问，不暴露到公网",
+      "VPC endpoint：从 VPC 内访问，流量不经公网",
       "静态数据默认加密",
       "内置用户名密码表"
     ],
@@ -2561,8 +2560,8 @@
       1,
       2
     ],
-    "why": "访问控制走 IAM 策略，网络隔离走 VPC endpoint，存储安全靠默认加密；DynamoDB 没有自己的用户名密码体系。",
-    "why_en": "Access control comes from IAM policies, network isolation from VPC endpoints, and storage safety from default encryption at rest.",
+    "why": "三条要求各对一项：按角色分权限 → IAM 策略；不走公网 → VPC endpoint（gateway endpoint）；落盘加密 → 默认静态加密。DynamoDB 没有自己的用户名密码体系，认证统一交给 IAM。",
+    "why_en": "Each requirement maps to one mechanism: role-scoped permissions → IAM policies; no public internet → a VPC (gateway) endpoint; encryption at rest → default at-rest encryption. DynamoDB has no native username/password system — authentication goes through IAM.",
     "tags": [
       "dynamodb",
       "security",
@@ -2570,7 +2569,7 @@
     ],
     "options_en": [
       "IAM integration: fine-grained policies control who can access what and which actions they can perform.",
-      "VPC endpoints: access securely from within a VPC without exposing traffic to the public internet.",
+      "VPC endpoints: access from within a VPC without traversing the public internet.",
       "Data at rest is encrypted by default.",
       "A built-in username/password table."
     ],
@@ -2600,8 +2599,8 @@
       "Default encryption at rest backstops storage security, blocking raw-disk leakage with no extra configuration.",
       "Identity authentication is delegated entirely to IAM -- DynamoDB itself keeps no accounts or passwords."
     ],
-    "scenario": "把 DynamoDB 接进有合规要求的内网服务：流量不能走公网，权限要按角色细分。",
-    "scenario_en": "You wire DynamoDB into a compliance-bound internal service: no public-internet traffic, role-scoped permissions."
+    "scenario": "把 DynamoDB 接进有合规要求的内网服务：流量不能走公网，权限要按角色细分，落盘数据也要求加密。",
+    "scenario_en": "You wire DynamoDB into a compliance-bound internal service: no public-internet traffic, role-scoped permissions, and data must be encrypted at rest."
   },
   {
     "id": "sd-deep-dives-dynamodb-045",
@@ -3021,8 +3020,8 @@
     "answer": [
       0
     ],
-    "why": "write-through 只覆盖走 DAX 的路径：任何旁路直写 DynamoDB 的服务都会造成缓存陈旧，需要靠 TTL/淘汰兜底或统一所有写路径。",
-    "why_en": "DAX only invalidates entries for writes that go through DAX itself, so direct writes to DynamoDB leave stale cache entries until TTL or eviction.",
+    "why": "write-through 只覆盖走 DAX 的写路径：旁路直写 DynamoDB 的服务会让 item cache 陈旧，只能等 TTL 过期/淘汰，或统一所有写路径。",
+    "why_en": "Write-through only covers writes that go through DAX; services writing DynamoDB directly leave the item cache stale until TTL/eviction, unless all writes are routed through DAX.",
     "tags": [
       "dynamodb",
       "dax",
@@ -3050,14 +3049,14 @@
     ],
     "optionExplanations": [
       "写穿透只覆盖经过 DAX 的那条写路径，任何绕开它直接写库的服务都会让缓存跟数据库脱节。",
-      "DAX 只精确失效被写入的那个 key，不会波及缓存里的其他条目，说全量清空夸大了范围。",
-      "DAX 支持给条目设置 TTL，到期后自动淘汰，这个说法低估了它的能力。",
+      "经 DAX 的写只更新 item cache 里对应的那条，不会清空整个缓存；注意 query cache 甚至不会因写入失效，只靠 TTL 过期。",
+      "DAX 有 item cache TTL 和 query cache TTL，在集群的 parameter group 里统一配置（不是逐条设置），所以「不支持 TTL」不成立。",
       "DAX 是写穿透缓存，写操作会同时落到缓存和 DynamoDB，二者是一起完成的。"
     ],
     "optionExplanations_en": [
       "Write-through only covers writes that pass through DAX -- any service that bypasses it and writes DynamoDB directly leaves the cache out of sync.",
-      "DAX invalidates only the exact key that was written, not the rest of the cache -- claiming a full wipe overstates the scope.",
-      "DAX does support setting a TTL so entries lapse automatically, so this undersells its capability.",
+      "A write through DAX updates only that item in the item cache, never wiping the whole cache; note the query cache isn't invalidated by writes at all and relies on TTL.",
+      "DAX has an item-cache TTL and a query-cache TTL, configured cluster-wide in the parameter group (not per item), so \"no TTL support\" is false.",
       "DAX is a write-through cache -- a write lands in both the cache and DynamoDB together."
     ],
     "scenario": "读路径走 DAX，但另有一个批处理作业直接写 DynamoDB 主表。",
@@ -3069,8 +3068,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "dax",
-    "q": "DAX 内部维护哪两个缓存？如何配置二选一？",
-    "q_en": "What two caches does DAX maintain internally, and how do you pick between them?",
+    "q": "DAX 内部维护哪两个缓存？是否需要二选一开启？",
+    "q_en": "What two caches does DAX maintain internally, and do you have to choose one to enable?",
     "options": [
       "读缓存和写缓存两种，可以按需要任选其中一个开启",
       "item 缓存与 query 缓存，均常开",
@@ -3080,8 +3079,8 @@
     "answer": [
       1
     ],
-    "why": "两个缓存各管一类操作、恒常开启：item cache 缓存单条读取，query cache 缓存查询/扫描结果——没有开关可选。",
-    "why_en": "DAX always runs both an item cache for single-item gets and a query cache for query and scan results, with no configuration to choose one.",
+    "why": "item cache 缓存 GetItem/BatchGetItem 结果，query cache 缓存 Query/Scan 结果，两个都常开，没有二选一的开关（只能各自调 TTL）。",
+    "why_en": "Item cache holds GetItem/BatchGetItem results and query cache holds Query/Scan results; both are always on with no switch to pick one (only their TTLs are tunable).",
     "tags": [
       "dynamodb",
       "dax",
@@ -3395,14 +3394,14 @@
     "options": [
       "Firehose 可以直接读 DynamoDB Streams",
       "必须先导出全表快照",
-      "Firehose 不能直连，需 Kinesis 中转。",
+      "Firehose 不能直连 DynamoDB Streams，中间要多一跳（Kinesis Data Streams 或 Lambda）。",
       "只能通过人工导出 CSV"
     ],
     "answer": [
       2
     ],
-    "why": "常见误区：Firehose 与 DynamoDB Streams 不直连，中间必须有 Kinesis Data Streams（在表上启用）或一个 Lambda 做搬运。",
-    "why_en": "Kinesis Data Firehose cannot read DynamoDB Streams directly and needs Kinesis Data Streams or a Lambda function as the intermediary.",
+    "why": "Firehose 不能直接消费 DynamoDB Streams。两条常见路线：① 给表开启 Kinesis Data Streams for DynamoDB，变更直接进 KDS，Firehose 以 KDS 为源投递到 S3/Redshift；② 开启 DynamoDB Streams，用 Lambda 读出后写入 Firehose。注意 DynamoDB Streams 和 Kinesis Data Streams for DynamoDB 是两个不同功能。",
+    "why_en": "Firehose can't consume DynamoDB Streams directly. Two common routes: (1) enable Kinesis Data Streams for DynamoDB so changes land in KDS and Firehose uses KDS as its source; (2) enable DynamoDB Streams and have a Lambda read and forward records to Firehose. DynamoDB Streams and Kinesis Data Streams for DynamoDB are two distinct features.",
     "tags": [
       "dynamodb",
       "streams",
@@ -3411,7 +3410,7 @@
     "options_en": [
       "Firehose can read DynamoDB Streams directly.",
       "You must first export a full table snapshot.",
-      "Firehose cannot connect directly -- it needs Kinesis as a relay.",
+      "Firehose can't consume DynamoDB Streams directly — it needs an extra hop (Kinesis Data Streams or Lambda).",
       "The only path is a manual CSV export."
     ],
     "termDefinitions": [
@@ -3447,13 +3446,13 @@
     "optionExplanations": [
       "这是个常见误区，按这个理解搭建管道会直接失败，因为两者根本没有直连路径。",
       "先导出全量快照违背了「实时」管道的初衷，会把它退化成批量导出。",
-      "对，管道要多一跳中转：先在表上开启 Streams，再挂一个搬运组件，Firehose 只负责最后一段投递。",
+      "对，管道要多一跳：走 Kinesis Data Streams for DynamoDB（变更直接进 KDS）或 DynamoDB Streams + Lambda 搬运，Firehose 只负责最后一段投递。",
       "人工导出跟「实时分析」的目标完全相悖，Streams 本身就是自动实时的。"
     ],
     "optionExplanations_en": [
       "This is a common misconception, and building the pipeline on it fails outright since no such direct connection exists.",
       "Exporting a full snapshot first defeats the point of a 'real-time' pipeline, degrading it into batch export.",
-      "Right -- the pipeline needs an extra hop: enable Streams on the table, hang a relay off it, and Firehose only does the final delivery.",
+      "Right — the pipeline needs an extra hop: either Kinesis Data Streams for DynamoDB (changes land straight in KDS) or DynamoDB Streams plus a Lambda relay, and Firehose only does the final delivery.",
       "Manual export directly contradicts the real-time analytics goal -- Streams itself is already automatic."
     ]
   },
@@ -3547,12 +3546,12 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "when-to-use",
-    "q": "为什么在面试里 DynamoDB「几乎可以胜任任何持久层」？（多选）",
-    "q_en": "Why is DynamoDB 'good for nearly any persistence layer' in an interview? (select all)",
+    "q": "为什么面试里常说 DynamoDB「几乎可以胜任大多数持久层」？（多选）",
+    "q_en": "Why is DynamoDB often described in interviews as able to serve almost any persistence layer? (select all)",
     "options": [
       "高可扩展、高持久",
-      "支持 ACID 事务（含跨表）",
-      "单毫秒级延迟，配 DAX 可到微秒级",
+      "支持 ACID 事务（可跨表，同 region、单次最多 100 个 item）",
+      "个位数毫秒级延迟，配 DAX 可到微秒级",
       "自带 DAX 缓存和 Streams，方便做低延迟读与异步派生视图/CDC",
       "免费且无供应商锁定"
     ],
@@ -3570,7 +3569,7 @@
     ],
     "options_en": [
       "Highly scalable and highly durable.",
-      "Supports ACID transactions, including across tables.",
+      "Supports ACID transactions, including across tables (same region, up to 100 items per transaction).",
       "Single-digit-millisecond latency, down to microseconds with DAX.",
       "Ships with DAX caching and Streams, making low-latency reads and async derived views or CDC easy.",
       "Free and has no vendor lock-in."
@@ -3610,7 +3609,7 @@
     "optionExplanations": [
       "扩展和持久是几乎任何持久层都要的底线诉求，DynamoDB 天然满足，不用自己搭分片方案。",
       "跨表原子写入让预订、下单这类场景不必自己实现补偿逻辑。",
-      "默认单毫秒级延迟已经很快，配 DAX 还能进一步压到微秒级，覆盖大部分低延迟诉求。",
+      "默认个位数毫秒级延迟已经很快，配 DAX 还能进一步压到微秒级，覆盖大部分低延迟诉求。",
       "不用额外引入 Redis 做缓存，也不用自建 CDC 管道去同步搜索索引或做实时分析。",
       "这把「功能强大」和「免费无锁定」混为一谈了，DynamoDB 是收费的托管服务，且深度绑定 AWS。"
     ],
@@ -3630,8 +3629,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "limitations",
-    "q": "哪些情况会让你不选 DynamoDB？（多选）",
-    "q_en": "Which situations should make you avoid DynamoDB? (select all)",
+    "q": "一般而言，哪些情况会让你不选 DynamoDB？（多选，不限于本场景）",
+    "q_en": "In general, which situations should make you avoid DynamoDB? (select all — not limited to this scenario)",
     "options": [
       "成本：每秒几十万写的高量负载下，按读写计费可能贵得离谱",
       "复杂查询：需要 JOIN、ad-hoc 聚合等灵活查询能力",
@@ -4221,21 +4220,21 @@
     "q_en": "What happens as the embedded history grows, and how should you model it?",
     "options": [
       "没事,DynamoDB 的单个 item 没有大小上限,随便追加即可",
-      "超过 400KB 会写入失败,应把大字段拆出、item 只留引用",
+      "超过 400KB 会写入失败，应把历史拆成独立 item（同 partition key、按 sort key 排序）",
       "换成强一致读模式就能放进更大的 item",
       "多开一些 RCU/WCU 容量单位就能突破单 item 的大小限制"
     ],
     "options_en": [
       "No problem -- a single DynamoDB item has no size cap, just keep appending.",
-      "Past 400KB the write fails; split the big field out and keep only a reference in the item.",
+      "Past 400KB the write fails; store each history entry as its own item (same partition key, ordered by sort key).",
       "Switching to strongly consistent reads lets a larger item fit.",
       "Provisioning more RCU/WCU capacity units raises the per-item size cap."
     ],
     "answer": [
       1
     ],
-    "why": "单个 item 硬上限 400KB:内嵌列表越追越大,到上限后写入直接被拒;把历史拆到独立表、item 只留引用,写入才不撞墙。",
-    "why_en": "A single item is hard-capped at 400KB, so an unbounded embedded list eventually gets its writes rejected -- move the history to a separate table and keep only a reference.",
+    "why": "单个 item 硬上限 400KB（含属性名）：内嵌列表越追越大，到上限后写入直接被拒。把每条历史拆成独立 item，与订单共用 partition key、用时间戳当 sort key，用 Query 就能按序取出；单个大 blob 才适合放 S3、item 里存指针。",
+    "why_en": "A single item is hard-capped at 400KB (attribute names included), so an ever-growing embedded list eventually gets writes rejected. Store each history entry as its own item sharing the order's partition key with a timestamp sort key, then Query them in order; offloading to S3 with a pointer is for single large blobs.",
     "tags": [
       "dynamodb",
       "data-model",
@@ -4258,13 +4257,13 @@
     ],
     "optionExplanations": [
       "恰恰相反:item 有 400KB 的硬上限,无限追加迟早撞上它。",
-      "400KB 是硬性写入约束,拆表后主 item 保持小巧,大字段单独存、只留一个引用键。",
+      "400KB 是硬性写入约束，把每条历史拆成独立 item（同 partition key、按 sort key 排序）后，订单 item 保持小巧，用 Query 即可按序取出。",
       "一致性模型只影响读到的新旧程度,和 item 能存多大毫无关系。",
       "容量单位管的是每秒吞吐(RCU/WCU),不是单条 item 的体积上限,加多少都突破不了 400KB。"
     ],
     "optionExplanations_en": [
       "The opposite is true: an item is hard-capped at 400KB, so unbounded appends will hit it.",
-      "400KB is a hard write constraint, so split it out -- the base item stays small and the big field lives elsewhere behind a reference key.",
+      "400KB is a hard write constraint; storing each history entry as its own item (same partition key, ordered by sort key) keeps the order item small, and a Query returns them in order.",
       "The consistency model only affects how fresh the read is; it has nothing to do with how big an item can be.",
       "Capacity units govern per-second throughput (RCU/WCU), not a single item's size ceiling -- no amount of them breaks 400KB."
     ]
@@ -4275,8 +4274,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "secondary-index",
-    "scenario": "一张主表配了 3 个 GSI,主表按每秒 1000 次写入,团队在估总写容量。",
-    "scenario_en": "A base table has 3 GSIs and takes 1000 writes/sec; the team is estimating total write capacity.",
+    "scenario": "一张主表配了 3 个 GSI，主表按每秒 1000 次写入；假设每次写入的 item 都带有这 3 个 GSI 的 key 属性、不改动 GSI key，且投影后的索引条目都 ≤1KB。团队在估总写容量。",
+    "scenario_en": "A base table has 3 GSIs and takes 1000 writes/sec. Assume every written item carries all 3 GSIs' key attributes, writes don't change GSI key values, and each projected index entry is ≤1KB. The team is estimating total write capacity.",
     "q": "主表每次写入对总写容量意味着什么?",
     "q_en": "What does each base-table write mean for total write capacity?",
     "options": [
@@ -4294,8 +4293,8 @@
     "answer": [
       1
     ],
-    "why": "每次主表写都会异步复制到每个相关 GSI,各扣一份写容量;总 WCU≈主表×(1+GSI 数),3 个 GSI 约 4 倍,是估写成本的基数。",
-    "why_en": "Every base write is asynchronously propagated to each affected GSI, so total write capacity is roughly base times one-plus-the-number-of-GSIs -- about 4x here.",
+    "why": "在题设假设下，每次主表写都会异步传播到 3 个 GSI，各扣一份 GSI 自己的写容量，总写量 ≈ 1000×(1+3) = 4000 WCU/s。若 item 没有某 GSI 的 key（sparse index）就不写该 GSI；若 update 改了 GSI key，该 GSI 会扣 delete + put 两次。",
+    "why_en": "Under these assumptions each base write propagates asynchronously to all 3 GSIs, each charging its own write capacity, so total ≈ 1000×(1+3) = 4000 WCU/s. Items lacking a GSI's key (sparse index) don't write to it, and an update that changes a GSI key costs a delete plus a put on that GSI.",
     "tags": [
       "dynamodb",
       "gsi",

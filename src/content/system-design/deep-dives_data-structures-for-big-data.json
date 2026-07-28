@@ -1008,18 +1008,18 @@
     "format": "mcq",
     "atomType": "fit",
     "sub": "bloom-filter",
-    "scenario": "一个 Redis 缓存挡在昂贵计算前面,查缓存约 C 毫秒。命中率一般,想让“注定未命中”的请求不再白付查缓存的延迟。",
-    "scenario_en": "A Redis cache sits before an expensive computation. A cache lookup costs about C milliseconds, hit rate is moderate, and you want definite misses to avoid paying that lookup cost.",
+    "scenario": "一个 Redis 缓存挡在昂贵计算前面，查缓存约 C 毫秒的网络往返。命中率一般，所有写缓存都经过本服务。想让「注定未命中」的请求不再白付查缓存的延迟，可以在应用进程内存里额外维护一个结构。",
+    "scenario_en": "A Redis cache sits before an expensive computation; a cache lookup costs about C ms of network round trip. Hit rate is moderate, and all cache writes go through this service. You want definite misses to stop paying that lookup, and you may keep an extra structure in the application's process memory.",
     "q": "如何用布隆过滤器优化注定未命中的缓存查询?",
     "q_en": "How should you optimize definite cache misses with a Bloom filter?",
     "options": [
-      "先查布隆过滤器,一定不在就跳过缓存",
+      "先查本地布隆过滤器，一定不在就跳过缓存",
       "加大缓存容量",
       "改用 Write-Behind 模式",
       "去掉缓存,全部直接计算"
     ],
     "options_en": [
-      "Check a bloom filter first, and skip the cache on a definite miss.",
+      "Check a local bloom filter first, and skip the cache on a definite miss.",
       "Just enlarge the cache.",
       "Switch the cache to write-behind.",
       "Remove the cache entirely and always compute."
@@ -1027,8 +1027,8 @@
     "answer": [
       0
     ],
-    "why": "布隆过滤器能以零磁盘/网络成本回答“一定不在”,让必然未命中的请求省掉那 C 毫秒的缓存往返,直奔昂贵操作。",
-    "why_en": "Checking a bloom filter first lets definite cache misses skip the cache lookup entirely and go straight to the expensive operation.",
+    "why": "本地布隆过滤器在进程内存里回答「一定不在」，没有网络往返；写缓存时同步登记 key，过滤器说不在就直接去算，省掉那 C 毫秒。",
+    "why_en": "A local bloom filter answers \"definitely not present\" from process memory with no network round trip; keys are registered whenever the cache is written, so a negative lets the request go straight to computation and save those C ms.",
     "whenOtherWins": "命中率极高或缓存延迟可忽略时,这层优化不值得引入复杂度;多客户端写缓存的场景里,它还会让你错过别人已写入的命中。",
     "tradeoff": "省下必然未命中的缓存往返 vs 多一层过滤器维护和潜在漏判",
     "diagram": "flowchart LR\n    Q[\"请求\"] --> B{\"布隆过滤器\"}\n    B -- \"一定不在\" --> E[\"直接跑昂贵计算\"]\n    B -- \"可能在\" --> C{\"查缓存\"}\n    C -- \"命中\" --> R[\"返回\"]\n    C -- \"未命中\" --> E",
@@ -1984,19 +1984,19 @@
       "一个全局 Count-Min Sketch",
       "为每个 key 存完整的访问日志",
       "布隆过滤器",
-      "16 位伪计数器,编码最近性+频率"
+      "每个 key 对象头里一个 24 位字段：LRU 存访问时钟，LFU 存衰减时间 + 8 位对数计数器"
     ],
     "options_en": [
       "One global Count-Min Sketch.",
       "A full access log stored per key.",
       "A Bloom filter.",
-      "A 16-bit pseudo-counter blending recency and frequency."
+      "A 24-bit field in each key's object header: a clock for LRU, or decay time plus an 8-bit logarithmic counter for LFU."
     ],
     "answer": [
       3
     ],
-    "why": "Redis 没用 CMS,而是在每个 key 旁放 16 位伪计数器,混合最近性+频率——一个结构同时服务 LRU 和 LFU 两种淘汰策略。",
-    "why_en": "Redis keeps a sixteen-bit pseudo-counter beside each key blending recency and frequency, which supports both LRU and LFU eviction.",
+    "why": "Redis 不用 CMS，而是复用每个对象头里的 24 位字段：LRU 策略存近似访问时间；LFU 策略拆成 16 位上次衰减时间 + 8 位对数（概率递增）计数器。再配合采样淘汰，每个 key 只多 3 字节元数据。",
+    "why_en": "Redis doesn't use a CMS; it reuses a 24-bit field in each object header. Under LRU it stores an approximate access clock; under LFU it splits into 16 bits of last-decrement time plus an 8-bit logarithmic (probabilistically incremented) counter. Combined with sampled eviction, each key carries only 3 bytes of extra metadata.",
     "tags": [
       "redis",
       "eviction",
@@ -2006,13 +2006,13 @@
       "Redis 的淘汰算法实际没有用全局 CMS 结构",
       "存完整访问日志开销太大,Redis 不这么做",
       "布隆过滤器只回答成员存在,给不出热度排序",
-      "正确:16 位伪计数器同时编码最近性和频率,一份结构服务 LRU 和 LFU"
+      "正确：每个对象头复用一个 24 位字段，LRU 策略存访问时钟，LFU 策略存衰减时间加 8 位对数计数器，两种策略二选一共用这一字段。"
     ],
     "optionExplanations_en": [
       "Redis's eviction algorithm does not actually use a global Count-Min Sketch structure.",
       "Storing a full access log per key is too expensive; Redis does not do this.",
       "A Bloom filter only answers membership, giving no popularity ranking.",
-      "Correct: a sixteen-bit pseudo-counter blends recency and frequency, letting one structure serve both LRU and LFU."
+      "Correct: each object header reuses one 24-bit field, holding an access clock under LRU or decay time plus an 8-bit logarithmic counter under LFU; the two policies share the field one at a time."
     ],
     "termDefinitions": [
       {
@@ -2766,16 +2766,16 @@
     "sub": "hyperloglog",
     "scenario": "面试里要给 DAU 去重计数选落地方案,希望用现成组件而不是自研。",
     "scenario_en": "In the interview you need a concrete landing spot for deduplicated DAU counting, preferably off-the-shelf rather than hand-rolled.",
-    "q": "以下哪组常用系统对 HyperLogLog 提供开箱即用的支持?",
-    "q_en": "Which common systems provide HyperLogLog support out of the box?",
+    "q": "以下哪组常用系统有现成的 HyperLogLog 实现可直接用？",
+    "q_en": "Which common systems have ready-made HyperLogLog implementations you can use directly?",
     "options": [
-      "Redis 和 PostgreSQL",
+      "Redis（原生）和 PostgreSQL（hll 扩展）",
       "只有专用分析数据库",
       "只有 Hadoop 生态",
       "没有任何现成实现,必须自己从零写"
     ],
     "options_en": [
-      "Redis and PostgreSQL.",
+      "Redis (built in) and PostgreSQL (hll extension).",
       "Only specialized analytics databases.",
       "Only the Hadoop ecosystem.",
       "No off-the-shelf implementation exists at all; you must write it from scratch yourself."
@@ -2783,8 +2783,8 @@
     "answer": [
       0
     ],
-    "why": "HLL 有几十种实现,Redis(PFADD/PFCOUNT)和 PostgreSQL 都原生支持,面试里可以直接点名。",
-    "why_en": "Both Redis and PostgreSQL support HyperLogLog out of the box among dozens of implementations.",
+    "why": "Redis 原生提供 PFADD/PFCOUNT/PFMERGE；PostgreSQL 核心不带 HLL，但成熟的 postgresql-hll 扩展可直接装用。面试里可以直接点名这两个落地方案。",
+    "why_en": "Redis ships PFADD/PFCOUNT/PFMERGE natively; PostgreSQL core has no HLL, but the mature postgresql-hll extension can be installed and used directly. Both are concrete options to name in an interview.",
     "tags": [
       "hyperloglog",
       "redis",

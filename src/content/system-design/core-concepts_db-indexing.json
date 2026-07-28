@@ -76,19 +76,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "indexing-basics",
-    "scenario": "用户表 100 万行、每页约 100 行，登录要按 email 查一条记录，而 email 列上没有索引。",
+    "scenario": "用户表 100 万行、每页约 100 行，数据页大多不在内存缓存里；登录要按 email 查一条记录，而 email 列上没有索引。",
     "q": "没有索引时，按 email 在百万行的表里找一个用户，为什么慢？",
     "options": [
       "数据库锁竞争太激烈，大量读写请求互相阻塞排队",
       "SQL 解析和优化器耗时太长",
-      "无索引只能逐页扫描整张表，每页都要读盘检查",
+      "无索引只能逐页扫描整张表（约 1 万页），每页都要读入内存逐行检查",
       "网络往返次数太多，客户端反复请求"
     ],
     "answer": [
       2
     ],
-    "why": "无索引时数据库别无选择，只能把每一页数据依次读进内存逐行检查；上百万页就是上百万次相对缓慢的磁盘读，只为找一条记录。",
-    "why_en": "Without an index the database must sequentially scan every page, loading each from disk into memory, which means millions of slow disk reads to find one record.",
+    "why": "无索引时数据库别无选择，只能把约 1 万个数据页依次读进内存逐行比对 100 万行，只为找一条记录；有 email 索引时只需走几层索引页加一个数据页。",
+    "why_en": "Without an index the database has no choice but to read about 10,000 pages into memory and compare a million rows to find one record; with an email index it only walks a few index pages plus one data page.",
     "tags": [
       "indexing",
       "full-scan",
@@ -98,7 +98,7 @@
     "options_en": [
       "Lock contention is too severe — many read and write requests block and queue against each other.",
       "SQL parsing and query planning take too long.",
-      "Without an index it must scan every page sequentially, reading each into memory to check.",
+      "Without an index it must scan the whole table page by page (about 10,000 pages), loading each into memory to check every row.",
       "There are too many network round trips between client and server."
     ],
     "termDefinitions": [
@@ -115,17 +115,17 @@
       }
     ],
     "q_en": "Why is finding a user by email slow in a million-row table with no index?",
-    "scenario_en": "A users table has a million rows at roughly a hundred rows per page, and login looks a user up by email with no index on that column.",
+    "scenario_en": "A users table has a million rows at roughly a hundred rows per page, and most pages are not in the memory cache; login looks a user up by email with no index on that column.",
     "optionExplanations": [
       "锁竞争影响的是并发写入的等待时间，不会让单条查询本身慢到要扫全表。",
       "SQL 解析和选执行计划确实耗时，但那是毫秒级开销，远不是全表扫描慢的主因。",
-      "对，没有索引数据库就只能按物理顺序把每一页读进内存逐行核对，页数越多越慢。",
+      "对，没有索引数据库就只能按物理顺序把约 1 万个数据页依次读进内存逐行核对，页数越多越慢。",
       "一次请求只有一次网络往返，跟数据库内部要扫多少页无关。"
     ],
     "optionExplanations_en": [
       "Lock contention affects how long concurrent writers wait, not why a single lookup itself has to scan the whole table.",
       "SQL parsing and planning do cost time, but that's a millisecond-level overhead, not the reason a full scan is slow.",
-      "Right — with no index the database has no shortcut, so it loads every page in physical order and checks each row; more pages means more time.",
+      "Right — with no index the database has no shortcut, so it loads about 10,000 pages in physical order and checks each row; more pages means more time.",
       "A single request makes one round trip; that has nothing to do with how many pages the database scans internally."
     ]
   },
@@ -138,7 +138,7 @@
     "scenario": "Postgres 的 users 表主键 B 树已经建好；现在问行数据本身躺在磁盘的哪种文件里。",
     "q": "主表数据在磁盘上的典型存储形式是？",
     "options": [
-      "堆文件（heap file）：行按写入顺序堆放，没有特定排序",
+      "堆文件（heap file）：行放进有空闲空间的数据页，不维持任何排序",
       "始终严格按主键排序的有序文件，每次写入都要维持排序位置并挪动后续行",
       "哈希桶数组，把行按主键的哈希值分散存放各处",
       "按列存储的列式压缩数据块，而非按行组织存储"
@@ -146,8 +146,8 @@
     "answer": [
       0
     ],
-    "why": "选堆文件。这里问主表数据，不是主键索引：行通常堆在数据页里；主键 B-tree 另存并指向这些行。",
-    "why_en": "Choose heap file. This asks about table data, not the primary-key index: rows usually live in heap pages, while a separate primary-key B-tree points to them.",
+    "why": "选堆文件。这里问的是主表数据，不是主键索引：Postgres 把行放在 heap 数据页里，不维持顺序（空间可被 VACUUM 后复用）；主键 B-tree 另外存放，指向这些行。InnoDB 的 clustered index 是例外。",
+    "why_en": "Choose heap file. The question is about table data, not the primary-key index: Postgres stores rows in heap pages with no order maintained (space can be reused after VACUUM), while a separate primary-key B-tree points to them. InnoDB's clustered index is the exception.",
     "whenOtherWins": "例外：InnoDB 用 clustered index；Postgres 常见是 heap table + separate index。",
     "tags": [
       "indexing",
@@ -155,12 +155,12 @@
       "storage"
     ],
     "options_en": [
-      "A heap file: rows pile up in write order, with no particular sort order.",
+      "A heap file: rows go into whichever data page has free space, with no sort order maintained.",
       "An always-sorted file strictly ordered by primary key, where every write must maintain sort position and shift the following rows.",
       "A hash bucket array that scatters rows across buckets based on the primary key's hash value.",
       "Column-oriented compressed data blocks, organized by column rather than by row."
     ],
-    "diagram": "flowchart LR\n    T[\"table heap pages\\nrows in write order\"]\n    I[\"primary-key B-tree\\nsorted keys\"] --> T\n    Q[\"WHERE id = 42\"] --> I\n    T --> R[\"row data\"]",
+    "diagram": "flowchart LR\n    T[\"table heap pages\\nrows, no sort order\"]\n    I[\"primary-key B-tree\\nsorted keys\"] --> T\n    Q[\"WHERE id = 42\"] --> I\n    T --> R[\"row data\"]",
     "table": {
       "headers": [
         "对象",
@@ -205,13 +205,13 @@
     "q_en": "How is the main table data usually stored on disk?",
     "scenario_en": "A Postgres users table already has its primary-key B-tree built; the question is what kind of file the row data itself sits in on disk.",
     "optionExplanations": [
-      "对，主表数据默认堆放在数据页里、没有排序要求，插入只管追加；真正维持顺序的是另外那棵主键 B 树索引。",
+      "对，主表数据默认放进有空闲空间的堆数据页、不维持任何排序（VACUUM 后空间可复用）；真正维持顺序的是另外那棵主键 B 树索引。",
       "这其实是聚簇索引（clustered index）的做法，如 InnoDB；本题问的是更常见的默认存储：堆文件。",
       "哈希桶数组是哈希索引的结构，不是主表数据默认的存放方式。",
       "列式存储是分析型数据库（如 ClickHouse）的组织方式，OLTP 主表默认按行存放在堆文件里。"
     ],
     "optionExplanations_en": [
-      "Right — by default, rows just pile into heap pages with no order; insert simply appends. Keeping order is the separate primary-key B-tree's job.",
+      "Right — by default, rows go into whichever heap page has free space with no order maintained (space is reusable after VACUUM). Keeping order is the separate primary-key B-tree's job.",
       "That's actually a clustered index, like InnoDB uses; this question asks about the more common default: an unordered heap file.",
       "A hash bucket array is how a hash index is structured, not how the main table's rows are stored by default.",
       "Columnar storage is how analytical databases like ClickHouse organize data; OLTP tables default to row-oriented heap files."
@@ -223,8 +223,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "storage",
-    "scenario": "一条 SELECT 要读 users 表的 3 个数据页，数据在 SSD 上，CPU 要逐行比较字段值。",
-    "q": "为什么每次数据库查询都绕不开「从磁盘加载到内存」这一步？",
+    "scenario": "一条 SELECT 要读 users 表的 3 个数据页，这 3 页目前都不在数据库缓冲池（buffer pool）里，数据在 SSD 上，CPU 要逐行比较字段值。",
+    "q": "需要的页不在缓冲池时，为什么查询必须先把它们从磁盘加载到内存？",
     "options": [
       "因为内存容量实在太小，根本没办法长期放下任何需要持久化的数据",
       "数据落在磁盘上，只有搬进内存（RAM）才能被 CPU 处理",
@@ -234,8 +234,8 @@
     "answer": [
       1
     ],
-    "why": "数据落在磁盘（如今多为 SSD），而 CPU 只能处理内存里的数据，所以每个查询都要把相关页从磁盘搬进 RAM。索引的价值就是减少要搬的页数。",
-    "why_en": "Data lives on disk but can only be processed in memory, so every query loads pages from disk into RAM, and indexes minimize how many pages that takes.",
+    "why": "CPU 只能处理内存里的数据；页不在缓冲池时，必须先把它从磁盘（如今多为 SSD）读进 RAM 才能逐行比较。已缓存的页可以直接用，这就是缓冲池的价值；索引的价值则是减少需要读的页数。",
+    "why_en": "The CPU can only work on data in memory; when a page is not in the buffer pool it must first be read from disk (usually SSD today) into RAM before rows can be compared. Pages already cached are used directly — that is what the buffer pool is for — and indexes cut how many pages need reading.",
     "tags": [
       "indexing",
       "memory",
@@ -261,8 +261,8 @@
         "fullName": "Central Processing Unit"
       }
     ],
-    "q_en": "Why does every database query have to load data from disk into memory?",
-    "scenario_en": "One SELECT needs three data pages from the users table; the data lives on SSD and the CPU has to compare field values row by row.",
+    "q_en": "When the needed pages are not in the buffer pool, why must the query load them from disk into memory first?",
+    "scenario_en": "One SELECT needs three data pages from the users table; none of them is in the database buffer pool right now, the data lives on SSD, and the CPU has to compare field values row by row.",
     "optionExplanations": [
       "夸大了：内存确实放不下全部数据，但真正原因是处理器只能操作装在内存里的东西，磁盘上的页得先搬进 RAM 才能被读到。",
       "对，处理器只能读写内存里的内容；磁盘上的页得先被搬进 RAM 才能被访问，这一步谁都跳不过。",
@@ -282,19 +282,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "storage",
-    "scenario": "机器全是 SSD，有人主张干脆去掉索引、让查询走全表扫描，说反正 SSD 没有寻道代价。",
+    "scenario": "机器全是 SSD，有人主张干脆去掉索引、让查询走全表扫描，说反正 SSD 没有寻道代价。数据库按 8KB 页、单个查询低并发地读盘。",
     "q": "关于 SSD 上「随机访问 vs 顺序访问」，正确的说法是？",
     "options": [
       "SSD 上随机访问和顺序访问的速度完全一样，两者之间没有任何差距",
       "SSD 上随机访问的速度反而比顺序访问还要更快",
       "只有传统机械硬盘 HDD 才会存在两者的速度差距",
-      "SSD 上随机访问仍明显慢于顺序访问——常见误解是这差距已消失"
+      "小块、低并发时，SSD 随机读仍明显慢于顺序读——常见误解是这差距已消失"
     ],
     "answer": [
       3
     ],
-    "why": "常见误解是 SSD 抹平了差距：其实差距只是比 HDD 小，随机访问依然明显更慢；HDD 上差距更悬殊，所以合理建索引至关重要。",
-    "why_en": "Even on SSDs random access is still significantly slower than sequential access, a smaller gap than on HDDs but a very real one.",
+    "why": "SSD 没有机械寻道，差距比 HDD 小得多，但小块低并发随机读仍明显慢于顺序读。这正是全表扫描的优势；索引依然值得建，是因为它把要读的页从成千上万降到几个——少读的页数远超每页随机读的额外代价。",
+    "why_en": "SSDs have no mechanical seek, so the gap is far smaller than on HDDs, but small random reads at low concurrency are still noticeably slower than sequential ones. That is the full scan's advantage; an index still wins because it cuts the pages read from thousands to a handful, which far outweighs the extra cost per random read.",
     "tags": [
       "indexing",
       "ssd",
@@ -304,7 +304,7 @@
       "On an SSD, random and sequential access are exactly the same speed, with no gap between them whatsoever.",
       "On an SSD, random access is actually faster than sequential access.",
       "Only traditional mechanical HDDs have a speed gap between the two.",
-      "SSD random access is still noticeably slower than sequential — the common misconception is that this gap has vanished."
+      "For small reads at low concurrency, SSD random reads are still noticeably slower than sequential — the common misconception is that this gap has vanished."
     ],
     "termDefinitions": [
       {
@@ -331,18 +331,18 @@
       }
     ],
     "q_en": "What is true about random access versus sequential access on SSDs?",
-    "scenario_en": "The machines are all SSD, and someone argues you can drop the index and just full-scan, since SSDs supposedly have no seek penalty.",
+    "scenario_en": "The machines are all SSD, and someone argues you can drop the index and just full-scan, since SSDs supposedly have no seek penalty. The database reads 8KB pages, one query at a time at low concurrency.",
     "optionExplanations": [
       "SSD 确实比 HDD 抹平了很多差距，但没抹平到「完全一样」；随机访问仍要付出额外开销（如闪存页/块管理）。",
       "说反了：无论 SSD 还是 HDD，顺序访问都比随机访问快，只是 SSD 上差距被缩小了。",
       "HDD 上差距确实更悬殊（机械寻道），但 SSD 上的差距只是变小，并没有消失。",
-      "对，SSD 只是把差距从 HDD 的数量级缩小到更小但依然明显的程度，索引依然重要。"
+      "对，SSD 把差距从 HDD 的数量级缩小了，但小块低并发随机读仍明显慢于顺序读；索引依然值得建，因为它把要读的页数降到几个。"
     ],
     "optionExplanations_en": [
       "SSDs do narrow the gap versus HDDs, but not to zero — random access still pays extra overhead like flash page/block management.",
       "Backwards — on both SSD and HDD, sequential beats random; SSDs just shrink that gap, they don't invert it.",
       "The gap is bigger on HDDs because of mechanical seek time, but on SSDs it only shrinks — it doesn't disappear.",
-      "Right — SSDs shrink the gap from HDD-scale down to something smaller but still real, which is why indexing still matters."
+      "Right — SSDs shrink the gap from HDD-scale, but small random reads at low concurrency are still noticeably slower than sequential; indexes still pay off because they cut the pages read to a handful."
     ]
   },
   {
@@ -412,8 +412,8 @@
     "q": "索引不是免费的。它的代价包括哪些？（多选）",
     "options": [
       "额外磁盘空间，有时接近原始数据大小",
-      "每次插入/更新除了改主表，还要更新表上的每一个索引",
-      "多个索引会让一次写操作触发多次磁盘写",
+      "每次插入除了写主表，还要往每个索引插入条目；更新被索引的列时也要改对应索引",
+      "索引越多，一次逻辑写要修改的页和要写的 WAL 越多",
       "有索引后读取一定变慢"
     ],
     "answer": [
@@ -421,8 +421,8 @@
       1,
       2
     ],
-    "why": "索引的三重代价：占磁盘空间、写入时每个索引都要维护、多索引放大写开销。读取恰恰是索引加速的对象，不会因此变慢。",
-    "why_en": "Indexes cost extra disk space and slow down writes because every insert or update must also update each index, turning one write into several disk writes.",
+    "why": "索引的三重代价：占磁盘空间；插入要维护每个索引、改到被索引列的更新也要维护对应索引；索引越多，一次写要改的页和写的 WAL 越多，写吞吐随之下降。读取恰恰是索引加速的对象，不会因此变慢。",
+    "why_en": "Indexes cost disk space; every insert must maintain each index, and updates to indexed columns must maintain those indexes; more indexes mean more pages and WAL per write, so write throughput drops. Reads are what indexes speed up, so they do not get slower.",
     "tags": [
       "indexing",
       "write-amplification",
@@ -430,8 +430,8 @@
     ],
     "options_en": [
       "It costs extra disk space, sometimes nearly as much as the original data.",
-      "Every insert or update must update the main table plus every index on it.",
-      "Multiple indexes turn a single write into several disk writes.",
+      "Every insert writes the table plus an entry in each index; updating an indexed column also updates that index.",
+      "The more indexes, the more pages and WAL one logical write has to touch.",
       "Reads always get slower once you add an index."
     ],
     "termDefinitions": [
@@ -445,14 +445,14 @@
     "scenario_en": "An orders table already carries five indexes, three more are proposed, and write throughput has already started dropping.",
     "optionExplanations": [
       "额外磁盘空间是实打实的代价：索引是独立结构，宽字段索引甚至能接近原表大小。",
-      "每次 INSERT/UPDATE/DELETE 除了改主表，还要同步维护这张表上的所有索引，这是写变慢的主因。",
-      "索引越多，一次逻辑写就要触发越多次物理磁盘写，写吞吐随索引数量下降。",
+      "每次 INSERT 除了写主表，还要往表上的每个索引插入条目；UPDATE 改到被索引的列时也要维护对应索引，这是写变慢的主因。",
+      "索引越多，一次逻辑写要修改的页和要写的 WAL 就越多，写吞吐随索引数量下降。",
       "错——读取正是索引存在的目的，加索引后同类查询通常更快，不会变慢。"
     ],
     "optionExplanations_en": [
       "Extra disk space is a real cost — an index is a separate structure, and for wide columns it can approach the size of the original table.",
-      "Every INSERT/UPDATE/DELETE has to update the main table plus every index on it in sync — that's the main reason writes slow down.",
-      "The more indexes there are, the more physical disk writes one logical write triggers, so write throughput drops as index count grows.",
+      "Every INSERT writes the table plus an entry in each index on it, and an UPDATE touching an indexed column must maintain that index too — the main reason writes slow down.",
+      "The more indexes there are, the more pages and WAL one logical write touches, so write throughput drops as index count grows.",
       "Wrong — reads are exactly what an index speeds up; after adding an index, matching queries usually get faster, not slower."
     ]
   },
@@ -596,8 +596,8 @@
     "answer": [
       3
     ],
-    "why": "内存影响常被夸大：缓冲池是 LRU 缓存，只把热页留在内存，冷索引几乎不占 RAM，不会「翻一倍」。真正该防的是没人查却拖慢每次写的索引。",
-    "why_en": "This card is only about the MEMORY cost — don't conflate it with the other two. An index has three costs: (1) slower writes — every insert/update/delete must maintain it (write amplification), the main cost; (2) extra disk — a separate B-tree structure; (3) memory — the topic here, and the overhyped one: the buffer pool is an LRU cache that keeps only hot pages, so cold indexes barely occupy RAM (no doubling). The real danger is unused indexes that slow every write for zero read benefit — monitor and drop them.",
+    "why": "内存影响常被夸大：缓冲池是类 LRU 的缓存，只留热页，加一个索引不会让内存「翻倍」。但被频繁写入维护的索引（尤其随机键）页也会被拉进内存、和热数据争缓冲池，所以要监控索引使用率和命中率，删掉没人查却拖慢写入的索引。",
+    "why_en": "The memory impact is often overstated: the buffer pool is an LRU-like cache that keeps only hot pages, so one more index does not \"double\" memory. But pages of an index that is maintained on every write (especially with random keys) are pulled into memory too and compete with hot data, so monitor index usage and hit rates and drop indexes that nobody reads but that slow every write.",
     "tags": [
       "indexing",
       "buffer-pool",
@@ -1619,7 +1619,7 @@
     "scenario": "Cassandra 表按 user_id 分区，产品现在要求支持按 email 查用户。",
     "q": "LSM（日志结构合并树）存储引擎上的「二级索引」是什么情况？",
     "options": [
-      "需要额外结构支持，如二级索引、GSI/LSI",
+      "需要额外结构：如 Cassandra 二级索引/物化视图，或另建一张以 email 为分区键的查找表",
       "性能和主键访问完全一样快，两者之间没有任何差别",
       "在 LSM 引擎上从技术上讲完全不可能实现二级索引",
       "会自动对表中每一列生效，完全无需任何额外配置"
@@ -1627,15 +1627,15 @@
     "answer": [
       0
     ],
-    "why": "LSM 表按主键排序，主键查找极快；二级索引得靠附加结构（Cassandra、DynamoDB 的 GSI/LSI 等），且性能特征与主键访问不同。",
-    "why_en": "On LSM storage secondary indexes require additional structures, as in Cassandra or DynamoDB's GSIs and LSIs, with different performance than primary-key access.",
+    "why": "Cassandra 的数据按分区键（user_id）分布、在分区内按 clustering key 排序，按主键查很快；按 email 查就得靠额外结构：内置二级索引（查询可能扇出到多个节点）、物化视图，或最常见的另建一张 email → user_id 的查找表、写入时双写。这些路径的读放大和一致性特征都和主键访问不同。",
+    "why_en": "Cassandra distributes data by partition key (user_id) and sorts within a partition by clustering key, so primary-key lookups are fast; looking up by email needs an extra structure: a built-in secondary index (queries may fan out across nodes), a materialized view, or most commonly a separate email → user_id lookup table written alongside. Each has different read amplification and consistency than primary-key access.",
     "tags": [
       "lsm",
       "secondary-index",
       "dynamodb"
     ],
     "options_en": [
-      "It needs an extra structure to support it, such as a secondary index or a GSI/LSI.",
+      "It needs an extra structure, such as a Cassandra secondary index / materialized view, or a separate lookup table partitioned by email.",
       "Performance is exactly as fast as primary-key access, with no difference at all.",
       "Implementing a secondary index on an LSM engine is technically impossible altogether.",
       "It automatically applies to every single column, with zero extra configuration needed."
@@ -1672,16 +1672,16 @@
     "q_en": "How should you think about secondary indexes on an LSM-tree storage engine?",
     "scenario_en": "A Cassandra table is partitioned by user_id, and the product now needs to look users up by email.",
     "optionExplanations": [
-      "对，LSM 表天生只按主键排序，二级索引必须依赖数据库另外挂载的机制，例如 Cassandra 自带的二级索引，或 DynamoDB 那类系统提供的支持。",
+      "对，Cassandra 按分区键分布数据，按 email 查就得靠额外结构：内置二级索引、物化视图，或另建一张 email → user_id 的查找表。",
       "错——二级索引要走额外结构，读放大和一致性特征都跟主键访问不一样，谈不上完全一样快。",
-      "并非不可能，只是不像主键那样原生——需要靠 GSI/LSI 这类附加结构实现。",
-      "二级索引不会自动对每一列生效，通常需要显式创建（如声明 GSI）。"
+      "并非不可能，只是不像主键那样原生——需要靠二级索引、物化视图或另建查找表这类附加结构实现。",
+      "二级索引不会自动对每一列生效，通常需要显式创建（如声明二级索引或建查找表）。"
     ],
     "optionExplanations_en": [
-      "Right — an LSM table is only sorted by primary key on its own; a secondary index needs a mechanism the database bolts on separately, like the one Cassandra ships or the kind DynamoDB offers.",
+      "Right — Cassandra distributes data by partition key, so looking up by email needs an extra structure: a built-in secondary index, a materialized view, or a separate email → user_id lookup table.",
       "Wrong — a secondary index goes through that extra structure, with different read-amplification and consistency characteristics, so it's not simply as fast.",
-      "It's not impossible, just not native the way primary-key access is — it needs an add-on structure like a GSI or LSI to work.",
-      "Secondary indexes don't automatically apply to every column — they usually need to be explicitly created, like declaring a GSI."
+      "It's not impossible, just not native the way primary-key access is — it needs an add-on structure such as a secondary index, a materialized view or a separate lookup table.",
+      "Secondary indexes don't automatically apply to every column — they usually need to be created explicitly, such as declaring a secondary index or building a lookup table."
     ]
   },
   {
@@ -2410,9 +2410,9 @@
     "scenario": "要为「写吞吐优先、读可以稍慢」的摄入场景挑存储引擎，先把候选列出来。",
     "q": "下列哪些是 LSM 树的现实代表？（多选）",
     "options": [
-      "Cassandra——承载 Netflix 每天数十亿观看事件的写入",
-      "RocksDB——Facebook 打造的存储引擎，支撑每秒百万级社交互动",
-      "DynamoDB——普遍认为采用 LSM 风格的存储架构以优化写吞吐",
+      "Cassandra——写入先进 memtable + commit log，再刷成 SSTable",
+      "RocksDB——Facebook 基于 LevelDB 打造的嵌入式存储引擎",
+      "HBase——写入先进 MemStore + WAL，再刷成 HFile",
       "PostgreSQL 的默认存储引擎"
     ],
     "answer": [
@@ -2420,17 +2420,17 @@
       1,
       2
     ],
-    "why": "LSM 写优化：写只进内存 memtable + 顺序追加 WAL，满了刷成不可变 SSTable，后台 compaction 归并清理。代表：Cassandra、RocksDB、DynamoDB；Postgres 默认走 B 树。",
-    "why_en": "How LSM writes work: a write goes into an in-memory sorted memtable plus a sequential WAL append (fast, no random writes); when the memtable fills it is flushed as one immutable, sorted SSTable; a background compaction merges SSTables and drops overwritten/deleted entries. Classic LSM systems: Cassandra, RocksDB, DynamoDB; Postgres defaults to B-trees.",
+    "why": "LSM 写优化：写只进内存 memtable + 顺序追加 WAL，满了刷成不可变有序文件，后台 compaction 归并清理。代表：Cassandra（SSTable）、RocksDB、HBase（HFile）。PostgreSQL 默认是 heap 表 + B-tree 索引，不是 LSM。",
+    "why_en": "LSM optimizes writes: a write only goes into an in-memory memtable plus a sequential WAL append; when full it is flushed as an immutable sorted file, and background compaction merges and cleans up. Examples: Cassandra (SSTables), RocksDB, HBase (HFiles). PostgreSQL defaults to heap tables plus B-tree indexes, not LSM.",
     "tags": [
       "lsm",
       "cassandra",
       "rocksdb"
     ],
     "options_en": [
-      "Cassandra — carries Netflix's billions of daily viewing-event writes.",
-      "RocksDB — Facebook's storage engine, powering millions of social interactions per second.",
-      "DynamoDB — widely believed to use an LSM-style storage architecture optimized for write throughput.",
+      "Cassandra — writes go to a memtable plus commit log, then flush to SSTables.",
+      "RocksDB — Facebook's embedded storage engine built on LevelDB.",
+      "HBase — writes go to a MemStore plus WAL, then flush to HFiles.",
       "PostgreSQL's default storage engine."
     ],
     "termDefinitions": [
@@ -2479,27 +2479,20 @@
           "可调/最终",
           "很强",
           "高写吞吐"
-        ],
-        [
-          "DynamoDB",
-          "托管 KV/文档",
-          "单项可强",
-          "很强",
-          "已知访问模式"
         ]
       ]
     },
     "diagram": "flowchart TD\n  W[\"写入\"] --> M[\"memtable（内存·有序）\"]\n  W --> L[\"WAL 日志（盘·防丢）\"]\n  M -->|满了整批刷盘| S1[\"SSTable 1（不可变·有序）\"]\n  M -->|再满再刷| S2[\"SSTable 2\"]\n  S1 --> C[\"后台 compaction：归并 + 清墓碑\"]\n  S2 --> C",
     "optionExplanations": [
-      "对，Cassandra 就是靠 LSM 引擎扛住 Netflix 这类每天数十亿次写入事件的规模。",
-      "对，RocksDB 是 Facebook 打造的 LSM 引擎，支撑高并发社交互动写入场景。",
-      "对，DynamoDB 普遍被认为底层用 LSM 风格存储来换取高写吞吐。",
+      "对，Cassandra 写入先进 memtable + commit log，再顺序刷成 SSTable，是典型的 LSM 引擎。",
+      "对，RocksDB 是 Facebook 基于 LevelDB 打造的嵌入式 LSM 存储引擎。",
+      "对，HBase 写入先进 MemStore + WAL，再刷成 HFile，属于 LSM 结构。",
       "错——PostgreSQL 的默认存储走的是 B 树，不是 LSM 树。"
     ],
     "optionExplanations_en": [
-      "Right — Cassandra runs on an LSM engine, which lets it absorb billions of daily viewing-event writes at Netflix's scale.",
-      "Right — RocksDB is the LSM engine Facebook built, backing high-concurrency social-interaction write workloads.",
-      "Right — DynamoDB is widely understood to use an LSM-style storage layer under the hood to buy high write throughput.",
+      "Right — Cassandra writes to a memtable plus commit log and flushes sequentially to SSTables, a classic LSM engine.",
+      "Right — RocksDB is the embedded LSM storage engine Facebook built on LevelDB.",
+      "Right — HBase writes to a MemStore plus WAL and flushes to HFiles, an LSM structure.",
       "Wrong — PostgreSQL's default storage engine is B-tree, not LSM."
     ]
   },
@@ -2754,8 +2747,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "hash-index",
-    "scenario": "Postgres 上一张表既有等值查询也有范围查询，你在犹豫默认该建哈希还是 B 树。",
-    "q": "PostgreSQL 支持哈希索引，却不默认使用，官方理由接近哪句话？",
+    "scenario": "Postgres 上一张表既有等值查询也有范围查询，你在犹豫该建哈希索引还是默认的 B 树索引。",
+    "q": "PostgreSQL 支持哈希索引，但 `CREATE INDEX` 默认建 B 树。下面哪个理由最站得住？",
     "options": [
       "哈希索引完全不支持任何事务相关的操作",
       "哈希索引会占用远超预期的额外内存空间",
@@ -2765,8 +2758,8 @@
     "answer": [
       3
     ],
-    "why": "关键是 B 树的 O(log n) 很小：扇出约 500，一页装几百 key，几十亿行也就 3-4 层，顶层多在缓存。真正成本是磁盘 I/O，B 树等值只比哈希慢一丝丝，却白送范围和排序。",
-    "why_en": "A B-tree's O(log n) is tiny: each node is a page holding hundreds of keys, so even billions of rows are only 3–4 levels deep. Since the real cost is disk I/O (not comparisons) and the top levels stay cached, equality lookups are only marginally slower than a hash — but you also get range and sort for free. Hence Postgres calls hash indexes a solution to a problem we rarely have.",
+    "why": "B 树的 O(log n) 很小：假设一页能装几百个 key，几十亿行也只有 3–4 层，上层页通常在缓存里，真正成本是最后的磁盘 I/O，所以等值查找只比哈希慢一点，却同时支持范围查询和排序。本题表里还有范围查询，哈希索引做不了，B 树是更稳的默认。（哈希索引在 PG 10 之后已写 WAL、可崩溃恢复，长 key 的纯等值场景下仍可能有优势。）",
+    "why_en": "A B-tree's O(log n) is small: assuming a page holds a few hundred keys, even billions of rows are only 3–4 levels deep, and the upper levels usually stay cached, so the real cost is the final disk I/O. Equality lookups are only slightly slower than a hash, while range queries and ordering come for free. This table also has range queries, which a hash index cannot serve, so the B-tree is the safer default. (Since PG 10 hash indexes are WAL-logged and crash-safe, and they can still win for pure equality on long keys.)",
     "tags": [
       "hash-index",
       "postgres",
@@ -2790,8 +2783,8 @@
         "meaningEn": "PostgreSQL is a popular open-source relational database whose default indexes are almost all B-trees."
       }
     ],
-    "q_en": "PostgreSQL supports hash indexes but does not default to them. Which sentence is closest to the official reasoning?",
-    "scenario_en": "A Postgres table serves both equality and range queries, and you're weighing a hash index against the default B-tree.",
+    "q_en": "PostgreSQL supports hash indexes, but `CREATE INDEX` builds a B-tree by default. Which reason holds up best?",
+    "scenario_en": "A Postgres table serves both equality and range queries, and you're weighing a hash index against the default B-tree index.",
     "table": {
       "headers": [
         "层数",
@@ -2820,13 +2813,13 @@
       "错——哈希索引照样支持事务；它的短板是不支持范围与排序，不是事务。",
       "错——哈希索引内存开销并不夸张；不默认用它是因为收益太小、还丢了范围能力。",
       "错——磁盘哈希索引完全可实现（PostgreSQL 就内置）；问题只是收益不值当。",
-      "对，B 树查找要翻的层数极少——几十亿行也就 3-4 层，等值查找只比哈希慢一丝丝，却多拿到范围和排序能力。"
+      "对，B 树查找要翻的层数极少（假设一页装几百个 key，几十亿行也就 3-4 层），等值查找只比哈希慢一点，却多拿到范围和排序能力。"
     ],
     "optionExplanations_en": [
       "Wrong — a hash index still supports transactions; its real limit is no range or sort, not transactions.",
       "Wrong — a hash index is not a memory hog; it just is not worth losing range support for a tiny gain.",
       "Wrong — on-disk hash indexes are entirely implementable (Postgres ships one); the payoff is just too small.",
-      "Right — a B-tree needs very few levels to search — even billions of rows means 3-4 levels, so equality lookup is barely slower than hash, and range plus sort come free."
+      "Right — a B-tree needs very few levels (assuming a page holds a few hundred keys, billions of rows are 3-4 levels), so equality lookup is only slightly slower than hash, and range plus sort come free."
     ]
   },
   {
@@ -4105,12 +4098,12 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "inverted-index",
-    "scenario": "用户搜「Databases」要能命中正文里的「database」「DATABASE」甚至「database's」。",
-    "q": "Elasticsearch 这类系统索引文本前的分析管道包含哪些步骤？（多选）",
+    "scenario": "用户搜「Databases」要能命中正文里的「database」「DATABASE」甚至「database's」。该字段用的是 Elasticsearch 的 `english` 语言 analyzer。",
+    "q": "要实现这个效果，分析管道里需要哪些步骤？（多选）",
     "options": [
       "把文本切分成 token（词或子词）",
       "统一转小写",
-      "去掉 \"the\"、\"and\" 等停用词，并常做词干化（还原词根）",
+      "词干化（stemming），把复数、所有格等变体还原成词根",
       "给每个词单独建一棵 B 树"
     ],
     "answer": [
@@ -4118,8 +4111,8 @@
       1,
       2
     ],
-    "why": "分词、小写化、去停用词、词干化让搜 \"Databases\" 也能命中 \"database\"、\"DATABASE\" 甚至 \"database's\"——这正是全文搜索显得自然的原因。",
-    "why_en": "Text is tokenized, lowercased, stripped of stop words, and often stemmed, which is why searching one form of a word matches its variants.",
+    "why": "分词把文本切成 token，小写化让 DATABASE 和 database 变成同一个词，词干化把 Databases、database's 还原成 database，所以三种写法都落到同一个倒排索引条目上。去停用词是可选配置（`standard` analyzer 默认不去），跟这个需求无关。倒排索引是「词 → 文档列表」的映射，不是每个词一棵 B 树。",
+    "why_en": "Tokenization splits the text into tokens, lowercasing makes DATABASE and database the same term, and stemming folds Databases and database's down to database, so all forms land on the same inverted-index entry. Stop-word removal is optional (the `standard` analyzer keeps stop words by default) and isn't needed here. An inverted index maps term → document list; it is not one B-tree per word.",
     "tags": [
       "inverted-index",
       "analysis-pipeline",
@@ -4128,7 +4121,7 @@
     "options_en": [
       "Split text into tokens (words or subwords).",
       "Convert everything to lowercase.",
-      "Remove stop words like \"the\" and \"and\", and often apply stemming.",
+      "Stemming, folding plurals, possessives, and similar variants down to a root form.",
       "Build a separate B-tree for every single word."
     ],
     "termDefinitions": [
@@ -4153,18 +4146,18 @@
         "meaningEn": "A stop word is a very common word, like the or and, typically stripped out before indexing."
       }
     ],
-    "q_en": "Which steps are in the text analysis pipeline before Elasticsearch-style indexing? (Select all that apply.)",
-    "scenario_en": "A search for Databases has to also hit database, DATABASE, and even database's in the body text.",
+    "q_en": "Which analysis steps are needed to get this behavior? (Select all that apply.)",
+    "scenario_en": "A search for \"Databases\" has to also hit \"database\", \"DATABASE\", and even \"database's\" in the body text. The field uses Elasticsearch's `english` language analyzer.",
     "optionExplanations": [
       "对，分词把一段文本切成独立的词或子词单元，是整条分析管道的第一步。",
       "对，统一小写让「Database」和「database」被当成同一个词处理，不会因大小写分裂成两个索引条目。",
-      "对，去停用词减少无意义索引项，词干化把 running/ran 还原成 run，让搜索更宽容。",
+      "对，词干化把 Databases、database's 这类复数、所有格变体还原成词根 database，搜任一写法都能命中。",
       "错——倒排索引是一张词到文档列表的映射表，不是给每个词单独建一整棵 B 树。"
     ],
     "optionExplanations_en": [
       "Right — tokenization splits a piece of text into individual word or subword units, the first stage of the pipeline.",
       "Right — lowercasing means \"Database\" and \"database\" are treated as the same word, instead of splitting into two index entries.",
-      "Right — removing stop words cuts meaningless index entries, and stemming folds running/ran down to run, making search more forgiving.",
+      "Right — stemming folds variants such as Databases and database's down to the root database, so a search for any form matches.",
       "Wrong — an inverted index is one mapping table from word to a list of documents, not a separate B-tree built per word."
     ]
   },
@@ -4788,27 +4781,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "dynamodb-sort-key",
-    "scenario": "DynamoDB 聊天表按 user_id 分区，最常见的查询是「查某个用户在某时间段内的消息」，需要按时间区间取。",
-    "scenario_en": "A DynamoDB chat table is partitioned by user_id, and the hottest query is 'a given user's messages in a time window', needing a time range.",
+    "scenario": "DynamoDB 聊天表以 user_id 为 partition key，最常见的查询是「查某个用户在某时间段内的消息」，需要按时间区间取。",
+    "scenario_en": "A DynamoDB chat table uses user_id as its partition key, and the hottest query is \"a given user's messages in a time window\", needing a time range.",
     "q": "怎么建模才能让「单用户 + 时间区间」这类查询走连续扫描？",
     "q_en": "How do you model the table so a single-user time-range query becomes a contiguous scan?",
     "options": [
-      "把 timestamp 设为该表的 sort key，让分区内 item 有序",
+      "把 timestamp（实际可用 `timestamp#messageId` 保证唯一）设为 sort key，让同一用户的 item 按时间有序",
       "另建一个只以 timestamp 为键的 GSI，靠它做时间区间扫描",
-      "依赖底层 B 树索引，直接对 timestamp 列做范围扫描",
+      "不改主键，直接对普通属性 timestamp 做 key 范围查询",
       "用 Scan 把整个分区读出来，再用 FilterExpression 过滤掉区间外的项"
     ],
     "options_en": [
-      "Make timestamp the table's sort key so items within the partition are stored in order.",
+      "Make timestamp the sort key (in practice `timestamp#messageId` to stay unique) so one user's items are ordered by time.",
       "Build a separate GSI keyed only on timestamp and use it for the time-range scan.",
-      "Rely on the underlying B-tree index to range-scan the timestamp column directly.",
+      "Leave the key schema alone and run a key-range Query directly on the plain timestamp attribute.",
       "Use Scan to read the whole partition, then FilterExpression to drop items outside the window."
     ],
     "answer": [
       0
     ],
-    "why": "同分区内 item 按 sort key 有序存放，所以「固定 partition key + sort key 区间」是一次连续读，代价接近顺序扫描。代价：这份有序只在单个 partition key 内成立。",
-    "why_en": "DynamoDB keeps items within a partition ordered by sort key, so a fixed partition key plus a sort-key range is one contiguous read, close to a sequential scan in cost. The catch: that ordering only holds inside a single partition key.",
+    "why": "同一 partition key 下 item 按 sort key 有序，「固定 user_id + sort key 区间」一次 Query 按序读出，读取量只随区间大小变。C 错在 KeyConditionExpression 只能用于 partition/sort key，普通属性不能范围查询。sort key 须唯一，常用 timestamp#messageId。",
+    "why_en": "Items under one partition key are ordered by sort key, so a fixed user_id plus a sort-key range is one ordered Query whose cost scales with the window. C fails because KeyConditionExpression only works on partition/sort keys, not plain attributes. The sort key must be unique, hence timestamp#messageId.",
     "whenOtherWins": "当查询不带 user_id、要跨所有用户按时间全局排序或取区间时，分区内 sort key 帮不上，得建一个以 time 为分区/排序键的 GSI。",
     "tradeoff": "分区内 sort-key 区间（单分区有序、最省）vs GSI（跨分区但另建结构）vs Scan（全读再过滤）",
     "tags": [
@@ -4847,15 +4840,15 @@
       }
     ],
     "optionExplanations": [
-      "对，这正是把 timestamp 放进 sort key 的目的：同一 user_id 下的时间区间落成一段相邻磁盘读，而非逐条随机点查。",
+      "对，timestamp 放进 sort key，同一 user_id 下 item 按时间有序，区间一次 Query 读出；sort key 须唯一，常用 timestamp#messageId。",
       "以 timestamp 为键的 GSI 是把数据跨分区重排，适合「跨用户按时间查」，但对「单用户区间」是绕远路。",
-      "DynamoDB 被普遍认为用 LSM 式底座、不是 B 树，没有可供用户对 timestamp 做范围扫描的 B 树索引。",
+      "错在 DynamoDB 的 KeyConditionExpression 只能作用于 partition key 和 sort key，普通属性不能直接做范围查询（底层存储用 B-tree，但用户接触不到）。",
       "Scan 会把整个分区都读出来再过滤，读取量不随区间收窄——正是 sort key 有序想避免的浪费。"
     ],
     "optionExplanations_en": [
-      "Right — items sit in sort-key order within the partition, so a fixed user_id plus a timestamp range is one contiguous read.",
+      "Right — with timestamp in the sort key, one user's items are time-ordered and a range is one Query; the key must be unique, commonly timestamp#messageId.",
       "A GSI keyed on timestamp reorders data across partitions, good for 'time across all users' but a detour for a single user's range.",
-      "DynamoDB is understood to use an LSM-style engine, not B-trees, so there's no user B-tree to range-scan on timestamp.",
+      "Wrong because KeyConditionExpression only works on the partition and sort keys; a plain attribute can't be range-queried directly (the storage layer uses a B-tree, but it isn't exposed to users).",
       "Scan reads the entire partition then filters, so the read volume doesn't shrink with the window — the waste sort-key ordering avoids."
     ]
   },

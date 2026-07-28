@@ -100,14 +100,14 @@
     "options_en": [
       "A custom reliable transport built on UDP.",
       "WebSocket.",
-      "HTTP over TCP, which is universal, mature, and covers ninety percent of use cases.",
+      "HTTP over TCP.",
       "FTP."
     ],
     "answer": [
       2
     ],
-    "why": "没有特殊理由就默认 HTTP over TCP：人人都懂、到处能跑；面试官也默认你会这么选。",
-    "why_en": "Default to HTTP over TCP, which is well understood, works everywhere, and covers ninety percent of use cases.",
+    "why": "没有实时推送、也没有极端性能要求，就默认 HTTP over TCP：工具链成熟、到处能跑、面试官零解释成本。WebSocket 是为双向实时准备的，自研 UDP 和 FTP 都没有理由。",
+    "why_en": "With no real-time push and no extreme performance requirement, default to HTTP over TCP: mature tooling, works everywhere, and needs no justification in an interview. WebSocket is for bidirectional real-time, and neither a custom UDP transport nor FTP has a reason here.",
     "whenOtherWins": "需要实时推送时才引入 SSE/WebSocket；内部服务间性能关键时用 gRPC。",
     "termDefinitions": [
       {
@@ -140,7 +140,7 @@
         "fullName": "File Transfer Protocol"
       }
     ],
-    "tradeoff": "通用协议覆盖 90% 场景 vs 为特定需求换专用协议的额外收益",
+    "tradeoff": "通用协议覆盖大多数场景 vs 为特定需求换专用协议的额外收益",
     "tags": [
       "networking",
       "http",
@@ -358,27 +358,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "networking",
-    "scenario": "SSE/WebSocket 连接要接入生产环境的负载均衡与容量规划。",
-    "scenario_en": "SSE and WebSocket connections need to run in production behind load balancing and capacity planning.",
+    "scenario": "SSE/WebSocket 连接要接入生产环境：前面有负载均衡器，每台服务器上挂着上万条长连接，服务器会滚动发布，也可能宕机。",
+    "scenario_en": "SSE and WebSocket connections are going to production behind a load balancer; each server holds tens of thousands of long-lived connections, servers are rolled during deploys, and any server may crash.",
     "q": "SSE 和 WebSocket 都是有状态连接，这带来的设计后果是？",
     "q_en": "What design consequence follows because SSE and WebSocket are stateful connections?",
     "options": [
-      "没有影响，照常部署",
+      "没有影响，照常按短请求部署",
       "只能单机部署，无法水平扩展",
       "必须换成 UDP",
-      "不能直接放负载均衡器后面"
+      "LB 要支持长连接（L4 透传或支持 Upgrade 的 L7），并提前设计连接分布、发布时的连接迁移和宕机后的重连风暴"
     ],
     "options_en": [
-      "No impact, deploy as usual.",
-      "It can only run on a single machine and cannot scale horizontally.",
+      "No impact; deploy it like short HTTP requests.",
+      "It can only run on one machine and cannot scale horizontally.",
       "You must switch to UDP.",
-      "You cannot just drop it behind a standard load balancer — you must plan for connection persistence and for a server dying with thousands of active connections."
+      "The load balancer must support long-lived connections (L4 pass-through or an L7 that supports Upgrade), and you must plan connection distribution, draining during deploys, and the reconnect storm when a server dies."
     ],
     "answer": [
       3
     ],
-    "why": "有状态连接绑定在具体服务器上：LB 策略、连接迁移、宕机时成千上万条连接的重连风暴都要提前设计。",
-    "why_en": "Both are stateful connections, so you must plan for connection persistence and for a server dying with thousands of active connections.",
+    "why": "长连接一建立就绑在某一台服务器上，不像短请求可以每次重新分配。所以 LB 要能扛长连接（L4 透传，或支持 HTTP Upgrade 的 L7），还要提前想好：连接数在机器间分布不均怎么办、滚动发布时怎么把连接平滑迁走、一台机器宕机时上万客户端同时重连怎么限流退避。它们照样能水平扩展、照样跑在 TCP 上，不需要 UDP。",
+    "why_en": "A long-lived connection is pinned to one server once established, unlike short requests that can be rebalanced each time. So the load balancer must handle long-lived connections (L4 pass-through or an L7 that supports HTTP Upgrade), and you must plan for uneven connection distribution, draining connections during rolling deploys, and throttling/backing off the reconnect storm when a server with thousands of clients dies. They still scale horizontally and still run over TCP; no UDP needed.",
     "termDefinitions": [
       {
         "term": "WebSocket",
@@ -401,13 +401,13 @@
       "有状态长连接绑定在具体服务器上，LB 策略、宕机重连都得提前规划，不是照常部署。",
       "多机部署可以做，只是要靠一致性哈希或 sticky session 把连接钉在固定实例上。",
       "换协议不解决连接状态问题，UDP 本身也不管连接归属。",
-      "对，得规划连接保持策略，还要预案宕机时成千上万条连接同时重连的风暴。"
+      "对，LB 要支持长连接（L4 透传或支持 Upgrade 的 L7），还要预案连接分布不均、发布迁移和宕机时上万条连接同时重连的风暴。"
     ],
     "optionExplanations_en": [
       "Stateful long connections tie to one server, so LB routing and reconnect storms need advance planning — it is not business as usual.",
       "Multi-server deployment still works, it just needs sticky routing or consistent hashing to pin each connection to one instance.",
       "Switching transport does not decide which server holds a connection; UDP itself says nothing about that either.",
-      "Right — you need a connection-persistence plan and a playbook for a reconnect storm when a server holding thousands of connections dies."
+      "Right — the LB must support long-lived connections (L4 pass-through or an L7 with Upgrade), and you need plans for uneven distribution, deploy-time draining, and the reconnect storm when a server holding thousands of connections dies."
     ]
   },
   {
@@ -533,8 +533,8 @@
     "answer": [
       1
     ],
-    "why": "L7 看得懂请求内容所以能做内容路由；L4 只管 TCP 连接分发所以更快。WebSocket 这类持久 TCP 连接通常配 L4。",
-    "why_en": "Layer seven balancers route based on HTTP content while layer four balancers work at the TCP level, faster but content-blind, which suits WebSockets.",
+    "why": "L7 看得懂 HTTP 内容，能按路径/头部路由；L4 只按 TCP 连接分发，不看内容，开销更低。本题连接建立后不需要按路径分流，所以 L4 就够了、更省。如果要按路径把不同 WebSocket 端点分到不同服务，支持 Upgrade 的 L7（如 ALB、nginx）同样能用。",
+    "why_en": "L7 understands HTTP content and can route by path or header; L4 just distributes TCP connections without reading content, with lower overhead. Here no path-based routing is needed after the connection is set up, so L4 is enough and cheaper. If you did need to route different WebSocket endpoints to different services, an L7 that supports Upgrade (ALB, nginx) works too.",
     "termDefinitions": [
       {
         "term": "L7",
@@ -842,13 +842,13 @@
     "q": "分页方式的选择：cursor-based vs offset-based，正确的判断是？",
     "q_en": "How should you choose between cursor-based and offset-based pagination?",
     "options": [
-      "cursor 适合实时插入；offset 够用",
+      "这里用 cursor（数据频繁插入时更稳）；offset 只适合基本不变的列表",
       "offset 分页在任何数据规模下都永远更好",
       "cursor 无法用 SQL 实现",
       "两者不能混用于同一系统"
     ],
     "options_en": [
-      "Cursor-based pagination works better for real-time data where items are added frequently, while offset-based is fine for most cases.",
+      "Use cursor here, since it stays stable under frequent inserts; offset is fine only for lists that rarely change.",
       "Offset pagination is always better at any data scale.",
       "Cursor-based pagination cannot be implemented in SQL.",
       "The two cannot coexist in the same system."
@@ -856,8 +856,8 @@
     "answer": [
       0
     ],
-    "why": "返回大结果集需要分页：数据实时增长时 offset 会漂移，cursor 更稳；一般场景 offset 简单够用。",
-    "why_en": "Cursor-based pagination works better for real-time data where items are added frequently, while offset-based is fine for most cases.",
+    "why": "offset 按「跳过前 N 条」翻页，顶部一插新帖，第 3 页的起点就往后挪，用户会看到重复的帖。cursor 用上一页最后一条的排序键（如 id）当起点，新插入不影响它。数据基本不变的列表用 offset 更简单。",
+    "why_en": "Offset paging skips the first N rows, so every new post at the top shifts page three and the user sees duplicates. Cursor paging starts after the last item's sort key (such as id), so new inserts don't move it. For lists that rarely change, offset is simpler.",
     "termDefinitions": [
       {
         "term": "cursor 分页",
@@ -922,27 +922,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "api-design",
-    "scenario": "系统既有用户登录会话，又有内部服务之间的调用，要给两者选认证方式。",
-    "scenario_en": "The system has both user login sessions and internal service-to-service calls, so you need auth for each path.",
-    "q": "标准搭配是？",
-    "q_en": "What is the standard auth pairing for user sessions and service-to-service calls?",
+    "scenario": "系统有两类调用方：（1）用户登录后的浏览器会话，网关希望不查库就能验签，凭证要短期过期、带 userId 等 claims；（2）少数几个内部批处理服务调用一个内部 API，团队想要最简单的长期凭证，并能按调用方逐个吊销。",
+    "scenario_en": "The system has two kinds of callers: (1) logged-in browser sessions, where the gateway wants to verify credentials without a DB lookup and the credential should expire quickly and carry claims like userId; (2) a few internal batch services calling one internal API, where the team wants the simplest long-lived credential that can be revoked per caller.",
+    "q": "这两类调用方各自该用什么认证方式？",
+    "q_en": "What auth method should each of the two caller types use?",
     "options": [
       "都用明文密码",
       "都用 IP 白名单",
-      "用户会话用 API key、服务间用 JWT",
-      "用户会话 JWT，服务间 API key"
+      "用户会话发一个永不过期的 API key 存在浏览器里；内部服务互相转发用户的 JWT",
+      "用户会话用短期签名 JWT；每个内部调用方各发一个可单独吊销的 API key"
     ],
     "options_en": [
       "Use plaintext passwords for both.",
       "Use IP allowlists for both.",
-      "Use an API key for user sessions and a JWT for service-to-service calls.",
-      "Use a JWT token for user sessions and an API key for service-to-service calls."
+      "Give user sessions a never-expiring API key stored in the browser; internal services forward the user's JWT to each other.",
+      "Use short-lived signed JWTs for user sessions; give each internal caller its own revocable API key."
     ],
     "answer": [
       3
     ],
-    "why": "面试口径：JWT 管用户会话、API key 管 service-to-service；点到为止，除非被追问不必展开。",
-    "why_en": "Use JWT tokens for user sessions and API keys for service-to-service calls.",
+    "why": "用户会话要短期过期、带 claims、网关不查库验签——这正是签名 JWT 的用法。内部调用方少、要最简单且能逐个吊销的长期凭证——每个调用方一个 API key 最直接。C 把长期不过期的 key 放进浏览器，且没有给内部批处理服务自己的身份。注意：生产里服务间认证也常用 mTLS 或 OAuth 2.0 client credentials（签发的通常就是 JWT），本题选 API key 是因为题面要求「最简单 + 按调用方吊销」。",
+    "why_en": "User sessions need a short-lived credential with claims that the gateway can verify without a DB lookup, which is exactly what a signed JWT is for. The internal callers are few and want the simplest long-lived credential that can be revoked per caller, so one API key per caller fits directly. C puts a never-expiring key in the browser and gives the batch services no identity of their own. Note that in production, service-to-service auth also commonly uses mTLS or OAuth 2.0 client credentials (which usually issue JWTs); API keys win here only because the prompt asks for the simplest per-caller-revocable credential.",
     "whenOtherWins": "若有第三方开发者生态，才需要展开 OAuth 之类的授权协议——一般面试不用主动深入。",
     "termDefinitions": [
       {
@@ -993,14 +993,14 @@
     "optionExplanations": [
       "明文密码只在本地临时调试能忍，线上认证绝不能这样做。",
       "固定 IP 白名单能当额外防线，但替代不了身份凭证。",
-      "把两者用途对调了：JWT 更适合带身份和过期时间的用户会话，不是服务间调用。",
-      "对，用户会话要能免查库验签就用 JWT，服务间调用更常用可轮换的 API key 或 mTLS。"
+      "把永不过期的 key 放进浏览器很危险，泄露后无法自动失效；转发用户 JWT 也没有给内部批处理服务自己的身份。",
+      "对，用户会话要短期、带 claims、免查库验签，用 JWT；少数内部调用方要最简单且可逐个吊销的凭证，每方一个 API key。"
     ],
     "optionExplanations_en": [
       "Plaintext passwords might survive a local debug session, but production auth can never work that way.",
       "A fixed IP allowlist can be an extra layer, but it never replaces an actual credential.",
-      "This swaps the two use cases — JWT fits identity-plus-timeout user sessions, not service-to-service calls.",
-      "Right — JWT lets any service verify a user session without a database hit, while API keys give service calls a rotatable credential."
+      "A never-expiring key in the browser is risky and can't expire on its own after a leak; forwarding the user's JWT also gives the batch services no identity of their own.",
+      "Right — user sessions need short-lived, claim-carrying, DB-free verification (JWT), while a few internal callers want the simplest per-caller revocable credential (one API key each)."
     ]
   },
   {
@@ -1063,9 +1063,9 @@
     "topic": "system-design",
     "sub": "data-modeling",
     "scenario": "数据是结构化的、关系清晰（用户账户→订单→商品），需要强一致、事务和复杂查询。",
-    "scenario_en": "The data is structured with clear relationships, such as users to orders to products, and needs transactions and strong consistency.",
+    "scenario_en": "The data is structured with clear relationships, such as users to orders to products, and needs strong consistency, transactions, and complex queries.",
     "q": "最合适的存储是？",
-    "q_en": "Which storage choice fits structured relational data with transactions?",
+    "q_en": "Which storage choice fits structured relational data with transactions and complex queries?",
     "options": [
       "MongoDB，文档型数据库，schema 灵活",
       "DynamoDB，键值/宽列数据库，按 key 强项",
@@ -1081,8 +1081,8 @@
     "answer": [
       2
     ],
-    "why": "结构化 + 清晰关系 + 强一致，正是关系型的主场：SQL 表达复杂查询、事务保一致、外键约束护关系。",
-    "why_en": "Relational databases like Postgres excel with structured data, clear relationships, strong consistency, transactions, and complex SQL queries.",
+    "why": "结构化 + 清晰关系 + 强一致 + 复杂查询，正是关系型的主场：SQL 表达复杂查询、事务保一致、外键约束护关系。DynamoDB / MongoDB 也有事务，但任意条件的复杂 join 查询不是它们的强项。",
+    "why_en": "Structured data with clear relationships, strong consistency, transactions, and complex queries is the relational home turf. DynamoDB and MongoDB offer transactions too, but ad-hoc multi-table joins are not their strength.",
     "whenOtherWins": "schema 频繁变化、或需要不依赖复杂 join 的水平扩展时，NoSQL（DynamoDB/MongoDB）更合适。",
     "termDefinitions": [
       {
@@ -1184,20 +1184,20 @@
     "options": [
       "NoSQL（DynamoDB / MongoDB）",
       "单机 Postgres，不做任何扩展准备",
-      "强一致的分布式 SQL（如 Spanner），join 成本依旧高",
+      "强一致的分布式 SQL（如 Spanner），能水平扩展，但每次 schema 变更仍要走 DDL",
       "关系型 + 只读副本，schema 变化仍要迁移脚本"
     ],
     "options_en": [
       "NoSQL, such as DynamoDB or MongoDB.",
       "A single Postgres instance with no scaling plan.",
-      "A strongly consistent distributed SQL database like Spanner, where joins still cost the same.",
+      "A strongly consistent distributed SQL database like Spanner: it scales horizontally, but every schema change still goes through DDL.",
       "Relational plus read replicas, still needing migration scripts for schema changes."
     ],
     "answer": [
       0
     ],
-    "why": "灵活 schema 与横向扩展是 NoSQL 的两大主场；代价是放弃复杂 join 和部分关系型保证。",
-    "why_en": "NoSQL databases shine when you need flexible schemas or horizontal scaling across many servers without complex joins.",
+    "why": "灵活 schema 与横向扩展是 NoSQL 的两大主场。Spanner 也能横向扩展，但 schema 是强定义的，频繁变化仍要走 DDL；只读副本只扩读不扩写，也绕不开迁移。",
+    "why_en": "Flexible schemas and horizontal scaling are NoSQL's home turf. Spanner also scales horizontally, but its schema is strictly defined and frequent changes still require DDL; read replicas only scale reads and still need migrations.",
     "whenOtherWins": "需要强一致、事务与复杂关系查询时回到关系型——别为扩展性提前放弃这些保证。",
     "termDefinitions": [
       {
@@ -1250,13 +1250,13 @@
     "optionExplanations": [
       "对，schema 常变又要横向扩展、不依赖复杂 join 时，文档或宽列 NoSQL 正合适。",
       "单机不做扩展准备撑不住并发和数据增长，这不是应对扩容需求的方案。",
-      "分布式 SQL 保的是强关系和事务，不是为了甩掉 schema 设计成本。",
+      "Spanner 能水平扩展，但 schema 强定义，频繁变化仍要走 DDL，不满足灵活 schema 的需求。",
       "只读副本能扩读不扩写，schema 变化照样要跑迁移脚本。"
     ],
     "optionExplanations_en": [
-      "Right — when schema shifts often and you need horizontal scale without heavy joins, document or wide-column NoSQL fits.",
+      "Right: when schema shifts often and you need horizontal scale without heavy joins, document or wide-column NoSQL fits.",
       "A single instance with no scaling plan can't absorb rising concurrency or data growth; it doesn't answer the scaling need.",
-      "Distributed SQL preserves strong relationships and transactions; it's not meant to shed schema-design cost.",
+      "Spanner scales horizontally, but its schema is strictly defined and frequent changes still go through DDL, so it misses the flexible-schema need.",
       "Read replicas scale reads, not writes, and schema changes still need migration scripts either way."
     ]
   },
@@ -1278,7 +1278,7 @@
     ],
     "options_en": [
       "Put all data into one wide table with no splitting.",
-      "Split data across tables to avoid duplication, so orders reference a user ID instead of copying user data: updating once updates everywhere, but reading full data needs joins, which get expensive at scale.",
+      "Split tables to avoid duplication, so orders reference a product ID; reads need joins.",
       "Give every single field its own table to save space.",
       "Compress duplicate fields but still keep a copy in every place."
     ],
@@ -1286,7 +1286,7 @@
       1
     ],
     "why": "规范化保一致性（改一次商品名全站生效），代价是读取要 join；表巨大或跨多表 join 时开销显著。",
-    "why_en": "Normalization splits data across tables to avoid duplication, keeping it consistent but requiring joins that get expensive at scale.",
+    "why_en": "Normalization splits data into tables so orders reference a product ID: one rename updates everywhere, at the cost of joins on read, which get expensive at scale.",
     "termDefinitions": [
       {
         "term": "join",
@@ -1486,27 +1486,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "data-modeling",
-    "scenario": "社交 App 的 DynamoDB 表以 user_id 为分区键，产品新增了 hashtag 搜索页。",
-    "scenario_en": "A social app stores posts in DynamoDB partitioned by user_id, and the product team just added a hashtag search page.",
+    "scenario": "社交 App 的 DynamoDB 表以 user_id 为分区键、没有任何 GSI；产品新增了 hashtag 搜索页，工程师想先不改表结构直接上线。",
+    "scenario_en": "A social app stores posts in DynamoDB partitioned by user_id with no GSI; the product team adds a hashtag search page and engineers want to ship it without changing the table design.",
     "q": "社交 App 用 user_id 做 DynamoDB 分区键（匹配「取用户 X 的全部帖子」），那「查提到 hashtag Y 的帖子」会怎样？",
     "q_en": "If DynamoDB is partitioned by user_id for fetching a user posts, what happens when you query posts by hashtag?",
     "options": [
-      "要扫描整张表——因为没为这个访问模式设计",
-      "DynamoDB 自动建索引，照样很快",
-      "DynamoDB 会拒绝该查询语法",
-      "和分区键查询一样快"
+      "只能用 Scan + filter 读遍整张表，代价随表大小线性增长",
+      "DynamoDB 会自动为 hashtag 建索引，照样很快",
+      "DynamoDB 会自动把请求只路由到存了该 hashtag 的那个分区",
+      "和按 user_id 的分区键查询一样快"
     ],
     "options_en": [
-      "It scans the entire table, because you did not design for this access pattern.",
-      "DynamoDB auto-builds an index and it stays fast.",
-      "DynamoDB rejects that query syntax outright.",
-      "It's just as fast as a partition-key query."
+      "Only a Scan with a filter over the entire table works, costing in proportion to table size.",
+      "DynamoDB auto-builds a hashtag index and it stays fast.",
+      "DynamoDB automatically routes the request to just the partition holding that hashtag.",
+      "It is just as fast as a user_id partition-key query."
     ],
     "answer": [
       0
     ],
-    "why": "NoSQL 必须预先知道查询、围绕访问模式设计 partition/sort key：匹配的查询是单分区秒查，没设计过的查询就是全表扫描。",
-    "why_en": "With user id as the partition key, a hashtag query scans the whole table because you did not design for that access pattern.",
+    "why": "DynamoDB 的 Query 必须带分区键等值条件；hashtag 不是 key，又没有 GSI，就只能 Scan 全表再过滤。要让它变快，得为这个访问模式补 GSI 或单独的 hashtag→post 倒排表。",
+    "why_en": "DynamoDB Query requires an equality condition on the partition key. Hashtag is not a key and there is no GSI, so the only option is a full-table Scan with a filter; making it fast requires a GSI or a separate hashtag-to-post table.",
     "termDefinitions": [
       {
         "term": "partition key",
@@ -1532,15 +1532,15 @@
       "access-patterns"
     ],
     "optionExplanations": [
-      "对，partition key 只加速按它查询的路径；hashtag 查询没被设计进去，只能全表扫。",
+      "对，Query 必须带分区键等值条件；hashtag 没被设计进 key，也没有 GSI，只能 Scan 全表再过滤。",
       "DynamoDB 不会自动为你没设计的访问模式建索引，得手动加 GSI 才行。",
-      "语法本身是合法的，只是没有索引支撑，代价是扫描整张表而不是报错。",
+      "分区是按 user_id 哈希的，系统不知道哪个分区有哪个 hashtag，没法只路由到某个分区。",
       "分区键查询是单分区秒查，hashtag 查询没有这个优势，速度差距很大。"
     ],
     "optionExplanations_en": [
-      "Right — the partition key only accelerates lookups by that key; a hashtag query wasn't designed for, so it's a full table scan.",
+      "Right: Query needs an equality condition on the partition key; hashtag is not in the key and there is no GSI, so the only way is a full-table Scan with a filter.",
       "DynamoDB doesn't auto-index access patterns you never designed for; you'd need to add a GSI yourself.",
-      "The query syntax itself is valid — it's just unindexed, so the cost is a full scan, not a rejection.",
+      "Partitions are hashed by user_id, so DynamoDB cannot know which partition holds a hashtag and cannot route to just one.",
       "A partition-key query is a fast single-partition lookup; a hashtag query has none of that advantage, so the gap is large."
     ]
   },
@@ -1552,9 +1552,9 @@
     "sub": "data-modeling",
     "q": "补全关系型 vs NoSQL 的取向：",
     "q_en": "Fill in the relational versus NoSQL design bias.",
-    "text": "关系型长于{{强一致}}与复杂查询（SQL、事务、外键约束）；NoSQL 长于{{灵活 schema}} 与不依赖复杂 join 的{{水平扩展}}。",
-    "why": "这是数据建模的第一层选型直觉，之后再用具体的访问模式和一致性需求收敛。",
-    "why_en": "Relational databases favor strong consistency and rich queries, while NoSQL favors flexible schemas and horizontal scaling without joins.",
+    "text": "关系型长于多表{{事务}}（ACID）与复杂查询（SQL join、外键约束）；NoSQL 长于{{灵活 schema}} 与不依赖复杂 join 的{{水平扩展}}。",
+    "why": "这是数据建模的第一层选型直觉：关系型的强项是跨表 ACID 事务和 join 查询；NoSQL 的强项是 schema 灵活和横向扩展。注意强一致读不是关系型独有，DynamoDB 也能开。",
+    "why_en": "A first-pass instinct: relational databases favor multi-table ACID transactions and joins, while NoSQL favors flexible schemas and horizontal scaling. Strongly consistent reads are not unique to relational databases; DynamoDB offers them too.",
     "termDefinitions": [
       {
         "term": "SQL",
@@ -1861,10 +1861,10 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "indexing",
-    "scenario": "主数据库之外，系统需要对推文/文档做全文搜索；另一个场景要「找 5 英里内的餐厅」。",
-    "scenario_en": "Outside the primary database, the system needs full-text search over posts or documents and nearby restaurant lookup within five miles.",
-    "q": "标准选型是？",
-    "q_en": "Which specialized index or store should you use for full-text and geospatial queries?",
+    "scenario": "主库是 Postgres。系统需要对推文/文档做全文搜索；另一个场景要「找 5 英里内的餐厅」。",
+    "scenario_en": "The primary database is Postgres. The system needs full-text search over posts or documents, and nearby restaurant lookup within five miles.",
+    "q": "以下哪组最合适？",
+    "q_en": "Which combination fits best?",
     "options": [
       "全文用 ES，地理用 PostGIS",
       "两种查询都用 LIKE 做模糊匹配",
@@ -1880,8 +1880,8 @@
     "answer": [
       0
     ],
-    "why": "超出主库能力的专用查询交给专用索引：全文搜索是 Elasticsearch 的主场，地理空间在 Postgres 用 PostGIS。",
-    "why_en": "Elasticsearch is the go-to for full-text search, and PostGIS is the popular Postgres extension for geospatial queries.",
+    "why": "主库已是 Postgres，地理查询直接加 PostGIS 扩展，不用多一套系统；全文搜索需要分词、倒排索引和相关性排序，交给 Elasticsearch。LIKE 和 B-tree 做不了分词和二维距离查询；普通 Redis 没有全文检索能力。这不是唯一方案：ES 自身也支持 geo 查询。",
+    "why_en": "With Postgres as the primary, PostGIS adds geospatial queries without another system; full-text search needs tokenization, inverted indexes and relevance ranking, which is Elasticsearch's job. LIKE and B-trees cannot tokenize or do 2-D distance queries, and plain Redis has no full-text search. This is not the only option: Elasticsearch can also run geo queries.",
     "whenOtherWins": "数据量小、只要前缀/简单匹配时，主库自带索引就够，别为它引入一套外部系统的运维成本。",
     "termDefinitions": [
       {
@@ -2056,27 +2056,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "读重系统里数据库被读打爆，要引入缓存，选读写模式。",
-    "scenario_en": "In a read-heavy system, database reads are the bottleneck and you need to pick a caching pattern.",
-    "q": "90% 场景该用的模式是？",
-    "q_en": "What cache pattern should you use in most read-heavy systems?",
+    "scenario": "读重系统里数据库被读打爆，要在应用和数据库之间加一层普通 Redis（Redis 自己不会回源查库），回源逻辑由应用代码负责，写路径暂时不改。",
+    "scenario_en": "In a read-heavy system the database is overloaded by reads. You add a plain Redis cache (Redis itself cannot load from the database); the application code owns the miss-handling logic, and the write path stays unchanged for now.",
+    "q": "该用哪种缓存读写模式？",
+    "q_en": "Which caching pattern fits?",
     "options": [
       "write-behind：先写缓存，之后异步落库",
-      "cache-aside：先查缓存，未命中再查库回填",
-      "read-through：缓存层自己负责回源取数据",
+      "cache-aside：应用先查缓存，未命中再查库并回填",
+      "read-through：缓存层自己负责未命中时回源",
       "write-through：写请求同步写入缓存和数据库"
     ],
     "options_en": [
       "Write-behind: write to the cache first, then flush to the database asynchronously.",
-      "Cache-aside: check the cache, and on a miss query the database and fill it back.",
-      "Read-through: the cache layer itself fetches on a miss.",
+      "Cache-aside: the app checks the cache, and on a miss queries the database and fills it back.",
+      "Read-through: the cache layer itself fetches from the database on a miss.",
       "Write-through: writes hit the cache and the database together in sync."
     ],
     "answer": [
       1
     ],
-    "why": "cache-aside 实现直白、适配大多数读重系统，是面试默认答案。",
-    "why_en": "The pattern you will use ninety percent of the time is cache-aside with Redis: check the cache, and on a miss query the database, store with a TTL, and return.",
+    "why": "瓶颈在读、写路径不改，写模式先排除。普通 Redis 不会自己回源，回源逻辑又由应用负责，这正是 cache-aside：查缓存→未命中查库→带 TTL 回填。",
+    "why_en": "The bottleneck is reads and the write path is unchanged, which rules out the write patterns. Plain Redis cannot load from the database and the app owns the miss logic, which is exactly cache-aside: check cache, on miss query the DB, fill with a TTL.",
     "whenOtherWins": "静态资源分发走 CDN、小而少变的配置走进程内缓存——不是所有缓存需求都该进 Redis。",
     "termDefinitions": [
       {
@@ -2150,16 +2150,16 @@
       "redis"
     ],
     "optionExplanations": [
-      "write-behind 能吸收写延迟，但异步落库期间有丢数据的窗口期。",
-      "对，应用层查缓存、未命中回源查库再回填，实现直白，适配大多数读重系统。",
-      "read-through 把回源逻辑收进缓存层，应用代码更简单，但系统本身更复杂。",
-      "write-through 每次写都要多打一跳缓存，保证同步但拉高了写延迟。"
+      "write-behind 是写路径模式，题面不改写路径，也解决不了读瓶颈。",
+      "对，普通 Redis 不会回源，应用查缓存、未命中查库再回填，正是 cache-aside。",
+      "read-through 要求缓存层自带 loader，题面是不会回源的普通 Redis，条件不符。",
+      "write-through 是写路径模式，不解决读瓶颈。"
     ],
     "optionExplanations_en": [
-      "Write-behind absorbs write latency, but the async flush window can lose data if something crashes mid-flight.",
-      "Right — the app checks the cache, falls back to the database on a miss and fills it with a TTL; simple and fits most read-heavy systems.",
-      "Read-through moves the fallback logic into the cache layer, simplifying app code but adding system complexity.",
-      "Write-through pays an extra cache hop on every write to stay in sync, which raises write latency."
+      "Write-behind is a write-path pattern; the write path is unchanged and it does not fix the read bottleneck.",
+      "Right: plain Redis cannot load from the database, so the app checks the cache, queries on a miss, and fills it back, which is cache-aside.",
+      "Read-through needs a cache layer with its own loader; the scenario has plain Redis that cannot load.",
+      "Write-through is a write-path pattern and does not fix the read bottleneck."
     ]
   },
   {
@@ -2278,20 +2278,20 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "caching",
-    "scenario": "热榜单 key 扛 5 万 QPS，不能取消 TTL，但过期瞬间数据库会被打穿。",
-    "scenario_en": "One hot key absorbs 50k QPS, the TTL cannot be dropped, and the database gets crushed the moment that key expires.",
+    "scenario": "首页有上千个热点 key 在同一次批量预热时写入、TTL 都是 60 秒；其中热榜 key 单独扛 5 万 QPS。不能取消 TTL，但这些 key 一过期，数据库就会被打穿。",
+    "scenario_en": "Thousands of hot keys are written by the same bulk warm-up job with an identical 60-second TTL, and the trending-list key alone absorbs 50k QPS. TTLs cannot be dropped, but the database gets crushed when these keys expire.",
     "q": "防止 cache stampede 的手段有哪些？（多选）",
     "q_en": "Which techniques prevent a cache stampede? Select all that apply.",
     "options": [
       "加锁：只让一个请求重建条目，其余等待结果",
       "提前重算：条目过期前主动刷新",
-      "错开 TTL：避免大量条目同时过期",
+      "错开 TTL：给 TTL 加随机抖动，避免大量条目同时过期",
       "把 TTL 全部设为 0"
     ],
     "options_en": [
       "Locking: let only one request rebuild the entry while the rest wait.",
       "Early recomputation: refresh the entry before it expires.",
-      "Staggered TTLs: avoid a mass of entries expiring at once.",
+      "Staggered TTLs: add jitter so many entries don't expire at once.",
       "Set every TTL to zero."
     ],
     "answer": [
@@ -2299,8 +2299,8 @@
       1,
       2
     ],
-    "why": "锁（single flight）、提前刷新、错峰过期是三板斧；TTL 设 0 等于每次都打库，恰恰制造问题。",
-    "why_en": "Prevent stampedes with locking so one request regenerates, early recomputation before expiry, and staggered TTLs.",
+    "why": "锁（single-flight）和提前刷新解决单个热 key 过期瞬间的重建洪峰；随机抖动错开 TTL 解决批量预热的上千个 key 同一秒一起过期。TTL 设 0 等于每次都打库。",
+    "why_en": "Locking (single-flight) and early recomputation handle the rebuild burst when one hot key expires; jittered TTLs handle thousands of bulk-warmed keys expiring in the same second. A zero TTL sends every request to the database.",
     "termDefinitions": [
       {
         "term": "cache stampede",
@@ -2322,14 +2322,14 @@
     "optionExplanations": [
       "只让一个请求去重建、其余排队等结果，挡住了并发重建同时砸向数据库。",
       "在条目真正到期前主动刷新，读请求永远撞不上未命中的窗口期。",
-      "把不同 key 的存活时间错开，防止大批条目在同一时刻集体失效。",
+      "批量预热的上千个 key 同一秒过期，加随机抖动把过期时间错开，防止集体失效。",
       "TTL 设为 0 等于每次都直接打库，制造的正是要防的问题。"
     ],
     "optionExplanations_en": [
       "Letting only one request rebuild while the rest wait blocks the pile-up of concurrent rebuilds hitting the database.",
       "Refreshing an entry before it actually lapses means reads never hit that miss window at all.",
-      "Staggering how long different keys stay alive keeps a big batch of entries from lapsing all at once.",
-      "Setting every TTL to zero means every request goes straight to the database — that's the exact problem this is meant to prevent."
+      "Thousands of bulk-warmed keys expire in the same second; jitter spreads their expiry so they don't lapse together.",
+      "Setting every TTL to zero means every request goes straight to the database, the exact problem this is meant to prevent."
     ]
   },
   {
@@ -2442,19 +2442,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "sharding",
-    "scenario": "单库 Postgres 现在 500GB、写 2 千/秒，读副本余量充足，只是用户数刚破一万。",
-    "scenario_en": "A single Postgres holds 500GB at 2k writes per second with read replicas to spare, and the user count just crossed ten thousand.",
+    "scenario": "单库 Postgres 现在 500GB、写 2 千/秒，读副本余量充足。用户数刚破一万，有同事据此提议马上分片。你要说清楚：哪些信号出现时才真的该考虑分片？",
+    "scenario_en": "A single Postgres holds 500GB at 2k writes per second with read replicas to spare. The user count just crossed ten thousand, and a teammate proposes sharding right away because of it. You need to state which signals would actually justify sharding.",
     "q": "什么信号说明你可能真的需要分片？（多选）",
     "q_en": "Which signals mean you may actually need sharding? Select all that apply.",
     "options": [
-      "存储逼近单实例上限（单个 Postgres 到 TB 量级封顶）",
-      "写吞吐到顶（数万写/秒）",
-      "读吞吐连读副本都扛不住",
+      "存储逼近单实例在当前硬件下可接受的上限（容量、备份/恢复时间、vacuum 等运维成本开始失控）",
+      "写吞吐逼近主库上限，垂直扩容已不划算或不可行",
+      "读吞吐连加读副本都扛不住",
       "用户数刚过一万"
     ],
     "options_en": [
-      "Storage nears a single instance's limit, like a Postgres instance capping out in the terabytes.",
-      "Write throughput hits its ceiling, tens of thousands of writes per second.",
+      "Storage nears what a single instance can handle on current hardware (capacity, backup/restore time, and vacuum cost start getting out of hand).",
+      "Write throughput nears the primary's ceiling, and vertical scaling is no longer cost-effective or possible.",
       "Read throughput that even read replicas cannot handle.",
       "The user count just crossed ten thousand."
     ],
@@ -2463,8 +2463,8 @@
       1,
       2
     ],
-    "why": "分片的三个触发条件：存储、写吞吐、副本也救不了的读吞吐；用户数本身不是理由，要看负载数字。",
-    "why_en": "Shard when you hit storage limits, write throughput limits, or read throughput that even replicas cannot handle.",
+    "why": "分片的触发信号看负载数字：存储逼近单实例的实际上限、写吞吐逼近主库上限且垂直扩容走到头、读吞吐连副本都扛不住。具体上限取决于硬件、payload、索引和 durability 配置，没有固定的 TB 数或写/秒数。用户数本身不是负载指标；本场景的 500GB / 2k 写/秒 / 副本富余，一个信号都没命中，不该现在分片。",
+    "why_en": "Sharding is triggered by load numbers: storage nearing a single instance's practical limit, write throughput nearing the primary's ceiling after vertical scaling runs out, or reads that replicas can't absorb. The actual limits depend on hardware, payload, indexes, and durability settings; there is no fixed terabyte or writes-per-second number. User count alone isn't a load signal, and this scenario (500GB, 2k writes/s, spare replicas) hits none of the signals, so it shouldn't shard yet.",
     "termDefinitions": [
       {
         "term": "Postgres",
@@ -2477,14 +2477,14 @@
       "triggers"
     ],
     "optionExplanations": [
-      "存储量逼近单实例上限时，再攒数据就会撞到物理容量墙。",
-      "写路径吞吐到顶是最常见的真实触发点，垂直扩容和加副本都救不了写瓶颈。",
+      "存储逼近单实例在当前硬件下可接受的上限（含备份/恢复、vacuum 成本失控）时，才是分片信号；没有固定的 TB 数。",
+      "写路径吞吐逼近主库上限、垂直扩容走到头，是最常见的真实触发点，加副本救不了写瓶颈。",
       "读吞吐连加读副本都扛不住，说明这条扩展路径已经走到头了。",
       "用户数本身不是负载指标，一万用户可能连数据库压力都感觉不到。"
     ],
     "optionExplanations_en": [
-      "Once storage nears a single instance's ceiling, adding more data starts hitting a real capacity wall.",
-      "Write throughput hitting its ceiling is the most common real trigger — vertical scaling and replicas can't fix a write bottleneck.",
+      "Storage nearing what one instance can handle on current hardware (with backup/restore and vacuum cost out of hand) is a sharding signal; there is no fixed TB number.",
+      "Write throughput nearing the primary's ceiling after vertical scaling runs out is the most common real trigger; replicas can't fix a write bottleneck.",
       "Read throughput that even replicas can't absorb means that scaling path has already run out.",
       "User count alone isn't a load signal; ten thousand users might barely register on the database."
     ]
@@ -2497,8 +2497,8 @@
     "sub": "sharding",
     "scenario": "图片社交要分片，既有「某用户的全部帖子」，也有「全站热门帖」两类查询。",
     "scenario_en": "A photo-sharing service is about to shard, and it serves both per-user post timelines and a global trending feed.",
-    "q": "分片时最重要的决策是什么？以 Instagram 为例说明取舍。",
-    "q_en": "What is the most important sharding decision, and how does Instagram illustrate it?",
+    "q": "分片时最重要的决策是什么？",
+    "q_en": "What is the most important sharding decision?",
     "options": [
       "选数据库品牌",
       "选数据中心的机房位置",
@@ -2508,14 +2508,14 @@
     "options_en": [
       "Choosing the database vendor.",
       "Choosing the data center location.",
-      "Choosing the shard key: sharding by user id keeps a user's data on one shard so user-scoped queries are fast, but global queries like trending posts must hit every shard and aggregate, which gets expensive.",
+      "Choosing the shard key.",
       "Choosing the number of shards."
     ],
     "answer": [
       2
     ],
-    "why": "shard key 决定数据怎么分布、什么查询快什么查询贵，牵动整个设计——这是分片的第一决策。",
-    "why_en": "The shard key is the most important decision: sharding Instagram by user id makes user-scoped queries fast but global queries expensive.",
+    "why": "shard key 决定数据怎么分布、什么查询快什么查询贵。以 Instagram 为例：按 user id 分片，「某用户的全部帖子」落在一个分片上很快；但「全站热门帖」要打到每个分片再聚合，代价高。这是分片的第一决策。",
+    "why_en": "The shard key decides how data is distributed and which queries are cheap or expensive. Instagram sharding by user id makes per-user timelines a single-shard query, but a global trending feed must hit every shard and aggregate, which is expensive. That makes it the first sharding decision.",
     "termDefinitions": [
       {
         "term": "shard key",
@@ -2551,13 +2551,13 @@
     "q": "hash 分片与 range 分片的取舍是？",
     "q_en": "What is the tradeoff between hash sharding and range sharding?",
     "options": [
-      "hash 分布均匀防热点，range 容易局部过热",
+      "hash 把相邻 key 打散、负载更均匀（单个热 key 除外），range 保留区间局部性但容易局部过热",
       "range 分片的负载分布永远比 hash 更均匀",
       "hash 分片天然就能支持高效的范围扫描",
       "hash 分片和 range 分片在效果上没有任何差别"
     ],
     "options_en": [
-      "Hash sharding spreads load evenly and avoids hot spots; range sharding risks locally overheating.",
+      "Hash sharding scatters adjacent keys for more even load (except a single hot key); range sharding keeps locality but risks local hot spots.",
       "Range sharding always distributes load more evenly than hash sharding.",
       "Hash sharding naturally supports efficient range scans.",
       "Hash sharding and range sharding produce no difference in effect."
@@ -2565,8 +2565,8 @@
     "answer": [
       0
     ],
-    "why": "还有目录式分片（查表定位）：灵活但每个请求多一跳依赖和延迟，面试里很少值得提。",
-    "why_en": "Hash-based sharding distributes evenly and avoids hot spots, while range-based suits naturally partitioned access but risks hot ranges.",
+    "why": "hash 分片把相邻 key 打散到各分片，负载更均匀，但丢掉了区间局部性，范围扫描要查多个分片；range 分片保留局部性，但像本题这种按时间递增写入、最近一小时最热的负载，会把读写集中到最新那个分片。注意 hash 只能打散 key 顺序造成的热点，单个热 key 仍会集中在一个分片。",
+    "why_en": "Hash sharding scatters adjacent keys across shards for more even load but loses range locality, so range scans hit many shards. Range sharding keeps locality, but a time-increasing workload like this one, where the last hour is hottest, piles reads and writes onto the newest shard. Hashing only removes hot spots caused by key ordering; a single hot key still lands on one shard.",
     "termDefinitions": [
       {
         "term": "hash 分片",
@@ -2610,13 +2610,13 @@
       "contrast"
     ],
     "optionExplanations": [
-      "对，hash 分布均匀防热点，range 保留区间局部性但容易过热。",
+      "对，hash 把相邻 key 打散让负载更均匀（单个热 key 除外），range 保留区间局部性但容易过热。",
       "时间递增这类写入用 range 反而最容易把最新分片打成热点。",
       "hash 把顺序信息打散了，天然做不了高效的连续范围扫描。",
       "负载均匀度和范围查询能力正是两者区分最大的两个维度。"
     ],
     "optionExplanations_en": [
-      "Right — hashing spreads load evenly and avoids hot spots, while range sharding keeps locality but risks overheating.",
+      "Right: hashing scatters adjacent keys for more even load (a single hot key aside), while range sharding keeps locality but risks overheating.",
       "Increasing-timestamp writes under range sharding are exactly what overheats the newest shard.",
       "Hashing scrambles ordering, so it can't naturally support efficient contiguous range scans.",
       "Load balance and range-query support are precisely where the two diverge the most."
@@ -2686,13 +2686,13 @@
     "q": "分片引入的新问题有哪些？（多选）",
     "q_en": "What new problems does sharding introduce? Select all that apply.",
     "options": [
-      "跨分片事务几乎不可能——需要分布式事务或 saga，复杂且慢",
+      "跨分片事务变得困难：需要 2PC 等分布式事务或 saga，复杂且慢",
       "热点分片：某个分片流量畸高（Taylor Swift 所在的分片被打爆，其他闲着）",
       "resharding 痛苦：加分片要搬移海量数据",
       "分片后不再需要考虑数据一致性问题"
     ],
     "options_en": [
-      "Cross-shard transactions become nearly impossible, needing distributed transactions or sagas, which are complex and slow.",
+      "Cross-shard transactions get hard, needing distributed transactions such as 2PC or sagas, which are complex and slow.",
       "Hot shards: one shard's traffic spikes far above the rest, like the shard holding Taylor Swift's data getting hammered while others sit idle.",
       "Resharding is painful: adding a shard means moving massive amounts of data.",
       "Sharding means you no longer need to think about data consistency."
@@ -2702,8 +2702,8 @@
       1,
       2
     ],
-    "why": "分片换来扩展性，同时带来跨片事务、热点、再分片三大痛；设计分片边界时要主动规避跨片操作。",
-    "why_en": "Sharding makes cross-shard transactions nearly impossible, creates hot spots, and makes resharding a painful mass data migration.",
+    "why": "分片换来扩展性，同时带来三大痛：跨片事务要靠 2PC 或 saga，复杂、慢、影响可用性；热点分片；再分片要大规模搬数据。设计分片边界时要尽量让转账等操作落在同一分片内。",
+    "why_en": "Sharding buys scalability but brings three pains: cross-shard transactions need 2PC or sagas, which are complex, slow, and hurt availability; hot shards; and resharding means mass data migration. Choose shard boundaries so operations like transfers stay within one shard where possible.",
     "termDefinitions": [
       {
         "term": "saga",
@@ -2852,7 +2852,7 @@
       "数据自动均匀迁移，无成本"
     ],
     "options_en": [
-      "N changes, so almost every key maps to a different server — most data must move, a disaster at millions of entries.",
+      "N changes, so almost every key maps to a different server.",
       "Only the newly added server's data needs to migrate.",
       "Nothing happens at all.",
       "Data automatically migrates evenly at no cost."
@@ -2860,8 +2860,8 @@
     "answer": [
       0
     ],
-    "why": "取模分布对 N 极度敏感；这正是一致性哈希要解决的问题。",
-    "why_en": "With modulo hashing, adding or removing a server changes N so almost every key remaps and most data must move.",
+    "why": "取模分布对 N 极度敏感：N 从 10 变 11，约 10/11 的 key 换了归属。对缓存来说，这意味着几乎全部条目瞬间失效，大量请求回源打到数据库；对存储集群来说，意味着大部分数据要迁移。这正是一致性哈希要解决的问题。",
+    "why_en": "Modulo placement is extremely sensitive to N: going from 10 to 11 nodes reassigns about 10/11 of keys. For a cache, that means almost every entry misses at once and traffic floods the database; for a storage cluster, most data must migrate. This is exactly what consistent hashing solves.",
     "termDefinitions": [
       {
         "term": "取模",
@@ -2876,16 +2876,16 @@
       "problem"
     ],
     "optionExplanations": [
-      "对，取模用的是服务器总数 N，N 一变几乎每个 key 的归属都要重算。",
+      "对，取模用的是服务器总数 N，N 一变几乎每个 key 的归属都要重算；缓存里就是大面积 miss、请求回源打库。",
       "取模没有局部性保护，牵动的不只是新机器，几乎所有旧 key 也要重新分配。",
       "增删节点确实会触发大规模重新映射，不是悄无声息就完成的。",
-      "重新映射意味着数据要真的搬家，既不自动也不是零成本。"
+      "重新映射要么让缓存大面积失效，要么让数据真的搬家，既不自动也不是零成本。"
     ],
     "optionExplanations_en": [
-      "Right — modulo uses the total server count N, so changing N forces almost every key to be remapped to a different server.",
+      "Right: modulo uses the total server count N, so changing N remaps almost every key; in a cache that means mass misses and traffic flooding the database.",
       "Modulo has no locality protection; it's not just the new machine, nearly every existing key gets reassigned too.",
       "Adding or removing a node does trigger a large-scale remap; it doesn't pass silently.",
-      "A remap means data actually has to move across machines — that's neither automatic nor free."
+      "A remap either invalidates most of a cache or forces data to actually move; it's neither automatic nor free."
     ]
   },
   {
@@ -2907,14 +2907,14 @@
     "options_en": [
       "Assign servers by a key's first letter.",
       "Maintain one global routing table.",
-      "Both servers and keys hash onto a virtual ring, and a key belongs to the next server found clockwise; adding a node only moves the keys between it and its neighbor.",
+      "Both servers and keys hash onto a virtual ring.",
       "Broadcast every request to all nodes."
     ],
     "answer": [
       2
     ],
-    "why": "环结构把增删节点的影响局部化：移除节点时也只有它的 key 迁给环上的下一台。Memcached/Redis Cluster、Cassandra/DynamoDB、部分 LB 和 CDN 都在用。",
-    "why_en": "Consistent hashing places servers and keys on a ring where each key belongs to the next server clockwise, so only a small range moves when nodes change.",
+    "why": "环结构把增删节点的影响局部化：移除节点时也只有它的 key 迁给环上的下一台。典型使用者：Cassandra（token ring）、Memcached 客户端（ketama）、Amazon Dynamo 论文；Redis Cluster 用的是 16384 个 hash slot，不是哈希环。",
+    "why_en": "Consistent hashing places servers and keys on a ring where each key belongs to the next server clockwise, so only a small range moves when nodes change. Typical users: Cassandra's token ring, Memcached clients such as ketama, and the Amazon Dynamo paper; Redis Cluster uses 16,384 hash slots, not a ring.",
     "termDefinitions": [
       {
         "term": "一致性哈希",
@@ -2966,7 +2966,7 @@
     "optionExplanations_en": [
       "Splitting by first letter only looks even in toy examples; real key distributions skew badly.",
       "Maintaining a global routing table is what directory-based sharding does, adding a lookup hop per request.",
-      "Right — servers and keys both hash onto one ring, each key belongs to the next server clockwise, so add/remove only touches a small local range.",
+      "Right: servers and keys both hash onto one ring and each key belongs to the next server clockwise, so adding or removing a node only touches a small local range, with no central routing table.",
       "Broadcasting can discover nodes or sync metadata, but locating one key's owner doesn't need asking every node."
     ]
   },
@@ -4082,13 +4082,13 @@
     "q": "直接把 gRPC 暴露给浏览器会怎样？",
     "q_en": "What happens if you expose gRPC directly to browsers?",
     "options": [
-      "浏览器不原生支持 gRPC；用 gRPC-Web 还得架代理转译且特性不全",
+      "浏览器不原生支持 gRPC；要改用 gRPC-Web，通常还需代理或服务端中间件转译，且不支持全部特性（如客户端流）",
       "完全没问题，gRPC 本来就是为浏览器直连设计的",
       "能用，只是 JSON 会比 protobuf 慢一点而已",
       "浏览器会自动把 gRPC 降级成普通的 HTTP/1.1 请求，功能和性能都不受影响"
     ],
     "options_en": [
-      "Browsers don't natively support gRPC; gRPC-Web needs a translating proxy and still lacks some features.",
+      "Browsers don't natively support gRPC; you'd use gRPC-Web, which usually needs a proxy or server middleware to translate and lacks some features (such as client streaming).",
       "No problem at all — gRPC was designed for browsers to call directly.",
       "It works; JSON is just a bit slower than protobuf, that's all.",
       "The browser auto-downgrades gRPC to a plain HTTP/1.1 request, with no loss of function or performance."
@@ -4096,8 +4096,8 @@
     "answer": [
       0
     ],
-    "why": "浏览器的 fetch/XHR 发不出 gRPC 的 HTTP/2 二进制帧，直连时前端请求直接失败；gRPC-Web 能补但要额外架一层代理转译、且不支持全部 gRPC 特性。所以对外用 REST、对内才用 gRPC。",
-    "why_en": "A browser's fetch and XHR can't emit gRPC's HTTP/2 binary frames, so a direct call just fails; gRPC-Web patches it but needs an extra translating proxy and drops some gRPC features, which is why you use REST externally and gRPC only internally.",
+    "why": "浏览器的 fetch/XHR 不让页面控制 HTTP/2 帧，也拿不到 gRPC 用来回传状态的 trailers，所以浏览器没法直接说原生 gRPC。gRPC-Web 能补上，但通常要 Envoy 之类的代理或服务端中间件转译，而且不支持客户端流/双向流。所以常见做法是对外 REST、对内 gRPC。",
+    "why_en": "Browser fetch/XHR don't let a page control HTTP/2 framing or read the trailers gRPC uses to return status, so a browser can't speak native gRPC. gRPC-Web fills the gap but usually needs a proxy like Envoy or server middleware to translate, and it doesn't support client or bidirectional streaming. That's why the common pattern is REST externally and gRPC internally.",
     "termDefinitions": [
       {
         "term": "gRPC",
@@ -4215,8 +4215,8 @@
     "sub": "api-design",
     "scenario": "面试要你为一个普通 CRUD 业务勾勒对外 API，没有实时推送或极端性能要求。",
     "scenario_en": "You're asked to sketch a public API for a routine CRUD service with no real-time push or extreme performance needs.",
-    "q": "90% 的面试里对外 API 该默认用什么风格？",
-    "q_en": "For most interviews, what API style should a public API default to?",
+    "q": "这种情况下对外 API 该默认用什么风格？",
+    "q_en": "In this case, what API style should the public API default to?",
     "options": [
       "REST：资源映射到 URL，用 HTTP 方法操作",
       "GraphQL，让客户端自定义每次查询返回哪些字段",
@@ -4303,8 +4303,8 @@
     "answer": [
       0
     ],
-    "why": "新鲜度要求决定失效策略：必须立刻读到新值就在写后立即失效缓存，下次读回源重建，不容忍陈旧窗口。代价：每次写都要多一次缓存删除/更新操作，逻辑更复杂。",
-    "why_en": "Freshness sets the strategy: if the next read must see the new value, invalidate the cache right at write time so the next read rebuilds from source, accepting the extra write-path work.",
+    "why": "新鲜度要求决定失效策略：要求下一次读拿到新值，就在写库后立即删除（或更新）缓存条目，下次读回源重建；TTL 类方案天生带陈旧窗口。注意它把陈旧窗口压到极小，但不是绝对保证：并发读可能把旧值回填、删除也可能失败，严格场景要配合延迟双删、版本号或直接读主库。代价是写路径多一步。",
+    "why_en": "Freshness drives the strategy: if the next read must see the new value, delete (or update) the cache entry right after the DB write so the next read rebuilds from source; TTL-based options have a built-in stale window. This shrinks the stale window to near zero but isn't an absolute guarantee: a concurrent read can repopulate an old value and the delete can fail, so strict paths add delayed double-delete, versioning, or reads from the primary. The cost is an extra step on the write path.",
     "whenOtherWins": "能容忍几秒到几分钟陈旧时，用短 TTL（或配合立即失效）更省事，不必让每次写都改动缓存。",
     "tradeoff": "立即失效的强新鲜 vs 短 TTL 的实现简单但有陈旧窗口",
     "termDefinitions": [
@@ -4326,13 +4326,13 @@
       "consistency"
     ],
     "optionExplanations": [
-      "对：写后立即失效保证下一次读回源，没有陈旧窗口，代价是写路径多一步。",
+      "对：写后立即失效把陈旧窗口压到极小（并发回填、删除失败时仍可能残留旧值，严格场景需配合延迟双删或版本号），代价是写路径多一步。",
       "长 TTL 意味着写完后仍会读到旧值一直到过期，满足不了『立刻新鲜』。",
       "永不失效会长期返回旧资料，改了头像也刷不掉，是最差的方案。",
       "统一几小时 TTL 是拿新鲜度换省事，对这条强新鲜路径不成立。"
     ],
     "optionExplanations_en": [
-      "Right: invalidating on write forces the next read from source with no stale window, at the cost of one extra write step.",
+      "Right: invalidating on write shrinks the stale window to near zero (a concurrent refill or a failed delete can still leave an old value, so strict paths add delayed double-delete or versioning), at the cost of one extra write step.",
       "A long TTL keeps serving the old value after a write until it expires, so it can't be immediately fresh.",
       "Never invalidating serves stale profiles indefinitely; a new avatar never shows up — the worst option.",
       "A uniform multi-hour TTL trades freshness for ease, which doesn't hold on this strong-freshness path."
@@ -4414,8 +4414,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "sharding",
-    "scenario": "多租户 SaaS，每个公司（租户）只查询自己那部分数据，你在选分片方式。",
-    "scenario_en": "A multi-tenant SaaS where each company (tenant) only ever queries its own data, and you're choosing a sharding scheme.",
+    "scenario": "多租户 SaaS，每个公司（租户）只查询自己的数据，数据 key 以 tenant_id 为前缀、同一租户的数据在 key 空间上连续，你在选分片方式。",
+    "scenario_en": "A multi-tenant SaaS where each company (tenant) only queries its own data; keys are prefixed with tenant_id so each tenant's data is contiguous in key space, and you're choosing a sharding scheme.",
     "q": "什么情况下 range（范围）分片是合适的？",
     "q_en": "When is range-based sharding a good fit?",
     "options": [
@@ -4433,8 +4433,8 @@
     "answer": [
       0
     ],
-    "why": "range 分片在访问天然分区时才安全：多租户 SaaS 每个租户只碰自己那段范围，查询命中单一分片、彼此隔离。代价：一旦某个范围变热（如最新时间段），负载就会挤到一个分片上，这时该改用 hash 分片打散。",
-    "why_en": "Range sharding is safe only when access naturally partitions: in multi-tenant SaaS each tenant touches just its own range, so queries hit one isolated shard, at the risk that a hot range piles load on a single shard.",
+    "why": "range 分片在访问天然按连续区间分区时最合适：每个租户的数据是一段连续的 key 范围，查询命中单一分片，整段迁移或扫描也方便。hash(tenant_id) 也能让租户查询落单分片，但会丢掉区间局部性。代价：某个范围变热（大租户、或单调递增的时间序列）时负载会挤到一个分片上，这时要拆分范围或改用 hash。",
+    "why_en": "Range sharding fits best when access naturally partitions into contiguous ranges: each tenant's data is one contiguous key range, so queries hit a single shard and whole-tenant moves or scans are easy. Hashing tenant_id also keeps a tenant on one shard but loses range locality. The risk is a hot range, such as one huge tenant or a monotonic time series, piling load on one shard; then you split the range or switch to hash.",
     "whenOtherWins": "访问不天然分区、或某个范围会成为热点（如单调递增的时间序列）时，改用 hash 分片把负载均匀打散。",
     "tradeoff": "range 分片对天然分区数据的隔离与局部性 vs 范围过热时的热点风险",
     "termDefinitions": [

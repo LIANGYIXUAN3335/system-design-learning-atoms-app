@@ -129,9 +129,9 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "database-vs-blob",
-    "q": "把 100MB 文件直接存进数据库 BLOB 字段会带来哪些问题？（多选）",
+    "q": "把 100MB 文件直接存进数据库 `bytea` 字段会带来哪些问题？（多选）",
     "options": [
-      "拖慢查询性能",
+      "读取视频的请求占用数据库 I/O 和 buffer cache，挤压其他查询",
       "增加备份和复制成本",
       "让结构化数据存储和大对象存储无法独立扩展",
       "自动获得全球 CDN 分发"
@@ -141,15 +141,15 @@
       1,
       2
     ],
-    "why": "数据库擅长结构化查询，不擅长承载大二进制对象。对象存储更适合无限容量、按对象计费和高耐久。",
-    "why_en": "Databases are poor homes for large binary objects because they hurt query, backup, replication, and scaling behavior.",
+    "why": "数据库擅长结构化查询，不擅长承载大二进制对象。Postgres 会把大的 bytea 值用 TOAST 存到行外，不读这一列的查询基本不受影响；但每次读视频都要从数据库搬 100MB，占用 I/O 和 buffer cache；每次写都进 WAL，备份和流复制体积随之暴涨；结构化数据和大文件也无法分开扩容。数据库不会自带 CDN 分发。",
+    "why_en": "Postgres stores large `bytea` values out of line via TOAST, so queries that skip that column are mostly unaffected; but each video read pulls 100MB through the database, using I/O and buffer cache, every write goes through WAL, and backups and streaming replication balloon. Structured data and large files also can't scale separately. A database never comes with CDN distribution.",
     "tags": [
       "database",
       "blob-storage",
       "tradeoffs"
     ],
     "options_en": [
-      "It slows down queries.",
+      "Reading videos consumes database I/O and buffer cache, crowding out other queries.",
       "It increases backup and replication cost.",
       "It stops structured storage and blob storage from scaling independently.",
       "It automatically gets global CDN distribution."
@@ -167,20 +167,20 @@
       }
     ],
     "optionExplanations": [
-      "对。大对象拖慢索引扫描和查询计划。",
+      "对。每次读视频都要通过数据库搬运大值，占用 I/O 和 buffer cache，挤压其他查询。",
       "对。大文件让备份、复制时间和存储成本显著上升。",
       "对。结构化数据和大对象的扩展需求不同，混在一起没法分别扩容。",
       "错。数据库本身不会自动接入全球 CDN 分发。"
     ],
     "optionExplanations_en": [
-      "Correct — large objects slow down index scans and query plans.",
+      "Correct — every video read moves the large value through the database, using I/O and buffer cache and crowding out other queries.",
       "Correct — big files make backup and replication time and cost grow a lot.",
       "Correct — structured data and blobs scale differently, so mixing them blocks independent scaling.",
       "Incorrect — a database does not automatically get global CDN distribution."
     ],
-    "q_en": "What problems come from storing a 100MB file directly in a database BLOB column? (Select all that apply)",
-    "scenario": "Postgres 主库每晚要做全量备份并同步只读副本，现在有人提议把 100MB 视频写进 BLOB 字段。",
-    "scenario_en": "Your Postgres primary does a nightly full backup and streams to read replicas, and someone proposes storing 100MB videos in a BLOB column."
+    "q_en": "What problems come from storing a 100MB file directly in a database `bytea` column? (Select all that apply)",
+    "scenario": "Postgres 主库每晚要做全量备份并同步只读副本，现在有人提议把 100MB 视频直接写进表里的 `bytea` 列。",
+    "scenario_en": "Your Postgres primary does a nightly full backup and streams to read replicas, and someone proposes storing 100MB videos directly in a `bytea` column."
   },
   {
     "id": "sd-patterns-large-blobs-004",
@@ -600,8 +600,8 @@
     "sub": "upload-restrictions",
     "q": "生成 presigned upload URL 时应尽量编码哪些限制？（多选）",
     "options": [
-      "content-length-range，限制文件大小",
-      "content-type，限制文件类型",
+      "文件大小上限（如 S3 POST policy 的 content-length-range，或把 Content-Length 签入签名）",
+      "content-type，限制声明的文件类型",
       "指定 object key / path",
       "允许客户端上传任意大小任意类型到任意路径"
     ],
@@ -610,18 +610,18 @@
       1,
       2
     ],
-    "why": "Presigned URL 谁拿到谁能用，所以签名里必须收窄权限。大小、类型和 key 都应尽量具体。",
-    "why_en": "Presigned upload URLs should be scoped by object key, content type, and size limits.",
+    "why": "Presigned 凭证谁拿到谁能用，所以签名里要尽量收窄权限：大小上限、类型、具体 key，外加较短的有效期。不同存储写法不同（S3 POST policy 用 content-length-range，PUT 可签入 Content-Length / Content-Type；GCS 用 x-goog-content-length-range）。content-type 只约束声明值，真实内容仍要在服务端扫描校验。",
+    "why_en": "Whoever holds a presigned credential can use it, so scope it tightly: size limit, content type, specific key, plus a short expiry. Syntax differs by store (S3 POST policy uses content-length-range, presigned PUT can sign Content-Length / Content-Type; GCS uses x-goog-content-length-range). content-type only constrains the declared value; the real content still needs server-side scanning.",
     "tags": [
       "presigned-url",
       "restrictions",
       "security"
     ],
     "options_en": [
-      "content-length-range to cap file size.",
-      "content-type to restrict the file type.",
-      "A specific object key / path.",
-      "Allow the client to upload any size, any type, to any path."
+      "A size limit (e.g. content-length-range in an S3 POST policy, or signing Content-Length)",
+      "content-type to restrict the declared file type",
+      "A specific object key / path",
+      "Allow the client to upload any size, any type, to any path"
     ],
     "termDefinitions": [
       {
@@ -641,20 +641,20 @@
       }
     ],
     "optionExplanations": [
-      "对。限制大小能防止小图 URL 被拿去传超大文件。",
-      "对。限制类型能防止头像接口收到可执行文件。",
+      "对。限制大小能防止小图凭证被拿去传超大文件。",
+      "对。限制声明的类型能挡住明显不符的上传，但真实内容仍要服务端校验。",
       "对。指定 key 能防止覆盖别人文件或路径注入。",
-      "错。不加任何限制等于把权限完全交给持有 URL 的人。"
+      "错。不加任何限制等于把权限完全交给持有凭证的人。"
     ],
     "optionExplanations_en": [
-      "Correct — a size cap stops a small-image URL from being used for a huge file.",
-      "Correct — a type restriction stops an avatar endpoint from accepting executables.",
+      "Correct — a size cap stops a small-image credential from being used for a huge file.",
+      "Correct — restricting the declared type blocks obviously wrong uploads, though real content still needs server-side checks.",
       "Correct — a fixed key prevents overwriting other files or path injection.",
-      "Incorrect — no restrictions means anyone holding the URL has unlimited power."
+      "Incorrect — no restrictions means anyone holding the credential has unlimited power."
     ],
     "q_en": "Which limits should you encode into a presigned upload URL? (Select all that apply)",
-    "scenario": "你为头像上传签发 presigned URL，但这个 URL 可能被抓包后转发给任意第三方使用。",
-    "scenario_en": "You issue a presigned URL for avatar uploads, but that URL can be sniffed and reused by anyone who gets it."
+    "scenario": "你为头像上传签发 presigned upload URL/POST policy，但这个凭证可能通过日志、转发等途径落到任何第三方手里，谁拿到谁能用。",
+    "scenario_en": "You issue a presigned upload URL / POST policy for avatar uploads, but the credential can leak through logs or forwarding, and anyone holding it can use it."
   },
   {
     "id": "sd-patterns-large-blobs-011",
@@ -2140,7 +2140,7 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "fast-downloads",
-    "scenario": "悉尼用户从 Virginia 对象存储下载很多小图片，每个请求 200ms 延迟，页面加载很慢。",
+    "scenario": "悉尼用户从 Virginia 对象存储下载很多公开的小图片（同一批图会被大量用户反复加载），每个请求约 200ms 延迟，页面加载很慢。",
     "q": "最务实的优化是什么？",
     "options": [
       "CDN 分发 + 合适 cache headers",
@@ -2151,8 +2151,8 @@
     "answer": [
       0
     ],
-    "why": "CDN 解决地理延迟：首个请求回源，后续区域用户从 edge 缓存获取，延迟可降到个位数毫秒级。",
-    "why_en": "A CDN reduces geographic download latency by caching files at edge locations near users.",
+    "why": "CDN 解决地理延迟：某个 PoP 的首个请求（cache miss）回源，之后该区域用户从附近 edge 命中，延迟取决于用户到 PoP 的距离，通常远低于跨太平洋的 ~200ms；合适的 Cache-Control 还能让浏览器本地复用。",
+    "why_en": "A CDN addresses geographic latency: the first request at a PoP (cache miss) goes to origin, and later users in that region hit a nearby edge, with latency set by the distance to the PoP and typically far below the ~200ms trans-Pacific round trip; proper Cache-Control also lets browsers reuse the files locally.",
     "whenOtherWins": "私有低频大文件可直接 signed blob storage download；热门或交互式资源更适合 CDN。",
     "tags": [
       "cdn",
@@ -2179,19 +2179,19 @@
       }
     ],
     "optionExplanations": [
-      "对。首个请求回源，后续区域用户从边缘节点获取，延迟能降到个位数毫秒。",
+      "对。首个请求回源，后续区域用户从附近边缘节点命中，延迟通常远低于跨洲回源。",
       "错。继续回单区域源站，跨洲延迟问题完全没解决。",
       "错。图片存进数据库只会重蹈大对象拖慢查询的问题。",
       "错。禁用缓存会让每次请求都变慢，反而更糟。"
     ],
     "optionExplanations_en": [
-      "Correct — the first request hits origin, later regional users get edge cache with single-digit ms latency.",
+      "Correct — the first request hits origin, later regional users hit a nearby edge, with latency typically far below a cross-continent origin round trip.",
       "Incorrect — still hitting a single origin region leaves the cross-continent latency unsolved.",
       "Incorrect — storing images in the database reintroduces the large-object query problem.",
       "Incorrect — disabling caching makes every request slower, the opposite of the goal."
     ],
     "q_en": "What is the most practical optimization?",
-    "scenario_en": "Sydney users download many small images from Virginia object storage; each request has 200ms latency and the page loads slowly."
+    "scenario_en": "Sydney users download many small public images from Virginia object storage (the same images are loaded repeatedly by many users); each request takes about 200ms and the page loads slowly."
   },
   {
     "id": "sd-patterns-large-blobs-036",

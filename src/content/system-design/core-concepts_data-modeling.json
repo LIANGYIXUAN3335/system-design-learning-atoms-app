@@ -369,21 +369,21 @@
     "q_en": "Which storage guarantee best fits this requirement?",
     "options": [
       "文档数据库的灵活 schema",
-      "SQL 的 ACID 事务",
+      "关系型数据库的 ACID 事务（配合唯一约束 / 条件更新）",
       "KV 缓存的高速读取",
       "宽列库的高写吞吐"
     ],
     "options_en": [
       "A document database's flexible schema.",
-      "SQL's ACID transactions.",
+      "A relational database's ACID transactions (with unique constraints / conditional updates).",
       "A key-value cache's fast reads.",
       "A wide-column store's high write throughput."
     ],
     "answer": [
       1
     ],
-    "why": "「不能重复扣款、不能超卖」正是 ACID 事务的用武之地：强一致作为非功能需求出现时，SQL 就是那个对的工具。",
-    "why_en": "When strong consistency like no double charges or overselling is a requirement, SQL's ACID guarantees are the right tool.",
+    "why": "扣款和扣库存要一起成功或一起失败、并发下不能互相覆盖，正是 ACID 事务（原子性 + 隔离性）的用武之地；再配合唯一约束（如 idempotency key）挡住重试造成的重复扣款，条件更新挡住超卖。",
+    "why_en": "Charging and decrementing stock must succeed or fail together without concurrent overwrites, which is exactly what ACID transactions (atomicity plus isolation) give you; pair them with a unique constraint such as an idempotency key to block duplicate charges from retries, and a conditional update to prevent overselling.",
     "whenOtherWins": "如果数据可接受最终一致（活动 feed、点赞数），就可以分散到为读优化的其他系统。",
     "tradeoff": "强一致 ACID 事务保证 vs 更灵活/更高吞吐但一致性较弱的存储",
     "termDefinitions": [
@@ -665,8 +665,8 @@
     "answer": [
       2
     ],
-    "why": "扩展性短板被夸大了：配合读副本、分片、连接池和缓存，关系型撑起了世界级大厂。扩展靠的是围绕数据库的架构，不只是数据库本身。",
-    "why_en": "The scalability knock on SQL is exaggerated: with read replicas, sharding, pooling, and caching, companies like Facebook and Airbnb run on relational foundations.",
+    "why": "先算账：一天 1000 万次写入平均约 120 次/秒，峰值按 10 倍也只有约 1.2k/秒，单主关系库通常就能承受。真到瓶颈时，读副本分摊读、分片分摊写、连接池和缓存挡热点，关系型同样能扩展。扩展靠的是围绕数据库的架构，不只是数据库本身。",
+    "why_en": "Do the math first: 10 million writes a day averages about 120 writes/s, and even a 10x peak is about 1.2k/s, which a single-primary relational database usually handles. Beyond that, read replicas spread reads, sharding spreads writes, and pooling plus caching absorb hot spots, so relational databases do scale. Scaling comes from the architecture around the database, not the database alone.",
     "termDefinitions": [
       {
         "term": "读副本",
@@ -894,27 +894,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "document-db",
-    "scenario": "MongoDB 存社交数据，主页要一次读出资料加帖子；但用户随时会编辑单条旧帖。",
-    "scenario_en": "Social data lives in MongoDB: the profile page reads bio and posts in one shot, but users edit individual old posts all the time.",
+    "scenario": "MongoDB 存社交数据，主页要一次读出资料加帖子；但用户随时会编辑单条旧帖，活跃用户的帖子会持续增长。",
+    "scenario_en": "Social data lives in MongoDB: the profile page reads bio and posts in one shot, but users edit individual old posts all the time, and active users keep adding posts.",
     "q": "把用户的帖子直接内嵌进用户文档（而不是独立表），代价是什么？",
     "q_en": "What is the cost of embedding a user's posts inside the user document instead of using a separate table?",
     "options": [
       "读主页要多做两次跨集合 join",
       "存储空间反而变少",
       "schema 变严格，字段必须预先声明",
-      "免 join，但改一条帖要重写整篇文档"
+      "免 join，但单帖更新落在整个大文档上，且文档随帖子无限变大"
     ],
     "options_en": [
       "The profile page now needs two extra cross-collection joins.",
       "Storage usage actually shrinks.",
       "The schema gets stricter: every field must be declared up front.",
-      "No joins, but editing one post rewrites the whole document."
+      "No joins, but each post edit hits the whole growing user document, which grows without bound."
     ],
     "answer": [
       3
     ],
-    "why": "内嵌换来免 join 的整读性能，代价是更新粒度变粗：改一条帖子等于改整个用户文档。",
-    "why_en": "Embedding posts inside the user document eliminates joins but means updating one post requires modifying the entire document.",
+    "why": "内嵌换来一次读出、免 join，代价是更新和增长都压在同一个用户文档上：改一条帖子是对大文档的一次写（虽然能用数组定位符只改一个元素，引擎仍要写出新版本文档），帖子越多文档越大，最终逼近 MongoDB 单文档 16MB 上限。所以无界增长的一对多（帖子、评论）通常拆成独立集合。",
+    "why_en": "Embedding gives one-read, join-free pages, but updates and growth all land on one user document: editing a post is a write to a large document (array operators can target one element, yet the engine still writes a new document version), and the document grows with every post toward MongoDB's 16MB limit. Unbounded one-to-many data like posts is usually split into its own collection.",
     "termDefinitions": [
       {
         "term": "内嵌",
@@ -937,13 +937,13 @@
       "内嵌恰恰是为了减少 join，不是增加——这个说法把因果理解反了。",
       "内嵌通常意味着数据被复制进文档里，占用空间往往更多而不是更少。",
       "文档库的卖点就是 schema 灵活，内嵌不会让它变得更严格。",
-      "内嵌把跨集合查找省掉了，整读一次到位，代价是改一条帖子也得重写整个用户文档。"
+      "内嵌把跨集合查找省掉了，整读一次到位，代价是更新都压在同一个大文档上（改一条帖子是对大文档的写），且文档随帖子无限变大，会逼近 16MB 上限。"
     ],
     "optionExplanations_en": [
       "Embedding is meant to remove joins, not add more — this gets the cause and effect backwards.",
       "Embedding usually means the data is duplicated inside the document, so storage tends to grow, not shrink.",
       "A document database's whole appeal is a flexible schema — embedding doesn't make it stricter.",
-      "Embedding cuts out the join so one read grabs everything, but changing a single post means writing back the whole user document."
+      "Embedding cuts out the join so one read grabs everything, but updates all land on one large document (editing a post is a write to it) and the document grows without bound toward the 16MB limit."
     ]
   },
   {
@@ -1009,8 +1009,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "document-db",
-    "scenario": "用户档案系统：有的用户有大量工作经历、项目、证书，有的几乎什么都没有——不同记录的结构差异巨大，且字段还在快速演化。",
-    "scenario_en": "A user profile system has very different record shapes: some users have many jobs, projects, and certificates, while others have almost none, and fields are evolving quickly.",
+    "scenario": "用户档案系统：有的用户有大量工作经历、项目、证书，有的几乎什么都没有——不同记录的结构差异巨大、嵌套很深，且字段还在快速演化；招聘方还要按证书、技能等档案内字段筛选用户。",
+    "scenario_en": "A user profile system has very different, deeply nested record shapes: some users have many jobs, projects, and certificates, while others have almost none, and fields are evolving quickly; recruiters also filter users by fields inside the profile such as certificates and skills.",
     "q": "最匹配的数据库类型是？",
     "q_en": "Which database type best fits this profile store?",
     "options": [
@@ -1028,8 +1028,8 @@
     "answer": [
       2
     ],
-    "why": "记录间结构差异大、schema 频繁变化、深度嵌套否则要一堆 join——三个文档库信号同时命中。",
-    "why_en": "Vastly different record structures and rapidly changing fields are exactly the pattern where a document database beats SQL.",
+    "why": "结构差异大、字段常变、深度嵌套，三个信号指向灵活 schema；再加上要按档案内字段筛选，KV 只能按 key 取整份 value 就不够了，文档库能对内嵌字段建索引查询。固定 schema 的关系型要为每种嵌套拆一堆表再 join。",
+    "why_en": "Very different shapes, fast-changing fields, and deep nesting point to a flexible schema; because recruiters also filter on fields inside the profile, a key-value store that only fetches a whole value by key is not enough, while a document database can index and query nested fields. A fixed-schema relational design would need many tables and joins.",
     "whenOtherWins": "schema 稳定、关系清晰、需要跨实体事务时，回到关系型——这也是面试的绝大多数情况。",
     "tradeoff": "灵活嵌套 schema 应对结构差异大的记录 vs 固定 schema 的一致性与查询能力",
     "termDefinitions": [
@@ -1131,7 +1131,7 @@
     "topic": "system-design",
     "sub": "document-db",
     "scenario": "已定用 MongoDB 存商品目录，详情页要一次返回商品、规格和评价摘要，跨集合查找很贵。",
-    "scenario_en": "You've committed to MongoDB for a product catalog, and the detail page must return product, specs and review summary in one read.",
+    "scenario_en": "You've committed to MongoDB for a product catalog, the detail page must return product, specs and review summary in one read, and cross-collection lookups are expensive.",
     "q": "选了文档数据库后，数据建模方式会怎么变？",
     "q_en": "How does data modeling change once you choose a document database?",
     "options": [
@@ -1399,8 +1399,8 @@
     "answer": [
       2
     ],
-    "why": "KV 没有 join：每种访问模式都要有自己的 key，数据被复制多份。读性能极好，但一处更新要同步多个 key——一致性是硬伤。",
-    "why_en": "Key-value schemas go flat: you duplicate data across keys per access pattern, which is great for reads but terrible for consistency on updates.",
+    "why": "KV 没有 join，每种访问模式都要有自己的 key：按 session_id 是主键；按 user_id 列会话，要么建以 user_id 为分区键的 GSI（DynamoDB 自动复制一份、最终一致），要么应用自己再写一份 user_id → sessions。读很快，代价是数据多份：手工复制要自己保证同步，GSI 则可能短暂读到旧数据。",
+    "why_en": "Key-value stores have no joins, so each access pattern needs its own key: session_id is the primary key, and listing by user_id needs either a GSI keyed on user_id (DynamoDB copies the data and keeps it eventually consistent) or an app-maintained user_id → sessions copy. Reads are fast; the cost is duplicated data—manual copies must be kept in sync by you, and a GSI can briefly return stale results.",
     "termDefinitions": [
       {
         "term": "join",
@@ -1444,8 +1444,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "key-value",
-    "scenario": "要给「凭 token 精确取一条值、从不做范围查询」的会话层点名具体产品。",
-    "scenario_en": "You need to name concrete products for a session layer that fetches one value by token and never runs a range query.",
+    "scenario": "选型时你要把候选产品按常见数据库分类归类（例如 DB-Engines 的主分类），找出归在 key-value store 里的那些。",
+    "scenario_en": "While picking storage you want to sort candidate products by their common database category (e.g., DB-Engines' primary model) and pick out the ones classified as key-value stores.",
     "q": "以下哪些属于 KV 存储？（多选）",
     "q_en": "Which of these are key-value stores? (Choose all that apply.)",
     "options": [
@@ -1465,8 +1465,8 @@
       1,
       3
     ],
-    "why": "Redis、DynamoDB、Memcached 都能按单 key 查值，是 KV 的代表；Cassandra 走的是宽列路线，不是 KV。",
-    "why_en": "Redis, DynamoDB, and Memcached are key-value stores, while Cassandra is a wide-column database.",
+    "why": "Redis、Memcached 是典型 KV；DynamoDB 官方定位是 key-value + document 数据库。Cassandra 按分区键也能精确取值，但主流分类把它归为宽列（wide-column），数据模型是分区内按 clustering key 排序的多行。",
+    "why_en": "Redis and Memcached are classic key-value stores, and AWS positions DynamoDB as a key-value and document database. Cassandra can also fetch by partition key, but it is generally classified as wide-column, with sorted rows per partition by clustering key.",
     "termDefinitions": [
       {
         "term": "Redis",
@@ -1611,18 +1611,18 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "wide-column",
-    "scenario": "Cassandra 存帖子，主查询永远是「取某人最近 20 条」，写入是持续追加的新帖。",
-    "scenario_en": "Posts live in Cassandra: the query is always 'this person's latest 20 posts' and writes are a steady append-only stream.",
+    "scenario": "Cassandra 存帖子，主键是 (user_id) 分区 + created_at 倒序 clustering，主查询永远是「取某人最近 20 条」，写入是持续追加的新帖。",
+    "scenario_en": "Posts live in Cassandra with user_id as the partition key and created_at DESC as the clustering key; the query is always 'this person's latest 20 posts' and writes are a steady append-only stream.",
     "q": "宽列库里「用户发新帖」是怎么落盘的？为什么读写都快？",
     "q_en": "In a wide-column store, how is a new user post written, and why are reads and writes fast?",
     "options": [
-      "同分区键的行物理相邻，顺序写读",
+      "写走 commit log + memtable 顺序追加；同分区按时间排序存放，读取是连续区间",
       "随机写到任意节点，读时要全表扫描",
       "全部帖子写进一个全局大 JSON 对象",
       "先写日志，再靠人工定期手动合并"
     ],
     "options_en": [
-      "Rows sharing a partition key sit physically adjacent, so writes and reads stay sequential.",
+      "Writes are sequential appends to the commit log and memtable; a partition's rows are stored sorted by time, so reads are a contiguous range.",
       "Writes land on random nodes and reads have to scan the whole table.",
       "Everything is written into one giant global JSON object.",
       "Write to a log first, then merge it manually on a schedule."
@@ -1630,8 +1630,8 @@
     "answer": [
       0
     ],
-    "why": "同一分区键的行存在一起：写 = 往该分区追加（快），读 = 顺序扫一个用户的连续帖子区间（也快）。",
-    "why_en": "Each post is a new row keyed by user id and timestamp, so writes append to the partition and reads scan a contiguous range.",
+    "why": "写快靠 LSM：只追加 commit log、写内存 memtable，满了顺序 flush 成 SSTable，没有随机写。读快靠数据布局：同一 user_id 的帖子在同一分区、按 created_at 排好序，取最近 20 条就是读一段连续区间；分区散在多个 SSTable 时由后台 compaction 自动合并（不是人工）。",
+    "why_en": "Writes are fast because of the LSM design: append to the commit log, write to the in-memory memtable, then flush sequentially into SSTables—no random writes. Reads are fast because one user's posts share a partition sorted by created_at, so the latest 20 is a contiguous range; when a partition spans several SSTables, background compaction merges them automatically, not manually.",
     "termDefinitions": [
       {
         "term": "分区键",
@@ -1653,16 +1653,16 @@
       "partition-key"
     ],
     "optionExplanations": [
-      "以 (user_id, timestamp) 为键写入新行，同分区的行物理相邻，写是分区追加、读是连续区间扫描，两边都快。",
+      "写入是追加 commit log + 写 memtable，满了顺序 flush 成 SSTable；同一 user_id 分区内按 created_at 排序，取最近 20 条就是读一段连续区间，读写都快。",
       "随机落盘看似均衡写入，但会毁掉按用户读取的连续性，读写都会变慢。",
       "写进一个全局 JSON 会造成单点瓶颈，也让更新粒度变得极粗。",
-      "日志合并是数据库内部的实现细节，不是应用层需要手动做的建模方式。"
+      "日志加合并确实是 Cassandra 的内部机制，但合并（compaction）是后台自动完成的，不是人工定期手动做，也不是应用要建模的东西。"
     ],
     "optionExplanations_en": [
-      "A new row is keyed by (user_id, timestamp), and rows in the same partition sit physically adjacent, so writes append and reads scan a contiguous range — both fast.",
+      "A write is an append to the commit log plus a memtable write, flushed sequentially into SSTables; rows in one user_id partition are sorted by created_at, so the latest 20 is a contiguous range and both reads and writes are fast.",
       "Random placement looks like it balances writes, but it destroys per-user read locality, slowing down both reads and writes.",
       "Writing into one giant global JSON blob creates a single point of contention and a huge update granularity.",
-      "Log-then-merge is an internal storage engine detail, not something the application models by hand."
+      "Log-then-merge is indeed Cassandra's internal mechanism, but the merge (compaction) runs automatically in the background rather than by hand, and it is not something the application models."
     ]
   },
   {
@@ -1671,8 +1671,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "wide-column",
-    "scenario": "IoT 平台：数十万传感器持续上报遥测数据，几乎全是追加写入，查询以时间范围聚合为主。",
-    "scenario_en": "An IoT platform receives continuous telemetry from hundreds of thousands of sensors; writes are almost all appends, and queries aggregate by time range.",
+    "scenario": "IoT 平台：数十万传感器每秒各报一次，合计每秒数十万条追加写入，要求加节点就能线性扩写、不能有单主瓶颈；查询以「按传感器取某时间段原始数据」为主，聚合用预先算好的按时间桶汇总表。",
+    "scenario_en": "An IoT platform: hundreds of thousands of sensors each report once per second, so hundreds of thousands of append-only writes per second; writes must scale linearly by adding nodes with no single-primary bottleneck. Queries mostly fetch one sensor's raw data over a time range, and aggregates come from precomputed per-time-bucket rollup tables.",
     "q": "最合适的数据库类型是？",
     "q_en": "Which database type best fits this IoT telemetry workload?",
     "options": [
@@ -1690,8 +1690,8 @@
     "answer": [
       2
     ],
-    "why": "巨量写入 + 时序 + 追加为主 + 聚合分析——遥测/事件日志/IoT 三件套全中，宽列库正是为此设计。",
-    "why_en": "Telemetry, event logging, and IoT sensor data with enormous append-only writes and time-range aggregations fit wide-column stores like Cassandra.",
+    "why": "每秒数十万条追加写 + 无主多副本线性扩写 + 按「传感器 + 时间范围」扫，正是宽列库的设计目标：以 sensor_id（加时间桶）为分区键、时间为 clustering key。聚合不靠 Cassandra 现场算，而是写入时或离线预聚合成汇总表。若需要灵活即席聚合，时序库或 MongoDB time series collection 会更合适。",
+    "why_en": "Hundreds of thousands of appends per second, masterless linear write scaling, and scans by sensor plus time range are exactly what wide-column stores target: partition by sensor_id (plus a time bucket) and cluster by time. Aggregates are not computed ad hoc in Cassandra but precomputed into rollup tables. If you need flexible ad-hoc aggregation, a time-series database or a MongoDB time series collection fits better.",
     "whenOtherWins": "数据量普通、需要事务和灵活查询时用 SQL；只按 key 取值用 KV。",
     "tradeoff": "海量追加写吞吐 + 时序聚合 vs 复杂关系查询能力",
     "termDefinitions": [
@@ -1999,11 +1999,11 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "db-choice",
-    "q": "补全各数据库类型的代表技术：",
-    "q_en": "Fill in representative technologies for each database type.",
-    "text": "文档数据库：{{MongoDB}}、Firestore；KV 存储：{{Redis}}、DynamoDB、Memcached；宽列：{{Cassandra}}、HBase；图数据库：{{Neo4j}}、Amazon Neptune。",
-    "why": "记住每类一两个代表名字，面试选型时直接点名，比说「某种 NoSQL」专业得多。",
-    "why_en": "Know the flagship names: MongoDB for documents, Redis for key-value, Cassandra for wide-column, and Neo4j for graphs.",
+    "q": "补全各类数据库最常被点名的旗舰产品：",
+    "q_en": "Fill in the flagship product most often named for each type:",
+    "text": "补全各类数据库最常被点名的旗舰产品：文档数据库：{{MongoDB}}（存 BSON 文档、与公司同名）；KV 存储：{{Redis}}（内存数据结构服务器，支持 list/set/sorted set）；宽列：{{Cassandra}}（源自 Facebook、无主多副本、CQL）；图数据库：{{Neo4j}}（查询语言 Cypher）。",
+    "why": "每类记一个旗舰名字，面试选型时直接点名，比说「某种 NoSQL」专业得多。同类的其他产品（Firestore、DynamoDB、HBase、Neptune 等）也对，括号里的特征用来锁定这一题要的那一个。",
+    "why_en": "Know one flagship per type so you can name it in an interview instead of saying \"some NoSQL\". Other products in each category (Firestore, DynamoDB, HBase, Neptune, etc.) are also valid; the hints in parentheses pin down the one this card expects.",
     "termDefinitions": [
       {
         "term": "MongoDB",
@@ -2163,19 +2163,19 @@
       "数据量只影响备份和归档策略",
       "数据量决定后端该用哪种编程语言",
       "数据量和 schema 的具体设计毫无任何关联",
-      "决定数据住哪：拆系统就要各自 schema"
+      "决定数据住哪：分片/拆系统后，schema 要带分片键并规划跨库引用"
     ],
     "options_en": [
       "Data volume only affects backup and archiving strategy.",
       "Data volume decides which backend language you should use.",
       "Data volume has nothing whatsoever to do with the actual schema design.",
-      "It decides where data lives: split the systems and each needs its own schema."
+      "It decides where data lives: once sharded or split, the schema needs shard keys and planned cross-store references."
     ],
     "answer": [
       3
     ],
-    "why": "百万级用户的数据可能要摊到多个存储系统；一旦拆开，schema 也要跟着拆，跨系统的引用方式必须提前想好。",
-    "why_en": "Data volume determines where data physically lives, and once entities live on separate systems they need distinct schemas with careful cross-references.",
+    "why": "放不下就要分片或把不同实体拆到不同系统。分片时每片 schema 一样，但要选分片键、用全局唯一 ID，跨分片 join 和外键基本不可用；按实体拆系统时各自 schema 不同，跨系统引用只能靠 ID 并由应用保证。这些都得在 schema 设计时提前想好。",
+    "why_en": "When data no longer fits, you shard or split entities across systems. Shards share one schema but need a shard key and globally unique IDs, and cross-shard joins and foreign keys mostly go away; splitting entities across systems gives each its own schema, with cross-system references held as IDs and enforced by the application. Both must be planned during schema design.",
     "termDefinitions": [
       {
         "term": "schema",
@@ -2196,13 +2196,13 @@
       "备份确实会受数据量影响，但拆表、跨系统引用同样会被数据量推着变，范围划窄了。",
       "编程语言的选择不由数据量直接决定，这两者没有这层因果关系。",
       "数据量上来后，单库变分库、字段跟着拆，说它不影响 schema 完全反了。",
-      "数据量决定数据能不能塞进一个系统——规模大了通常要拆到多套存储，schema 也得跟着拆分，并想清楚跨系统怎么互相引用。"
+      "数据量决定数据能不能塞进一个系统——放不下就要分片或拆到多套存储：分片要带分片键、跨片 join/外键基本不可用，拆系统则各有 schema，跨系统引用靠 ID，都得提前规划。"
     ],
     "optionExplanations_en": [
       "Backups are affected by data volume, but so are table splitting and cross-system references — this scopes it too narrowly.",
       "Programming language choice isn't directly determined by data volume — there's no such causal link.",
       "Once data volume grows, a single database often splits and fields get carved up with it, so saying it has no effect gets this backwards.",
-      "Data volume decides whether everything fits in one system — once scale forces a split across multiple stores, the schema splits with it, and cross-system references need a plan."
+      "Data volume decides whether everything fits in one system — if not, you shard or split across stores: sharding needs a shard key and loses cross-shard joins and foreign keys, while splitting systems gives each its own schema with cross-system references held as IDs; all of it needs planning up front."
     ]
   },
   {
@@ -2380,27 +2380,27 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "relationships",
-    "scenario": "review schema 时看到 users 和 user_settings 拆成两张表，每个用户恰好一行设置。",
-    "scenario_en": "Reviewing the schema you find users and user_settings split into two tables, and every user has exactly one settings row.",
+    "scenario": "review schema 时看到 users 和 user_settings 拆成两张表，每个用户恰好一行设置；两表字段都很小、总是一起读写，也没有权限隔离需求。",
+    "scenario_en": "Reviewing the schema you find users and user_settings split into two tables, every user has exactly one settings row, both tables are small, always read and written together, and have no access-isolation needs.",
     "q": "发现 schema 里有一对一（1:1）关系，通常意味着什么？",
     "q_en": "What does a one-to-one relationship in a schema usually suggest?",
     "options": [
       "说明设计已经非常规范",
-      "很少见——往往是该合并两表的信号",
+      "没有拆分理由的 1:1，往往是该合并两表的信号",
       "必须给这个外键补一个索引",
       "需要引入专门的图数据库来表达这种关系"
     ],
     "options_en": [
       "It shows the design is already well normalized.",
-      "Rare in practice, and usually a hint the two tables should merge.",
+      "A 1:1 split with no reason behind it usually hints the two tables should merge.",
       "You must add an index on that foreign key.",
       "You need a dedicated graph database to express this kind of relationship."
     ],
     "answer": [
       1
     ],
-    "why": "1:1 拆表通常没必要（除非有安全隔离/巨大字段等特殊原因），看到它先问：这两张表为什么不合成一张？",
-    "why_en": "A one-to-one relationship is rare in practice and usually a sign the two tables should just be merged.",
+    "why": "1:1 拆表要有理由：安全隔离、超大或很少读的字段、更新频率差异很大等。题面这些理由都不存在，两表又总是一起读写，拆开只多一次 join，所以应考虑合并。",
+    "why_en": "A 1:1 split needs a reason: security isolation, large or rarely read columns, very different update rates, and so on. None apply here and the tables are always used together, so the split only adds a join and merging should be considered.",
     "termDefinitions": [
       {
         "term": "FK",
@@ -2421,13 +2421,13 @@
     ],
     "optionExplanations": [
       "1:1 不会自动等于规范，反而常常是表边界切错了的信号。",
-      "现实中 1:1 很少出现，除非有访问权限隔离或超大字段这类特殊理由，不然多半说明这两张表当初就该合成一张。",
+      "没有拆分理由（安全隔离、超大字段、更新频率差异等）的 1:1，拆开只多一次 join，多半说明这两张表当初就该合成一张。",
       "外键索引能提升查询速度，但不解释为什么当初要把这两张表拆开。",
       "图库解决的是关系遍历问题，跟要不要合并这两张 1:1 的表没关系。"
     ],
     "optionExplanations_en": [
       "A one-to-one relationship doesn't automatically mean good design — it's often a sign the table boundary was drawn wrong.",
-      "Seeing a one-to-one in the wild is unusual — barring a real reason like access isolation or one huge column, ask why these two tables aren't simply merged.",
+      "A 1:1 split with no reason (security isolation, huge columns, different update rates, etc.) only adds a join, which usually means the two tables should have been one.",
       "A foreign key index can speed up lookups, but it doesn't explain why the tables were split apart in the first place.",
       "Graph databases solve traversal problems — that has nothing to do with whether these two one-to-one tables should merge."
     ]
@@ -2510,7 +2510,7 @@
       "外键完全免费，没有任何运行时代价",
       "外键主要拖慢读取，写入不受影响",
       "外键会额外占用大量磁盘空间",
-      "每次写入都要校验，规模大了会弃用"
+      "每次写入都要校验，部分大公司会弃用"
     ],
     "options_en": [
       "Foreign keys are free and carry no runtime cost at all.",
@@ -2521,8 +2521,8 @@
     "answer": [
       3
     ],
-    "why": "FK 校验发生在每次写入上，规模大了就是可观开销；「弃 FK 换写性能、应用层兜底完整性」是真实世界的常见取舍。",
-    "why_en": "Foreign keys cost a validation on every write, so at very large scale some companies drop them and enforce integrity in the application.",
+    "why": "外键在每次插入/更新子表（以及删除父表行）时都要校验，还可能给父行加锁，写压力大时是可观开销；分片或拆库后跨库外键数据库也无法保证。所以部分大公司选择去掉 FK、由应用层兜底完整性——这是取舍，不是规模大就必须这样做。",
+    "why_en": "Foreign keys are checked on every child insert/update (and parent delete) and can take locks on parent rows, which adds up under heavy writes; after sharding, cross-shard foreign keys cannot be enforced by the database at all. So some large companies drop them and enforce integrity in the application—a trade-off, not a rule of scale.",
     "termDefinitions": [
       {
         "term": "FK",
@@ -3067,8 +3067,8 @@
       1,
       2
     ],
-    "why": "三类例外的共性：数据不再变（快照/低频变更）或一致性可让位于速度。支付恰恰相反——强一致数据最不该冗余。",
-    "why_en": "Denormalization suits analytics with infrequent changes, point-in-time event logs, and read-optimized systems like search, but never payments.",
+    "why": "三类例外的共性：数据写入后基本不再变（快照/低频变更），或一致性可以短暂让位于读速度。D 错在理由：冗余本身不会让钱更安全，多一份副本就多一处可能对不上账；账务系统即使做余额快照这类冗余，也必须以不可变分录为唯一真相源、可重算可对账。",
+    "why_en": "The three exceptions share one trait: the data barely changes after it is written (snapshots, rare updates), or consistency can briefly yield to read speed. D is wrong because of its reasoning: duplication does not make money safer — every extra copy is another place that can drift. Even when a ledger keeps redundant balance snapshots, the immutable entries must stay the single source of truth that can be recomputed and reconciled.",
     "termDefinitions": [
       {
         "term": "审计跟踪",
@@ -3092,13 +3092,13 @@
       "报表聚合数据低频变化，反范式带来的重复计算成本很低，换读性能很划算。",
       "事件日志和审计记录本来就是某一时刻的快照，不需要事后同步字段，冗余没有代价。",
       "搜索这类重读系统能接受短暂旧数据，用一点一致性风险换更快的响应是合理取舍。",
-      "支付账务恰恰相反：钱的记录需要强一致和可审计，冗余只会扩大出错和对不上账的风险。"
+      "D 错在理由：冗余不会让钱更安全，多一份副本就多一处可能对不上账；账务系统即使做余额快照，也必须以不可变分录为唯一真相源、可重算可对账。"
     ],
     "optionExplanations_en": [
       "Analytics aggregates change infrequently, so denormalization's recompute cost stays low while read speed improves — a good trade.",
       "Event logs and audit trails are already point-in-time snapshots that never need syncing after the fact, so duplication costs nothing.",
       "A search engine and similar read-heavy systems can live with slightly stale data, so giving up a bit of consistency for snappier responses is a fair trade.",
-      "Payment ledgers are the opposite case: money records need strong consistency and auditability, and duplication only expands the risk of mismatched books."
+      "D is wrong in its reasoning: duplication does not make money safer, since every extra copy can drift; even with balance snapshots, a ledger must keep immutable entries as the single source of truth that can be recomputed and reconciled."
     ]
   },
   {
@@ -3107,27 +3107,27 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "normalization",
-    "scenario": "帖子详情页要一次拿到作者名、点赞数、评论数，但账本级正确性仍要求真相源干净。",
-    "scenario_en": "The post detail page wants author name, like count and comment count in one read, while the source of truth still has to stay clean.",
+    "scenario": "帖子详情页要一次拿到作者名、点赞数、评论数，点赞数要求几秒内可见；同时账本级正确性要求真相源干净、不能出现多处手工同步的冗余列。",
+    "scenario_en": "The post detail page wants author name, like count and comment count in one read, and new likes must show up within seconds; meanwhile the source of truth must stay clean, with no duplicated columns kept in sync by hand.",
     "q": "既想要反范式的读性能，又不想弄脏数据模型，标准做法是？",
     "q_en": "What is the standard way to get denormalized read speed without dirtying the data model?",
     "options": [
-      "把两份 schema 都写进数据库",
-      "真相源保持范式化，缓存层放反范式视图",
-      "放弃读性能",
-      "每天夜里全量同步一次"
+      "直接在真相源 posts 表里加 author_name、like_count 冗余列，由各处业务代码顺手更新",
+      "真相源保持范式化，另维护一份派生的反范式读视图（缓存或物化视图/读模型），由变更事件或刷新机制更新",
+      "放弃读性能，每次请求现场 join + 聚合",
+      "每天夜里全量重建一次读视图"
     ],
     "options_en": [
-      "Store both schemas directly in the database.",
-      "Keep the source of truth normalized, put a denormalized view in the cache layer.",
-      "Give up on read performance.",
-      "Do a full resync once every night."
+      "Add author_name and like_count columns straight into the source-of-truth posts table, updated ad hoc by whatever code touches them.",
+      "Keep the source of truth normalized and maintain a separate derived, denormalized read view (a cache or a materialized view / read model), refreshed from change events.",
+      "Give up on read performance and join plus aggregate on every request.",
+      "Rebuild the read view with a full resync once every night."
     ],
     "answer": [
       1
     ],
-    "why": "两全法：数据库里的真相源永远规范干净，缓存层持有为读优化的反范式视图——预计算 join、聚合、任何让读快的结构。",
-    "why_en": "Keep the source of truth normalized and put a cache in front holding a denormalized representation with precomputed joins and aggregations.",
+    "why": "真相源保持范式化、只存一份事实；为读路径另建派生的反范式视图（放缓存、物化视图或独立读表都行），由变更事件刷新，坏了可以从真相源重建。A 把冗余直接塞进真相源、靠手工同步，正是题面禁止的；C 达不到一次读出的目标；D 让点赞数延迟一天，违反「几秒内可见」。",
+    "why_en": "Keep the source of truth normalized with each fact stored once, and build a separate derived, denormalized view for the read path (a cache, materialized view or dedicated read table all work), refreshed from change events and rebuildable from the source. A puts duplication into the source of truth with manual syncing, which the scenario rules out; C misses the one-read goal; D delays like counts by a day, breaking the within-seconds requirement.",
     "termDefinitions": [
       {
         "term": "真相源",
@@ -3148,16 +3148,16 @@
       "caching"
     ],
     "optionExplanations": [
-      "把规范化和反范式两份 schema 都落进数据库，只会让同步逻辑和真相源边界更难维护。",
-      "数据库本身保持干净规范、当那个唯一权威的数据版本；前面另起一层缓存，专门存一份为读优化过的冗余数据，两边各司其职。",
-      "读性能完全可以靠缓存、预计算或索引拿回来，不必彻底放弃。",
-      "夜间全量同步适合离线报表，实时读路径等不了一整天的延迟。"
+      "把冗余列直接塞进真相源、靠各处代码手工同步，会弄脏数据模型，正是题面要避免的。",
+      "真相源保持范式化、只存一份事实；另起一份派生的反范式读视图（缓存、物化视图或读表），由变更事件刷新，坏了可从真相源重建。",
+      "放弃读性能达不到「一次读出」的目标；读性能完全可以靠派生视图拿回来。",
+      "夜间全量重建会让点赞数延迟一天，违反「几秒内可见」的要求。"
     ],
     "optionExplanations_en": [
-      "Writing both a normalized and a denormalized schema straight into the database just makes sync logic and the source-of-truth boundary harder to maintain.",
-      "The database itself stays the single normalized authority, while a cache layer in front carries a copy shaped for fast reads — you get both without compromising either.",
-      "Read performance can be recovered with caching, precomputation, or indexing — giving up on it entirely isn't necessary.",
-      "A nightly full resync suits offline reporting, but a real-time read path can't wait a full day for fresh data."
+      "Putting redundant columns into the source of truth and syncing them by hand across code paths dirties the data model, which is exactly what the scenario rules out.",
+      "The source of truth stays normalized with each fact stored once, while a separate derived denormalized read view (cache, materialized view or read table) is refreshed from change events and can be rebuilt from the source.",
+      "Giving up read performance misses the one-read goal; a derived view can recover read speed.",
+      "A nightly full rebuild delays like counts by a day, breaking the within-seconds requirement."
     ]
   },
   {
@@ -3933,13 +3933,13 @@
     "q": "作者被删除后，引用完整性靠什么保证？",
     "q_en": "When an author is deleted, what protects referential integrity?",
     "options": [
-      "NoSQL 没有外键，只能靠应用层逻辑维护，否则留下孤儿记录",
+      "MongoDB 不提供外键约束，需要应用层（或自己写的触发/清理任务）维护，否则留下孤儿记录",
       "文档数据库内置外键约束，删除用户时会自动级联删掉他的所有帖子",
       "靠数据库的 CHECK 约束在删除时自动拦截掉悬空引用",
       "靠事务隔离级别自动清理掉悬空的引用"
     ],
     "options_en": [
-      "NoSQL has no foreign keys, so it must be enforced in application logic or you get orphaned records.",
+      "MongoDB has no foreign-key constraints, so integrity must be maintained by the application (or your own trigger/cleanup job), or you get orphaned records.",
       "The document database has built-in foreign keys and cascade-deletes all the user's posts automatically.",
       "A database CHECK constraint automatically blocks the dangling reference at delete time.",
       "The transaction isolation level automatically cleans up the dangling references."
@@ -3948,19 +3948,19 @@
       0
     ],
     "optionExplanations": [
-      "NoSQL 没有外键校验，删掉 user 后引用它的帖子就成了孤儿记录，得靠应用代码在删除时一并处理。",
+      "MongoDB 没有外键校验，删掉 user 后引用它的帖子就成了孤儿记录，得靠应用代码（或自建的清理任务）在删除时一并处理。",
       "文档库通常不提供外键和级联删除，这正是它换取写性能和灵活 schema 的代价。",
       "CHECK 约束只校验单行取值范围，管不了跨集合的引用是否还存在。",
       "隔离级别管的是并发事务的可见性，和引用是否悬空毫无关系。"
     ],
     "optionExplanations_en": [
-      "NoSQL has no FK check, so a deleted user leaves referencing posts as orphans unless app code handles it.",
+      "MongoDB has no FK check, so a deleted user leaves referencing posts as orphans unless app code (or your own cleanup job) handles it.",
       "Document stores usually offer no foreign keys or cascade delete — the price of write speed and flexible schema.",
       "A CHECK constraint only validates a single row's value range, not whether a cross-collection reference still exists.",
       "Isolation levels govern concurrent-transaction visibility, unrelated to whether a reference dangles."
     ],
-    "why": "NoSQL 里没有外键，关系和引用完整性只能由应用层逻辑维护；漏了就会留下孤儿记录（帖子指向已删除的用户）。这是文档库换取灵活 schema 与写性能的代价。",
-    "why_en": "NoSQL has no foreign keys, so relationships and referential integrity must be enforced in application logic; miss it and you get orphaned records — the price of a flexible schema.",
+    "why": "MongoDB 没有声明式外键和级联删除，删除用户时引用它的帖子不会被数据库自动处理；要靠应用逻辑（或自己挂的 change stream / 定时清理任务）一并处理，漏了就会留下孤儿记录。这是文档库换取灵活 schema 的代价。",
+    "why_en": "MongoDB has no declarative foreign keys or cascading deletes, so deleting a user leaves the referencing posts untouched; application logic (or your own change-stream or cleanup job) has to handle them, and missing that leaves orphaned records. That is the price of the flexible document schema.",
     "termDefinitions": [
       {
         "term": "NoSQL",

@@ -770,11 +770,11 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "partitioning",
-    "q": "补全 Kafka 的分区计算公式：",
-    "q_en": "Fill in Kafka's partition calculation formula:",
-    "text": "partition = {{hash}}(key) % {{num_partitions}}；默认哈希函数是 {{murmur2}}。",
-    "why": "分区号 = key 哈希后对分区数取模；选了坏 key 就会出热分区，好 key 应在分区空间上均匀分布。",
-    "why_en": "The partition number is the murmur2 hash of the key modulo the partition count, so a badly chosen key creates hot partitions.",
+    "q": "补全 Java 客户端默认分区器的分区计算公式：",
+    "q_en": "Fill in the default partitioner formula of the Java client:",
+    "text": "partition = toPositive({{murmur2}}(keyBytes)) % {{num_partitions}}。",
+    "why": "Java 客户端对 key 字节做 murmur2 哈希、取正、再对分区数取模。分区是客户端算的，其他客户端（如 librdkafka 默认用 CRC32）可能不同，混用语言的生产者要统一 partitioner。坏 key 会造成热分区。",
+    "why_en": "The Java client hashes key bytes with murmur2, makes the result positive, and takes it modulo the partition count. Partitioning is client-side; other clients (e.g. librdkafka defaults to CRC32) may differ, so mixed-language producers should align partitioners. A bad key causes hot partitions.",
     "tags": [
       "kafka",
       "partitioning",
@@ -791,7 +791,9 @@
         "meaning": "topic 下的一个有序、不可变、只追加写入的消息日志。",
         "meaningEn": "A partition is an ordered, immutable, append-only log that a topic is split into."
       }
-    ]
+    ],
+    "scenario": "用 Apache Kafka 官方 Java 客户端发带 key 的消息，使用默认分区器。",
+    "scenario_en": "Sending keyed messages with the official Apache Kafka Java client and its default partitioner."
   },
   {
     "id": "sd-deep-dives-kafka-015",
@@ -1231,31 +1233,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "delivery-semantics",
-    "scenario": "业务要求每条消息被处理且只被处理一次，你在考虑该怎么配置 Kafka。",
-    "scenario_en": "The business requires each message to be processed once and only once, so you are considering Kafka configuration.",
+    "scenario": "一个流处理服务从 Kafka topic A 读消息、处理后写到 topic B，要求 A 里的每条消息在 B 里的结果恰好出现一次（不涉及外部数据库或 API）。",
+    "scenario_en": "A stream processor reads from Kafka topic A, processes each message, and writes results to topic B; each input must yield its result in B exactly once (no external DB or API side effects).",
     "q": "Kafka 要做到 exactly-once 语义需要什么？",
     "q_en": "What does Kafka need to provide exactly-once semantics?",
     "options": [
-      "什么都不用做，Kafka 默认的投递语义本来就是精确一次",
+      "什么都不用做，Kafka 默认就是端到端精确一次",
       "只要开启消息压缩",
       "把 retention 设为无限长",
-      "额外配置：幂等生产者（idempotent）加事务 API"
+      "开启事务（transactional.id，自带幂等生产者），把 offset 提交放进同一事务，消费端用 read_committed"
     ],
     "answer": [
       3
     ],
-    "why": "恰好一次不是默认行为：需要 idempotent producer 加 transactional API 的组合才拿得到。",
-    "why_en": "Exactly-once semantics are not the default; they require idempotent producers plus the transactional APIs together.",
+    "why": "Kafka 内的 exactly-once 靠事务：幂等生产者去掉重试造成的重复写，事务把「写 B + 提交 A 的 offset」绑成原子操作，下游 read_committed 只读已提交数据。默认配置（3.0 起生产者已默认幂等）仍不是端到端恰好一次。若处理要写外部系统，Kafka 事务管不到，需要外部幂等。",
+    "why_en": "Exactly-once within Kafka relies on transactions: the idempotent producer removes duplicate writes from retries, and a transaction atomically binds \"write to B + commit A's offsets\", with read_committed consumers seeing only committed data. Defaults (producers are idempotent by default since 3.0) are still not end-to-end exactly-once. External side effects are outside Kafka transactions and need their own idempotency.",
     "tags": [
       "kafka",
       "exactly-once",
       "transactions"
     ],
     "options_en": [
-      "Nothing at all, since Kafka's default delivery semantics are already exactly-once.",
+      "Nothing — Kafka is end-to-end exactly-once by default",
       "Just turn on message compression.",
       "Set retention to be unlimited.",
-      "Extra config: an idempotent producer plus the transactional APIs."
+      "Enable transactions (transactional.id, which implies an idempotent producer), commit offsets in the same transaction, and read with read_committed"
     ],
     "termDefinitions": [
       {
@@ -1275,16 +1277,16 @@
       }
     ],
     "optionExplanations": [
-      "默认其实是至少一次，重试会造成重复；精确一次要显式开启才成立。",
+      "默认并不是端到端精确一次：消费侧语义取决于 offset 提交方式，3.0 起生产者虽默认幂等，事务仍需显式开启。",
       "压缩只影响消息大小和网络开销，不改变投递语义强弱。",
       "retention 只决定消息保留多久，跟是否会被重复处理无关。",
-      "需要幂等生产者去重写入、再加事务 API 保证跨分区原子提交，两者缺一不可才拿得到 exactly-once。"
+      "事务（自带幂等生产者）把「写 B + 提交 A 的 offset」绑成原子操作，下游 read_committed 只读已提交数据，才能在 Kafka 内拿到 exactly-once；外部副作用不在此列。"
     ],
     "optionExplanations_en": [
-      "The default is actually at-least-once with possible duplicates; exactly-once must be turned on.",
+      "It isn't end-to-end exactly-once by default: consumer-side semantics depend on how offsets are committed, and although producers are idempotent by default since 3.0, transactions still must be enabled explicitly.",
       "Compression only affects message size and network overhead, not how strong the delivery guarantee is.",
       "Retention only controls how long messages stick around, unrelated to whether they get reprocessed.",
-      "You need an idempotent producer to dedupe writes plus the transactional API for atomic cross-partition commits — both together, not either alone."
+      "A transaction (implying an idempotent producer) atomically binds \"write to B + commit A's offsets\", and read_committed consumers see only committed data, giving exactly-once inside Kafka; external side effects are not covered."
     ]
   },
   {
@@ -3542,31 +3544,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "philosophy",
-    "scenario": "有人问 Kafka 会不会替你校验消息格式，或者要不要提前注册 Avro schema。",
-    "scenario_en": "Someone asks whether Kafka validates message formats or requires an Avro schema to be registered first.",
+    "scenario": "有人问开源 Apache Kafka 的 broker 会不会替你校验消息格式，或者要不要提前注册 Avro schema。",
+    "scenario_en": "Someone asks whether an open-source Apache Kafka broker validates message formats or requires an Avro schema to be registered first.",
     "q": "Kafka 对消息内容本身的态度是？",
     "q_en": "How does Kafka treat message content itself?",
     "options": [
-      "强制要求 JSON schema，Kafka 消息体其实是不透明的字节数组",
-      "自动做字段类型校验，broker 从不解析 value 的具体内容",
-      "强制要求先注册 Avro schema，这只是常见实践之一，并非硬性强制",
-      "完全不关心内容：只负责存储和供给，消息的构造和处理是开发者的事"
+      "broker 强制要求消息符合 JSON schema",
+      "broker 写入时自动校验 value 的字段类型",
+      "生产消息前必须先在 Kafka 里注册 Avro schema",
+      "不关心内容：把 key/value 当字节存储和供给，消息的序列化和解析是开发者的事"
     ],
     "answer": [
       3
     ],
-    "why": "Kafka 暴露简单的生产/消费 API，把数据当不透明字节；schema 管理是你自己（或 Schema Registry 这类外部工具）的责任。",
-    "why_en": "Kafka does not care what the data is; it just stores and serves it, leaving message construction and processing entirely to the developer.",
+    "why": "Apache Kafka broker 把消息 key/value 当不透明字节，只负责持久化和按 offset 供给；序列化格式由 producer/consumer 约定。Avro + Schema Registry 是常见实践，但 Schema Registry 是外部组件，不是 Kafka 的硬性要求；broker 端 schema 校验是 Confluent 商业版特性，不属于 Apache Kafka 本体。",
+    "why_en": "An Apache Kafka broker treats key and value as opaque bytes, persisting them and serving them by offset; producers and consumers agree on serialization. Avro with a Schema Registry is a common practice, but the registry is an external component, not a Kafka requirement; broker-side schema validation is a Confluent commercial feature, not part of Apache Kafka.",
     "tags": [
       "kafka",
       "philosophy",
       "api"
     ],
     "options_en": [
-      "It mandates a JSON schema, when a Kafka message body is really an opaque byte array.",
-      "It automatically validates field types, the broker never parses what is inside the value at all.",
-      "It mandates registering an Avro schema first, just one common practice, never a hard requirement.",
-      "It does not care what the data is at all; it just stores and serves it, leaving construction and processing to the developer."
+      "The broker requires every message to match a JSON schema",
+      "The broker automatically validates the value's field types on write",
+      "You must register an Avro schema in Kafka before producing",
+      "It doesn't care about content: it stores and serves key/value as bytes, leaving serialization and parsing to the developer"
     ],
     "termDefinitions": [
       {
@@ -3605,16 +3607,16 @@
       ]
     },
     "optionExplanations": [
-      "Kafka 消息体是不透明的字节数组，协议层不强制任何 JSON schema。",
-      "broker 不解析 value 的内容，自然也不会做字段级别的类型校验。",
-      "Avro 只是常见的一种序列化选择，不是 Kafka 强制要求先注册的 schema。",
-      "Kafka 只负责存储和供给字节，消息的构造、格式约定全部由生产者和消费者自行商定。"
+      "Apache Kafka 的消息体是不透明的字节，协议层不强制任何 JSON schema。",
+      "broker 不解析 value 的内容，不做字段级类型校验（broker 端 schema 校验是 Confluent 商业版特性，不属于 Apache Kafka 本体）。",
+      "Avro + Schema Registry 是常见实践，但 Registry 是外部组件，不是 Kafka 要求先注册的硬性前提。",
+      "Kafka 只负责存储和供给字节，消息的序列化格式和解析由生产者和消费者自行约定。"
     ],
     "optionExplanations_en": [
-      "A Kafka message body is an opaque byte array; the protocol layer never enforces a JSON schema.",
-      "The broker never parses the value's content, so it certainly doesn't do field-level type checking either.",
-      "Avro is just a common serialization choice, not something Kafka forces you to register up front.",
-      "Kafka only stores and hands back raw bytes; the format and how a message is built is entirely up to producers and consumers to agree on."
+      "An Apache Kafka message body is opaque bytes; the protocol layer never enforces a JSON schema.",
+      "The broker never parses the value, so it does no field-level type checking (broker-side schema validation is a Confluent commercial feature, not part of Apache Kafka).",
+      "Avro with a Schema Registry is common practice, but the registry is an external component, not a hard prerequisite of Kafka.",
+      "Kafka only stores and serves bytes; producers and consumers agree on serialization format and parsing."
     ]
   },
   {

@@ -197,7 +197,7 @@
         [
           "Redis",
           "内存 KV",
-          "单主强",
+          "异步复制，failover 可丢写",
           "集群可扩",
           "热点低延迟"
         ],
@@ -359,16 +359,16 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "data-model",
-    "scenario": "要存用户画像：不同用户拥有的属性列差异很大、大量为空，选型时关心「每行必须有哪些列」。",
+    "scenario": "要存用户画像：表里声明了几十个可选属性列，不同用户实际填写的列差异很大、大量为空，选型时关心「没填的列要不要占位存储」。",
     "q": "在「每行有哪些列」这个维度上，宽列模型的 Cassandra（wide-column store）和关系型数据库的区别是？",
     "options": [
-      "Cassandra 每行列可不同；关系库每行必须有全部列",
+      "Cassandra 每行可以只写已声明列中的一部分，没写的列不占存储；关系库每行都有全部列（缺失为 NULL）",
       "两者都要求每行列完全一致",
       "关系库每行的列可各不相同，Cassandra 反而要求每行列完全一致",
       "Cassandra 每行最多只能有一列"
     ],
     "options_en": [
-      "Cassandra rows can differ; relational rows need every column",
+      "Cassandra rows can write only a subset of the declared columns and unwritten ones take no storage; relational rows have every column (missing ones are NULL)",
       "Both require every row to have identical columns",
       "Relational rows can each differ while Cassandra instead requires every row to have identical columns",
       "Cassandra rows can have at most one column"
@@ -376,8 +376,8 @@
     "answer": [
       0
     ],
-    "why": "宽列模型下，一张表里不同的行可以只写各自需要的列，天然适合稀疏、灵活的 schema；关系库则要求每行覆盖全部列，缺失也要存 NULL。",
-    "why_en": "As a wide-column store Cassandra lets each row specify different columns, unlike a relational database where every row must have an entry for every column even if it is null.",
+    "why": "CQL 表的列需要先声明，但宽列存储按列写入：一行没写的列在磁盘上根本不存在，天然适合稀疏数据；关系库每行在逻辑上都有全部列，缺失值是 NULL。",
+    "why_en": "CQL columns must be declared up front, but the wide-column store writes per column: a column a row never wrote does not exist on disk, which suits sparse data; in a relational table every row logically has every column, with missing values as NULL.",
     "tradeoff": "宽列稀疏灵活 vs 关系表规范固定",
     "termDefinitions": [
       {
@@ -421,15 +421,15 @@
       "contrast"
     ],
     "q_en": "How does Cassandra's wide-column model differ from relational databases in which columns each row has?",
-    "scenario_en": "Storing user profiles where different users have wildly different, mostly empty attribute columns, you care about which columns every row must carry.",
+    "scenario_en": "Storing user profiles: the table declares dozens of optional attribute columns, different users actually fill very different subsets and most are empty, and you care whether unfilled columns still take up storage.",
     "optionExplanations": [
-      "对，宽列模型下每行可以只写自己需要的列，关系表则每行要覆盖全部列、缺的位置也要占位存 NULL。",
+      "对，列要先声明，但宽列存储按列写入，一行没写的列在磁盘上不存在；关系表每行逻辑上覆盖全部列，缺的位置存 NULL。",
       "说反了，恰恰是宽列模型允许行与行的列不同，这才是它跟关系库的核心区别。",
       "这个说法把两者对调了：真正必须每行列一致的是关系表，Cassandra 的行可以各不相同。",
       "宽列模型的「宽」正是指一行能有很多列，限制成最多一列没有意义也不符合事实。"
     ],
     "optionExplanations_en": [
-      "Right — in the wide-column model each row can carry only the columns it needs, while a relational row must have every column, storing null where one is missing.",
+      "Right — columns must be declared first, but the wide-column store writes per column, so a column a row never wrote does not exist on disk; a relational row logically covers every column, storing NULL where one is missing.",
       "That's backwards — it's the wide-column model that lets rows differ, which is exactly the core distinction from a relational table.",
       "This swaps the two: it's the relational table that must keep every row uniform, while Cassandra rows can vary freely.",
       "\"Wide\" in wide-column literally means a row can hold many columns, so capping it at one column misstates the model."
@@ -458,8 +458,8 @@
     "answer": [
       1
     ],
-    "why": "Cassandra 给每个列都记录写入时间戳元数据；副本间列级冲突直接按时间戳取最新的那次写，即 last write wins。",
-    "why_en": "Every column carries a write timestamp, and replica conflicts on a column are resolved by last write wins.",
+    "why": "Cassandra 给每个 cell 记写入时间戳（由客户端或协调者赋值），副本合并时按时间戳 last write wins；时间戳相同再按值比较。代价是时钟偏差可能让「真实更晚」的写输掉。",
+    "why_en": "Each cell carries a write timestamp assigned by the client or coordinator, and replicas reconcile by last write wins on that timestamp, breaking ties by value. The cost is that clock skew can let a truly later write lose.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -483,13 +483,13 @@
       "Cassandra 没有应用层冲突回调这一步，副本间冲突在存储引擎内部自动裁决，不会抛异常给应用。",
       "对，每列写入都带时间戳，出现冲突就按谁的时间戳更新来保留谁的值。",
       "随机选值会让结果不可预测、不同副本可能收敛到不同结果，Cassandra 靠时间戳保证收敛方向一致。",
-      "多版本共存是 CRDT 一类结构的做法，Cassandra 的列级冲突只保留时间戳最新的一份。"
+      "保留多个并发版本（siblings）是 Dynamo / Riak 配 vector clock 的做法；Cassandra 列级冲突只保留时间戳最大的那份。"
     ],
     "optionExplanations_en": [
       "Cassandra has no application-level conflict callback — replica conflicts are resolved automatically inside the storage engine, no exception thrown.",
       "Right — every column carries a write timestamp, so a conflict between replicas is resolved by keeping whichever write has the newest timestamp.",
       "Picking randomly would make the outcome unpredictable and let replicas converge on different values — timestamps guarantee they converge the same way.",
-      "Keeping multiple versions is how CRDT-style structures work; Cassandra's column-level conflicts keep only the newest-timestamped value."
+      "Keeping concurrent versions (siblings) is the Dynamo/Riak approach with vector clocks; Cassandra keeps only the cell with the highest timestamp."
     ]
   },
   {
@@ -882,13 +882,13 @@
     "q": "传统的 hash(value) % num_nodes 分配方案有哪些问题？（多选）",
     "options": [
       "节点数量变化时，大量值会被重新映射到新节点，数据要在节点间大规模搬迁",
-      "哈希不走运时，很多值会集中到同一节点，负载不均",
+      "每个节点只能分到固定的 1/N，无法给性能更强的节点分更多数据；负载偏了也只能整体重新取模",
       "无法计算出哈希值",
       "读请求永远比写请求慢"
     ],
     "options_en": [
       "When the node count changes, most values get remapped to new nodes and a huge amount of data has to move between nodes",
-      "If the hash distribution is unlucky, many values land on the same node, creating uneven load",
+      "Every node gets a fixed 1/N share, so stronger machines can't take more, and fixing skew means re-modding everything",
       "The hash value cannot be computed at all",
       "Read requests are always slower than write requests"
     ],
@@ -896,8 +896,8 @@
       0,
       1
     ],
-    "why": "取模哈希的两大痛点：一是加减节点会让几乎所有 key 换家，引发海量数据迁移；二是分布可能不均导致热点节点。一致性哈希正是为了解决这两点。",
-    "why_en": "Modulo hashing forces massive data remapping whenever the node count changes and can also produce uneven load across nodes.",
+    "why": "取模方案一是加减节点会让几乎所有 key 换家；二是分配粒度固定为 1/N，没法按机器能力加权，也没法局部调整。一致性哈希解决第一点，第二点要靠 vnode（每台机器多个 token，强机器分更多）。",
+    "why_en": "Modulo hashing remaps nearly every key when nodes change, and its fixed 1/N granularity can't weight machines by capacity or rebalance locally. Consistent hashing fixes the first; vnodes (many tokens per machine, more for stronger ones) fix the second.",
     "termDefinitions": [
       {
         "term": "一致性哈希",
@@ -915,13 +915,13 @@
     "scenario_en": "A 20-node cluster places data with hash(key) % 20, and now it has to grow to 25 nodes.",
     "optionExplanations": [
       "对，节点数一变，几乎所有 key 的目标节点都会跟着变，大量数据要连夜搬迁。",
-      "对，哈希函数分布不均时某个节点会集中收到过多 key，其余节点却很闲，负载失衡。",
+      "对，取模分配每个节点份额固定为 1/N，没法给强机器多分数据，偏了也只能整体重新取模。",
       "哈希值本身是可以算出来的，取模方案的问题从不在算不出来，而在节点变动后的重映射代价。",
       "读写谁更慢是缓存命中率、磁盘 IO 模式决定的，跟取模分区这种路由方式没有必然关系。"
     ],
     "optionExplanations_en": [
       "Right — when the node count changes, almost every key's target node shifts too, forcing a massive overnight data migration.",
-      "Right — an uneven hash distribution can pile too many keys onto one node while others sit idle, creating load imbalance.",
+      "Right — modulo gives every node a fixed 1/N share, so stronger machines can't take more, and fixing skew means re-modding everything.",
       "The hash value is perfectly computable — modulo partitioning's real problem was never being uncomputable, it's the remap cost when node count changes.",
       "Which of reads or writes is slower depends on cache hit rate and disk I/O patterns, not on modulo-based routing itself."
     ]
@@ -991,7 +991,7 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "partitioning",
-    "scenario": "线上集群临时加一台机器扩容，运维最担心这次操作会搬走多少数据。",
+    "scenario": "线上集群（每台机器在环上只有一个 token，暂不考虑副本）临时加一台机器扩容，运维最担心这次操作会搬走多少数据。",
     "q": "一致性哈希下，一个节点加入或退出集群时，影响范围是？",
     "options": [
       "所有节点的数据都要重新分布",
@@ -1008,8 +1008,8 @@
     "answer": [
       1
     ],
-    "why": "这正是一致性哈希的价值：节点变化只重新映射相邻一段数据，避免了取模哈希那种全局大搬迁。",
-    "why_en": "With consistent hashing a node joining or leaving only remaps values with its adjacent node on the ring instead of reshuffling everything.",
+    "why": "单 token 一致性哈希下，新节点只接管它在环上前一段区间，数据只从顺时针的相邻节点搬过来，约占 1/N；其余不动。若开 vnode，新节点会从很多节点各拿一小段，总量仍约 1/N。",
+    "why_en": "With single-token consistent hashing, the new node takes over only the range just before it, pulling data from its clockwise neighbor—about 1/N of the total—while the rest stays put. With vnodes it takes small slices from many nodes, still about 1/N overall.",
     "termDefinitions": [
       {
         "term": "一致性哈希",
@@ -1025,7 +1025,7 @@
       "rebalancing"
     ],
     "q_en": "Under consistent hashing, how much data is affected when a node joins or leaves?",
-    "scenario_en": "You're adding one machine to a live cluster, and ops mainly worries about how much data that move shifts.",
+    "scenario_en": "You're adding one machine to a live cluster (each machine owns a single token on the ring; ignore replication for now), and ops mainly worries about how much data that move shifts.",
     "optionExplanations": [
       "全体重分布正是取模哈希的老毛病，一致性哈希的设计目的就是避免这种全局搬迁。",
       "对，节点变化只会重新映射环上跟它相邻的一小段数据，其余节点的数据完全不用动。",
@@ -1045,7 +1045,7 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "partitioning",
-    "scenario": "8 节点集群用一致性哈希后，监控显示其中两台的负载是其他节点的 3 倍。",
+    "scenario": "8 节点集群用一致性哈希（每台机器一个 token）后，监控显示其中两台的负载是其他节点的 3 倍；排查发现是这两台在环上分到的 token 区间明显更大，不是热点 key。",
     "q": "一致性哈希解决了重映射问题，但负载仍可能不均。Cassandra（用一致性哈希做分区的分布式数据库）怎么解决？",
     "options": [
       "vnode 摊匀负载，强机器分更多",
@@ -1062,8 +1062,8 @@
     "answer": [
       0
     ],
-    "why": "把物理节点拆成环上的多个 vnode，等于把它的负载切碎撒在环上，分布更均匀；还能按机器资源差异分配不同数量的 vnode。",
-    "why_en": "Cassandra maps multiple virtual nodes on the ring to each physical node, spreading load evenly and letting bigger machines own more vnodes.",
+    "why": "把每台物理机拆成环上多个 vnode，区间被切碎打散，单台分到的总区间趋于均匀；还能按机器能力给不同数量的 vnode。注意 vnode 只解决区间不均，热点 partition key 要靠改键设计。",
+    "why_en": "Splitting each physical machine into many vnodes chops its ranges into small, scattered pieces so totals even out, and stronger machines can own more vnodes. Vnodes fix uneven ranges only; a hot partition key needs a key redesign.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -1089,7 +1089,7 @@
       "load-balancing"
     ],
     "q_en": "Consistent hashing limits remapping but may still skew load. How does Cassandra smooth it out?",
-    "scenario_en": "After consistent hashing, monitoring shows two nodes in an eight-node cluster carrying three times the load of the rest.",
+    "scenario_en": "After adopting consistent hashing with one token per machine, monitoring shows two nodes in an eight-node cluster carrying three times the load of the rest; investigation shows they own much larger token ranges, not hot keys.",
     "optionExplanations": [
       "对，把每台物理机拆成环上多个 vnode，负载就被打碎摊匀，强机器还能多分几个 vnode。",
       "定期全量重哈希等于把一致性哈希的省搬迁优势又丢回去了，不是 Cassandra 的做法。",
@@ -1490,7 +1490,7 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "consistency",
-    "scenario": "要在 Cassandra 上做账户转账：扣一个账户、加另一个账户，必须同时成功或同时失败。",
+    "scenario": "要在 Cassandra（以 5.0 及之前的正式版为准）上做账户转账：先检查余额，再扣一个账户、加另一个账户，必须同时成功或同时失败，且中途不能被并发转账看到中间状态。",
     "q": "Cassandra（分布式 NoSQL 数据库）对事务 / ACID 的支持程度是？",
     "options": [
       "完整支持关系库那种跨多行多表的 ACID 事务与回滚",
@@ -1507,8 +1507,8 @@
     "answer": [
       2
     ],
-    "why": "Cassandra 不提供关系型数据库那种通用多行多表 ACID 事务。常规写有分区/行级别的原子性和隔离语义，CAS/LWT 可做小范围条件更新，但高吞吐 OLTP 转账类场景仍应选事务数据库。",
-    "why_en": "Cassandra does not provide general multi-row, multi-table ACID transactions; normal writes have partition/row-level atomicity and isolation, while CAS/LWT handles small conditional updates at a performance cost.",
+    "why": "Cassandra 5.0 及之前没有关系库那种通用多行 ACID 事务。单分区写是原子且隔离的；logged batch 能让跨分区写最终全部生效，但不隔离、不能带条件；CAS/LWT 只能对单分区做条件更新。转账这种需要检查+隔离的场景应放在事务数据库。",
+    "why_en": "Through 5.0 Cassandra has no relational-style general multi-row ACID transactions. Single-partition writes are atomic and isolated; logged batches make cross-partition writes eventually all apply but without isolation or conditions; CAS/LWT does conditional updates within one partition. A transfer that needs checks and isolation belongs in a transactional database.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -1548,16 +1548,16 @@
       "transactions"
     ],
     "q_en": "What level of transactions and ACID does Cassandra support?",
-    "scenario_en": "You want to run an account transfer on Cassandra: debit one account and credit another, with both succeeding or neither.",
+    "scenario_en": "You want to run an account transfer on Cassandra (as of 5.0 and earlier releases): check the balance, debit one account and credit another, with both succeeding or neither and no concurrent transfer seeing the intermediate state.",
     "optionExplanations": [
       "跨行跨表的通用事务，Cassandra 并没有做到，说它完整支持多行多表 ACID 并不成立。",
-      "跨分区的分布式事务同样不在 Cassandra 的能力范围内，它的原子性只保证在分区/行这个粒度。",
+      "5.0 及之前，Cassandra 没有跨分区的协调式分布式事务；logged batch 只能让跨分区写最终全部生效，既不隔离也不能带条件检查。",
       "对，Cassandra 没有通用多行事务，但 CAS/LWT（轻量事务）能做小范围的条件更新。",
       "常规写在分区/行级别是有原子性保证的，说完全没有任何原子性保证过于绝对。"
     ],
     "optionExplanations_en": [
       "Cassandra offers no general cross-row, cross-table transactions like a relational database — claiming full multi-row, multi-table ACID support is wrong.",
-      "Distributed transactions across partitions are also outside Cassandra's capability; its atomicity guarantee stops at the partition/row granularity.",
+      "Through 5.0 Cassandra has no coordinated cross-partition distributed transactions; a logged batch only makes cross-partition writes eventually all apply, with no isolation and no conditional checks.",
       "Right — Cassandra has no general multi-row transactions, but CAS/lightweight transactions (LWT) can do small-scale conditional updates.",
       "A normal write does have atomicity at the partition/row level, so saying there's no atomicity guarantee at all overstates it."
     ]
@@ -1569,9 +1569,9 @@
     "topic": "system-design",
     "sub": "consistency",
     "q": "补全 Cassandra 的一致性级别：",
-    "text": "一致性级别规定一次读/写需要多少副本响应才算成功：从 {{ONE}}（一个副本响应即可）到 {{ALL}}（全部副本响应）；{{QUORUM}} 要求多数派即 n/2 + 1 个副本响应。",
-    "why": "读和写可以分别设置一致性级别，这就是 Cassandra 的「可调一致性」：在一致性与可用性之间按需调节。",
-    "why_en": "Consistency levels range from one replica responding to all replicas, with quorum requiring a majority of n over two plus one.",
+    "text": "一致性级别规定一次读/写需要多少副本响应才算成功：从 {{ONE}}（一个副本响应即可）到 {{ALL}}（全部副本响应）；{{QUORUM}} 要求多数派，即 floor(RF/2) + 1 个副本响应（RF 为副本因子；多 DC 时按所有 DC 的副本总数算）。",
+    "why": "读和写可以分别设置一致性级别；QUORUM = floor(RF/2)+1，RF=3 时是 2。多 DC 只想要本机房多数派时用 LOCAL_QUORUM。",
+    "why_en": "Reads and writes set consistency levels independently; QUORUM = floor(RF/2)+1, so 2 when RF=3. Use LOCAL_QUORUM for a majority within the local data center.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -1648,7 +1648,7 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "consistency",
-    "scenario": "副本因子 3 的集群，业务要求「刚写完立刻读，必须读到刚写的那个值」。",
+    "scenario": "副本因子 3 的集群，业务要求「一次写在 QUORUM 级别成功返回后，随后的读必须读到它」（不考虑同一列的并发写）。",
     "q": "读和写都用 QUORUM 级别，能得到什么保证？为什么？",
     "options": [
       "读写都是多数派，集合必重叠",
@@ -1665,8 +1665,8 @@
     "answer": [
       0
     ],
-    "why": "两个多数派集合必有交集：3 副本时写 2 读 2，至少 1 个节点两边都参与，所以读一定能看到最新写。这是 QUORUM 读写组合的核心价值。",
-    "why_en": "Quorum reads plus quorum writes guarantee visibility because any two majorities overlap in at least one node that saw the write.",
+    "why": "RF=3 时 W=2、R=2，W+R>RF，读集合至少包含一个确认过该写的副本，协调者按时间戳取最新值并做 read repair，所以能读到已成功的 QUORUM 写。并发写同一列时仍按时间戳 LWW 裁决。",
+    "why_en": "With RF=3, W=2 and R=2 give W+R>RF, so the read set includes at least one replica that acknowledged the write; the coordinator picks the newest timestamp and read-repairs, so a successful QUORUM write is visible. Concurrent writes to the same column are still resolved by timestamp LWW.",
     "termDefinitions": [
       {
         "term": "QUORUM",
@@ -1680,16 +1680,16 @@
       "read-your-writes"
     ],
     "q_en": "If both reads and writes use QUORUM, what guarantee do you get and why?",
-    "scenario_en": "In a cluster with replication factor three, the business requires that a read immediately after a write always sees that write.",
+    "scenario_en": "In a cluster with replication factor three, the business requires that once a write returns success at QUORUM, a subsequent read must see it (ignoring concurrent writes to the same column).",
     "optionExplanations": [
       "对，读写都取多数派意味着两个集合的节点数之和超过副本总数，必然至少重叠一个节点。",
-      "所有副本时刻完全一致是线性一致的说法，QUORUM 只保证读写集合重叠，不等于全局时刻一致。",
+      "副本之间依然可能暂时不一致（第三个副本可能还没收到）；QUORUM 只保证读写集合重叠，不等于所有副本时刻相同。",
       "QUORUM 要等多个节点确认写入才算成功，比 ONE 慢，谈不上写入速度最大化。",
       "读操作必须联系到达到 QUORUM 数量的在线副本才能返回，不可能零副本在线也能读。"
     ],
     "optionExplanations_en": [
       "Right — reading and writing both at a majority means the two node-count sums exceed the total replica count, so they must overlap in at least one node.",
-      "Perfect consistency across all replicas at every moment describes linearizability — quorum only guarantees overlap between read and write sets, not global instant consistency.",
+      "Replicas can still be temporarily divergent (the third may not have the write yet); QUORUM only guarantees overlapping read and write sets, not identical replicas at every moment.",
       "Quorum has to wait for acknowledgment from multiple nodes before it succeeds, making it slower than ONE, not the fastest option.",
       "A read still has to reach enough online replicas to hit quorum — it can't return with zero replicas online."
     ]
@@ -1700,25 +1700,25 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "consistency",
-    "scenario": "客户端多数请求用 ONE 级别读写，你要说清这套集群到底能给什么一致性承诺。",
-    "q": "不论选择哪种一致性级别，Cassandra（可调一致性的分布式数据库）总体上追求的一致性模型是？",
+    "scenario": "客户端多数请求用 ONE 级别读写，也不使用 LWT（轻量事务）；你要说清这套配置下集群给的一致性承诺。",
+    "q": "在这种以 ONE 为主、不用 LWT 的配置下，Cassandra 提供的基线一致性模型是？",
     "options": [
       "线性一致（linearizability）：读永远能看到全局最新写",
       "串行化快照隔离",
       "因果一致",
-      "最终一致：只要时间足够，所有副本终将拥有最新数据"
+      "最终一致：停止写入并经过足够时间后，所有副本收敛到同一最新值"
     ],
     "options_en": [
       "Linearizability: every read always sees the globally latest write",
       "Serializable snapshot isolation",
       "Causal consistency",
-      "Eventual consistency, where given enough time every replica converges on the latest data"
+      "Eventual consistency: once writes stop and enough time passes, all replicas converge on the same latest value"
     ],
     "answer": [
       3
     ],
-    "why": "Cassandra 天生偏向可用性和可调一致性。常见低一致性读写会呈现最终一致；QUORUM 读写等组合可提高读写可见性，但不等于完整事务或全局线性一致。",
-    "why_en": "Cassandra is availability-leaning with tunable consistency: lower levels behave eventually consistently, while quorum combinations improve read-after-write visibility without becoming full transactions or global linearizability.",
+    "why": "ONE 读写只要求一个副本响应，其余副本靠 hinted handoff、read repair、anti-entropy repair 追上，因此基线是最终一致。这不是「任何级别都如此」：QUORUM 读写（W+R>RF）能给出写后读可见性，LWT 配合 SERIAL 读可对单分区提供线性一致，但都不等于多行事务。",
+    "why_en": "With ONE only a single replica must respond; the others catch up via hinted handoff, read repair, and anti-entropy repair, so the baseline is eventual consistency. That is not true at every level: QUORUM reads and writes (W+R>RF) give read-after-write visibility, and LWT with SERIAL reads gives per-partition linearizability, though neither amounts to multi-row transactions.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -1735,8 +1735,8 @@
       "cassandra",
       "eventual-consistency"
     ],
-    "q_en": "Regardless of the selected consistency level, what consistency model does Cassandra generally target?",
-    "scenario_en": "Most client requests read and write at consistency level ONE, and you have to state what consistency guarantee the cluster actually gives.",
+    "q_en": "Under this ONE-heavy setup without LWT, what baseline consistency model does Cassandra provide?",
+    "scenario_en": "Most client requests read and write at consistency level ONE and no LWT (lightweight transactions) are used; you have to state what consistency guarantee the cluster gives under this setup.",
     "optionExplanations": [
       "线性一致要求所有操作看起来像单一副本瞬时生效，Cassandra 默认不保证这种全局实时顺序。",
       "串行化快照隔离是关系型事务里的隔离级别概念，Cassandra 没有这类多行事务隔离机制。",
@@ -1756,25 +1756,25 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "consistency",
-    "scenario": "系统整体上写多读多、能容忍最终一致，但有一条「用户改完设置立刻要读到新值」的关键路径需要写后读可见。",
+    "scenario": "系统整体上写多读多、能容忍最终一致，但有一条关键路径：用户改完设置后，可能从另一台设备立刻读取，必须读到新值。",
     "q": "在 Cassandra 里最合适的做法是？",
     "options": [
       "放弃 Cassandra，全部换成关系库",
-      "关键路径用 QUORUM，其余用 ONE",
+      "设置的写和读都用 QUORUM，其余路径用 ONE",
       "所有读写都用 ALL",
       "靠客户端本地缓存解决"
     ],
     "options_en": [
       "Abandon Cassandra and switch everything to a relational database",
-      "QUORUM on the critical path, ONE elsewhere",
+      "Use QUORUM for both the settings write and read, ONE elsewhere",
       "Use ALL for every read and write",
       "Rely on client-side local caching to solve it"
     ],
     "answer": [
       1
     ],
-    "why": "一致性级别是按每次读/写单独指定的，这正是「可调一致性」的用法：关键路径付 QUORUM 的延迟代价，其余路径保持高可用低延迟。",
-    "why_en": "Consistency is tunable per operation, so you use quorum reads and writes only on the critical path and cheaper levels elsewhere.",
+    "why": "一致性级别按每次操作单独指定：设置的写和读都用 QUORUM，W+R>RF 保证读到已成功的写；其余路径保持 ONE。本地缓存只覆盖同一设备，换设备就失效。",
+    "why_en": "Consistency is set per operation: QUORUM on both the settings write and read gives W+R>RF so successful writes are visible, while other paths stay at ONE. A local cache only covers the same device and fails across devices.",
     "tradeoff": "关键路径 QUORUM 强一致 vs 其余路径 ONE 高可用低延迟",
     "whenOtherWins": "如果业务需要真正的多行 ACID 事务（如转账），Cassandra 不合适，应选关系型数据库。",
     "termDefinitions": [
@@ -1803,18 +1803,18 @@
       "quorum"
     ],
     "q_en": "What is the best approach in Cassandra?",
-    "scenario_en": "The system is read/write heavy and can tolerate eventual consistency, but one critical path must read a user's updated settings immediately after the write.",
+    "scenario_en": "The system is read/write heavy and can tolerate eventual consistency, but on one critical path a user who updates settings may immediately read them from another device and must see the new value.",
     "optionExplanations": [
       "换关系库能拿到强一致事务，但会丢掉 Cassandra 的水平扩展和高可用能力，属于用力过猛。",
-      "对，一致性级别按每次读写单独设定，紧要路径愿意多等一等换可见性，其余路径留在 ONE 保持低延迟。",
+      "对，设置的写和读都用 QUORUM（W+R>RF）才能保证写后读可见，其余路径留在 ONE 保持低延迟。",
       "所有读写都用 ALL 意味着任何一个副本掉线整个操作都失败，可用性反而比 QUORUM 更差。",
-      "客户端本地缓存解决不了跨节点的写后读可见性问题，缓存数据没更新前用户仍可能读到旧值。"
+      "客户端本地缓存只覆盖同一设备，用户换另一台设备读时缓存无效，仍可能读到旧值。"
     ],
     "optionExplanations_en": [
       "Switching to a relational database buys strong transactions but throws away Cassandra's horizontal scaling and availability — overkill here.",
-      "Right — consistency is set per read/write, so the critical path pays quorum's latency for visibility while everything else stays on ONE for low latency.",
+      "Right — QUORUM on both the settings write and read (W+R>RF) guarantees read-after-write visibility, while other paths stay on ONE for low latency.",
       "Using ALL for every operation means any single replica going offline fails the whole request, which is worse for availability than quorum.",
-      "Client-side local caching doesn't solve cross-node read-after-write visibility — users can still see a stale value before the cache updates."
+      "A client-side cache only covers the same device; once the user reads from another device the cache doesn't help and a stale value can still be returned."
     ]
   },
   {
@@ -1952,13 +1952,13 @@
       "Cassandra 没有中心化的元数据服务，这正是它区别于有主架构的地方，查不存在的服务当然不行。",
       "广播询问所有节点开销太大，跟一致性哈希能直接算出位置的设计初衷相悖。",
       "对，每个节点靠 gossip 知道存活节点、用一致性哈希算出分区位置、再结合复制配置，就能直接推算副本在哪。",
-      "客户端不知道集群拓扑和复制策略这些内部细节，指定副本位置这件事必须由协调者自己算。"
+      "token-aware 驱动确实能算出副本并直接把请求发给副本，但那只是选协调者；协调者不靠请求里的位置字段，而是自己用 token 环和复制配置算出副本。"
     ],
     "optionExplanations_en": [
       "Cassandra has no centralized metadata service — that's precisely what distinguishes it from a master-based architecture, so there's nothing to query.",
       "Broadcasting the question to every node is expensive overhead, defeating the whole point of consistent hashing being able to compute the location directly.",
       "Right — each node combines gossip-learned liveness, consistent hashing of the partition key, and the replication config to derive replica locations itself.",
-      "Clients don't know internal details like cluster topology and replication strategy — locating replicas has to be computed by the coordinator itself."
+      "Token-aware drivers can compute replicas and send the request straight to one, but that only picks the coordinator; the coordinator doesn't rely on a location in the request and computes replicas itself from the token ring and replication config."
     ]
   },
   {
@@ -2151,10 +2151,10 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "storage-model",
-    "q": "补全 LSM 树的三大构件：",
-    "text": "LSM 树三构件：{{Commit Log}}（写前日志 WAL，保证节点崩溃时写不丢）、{{Memtable}}（内存中按主键排序的写缓冲）、{{SSTable}}（Memtable 刷盘生成的不可变有序文件）。",
-    "why": "Commit Log 管持久性，Memtable 管内存里的最新写，SSTable 是磁盘上的不可变排序文件——三者配合实现高写吞吐。",
-    "why_en": "The LSM tree combines a commit log for durability, an in-memory sorted memtable, and immutable sorted SSTables on disk.",
+    "q": "补全 Cassandra 存储引擎（LSM 结构）的三大构件：",
+    "text": "Cassandra 存储引擎三构件：{{Commit Log}}（Cassandra 对写前日志 WAL 的叫法；节点崩溃后可重放恢复尚未刷盘的写，能恢复到哪一条取决于 commitlog_sync 的 fsync 策略）、{{Memtable}}（内存中按主键排序的写缓冲）、{{SSTable}}（Memtable 刷盘生成的不可变有序文件）。",
+    "why": "Commit Log 管持久性（崩溃后重放），Memtable 管内存里的最新写，SSTable 是磁盘上的不可变排序文件——三者配合实现高写吞吐。注意：默认 periodic 模式下 ack 不等 fsync，单节点断电可能丢最近一小段写，靠其他副本兜底；要「ack 即落盘」需配置 batch/group 模式。",
+    "why_en": "The commit log provides durability via replay after a crash, the memtable holds the latest writes in memory, and SSTables are immutable sorted files on disk — together they deliver high write throughput. Note that in the default periodic mode an ack does not wait for fsync, so a single node can lose its last few seconds of writes on power loss and relies on other replicas; \"acked means on disk\" requires batch or group mode.",
     "termDefinitions": [
       {
         "term": "LSM",
@@ -2184,7 +2184,7 @@
       "lsm-tree",
       "sstable"
     ],
-    "q_en": "Fill in the three main LSM-tree components:"
+    "q_en": "Fill in the three main components of Cassandra's LSM-based storage engine:"
   },
   {
     "id": "sd-deep-dives-cassandra-035",
@@ -2246,7 +2246,7 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "storage-model",
-    "scenario": "节点在向客户端确认写入后 1 秒断电重启，这条已确认的写必须还在。",
+    "scenario": "节点配置为 commitlog_sync: batch（commit log fsync 完成后才向客户端确认）。它在确认一条写入后 1 秒断电重启，这条已确认的写在本节点上必须还在。",
     "q": "写入为什么必须先写 Commit Log 再写 Memtable？",
     "options": [
       "因为 Commit Log 的顺序查询速度比 Memtable 更快",
@@ -2263,8 +2263,8 @@
     "answer": [
       1
     ],
-    "why": "Memtable 在内存里，节点一挂就没了；Commit Log 是写前日志，先落盘就能在重启后重放，保证「只存在于 Memtable 的数据」不丢。",
-    "why_en": "The commit log is a write-ahead log so data that only lives in the in-memory memtable can be recovered if the node crashes.",
+    "why": "Memtable 在内存里，节点一断电就没了；Commit Log 是写前日志，在 batch 模式下 fsync 后才 ack，所以重启后重放就能恢复这条已确认的写。若是默认 periodic 模式，ack 不等 fsync，最近几秒的写可能只在其他副本上，需要靠 hint/repair 补回。",
+    "why_en": "The memtable lives in memory and vanishes on power loss; the commit log is a write-ahead log, and in batch mode the ack only happens after fsync, so replaying it on restart recovers the acknowledged write. In the default periodic mode the ack doesn't wait for fsync, so the last few seconds of writes may survive only on other replicas and come back via hints or repair.",
     "termDefinitions": [
       {
         "term": "Memtable",
@@ -2283,7 +2283,7 @@
       "durability"
     ],
     "q_en": "Why must Cassandra write the Commit Log before the Memtable?",
-    "scenario_en": "A node loses power one second after acknowledging a write to the client, and that acknowledged write must survive.",
+    "scenario_en": "A node is configured with commitlog_sync: batch (it acknowledges the client only after the commit log is fsynced). It loses power one second after acknowledging a write, and that acknowledged write must still be on this node after restart.",
     "optionExplanations": [
       "Commit Log 是只追加的日志文件，专为写入设计，查询走的是 Memtable 和 SSTable，不是它。",
       "对，Memtable 只存在内存里、节点一崩就没了，Commit Log 先落盘写前日志，重启后能重放恢复。",
@@ -2498,20 +2498,20 @@
     "options": [
       "把 SSTable 压缩成 zip 文件",
       "把内存里的 Memtable 转写成 Commit Log 日志",
-      "合并 SSTable 并清理已删除行的 tombstone",
+      "合并 SSTable，丢弃被覆盖的旧值，并清除已过 gc_grace_seconds 的 tombstone",
       "把数据重新哈希到其他节点"
     ],
     "options_en": [
       "Compress SSTables into a zip file",
       "Turn the in-memory memtable into a commit log file",
-      "Merge SSTables and purge tombstones for deleted rows",
+      "Merge SSTables, drop superseded values, and purge tombstones older than gc_grace_seconds",
       "Rehash the data onto other nodes"
     ],
     "answer": [
       2
     ],
-    "why": "大量更新/删除会让 SSTable 膨胀，compaction 定期合并它们、丢弃被覆盖的旧值和 tombstone；因为 SSTable 都有序，归并非常高效。",
-    "why_en": "Compaction consolidates SSTables into fewer files reflecting the merged state and removes tombstoned rows, efficiently because the files are sorted.",
+    "why": "大量更新/删除会让 SSTable 膨胀，compaction 定期把多个有序 SSTable 归并成新文件、只保留每个 key 的最新版本；tombstone 要等过了 gc_grace_seconds（默认 10 天，给 repair 留窗口防止已删数据复活）才会在 compaction 中被真正清除。",
+    "why_en": "Heavy updates and deletes bloat SSTables; compaction periodically merge-sorts several SSTables into new files keeping only the newest version of each key. Tombstones are only purged during compaction once they are older than gc_grace_seconds (default 10 days, leaving a repair window so deleted data doesn't resurrect).",
     "termDefinitions": [
       {
         "term": "SSTable",
@@ -2551,13 +2551,13 @@
     "optionExplanations": [
       "compaction 不是通用文件压缩算法，跟打包成 zip 这种格式压缩完全是两回事。",
       "Memtable 刷盘变成的是 SSTable，不是 Commit Log；Commit Log 只在写入前预先落盘。",
-      "对，compaction 会周期性把多个 SSTable 合并成一份、丢弃被覆盖的旧值并清理 tombstone，文件本身有序所以归并很高效。",
+      "对，compaction 周期性把多个 SSTable 归并成一份、丢弃被覆盖的旧值；tombstone 要过了 gc_grace_seconds 才会被清除，所以跑完 compaction 磁盘不一定立刻缩小。",
       "重新哈希到其他节点是节点变动时的数据迁移，跟同一节点内部合并文件的 compaction 是两回事。"
     ],
     "optionExplanations_en": [
       "Compaction isn't a generic file-compression algorithm — it's completely different from zipping files up.",
       "A memtable flush produces an SSTable, not a commit log; the commit log is written ahead of time, before the memtable even exists.",
-      "Right — compaction periodically merges several SSTables, discards superseded old values, and purges tombstones, and it's efficient precisely because the files are already sorted.",
+      "Right — compaction periodically merges several SSTables into one and drops superseded values; tombstones are only purged once older than gc_grace_seconds, so disk usage doesn't necessarily shrink right after a compaction.",
       "Rehashing data onto other nodes is what happens during node membership changes, a different process from compaction merging files within one node."
     ]
   },
@@ -2792,9 +2792,9 @@
     "topic": "system-design",
     "sub": "gossip",
     "q": "补全 gossip 的版本控制机制：",
-    "text": "每个节点维护 {{generation}}（节点启动时的时间戳）和 {{version}}（约每秒自增的逻辑时钟）；全集群这些值构成{{向量时钟}}，让节点能忽略 gossip 收到的过期集群状态。",
-    "why": "generation + version 让节点能比较信息新旧：向量时钟保证旧状态不会覆盖新状态，gossip 才能收敛到正确的集群视图。",
-    "why_en": "Each node tracks a bootstrap generation and a per-second version, forming a vector clock that lets nodes discard stale gossip information.",
+    "text": "每个节点维护 {{generation}}（节点启动时的时间戳）和 {{version}}（心跳每轮自增、状态变化时也递增的版本号）；收到某节点的 gossip 状态时，先比 generation 再比 version，较大者更新，从而忽略过期的集群状态。",
+    "why": "generation + version 让节点能比较关于同一节点的信息新旧：重启会拿到更大的 generation，同一次启动内 version 单调递增，所以旧状态不会覆盖新状态，gossip 才能收敛到正确的集群视图。",
+    "why_en": "Generation plus version lets a node compare how fresh information about the same peer is: a restart yields a larger generation and version only grows within one run, so stale state never overwrites newer state and gossip converges to the correct cluster view.",
     "termDefinitions": [
       {
         "term": "gossip",
@@ -2824,13 +2824,13 @@
     "scenario": "新节点启动时需要一个已知入口加入 gossip，否则集群可能裂成互不知情的两半。",
     "q": "seed（种子）节点在 gossip 里的作用是？",
     "options": [
-      "作为 gossip 热点，防止子集群分裂",
+      "新节点加入时的已知联系点，gossip 也会定期优先联系它们，防止形成互不知情的子集群",
       "它专门负责存储集群里所有数据的主副本节点",
       "单独负责集群里所有查询的协调",
       "只有在测试环境里才会被用到"
     ],
     "options_en": [
-      "A gossip hotspot that prevents sub-clusters",
+      "Known contact points for joining nodes that gossip also periodically prefers, preventing isolated sub-clusters",
       "The node dedicated to storing the primary replica of all cluster data",
       "Solely responsible for coordinating every query in the cluster",
       "Only ever gets used in a testing environment"
@@ -2838,8 +2838,8 @@
     "answer": [
       0
     ],
-    "why": "seed 节点是刻意制造的「必经点」：大家都倾向跟它们 gossip，信息就不会困在局部，杜绝子集群分裂；seed 通过服务发现机制保证可被找到。",
-    "why_en": "Seed nodes act as guaranteed gossip hotspots that bootstrap the cluster and prevent isolated sub-clusters from forming.",
+    "why": "seed 节点是在配置（seed_provider，通常静态写在 cassandra.yaml）里列出的已知地址：新节点启动先联系它们拿到集群成员信息；gossip 每轮也会以一定概率联系 seed，让信息不会困在局部，防止子集群分裂。seed 不存特殊数据、也不是查询协调者。",
+    "why_en": "Seed nodes are known addresses listed in configuration (seed_provider, usually static in cassandra.yaml): a starting node contacts them first to learn cluster membership, and each gossip round also contacts a seed with some probability so information doesn't get stuck locally, preventing isolated sub-clusters. Seeds hold no special data and aren't query coordinators.",
     "termDefinitions": [
       {
         "term": "gossip",
@@ -2855,13 +2855,13 @@
     "q_en": "What role do seed nodes play in gossip?",
     "scenario_en": "A starting node needs a known entry point to join gossip, otherwise the cluster can split into halves unaware of each other.",
     "optionExplanations": [
-      "对，seed 节点被刻意设成大家都愿意去交换信息的热点，防止 gossip 困在局部形成子集群。",
+      "对，seed 是配置里列出的已知联系点：新节点先联系它们加入，gossip 也会定期联系 seed，防止信息困在局部形成子集群。",
       "seed 节点跟数据存储位置没关系，它是 gossip 层面的角色，不负责存主副本。",
       "查询协调可以由任意节点承担，不是 seed 节点的专属职责。",
       "seed 节点在生产集群里同样是必需的引导机制，不只是测试环境的产物。"
     ],
     "optionExplanations_en": [
-      "Right — seed nodes are deliberately made into a hotspot everyone gossips with, preventing information from getting stuck in isolated sub-clusters.",
+      "Right — seeds are the known contact points listed in configuration: a new node contacts them to join, and gossip also contacts seeds periodically so information doesn't get stuck in isolated sub-clusters.",
       "Seed nodes have nothing to do with where data is stored — they're a gossip-layer role, not holders of a primary replica.",
       "Query coordination can be handled by any node, it isn't an exclusive responsibility of seed nodes.",
       "Seed nodes are just as necessary as a bootstrap mechanism in production clusters, not something only used in testing."
@@ -2873,17 +2873,17 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "gossip",
-    "scenario": "排查「新建的表在部分节点上查不到」，你要先确认 gossip 到底传的是什么。",
+    "scenario": "排查「新建的表在部分节点上查不到」，你要先确认 gossip 到底传的是什么（以 Cassandra 4.x 为准）。",
     "q": "节点通过 gossip 追踪/传播哪些信息？（多选）",
     "options": [
       "集群里哪些节点存活/可达",
-      "集群的 schema 信息",
+      "各节点当前的 schema 版本号（不一致时再另行拉取 schema 定义）",
       "每个已知节点的 generation 和 version",
       "每张表的具体行数据内容"
     ],
     "options_en": [
       "Which nodes in the cluster are alive and reachable",
-      "The cluster's schema information",
+      "Each node's current schema version (the schema definition is pulled separately on mismatch)",
       "Each known node's generation and version",
       "The actual row data content of every table"
     ],
@@ -2892,8 +2892,8 @@
       1,
       2
     ],
-    "why": "gossip 传播的是集群元信息（存活状态、schema、版本时钟），不是业务数据本身；数据靠复制机制传输。",
-    "why_en": "Gossip carries cluster metadata like node liveness, schema, and version clocks, not the actual table data.",
+    "why": "gossip 传播的是集群元信息：存活状态、schema 版本号、各节点的 generation/version。节点发现对端 schema 版本和自己不同，会通过单独的 schema 同步消息拉取定义——「部分节点看不到新表」通常就是这一步还没收敛。业务行数据走复制/读写路径，不走 gossip。",
+    "why_en": "Gossip carries cluster metadata: liveness, schema version, and each node's generation/version. When a node sees a peer's schema version differ from its own, it pulls the definition through separate schema-sync messages — a new table missing on some nodes usually means that step hasn't converged. Row data travels over replication and the read/write path, never gossip.",
     "termDefinitions": [
       {
         "term": "gossip",
@@ -2906,16 +2906,16 @@
       "gossip"
     ],
     "q_en": "Which information does gossip track and spread?",
-    "scenario_en": "Debugging why a newly created table is invisible on some nodes, you first need to know what gossip actually carries.",
+    "scenario_en": "Debugging why a newly created table is invisible on some nodes, you first need to know what gossip actually carries (assume Cassandra 4.x).",
     "optionExplanations": [
       "对，节点存活/可达状态正是 gossip 要扩散的核心信息，用来让所有节点感知集群成员变化。",
-      "对，schema 变更也靠 gossip 传播，让各节点的表结构认知保持同步。",
+      "对，gossip 里带的是 schema 版本号，节点发现版本不一致后，再通过单独的 schema 同步消息拉取定义。",
       "对，generation 和 version 帮节点判断收到的状态信息是不是比自己已知的更新，避免用旧数据覆盖新数据。",
       "行数据内容走的是复制/读写路径，不是 gossip 的职责，gossip 只传集群元信息，不传业务数据。"
     ],
     "optionExplanations_en": [
       "Right — node liveness and reachability is exactly the core info gossip spreads, letting every node sense membership changes.",
-      "Right — schema changes propagate through gossip too, keeping every node's view of table structure in sync.",
+      "Right — gossip carries the schema version number, and a node that sees a mismatch pulls the definition through separate schema-sync messages.",
       "Right — generation and version let a node tell whether incoming state is newer than what it already knows, preventing stale data from overwriting fresh data.",
       "Actual row content travels over the replication/read-write path, not gossip — gossip only carries cluster metadata, never business data."
     ]
@@ -3090,25 +3090,25 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "fault-tolerance",
-    "scenario": "副本因子 3 的集群，写入时其中一个副本节点正在重启，客户端不希望这次写失败。",
-    "q": "写入时某个副本节点恰好离线，Cassandra（多副本分布式数据库）用什么机制保证这次写不丢？",
+    "scenario": "副本因子 3、写一致性级别 QUORUM 的集群，写入时其中一个副本节点正在重启，另外两个副本正常确认了这次写。",
+    "q": "这次写对客户端返回成功；Cassandra 用什么机制让那个离线副本在恢复后补上这次写？",
     "options": [
       "这次写入直接返回失败，交给客户端稍后自己重试",
       "把写永久转移给别的节点",
-      "hinted handoff 暂存补发",
+      "hinted handoff：协调者暂存 hint，副本恢复后补发",
       "阻塞等待节点恢复"
     ],
     "options_en": [
       "The write returns a failure outright, leaving the client to retry later itself",
       "The write is permanently moved to a different node",
-      "Hinted handoff buffers and replays it",
+      "Hinted handoff: the coordinator stores a hint and replays it when the replica returns",
       "Block and wait for the node to recover"
     ],
     "answer": [
       2
     ],
-    "why": "hinted handoff 让写照常进行：coordinator 暂存 hint，检测到目标节点回归后重放给它。这是短期兜底，防止离线节点漏掉写。",
-    "why_en": "With hinted handoff the coordinator temporarily stores the write as a hint and delivers it when the offline node comes back.",
+    "why": "QUORUM 只需 3 个副本中的 2 个 ack，所以写照常成功；协调者为离线副本记一条 hint，gossip 报告它恢复后重放给它。hint 是短期、best-effort 的补齐手段（超过 max_hint_window 就不再记录），长期一致性仍要靠 repair。若 CL=ALL，这次写会因副本不足直接失败，hint 不计入 CL。",
+    "why_en": "QUORUM needs only 2 of 3 replicas to ack, so the write succeeds; the coordinator stores a hint for the offline replica and replays it once gossip reports it back. Hints are a short-term, best-effort catch-up mechanism (no longer recorded past max_hint_window), and long-term consistency still relies on repair. With CL=ALL the write would fail outright for lack of replicas, since hints don't count toward the consistency level.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -3133,8 +3133,8 @@
       "hinted-handoff",
       "fault-tolerance"
     ],
-    "q_en": "If a replica is offline during a write, what mechanism keeps the write from being lost?",
-    "scenario_en": "With replication factor three, one replica happens to be restarting during a write, and the client does not want the write to fail.",
+    "q_en": "The write returns success to the client; what mechanism lets the offline replica catch up on this write after it recovers?",
+    "scenario_en": "In a cluster with replication factor 3 and write consistency level QUORUM, one replica is restarting during a write while the other two replicas acknowledge it normally.",
     "optionExplanations": [
       "直接失败让客户端重试会把可用性代价转嫁给应用层，跟 Cassandra 高可用的设计目标相悖。",
       "把写永久转移给别的节点会让数据长期落在错误的副本集合上，跟一致性哈希算出的位置不符。",
@@ -3154,16 +3154,16 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "fault-tolerance",
-    "scenario": "一台节点离线了 3 天才修好，你要判断这期间的写还能不能靠 hint 补回来。",
+    "scenario": "一台节点离线了 3 天才修好（max_hint_window 为默认 3 小时），你要判断这期间的写还能不能靠 hint 补回来。",
     "q": "关于 hint 的生命周期，正确的是？",
     "options": [
-      "hint 短期有效，长期离线靠重建/读修复",
+      "hint 只在有限窗口内记录，超窗口后要靠 repair（anti-entropy）或重建补齐",
       "hint 会被永久保存下来，直到最终成功送达为止",
       "hint 只存在客户端本地",
       "hint 会广播给集群所有节点"
     ],
     "options_en": [
-      "Hints are short-lived; long outages need rebuild or read repair",
+      "Hints are only recorded within a limited window; beyond it, repair (anti-entropy) or a rebuild must backfill",
       "A hint is stored permanently until it's finally delivered successfully",
       "Hints only ever live on the local client",
       "Hints get broadcast to every node in the cluster"
@@ -3171,8 +3171,8 @@
     "answer": [
       0
     ],
-    "why": "hinted handoff 只是短期防丢手段，hint 有较短的存活期；长时间离线的节点要么被重建，要么通过读修复补齐数据。",
-    "why_en": "Hints are short-lived, so a node offline for a long time is fixed by rebuild or read repair rather than hinted handoff.",
+    "why": "hinted handoff 只是短期补齐手段：节点离线超过 max_hint_window 后，协调者不再为它记 hint。3 天远超 3 小时，这期间大部分写没有 hint，节点回来后要跑 nodetool repair（必要时重建）补齐；读修复只修被读到的那部分数据，不能当主手段。",
+    "why_en": "Hinted handoff is only a short-term catch-up mechanism: once a node has been down longer than max_hint_window, coordinators stop recording hints for it. Three days far exceeds three hours, so most missed writes have no hint, and the returning node needs nodetool repair (or a rebuild); read repair only fixes data that happens to be read and isn't the primary remedy.",
     "termDefinitions": [
       {
         "term": "hinted handoff",
@@ -3192,15 +3192,15 @@
       "read-repair"
     ],
     "q_en": "Which statement about the hint lifecycle is correct?",
-    "scenario_en": "A node stayed offline for three days before being fixed, and you must judge whether hints can still backfill the writes it missed.",
+    "scenario_en": "A node stayed offline for three days before being fixed (max_hint_window is the default 3 hours), and you must judge whether hints can still backfill the writes it missed.",
     "optionExplanations": [
-      "对，hint 只是短期防丢措施，存活期有限；长时间离线的节点要靠重建或读修复补齐数据。",
+      "对，hint 只是短期补齐手段，离线超过 max_hint_window 后协调者不再记 hint；长时间离线的节点要靠 nodetool repair 或重建补齐。",
       "hint 永久保留会让协调者无限期攒着待发送的写，节点长期离线时这份存储会失控增长。",
       "hint 存在协调者节点上等待补发，不是存在发起请求的客户端里。",
       "hint 只发给原本该收到这次写的目标副本，不会广播给集群里所有节点。"
     ],
     "optionExplanations_en": [
-      "Right — a hint is only a short-lived anti-data-loss measure with a limited lifespan; a node down for a long stretch gets fixed via rebuild or read repair instead.",
+      "Right — a hint is only a short-term catch-up measure, and coordinators stop recording hints once a node has been down past max_hint_window; a node offline that long is backfilled with nodetool repair or a rebuild.",
       "Keeping hints forever would let the coordinator accumulate an unbounded backlog of pending writes for any node that stays offline a long time.",
       "A hint lives on the coordinator node waiting to be replayed, not on the client that issued the original request.",
       "A hint only goes to the specific replica that was supposed to receive that write, not broadcast to every node in the cluster."
@@ -3219,13 +3219,13 @@
         ],
         [
           "超过 hint 窗口",
-          "已过期丢弃",
-          "读修复逐条补齐"
+          "不再生成 hint",
+          "nodetool repair 补齐"
         ],
         [
           "长期离线/换机",
           "没有 hint 可用",
-          "重建节点全量同步"
+          "重建或 repair"
         ]
       ]
     }
@@ -3604,7 +3604,7 @@
       1
     ],
     "why": "主键必须唯一：两条消息同毫秒到达就会撞 created_at，而 Snowflake ID 是全局唯一且按时间可排序的 ID，两个需求同时满足。",
-    "why_en": "A snowflake ID is a chronologically sortable unique identifier, eliminating the collision risk a millisecond timestamp still has.",
+    "why_en": "The key must be unique: two messages arriving in the same millisecond collide on created_at, while a Snowflake ID combines timestamp, worker id, and sequence number, making it globally unique and chronologically sortable.",
     "tradeoff": "Snowflake ID 唯一有序 vs 时间戳可能碰撞",
     "whenOtherWins": "如果该列不参与主键、只用于展示或范围过滤，普通时间戳列就够了。",
     "termDefinitions": [
@@ -3629,25 +3629,22 @@
     "table": {
       "headers": [
         "方案",
-        "定位",
-        "一致性",
-        "扩展",
-        "何时选"
+        "唯一性",
+        "按时间排序",
+        "碰撞风险"
       ],
       "rows": [
         [
-          "Cassandra",
-          "宽列写库",
-          "可调/最终",
-          "很强",
-          "高写吞吐"
+          "created_at 时间戳",
+          "不保证",
+          "可以",
+          "同毫秒多条消息会撞"
         ],
         [
-          "Snowflake",
-          "云数仓",
-          "批/交互",
-          "托管扩展",
-          "BI/离线"
+          "Snowflake ID（时间戳+机器号+序列号）",
+          "全局唯一",
+          "可以（高位是时间）",
+          "无"
         ]
       ]
     },
@@ -4034,13 +4031,13 @@
       "对，浏览数据能容忍陈旧但必须一直可用，下单这条少数路径再单独走强一致校验，两者需求不同该分开处理。",
       "浏览 UI 恰恰不需要事务，用户只是在看座位状态，真正需要强一致校验的是下单那一步。",
       "Cassandra 没有 JOIN，座位表和价格表要么反规范化进同一张表，要么在应用层拼，不是靠数据库 JOIN。",
-      "浏览场景是读远多于写：座位状态变化相对少，但被大量用户反复浏览查询，不是写多读少。"
+      "座位状态虽然一直在变，但每次变化会被大量浏览用户反复读取，浏览路径是读远多于写，不是写多读少。"
     ],
     "optionExplanations_en": [
       "Right — browsing data can tolerate staleness but must always stay available, while the small checkout path separately re-verifies with strong consistency; the two needs are different and should be split.",
       "The browsing UI is exactly where transactions aren't needed — users are just viewing seat status; it's checkout that needs the strong-consistency check.",
       "Cassandra has no join — the seats and price tables would have to be denormalized into one table or stitched together in the app, not joined by the database.",
-      "Browsing is read-heavy, not write-heavy — seat status changes relatively rarely but gets read repeatedly by huge numbers of browsing users."
+      "Seat status does keep changing, but each change is read over and over by huge numbers of browsing users, so the browse path is read-heavy, not write-heavy."
     ]
   },
   {
@@ -4295,21 +4292,21 @@
     "q": "Cassandra 提供的哪个特性最匹配？",
     "options": [
       "物化视图",
-      "SAI：全局二级索引，稍慢但够灵活",
+      "SAI：节点本地的二级索引，查询要扇出、稍慢但灵活",
       "换用 SimpleStrategy",
       "把该列加进分区键"
     ],
     "options_en": [
       "A materialized view",
-      "SAI: a global secondary index, a bit slower but flexible",
+      "SAI: a node-local secondary index; queries fan out, a bit slower but flexible",
       "Switch to SimpleStrategy",
       "Add that column into the partition key"
     ],
     "answer": [
       1
     ],
-    "why": "SAI 就是为「低频、灵活查询」设计的：不用为每个次要查询建表，接受比分区键查询稍差的性能。高频核心查询仍应围绕分区键建模。",
-    "why_en": "Storage attached indexes give global secondary indexing for infrequent query patterns that do not justify a separate denormalized table.",
+    "why": "SAI（Storage-Attached Index）是挂在每个节点 SSTable 上的本地二级索引，适合「低频、不值得单独建表」的过滤查询；代价是不带分区键时要扇出到所有节点，比按分区键查询慢。高频核心查询仍应围绕分区键建模。",
+    "why_en": "SAI (Storage-Attached Index) is a node-local secondary index attached to each node's SSTables. It fits infrequent filter queries that don't justify a separate denormalized table; the cost is that queries without a partition key fan out to all nodes, so they're slower than partition-key lookups. Hot, core queries should still be modeled around the partition key.",
     "tradeoff": "SAI 灵活但稍慢 vs 反规范化表专快但要多维护一张表",
     "whenOtherWins": "高频核心访问模式仍应建专门的表/反规范化，分区键直查性能最好。",
     "termDefinitions": [
@@ -4355,13 +4352,13 @@
     "scenario_en": "The app has a low-frequency query that filters on a non-partition-key column, and maintaining a separate denormalized table feels too expensive.",
     "optionExplanations": [
       "物化视图适合让 Cassandra 自动维护一张按新维度排列的完整反规范化表，但对低频查询来说维护成本仍然偏高。",
-      "对，SAI 是全局二级索引，专为不值得单独建表的低频灵活查询设计，接受比分区键查询稍慢的代价。",
+      "对，SAI 是挂在各节点上的本地二级索引，专为不值得单独建表的低频灵活查询设计；不带分区键时要扇出到所有节点，所以比分区键查询慢。",
       "SimpleStrategy 是复制策略，管的是副本怎么分布，跟这里要解决的按非分区键过滤查询完全是两回事。",
       "把这一列塞进分区键会改变整张表的路由方式，影响所有原有的高频查询，代价远大于收益。"
     ],
     "optionExplanations_en": [
       "A materialized view would have Cassandra auto-maintain a whole extra denormalized table for the new dimension, which is still too much upkeep for a low-frequency query.",
-      "Right — SAI is a global secondary index built exactly for low-frequency, flexible queries that don't justify their own table, accepting slightly slower performance than a partition-key lookup.",
+      "Right — SAI is a node-local secondary index built for low-frequency, flexible queries that don't justify their own table; without a partition key the query fans out to all nodes, hence slower than a partition-key lookup.",
       "SimpleStrategy is a replication strategy about how replicas are distributed — a completely different concern from filtering on a non-partition-key column.",
       "Folding that column into the partition key would change how the entire table gets routed, disrupting every existing high-frequency query for far more cost than benefit."
     ]
@@ -4440,25 +4437,25 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "advanced-features",
-    "scenario": "商品数据存在 Cassandra 里，产品现在要加一个按标题关键词模糊搜索的功能。",
+    "scenario": "商品数据存在 Cassandra 里（主存储不变），产品要加按标题关键词搜索：需要分词、按相关性排序、容忍拼写错误。",
     "q": "想在 Cassandra（宽列 NoSQL 数据库）的数据上做全文搜索，正确的路径是？",
     "options": [
-      "插件接入搜索引擎（如 ES/Solr）",
-      "Cassandra 原生支持全文搜索语法",
-      "用 LIKE 语句模糊匹配",
-      "把数据全量导入内存再搜索"
+      "把数据通过 CDC / 双写同步到 Elasticsearch / OpenSearch 等搜索引擎，由它负责检索",
+      "直接用 Cassandra 主键查询完成相关性排序",
+      "用 SASI/SAI 的 LIKE 子串匹配，就能得到相关性排序和拼写容错",
+      "每次请求把全量商品加载进应用内存再遍历"
     ],
     "options_en": [
-      "Plug in a search engine like Elasticsearch or Solr",
-      "Cassandra natively supports full-text search syntax",
-      "Use a LIKE clause for fuzzy matching",
-      "Load all the data into memory and search there"
+      "Sync the data via CDC / dual writes to a search engine such as Elasticsearch / OpenSearch and let it serve search",
+      "Use Cassandra primary-key lookups to do relevance ranking directly",
+      "Use SASI/SAI LIKE substring matching to get relevance ranking and typo tolerance",
+      "Load all products into application memory on every request and scan them"
     ],
     "answer": [
       0
     ],
-    "why": "Cassandra 本身不做全文检索，但可以通过插件（如 Stratio Lucene Index）接入 ElasticSearch / Solr 这类搜索引擎来补齐搜索能力。",
-    "why_en": "Cassandra integrates with distributed search engines like Elasticsearch or Solr through plugins such as the Stratio Lucene index.",
+    "why": "Cassandra 的索引（SASI/SAI）最多做子串或分词匹配，不提供相关性打分和拼写容错。常见做法是保留 Cassandra 作主存储，通过 CDC 或双写把数据同步到 Elasticsearch / OpenSearch，由搜索引擎的倒排索引负责检索，再按 id 回 Cassandra 取详情。",
+    "why_en": "Cassandra's indexes (SASI/SAI) at most offer substring or tokenized matching, with no relevance scoring or typo tolerance. The common approach keeps Cassandra as the primary store and syncs data to Elasticsearch / OpenSearch via CDC or dual writes; the search engine's inverted index serves queries, and details are fetched back from Cassandra by id.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -4482,7 +4479,7 @@
       "elasticsearch"
     ],
     "q_en": "What is the right path for full-text search over Cassandra data?",
-    "scenario_en": "Product data lives in Cassandra, and the team now needs fuzzy keyword search over item titles.",
+    "scenario_en": "Product data lives in Cassandra (it stays the primary store). The product now needs keyword search over titles with tokenization, relevance ranking, and typo tolerance.",
     "table": {
       "headers": [
         "方案",
@@ -4516,16 +4513,16 @@
       ]
     },
     "optionExplanations": [
-      "对，全文检索不是 Cassandra 自带能力，得挂一个第三方搜索插件才能对接 Elasticsearch/Solr。",
-      "Cassandra 的 CQL 里没有原生的全文检索语法，这方面能力必须靠外部搜索引擎补齐。",
-      "LIKE 模糊匹配做的是简单的字符串前缀/包含匹配，不是相关性排序、分词这些全文搜索的核心能力。",
-      "把全量数据导入内存既不现实（数据量可能远超单机内存），也没有解决搜索本身要的索引结构问题。"
+      "对，Cassandra 保留作主存储，通过 CDC 或双写把数据同步到搜索引擎，由它的倒排索引提供分词、相关性排序和拼写容错。",
+      "主键查询只能按键精确定位，做不了相关性排序，更谈不上对标题做关键词检索。",
+      "SASI/SAI 的 LIKE 最多做子串或分词匹配，不提供相关性打分和拼写容错，满足不了这里的需求。",
+      "把全量商品加载进内存既不现实（数据量可能远超单机内存），也没有解决检索所需的索引结构问题。"
     ],
     "optionExplanations_en": [
-      "Right — Cassandra itself has no full-text search; you plug in a search engine like Elasticsearch or Solr through something like the Stratio Lucene index.",
-      "Cassandra's CQL has no native full-text search syntax, so that capability has to be supplied by an external search engine.",
-      "A LIKE clause only does simple prefix or substring matching, not the relevance ranking and tokenization that full-text search actually needs.",
-      "Loading all the data into memory isn't realistic (it can far exceed a single machine's RAM) and doesn't solve the indexing structure search itself needs."
+      "Right — keep Cassandra as the primary store and sync data to a search engine via CDC or dual writes; its inverted index provides tokenization, relevance ranking, and typo tolerance.",
+      "A primary-key lookup only locates rows by exact key; it can't rank by relevance, let alone do keyword search over titles.",
+      "SASI/SAI LIKE matching goes at most to substring or tokenized matches, with no relevance scoring or typo tolerance, so it can't meet this requirement.",
+      "Loading all products into memory isn't realistic (the data can far exceed a single machine's RAM) and doesn't provide the index structure retrieval needs."
     ]
   },
   {
@@ -4539,14 +4536,14 @@
     "options": [
       "优先可用性而非强一致，且扩展性需求高",
       "写入吞吐极高（LSM 写优化存储正中下怀）",
-      "schema 灵活或列多且稀疏（宽列设计）",
+      "列多且稀疏、经常加新列（宽列模型下空列不占空间、加列成本低）",
       "应用有若干清晰的访问模式可以围绕它们建 schema",
       "需要多表 JOIN 和 ad-hoc 聚合的复杂查询"
     ],
     "options_en": [
       "Availability matters more than strong consistency, and scalability needs are high",
       "Write throughput needs to be extremely high, playing right into LSM's write-optimized storage",
-      "The schema needs to be flexible or has many sparse columns, fitting the wide-column design",
+      "Many sparse columns with new columns added often (in the wide-column model empty columns cost nothing and adding columns is cheap)",
       "The app has a handful of clear access patterns the schema can be built around",
       "It needs complex queries with multi-table joins and ad hoc aggregation"
     ],
@@ -4556,8 +4553,8 @@
       2,
       3
     ],
-    "why": "前四条正是 Cassandra 的甜蜜区：高可用、高写吞吐、宽列灵活、查询驱动建模。复杂查询（JOIN/聚合）恰恰是它的短板。",
-    "why_en": "Cassandra shines for availability-leaning, highly scalable, write-heavy systems with flexible schemas and clear access patterns, but not complex queries.",
+    "why": "前四条是 Cassandra 的甜蜜区：高可用、高写吞吐、宽列稀疏、查询驱动建模。注意 CQL 表仍有显式 schema，只是稀疏列不占空间、加列便宜。JOIN / ad-hoc 聚合是它的短板。",
+    "why_en": "The first four are Cassandra's sweet spot: high availability, high write throughput, sparse wide columns, and query-driven modeling. CQL tables still have an explicit schema; sparse columns just cost nothing and adding columns is cheap. Joins and ad hoc aggregation are its weak spot.",
     "tradeoff": "可用性+高写吞吐 vs 复杂查询（JOIN/聚合）能力",
     "termDefinitions": [
       {
@@ -4605,14 +4602,14 @@
     "optionExplanations": [
       "对，可用性优先、扩展性需求高正是 Cassandra 的设计目标，去中心化架构天然为此而生。",
       "对，极高写吞吐正中 LSM 写优化存储的下怀，随机写变成了顺序追加。",
-      "对，schema 灵活、列多且稀疏正好用上宽列模型，行与行可以只写各自需要的列。",
+      "对，列多且稀疏、经常加列正好用上宽列模型：行与行只写各自需要的列，空列不占空间，加列成本低（但 CQL 表仍有显式 schema）。",
       "对，应用有清晰的访问模式才谈得上按查询建表，这是 Cassandra 建模方法论的前提。",
       "复杂查询恰恰是 Cassandra 的短板：没有 JOIN、没有通用跨表聚合，这类需求应该交给关系型或 OLAP 数据库。"
     ],
     "optionExplanations_en": [
       "Right — availability over strong consistency plus high scalability needs is exactly what Cassandra's decentralized architecture was built for.",
       "Right — extremely high write throughput plays right into LSM's write-optimized storage, turning random writes into sequential appends.",
-      "Right — a flexible or sparse-column schema is exactly what the wide-column model handles, letting each row write only the columns it needs.",
+      "Right — many sparse columns with frequent additions suit the wide-column model: each row writes only the columns it needs, empty columns cost nothing, and adding a column is cheap (though a CQL table still has an explicit schema).",
       "Right — having clear access patterns is the prerequisite for building tables per query, which is Cassandra's whole modeling methodology.",
       "Complex queries are exactly Cassandra's weak spot — no joins, no general cross-table aggregation; that workload belongs on a relational or OLAP database instead."
     ]
@@ -4628,20 +4625,20 @@
     "options": [
       "合适，加大副本因子即可",
       "合适，用 QUORUM 就等于 ACID",
-      "不合适：偏可用性、无事务、无 JOIN/聚合",
+      "不合适：偏可用性、无通用多行 ACID 事务、无 JOIN/聚合",
       "合适，用物化视图代替事务"
     ],
     "options_en": [
       "Yes, just increase the replication factor",
       "Yes, using QUORUM is equivalent to ACID",
-      "No: availability-biased, no transactions, no joins or aggregation",
+      "No: availability-biased, no general multi-row ACID transactions, no joins or aggregation",
       "Yes, use materialized views instead of transactions"
     ],
     "answer": [
       2
     ],
-    "why": "强一致 + 事务 + 复杂查询三条全踩在 Cassandra 的短板上；QUORUM 只解决读写可见性，不提供事务语义。",
-    "why_en": "Cassandra is wrong for strict-consistency transactional systems with complex queries, since it lacks ACID transactions and joins.",
+    "why": "强一致多行事务 + 复杂关联查询全踩在 Cassandra 短板上：它只有单分区 LWT（CAS），没有通用多行 ACID 事务，也没有 JOIN；QUORUM 只解决读写可见性，不提供事务语义。",
+    "why_en": "Strict multi-row transactions plus complex joins hit Cassandra's weak spots: it only offers single-partition LWT (CAS), no general multi-row ACID transactions, and no joins; QUORUM only addresses read/write visibility, not transactional semantics.",
     "tradeoff": "强一致事务型负载 vs Cassandra 可用性优先型负载",
     "whenOtherWins": "同一家银行的高写吞吐日志/审计事件流、通知 feed 这类可用性优先的负载，仍然可以用 Cassandra。",
     "termDefinitions": [
@@ -4800,20 +4797,20 @@
     "options": [
       "只支持字符串",
       "只支持数字和字符串",
-      "类型丰富，含 UDT 和 JSON",
+      "类型丰富：含集合类型和 UDT，另支持 JSON 格式读写语法",
       "必须提前把所有值序列化成二进制"
     ],
     "options_en": [
       "It only supports strings",
       "It only supports numbers and strings",
-      "Rich types including UDTs and JSON",
+      "Rich types including collections and UDTs, plus JSON-format read/write syntax",
       "Every value must be pre-serialized into binary"
     ],
     "answer": [
       2
     ],
-    "why": "Cassandra 列类型很丰富：基础类型之外还有 UDT 和 JSON 值，因此既能存扁平结构也能存嵌套结构，作为数据存储非常灵活。",
-    "why_en": "Cassandra columns support many types including user-defined types and JSON values, handling both flat and nested data flexibly.",
+    "why": "Cassandra 除基础类型外还有 list/set/map 集合和 UDT，嵌套地址可直接建成 UDT 列；INSERT ... JSON / SELECT JSON 只是用 JSON 格式读写，底层仍是声明的 CQL 类型，没有独立的 JSON 列类型。",
+    "why_en": "Beyond primitive types Cassandra has list/set/map collections and UDTs, so a nested address can be a UDT column. INSERT ... JSON / SELECT JSON only read and write in JSON format; data is still stored as the declared CQL types, and there is no standalone JSON column type.",
     "termDefinitions": [
       {
         "term": "Cassandra",
@@ -4836,14 +4833,14 @@
     "scenario_en": "One table has to hold both flat user fields and a nested address structure, without adding a serialization layer.",
     "optionExplanations": [
       "只支持字符串太局限了，Cassandra 的类型系统覆盖数字、布尔、集合、UDT 等一大批类型。",
-      "数字和字符串只是基础类型的一部分，Cassandra 还支持集合类型、UDT、JSON 等更丰富的结构。",
-      "对，Cassandra 类型丰富，除了基础类型还支持 UDT 和 JSON 这类结构，能存扁平数据也能存嵌套结构。",
+      "数字和字符串只是基础类型的一部分，Cassandra 还支持集合类型、UDT 等更丰富的结构。",
+      "对，Cassandra 类型丰富，除基础类型外还有集合和 UDT（嵌套地址可建成 UDT 列），并支持 INSERT/SELECT JSON 语法，但没有独立的 JSON 列类型。",
       "把值提前序列化成二进制不是必须步骤，CQL 类型系统直接支持结构化写入，不需要应用层自己序列化。"
     ],
     "optionExplanations_en": [
       "Only supporting strings is far too limited — Cassandra's type system covers numbers, booleans, collections, UDTs, and more.",
-      "Numbers and strings are just a slice of the basic types — Cassandra also supports collection types, UDTs, and JSON for richer structures.",
-      "Right — Cassandra's types are rich: beyond the basics there are UDTs and JSON values, letting it store both flat and nested data.",
+      "Numbers and strings are just a slice of the basic types — Cassandra also supports collection types, UDTs, and other richer structures.",
+      "Right — Cassandra's types are rich: beyond the basics there are collections and UDTs (a nested address can be a UDT column), plus INSERT/SELECT JSON syntax, though there is no standalone JSON column type.",
       "Pre-serializing every value into binary isn't required — CQL's type system natively supports structured writes without the application doing its own serialization."
     ]
   },
@@ -4853,16 +4850,16 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "fault-tolerance",
-    "scenario": "一个 Cassandra 节点被判定离线数小时,远超 hint 的短暂寿命;期间协调节点替它暂存的写早已过期。它重新上线时,错过的写从哪补回来?",
+    "scenario": "一个 Cassandra 节点被判定离线数小时，远超 hint window（max_hint_window）；期间协调节点已停止为它记录 hint。它重新上线时，错过的写从哪补回来？",
     "q": "长期离线的节点靠什么补回错过的写?",
     "options": [
-      "短暂离线回放 hint,长期离线靠 read repair",
+      "短暂离线回放 hint；长期离线跑 anti-entropy repair（nodetool repair）补齐，read repair 只顺带修被读到的 key",
       "hinted handoff 一直保存到节点回来再回放",
       "节点一上线自动拥有全部最新数据,无需补",
       "协调节点阻塞写入直到离线节点恢复才放行"
     ],
     "options_en": [
-      "Replay hints if brief; read repair if long",
+      "Replay hints if brief; if long, run anti-entropy repair (nodetool repair) — read repair only fixes keys that happen to be read",
       "Hinted handoff holds writes until the node returns",
       "The node automatically has all latest data on rejoin",
       "The coordinator blocks writes until the node recovers"
@@ -4870,8 +4867,8 @@
     "answer": [
       0
     ],
-    "why": "hint 只做短期兜底:节点很快回来才回放 hint;离线超过 hint 寿命后 hint 已丢,该副本停在旧值,只能靠管理员 rebuild 或读时 read repair 逐 key 修复。",
-    "why_en": "Hints are short-lived, so a briefly-offline node gets its missed writes replayed, but after a long outage the hints are gone and you rely on a rebuild or read repair to reconcile.",
+    "why": "hint 只在 hint window 内记录：节点很快回来就回放。离线超过 window 后，缺失的写要靠 anti-entropy repair（Merkle tree 比对副本差异并流式补齐），且要在 gc_grace_seconds 内完成以免删除复活；read repair 只修被读到的 key，不能作为主修复手段。",
+    "why_en": "Hints are only stored within the hint window, so a node that returns quickly gets them replayed. Beyond that window, missed writes are recovered by anti-entropy repair (Merkle-tree comparison and streaming of differences), which should run within gc_grace_seconds to avoid resurrecting deletes; read repair only fixes keys that are read and is not the primary mechanism.",
     "termDefinitions": [
       {
         "term": "hinted handoff",
@@ -4905,16 +4902,16 @@
       "read-repair"
     ],
     "q_en": "How does a long-offline node recover the writes it missed?",
-    "scenario_en": "A Cassandra node is convicted offline for hours, far past a hint's short lifespan, so the writes the coordinator stashed for it have already expired. Where do the missed writes come from when it rejoins?",
+    "scenario_en": "A Cassandra node is marked down for hours, far beyond the hint window (max_hint_window), so coordinators have stopped storing hints for it. When it rejoins, how are the missed writes recovered?",
     "optionExplanations": [
-      "对:hint 只做短期兜底,节点很快回来才回放;离线过久 hint 已过期,靠 rebuild 或 read repair 补,后者只修被读到的 key。",
-      "错:hint 寿命很短,不会一直存到节点回来;超时后补数据换成整份重建或读时修复来兜。",
+      "对：hint 只覆盖 hint window 内的短暂离线；离线更久要跑 anti-entropy repair，read repair 只修被读到的 key。",
+      "错：hint 只在 hint window 内记录，不会存到节点回来；超时后靠 repair 补齐。",
       "错:节点上线不会自动获得离线期间的写,必须由别的机制把缺的数据送回来。",
       "错:协调节点不阻塞写;它把 hint 暂存后就让写继续,可用性不受离线节点影响。"
     ],
     "optionExplanations_en": [
-      "Right — hints are a short-term safety net replayed only if the node returns fast; after a long outage the hints have expired, so a rebuild or read repair fills the gap, and read repair only fixes keys that get read.",
-      "Wrong — hints are short-lived and are not kept until the node returns; a long outage is reconciled by a rebuild or read repair.",
+      "Right — hints cover only a brief outage within the window; a longer one needs anti-entropy repair, as read repair only fixes keys that get read.",
+      "Wrong — hints are only recorded within the window and not kept until the node returns; beyond it repair fills the gap.",
       "Wrong — a node does not automatically gain the writes it missed while offline; another mechanism has to ship the missing data back.",
       "Wrong — the coordinator does not block writes; it stashes a hint and lets the write proceed, so availability is unaffected by the offline node."
     ]

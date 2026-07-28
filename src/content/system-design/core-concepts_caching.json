@@ -16,16 +16,16 @@
     "answer": [
       1
     ],
-    "why": "决定性约束是存储介质：内存离 CPU 近，通常避开磁盘寻道和页读取。经验法则是先用缓存加速高频读，但同时准备失效和降级。",
-    "why_en": "A cache is faster mainly because memory is close to the CPU and avoids disk access, not because Redis has magic query logic.",
+    "why": "题面里数据库的 working set 放不进内存，很多读要等 SSD 页读取，而 Redis 的读全在内存完成，这是主要差距。另外 Redis 的按 key 查找比 SQL 的解析、计划和执行路径更轻，也贡献一部分；如果数据库热数据都在 buffer cache 里，差距会明显缩小。",
+    "why_en": "Here the database working set does not fit in memory, so many reads wait on SSD page fetches while Redis serves everything from RAM; that is the main gap. Redis key lookups also skip SQL parsing, planning, and execution overhead; if the database's hot data were fully in its buffer cache, the gap would shrink considerably.",
     "tags": [
       "caching",
       "latency",
       "memory"
     ],
     "diagram": "flowchart LR\n    App[\"App\"] --> Redis[\"Redis memory ~1ms\"]\n    App --> DB[\"Database disk ~50ms\"]",
-    "scenario": "一次资料页读取要么查 Postgres，要么查 Redis；面试官在问为什么缓存读延迟能低一个数量级。",
-    "scenario_en": "A profile-page read can hit Postgres or Redis; the interviewer is asking why cache read latency can be an order of magnitude lower.",
+    "scenario": "资料页数据总量远大于 Postgres 机器内存，很多读需要从 SSD 读数据页；Redis 把这批资料全部放在内存里。在这个场景里观测到 Redis 读延迟比 Postgres 低约一个数量级，面试官问主要原因。",
+    "scenario_en": "The profile data is much larger than the Postgres machine's memory, so many reads must fetch data pages from SSD; Redis keeps all of these profiles in memory. In this setup Redis reads are observed to be about an order of magnitude faster, and the interviewer asks for the main reason.",
     "options_en": [
       "Redis indexes are always more advanced than database indexes.",
       "The memory path avoids disk-access latency.",
@@ -635,8 +635,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "patterns",
-    "scenario": "面试里只说系统读多、想降低数据库压力；没有强一致写入、极高写吞吐或 CDN 这类特殊要求。",
-    "scenario_en": "In an interview, the only stated need is a read-heavy system that should reduce database load; there is no special consistency, write-throughput, or CDN requirement.",
+    "scenario": "面试里只说系统读多、想降低数据库压力；缓存用的是 Redis 这类不自带回源能力的 KV 存储，团队不想再引入缓存代理层；没有强一致写入、极高写吞吐或 CDN 这类特殊要求。",
+    "scenario_en": "In an interview, the only stated need is a read-heavy system that should reduce database load; the cache is a plain KV store like Redis with no built-in loader, and the team does not want to add a caching proxy layer; there is no special consistency, write-throughput, or CDN requirement.",
     "q": "默认用哪种缓存模式？",
     "q_en": "Which caching pattern is the default?",
     "options": [
@@ -648,9 +648,9 @@
     "answer": [
       1
     ],
-    "why": "无强一致/高写吞吐要求时默认 Cache-Aside：读 cache、miss 查库回填；简单但 miss 慢、可能陈旧。",
-    "why_en": "Without special consistency or write-throughput needs, cache-aside is the default: read cache first, and on a miss the app reads DB and fills cache.",
-    "whenOtherWins": "写后必须立刻读到最新时，改用 Write-Through。",
+    "why": "缓存是不带回源能力的 Redis、又不想加代理层，读多降 DB 压力的默认就是 Cache-Aside：读 cache，miss 由应用查库回填；简单可降级，代价是 miss 慢、可能读到旧值。",
+    "why_en": "With plain Redis (no built-in loader) and no proxy layer, cache-aside is the default for a read-heavy system: read the cache, and on a miss the app reads the DB and fills the cache. It is simple and degrades gracefully, at the cost of slower misses and possible staleness.",
+    "whenOtherWins": "写后需要尽快读到新值时，可考虑 Write-Through 缩小陈旧窗口，但双写失败和并发竞态仍要处理。",
     "tags": [
       "caching",
       "cache-aside",
@@ -724,13 +724,13 @@
     "optionExplanations": [
       "Write-Behind 优化写吞吐、可能丢，不是通用默认。",
       "对：无特殊一致/吞吐要求时，Cache-Aside 最简单。",
-      "Read-Through 把回源下沉缓存层，适合 CDN/代理。",
+      "Read-Through 要缓存层自带回源能力，Redis 本身没有，还得加代理层。",
       "Write-Through 同步双写读更新鲜，但写更慢。"
     ],
     "optionExplanations_en": [
       "Write-behind optimizes throughput and may lose data, not a general default.",
       "Right: with no special consistency/throughput need, cache-aside is simplest.",
-      "Read-through pushes origin fetch into the cache, fitting CDN/proxy.",
+      "Read-through needs a cache layer that loads on miss; plain Redis lacks it, so you'd add a proxy layer.",
       "Write-through's sync double write keeps reads fresh but writes slower."
     ]
   },
@@ -842,8 +842,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "write-through",
-    "scenario": "某系统要求读到的数据必须永远是最新的，同时可以接受写入慢一点。",
-    "scenario_en": "A system requires reads to always see the freshest data and can accept slower writes.",
+    "scenario": "某系统希望写成功后，后续读尽快看到新值（尽量缩小缓存陈旧窗口），同时可以接受写入慢一点；写入不能因缓存崩溃而丢失。",
+    "scenario_en": "A system wants reads after a successful write to see the new value as soon as possible (minimizing the cache stale window), can accept slower writes, and must not lose writes if the cache crashes.",
     "q": "最匹配的缓存写模式是？",
     "q_en": "Which cache write pattern best matches?",
     "options": [
@@ -855,8 +855,8 @@
     "answer": [
       2
     ],
-    "why": "写穿透同步写缓存和库、两边成功才算完成，所以读更容易保持新鲜；代价是每次写更慢。",
-    "why_en": "Write-through writes to the cache and synchronously to the database before acknowledging, making freshness easier than cache-aside, but failures, bypass writes, and races still need handling.",
+    "why": "写穿透在写请求里同步写缓存和库、两边成功才确认，所以写后陈旧窗口最小；Write-Behind 异步刷库会丢写，排除。代价是每次写更慢，而且没有分布式事务时双写失败、并发竞态和绕过缓存的写仍会造成不一致，需要重试或配合失效/TTL 兜底。",
+    "why_en": "Write-through updates the cache and the database synchronously and acknowledges only after both succeed, which minimizes the post-write stale window; write-behind can lose writes, so it is out. The cost is slower writes, and without a distributed transaction, partial dual-write failures, races, and bypass writes can still cause inconsistency, so retries or invalidation/TTL are still needed.",
     "options_en": [
       "Cache-aside (lazy loading).",
       "Write-behind (async DB flush).",
@@ -888,15 +888,15 @@
       }
     ],
     "optionExplanations": [
-      "Cache-Aside 有旧值窗口，读不保证永远最新。",
+      "Cache-Aside 写后到下次回填前有旧值窗口。",
       "Write-Behind 写最快但异步刷库、崩溃可能丢。",
-      "对：读要永远最新、写慢可接受时，写穿透同步双写最合适。",
+      "对：写时同步更新缓存和库，写后陈旧窗口最小，代价是写慢。",
       "CDN 分发静态内容，管不了应用数据新鲜度。"
     ],
     "optionExplanations_en": [
-      "Cache-aside has a stale window, so reads aren't always freshest.",
+      "Cache-aside leaves a stale window until the next refill.",
       "Write-behind is fastest but async and may lose data on a crash.",
-      "Right: when reads must stay fresh and slower writes are fine, write-through fits.",
+      "Right: updating cache and DB synchronously on write minimizes the post-write stale window, at the cost of slower writes.",
       "A CDN distributes static content, not app-data freshness."
     ]
   },
@@ -992,7 +992,7 @@
       "Write-behind, flushing to the DB asynchronously in batches."
     ],
     "tradeoff": "极高写吞吐 vs 崩溃可能丢最近数据",
-    "whenOtherWins": "数据绝不能丢（钱、订单）时，绝不能用 Write-Behind。",
+    "whenOtherWins": "数据不能丢（钱、订单）时，不要用纯内存缓冲的 Write-Behind；要么同步落库，要么先写入持久化、有副本的队列/日志再异步落库。",
     "tags": [
       "caching",
       "write-behind",
@@ -1393,8 +1393,8 @@
     "answer": [
       0
     ],
-    "why": "LRU 是多数系统的默认：它假设最近用过的很快会再用，适配大多数工作负载，且可用链表/环形缓冲在 O(1) 淘汰。",
-    "why_en": "LRU is the safe default because recently used data tends to be used again, and it fits most workloads with constant-time eviction.",
+    "why": "LRU 是多数系统的默认：它假设最近用过的很快会再用，适配大多数工作负载；精确 LRU 用「哈希表 + 双向链表」可 O(1) 淘汰，Redis 等系统则用采样近似 LRU 降低开销。",
+    "why_en": "LRU is the safe default because recently used data tends to be used again, which fits most workloads; exact LRU gets O(1) eviction with a hash map plus a doubly linked list, while systems like Redis use a sampled approximation to cut overhead.",
     "options_en": [
       "LRU (least recently used).",
       "FIFO (first in, first out, by insertion order).",
@@ -1430,13 +1430,13 @@
     "optionExplanations": [
       "对：普通负载下近期用过的会再用，LRU 是安全默认、O(1) 淘汰。",
       "FIFO 按到达顺序，可能删仍热的老 key。",
-      "随机淘汰无使用感知，易误删有用数据。",
+      "随机淘汰不看使用情况，热点明显时命中率通常比 LRU 差。",
       "永不淘汰会让内存无限增长撑爆。"
     ],
     "optionExplanations_en": [
       "Right: recently used is reused soon, so LRU is the safe O(1) default.",
       "FIFO evicts by arrival and may drop still-hot old keys.",
-      "Random eviction has no usage awareness and drops useful data.",
+      "Random eviction ignores usage, so with clear hot spots its hit rate is usually worse than LRU.",
       "Never evicting grows memory without bound until it breaks."
     ]
   },
@@ -1888,24 +1888,24 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "problems",
-    "scenario": "首页 feed 是热点 key。方案 A 用 TTL=60s；方案 B 是用户一发新帖就立刻删除 feed cache。",
-    "scenario_en": "The home feed is a hot key. Plan A uses TTL=60s; Plan B deletes the feed cache immediately whenever a user posts.",
+    "scenario": "首页 feed 是热点 key。方案 A 用 TTL=60s；方案 B 是用户一发新帖就立刻删除 feed cache。你考虑用定时预热（过期前定时重建）来防击穿。",
+    "scenario_en": "The home feed is a hot key. Plan A uses TTL=60s; Plan B deletes the feed cache immediately whenever a user posts. You are considering scheduled cache warming (rebuilding before expiry) to prevent stampedes.",
     "q": "关于「缓存预热」（cache warming）防击穿，正确的是？",
     "q_en": "Which statement about cache warming to prevent stampedes is correct?",
     "options": [
-      "无论 TTL 过期还是写时失效，预热都同样有效、能挡住",
-      "只对 TTL 过期有效；写时失效时预热挡不住",
+      "两个方案里定时预热都同样有效、能挡住",
+      "能挡住方案 A 可预测的 TTL 过期；挡不住方案 B 写后立即删除后的第一波 miss",
       "预热本身会导致缓存数据不一致",
       "预热本质上就等于请求合并这一手段"
     ],
     "answer": [
       1
     ],
-    "why": "预热只挡可预测的 TTL 过期；写时失效是写完立刻 delete、不等 TTL，挡不住第一波 miss。",
-    "why_en": "Warming refreshes before a known expiry. Write-time invalidation deletes cache right after a write, not when TTL expires; periodic warming only narrows the cold window.",
+    "why": "定时预热靠的是提前知道过期时间：方案 A 到期时刻可预测，可以在过期前重建；方案 B 写完立刻 delete，时机不可预测，定时预热最多缩短冷窗口，挡不住第一波 miss，要靠请求合并、锁或 stale-while-revalidate。预热另一个常见用途是冷启动（发布、缓存重启后先装热数据），与本题无关。",
+    "why_en": "Scheduled warming relies on knowing the expiry time: Plan A's expiry is predictable, so you can rebuild before it; Plan B deletes right after a write at unpredictable times, so scheduled warming only narrows the cold window and cannot stop the first miss wave — use request coalescing, locks, or stale-while-revalidate. Warming is also commonly used for cold starts (deploys, cache restarts), which is outside this question.",
     "options_en": [
-      "It works equally well whether it's TTL expiry or write-time invalidation.",
-      "Only for TTL expiry; if you invalidate on writes, warming can't stop it.",
+      "Scheduled warming works equally well for both plans.",
+      "It covers Plan A's predictable TTL expiry, but not the first miss wave right after Plan B's write-time delete.",
       "Warming itself causes cache data inconsistency.",
       "Warming is essentially the same as request coalescing."
     ],
@@ -2043,12 +2043,12 @@
     "sub": "problems",
     "q": "处理缓存一致性（stale）问题的常见手段有哪些？（多选）",
     "q_en": "Which common techniques handle stale-cache consistency problems? (Select all)",
-    "scenario": "商品库存页读走缓存、写只更新数据库，要求秒级看到新值，同时不能牺牲读吞吐。",
-    "scenario_en": "An inventory page reads from cache while writes only touch the DB; new values must show up within seconds without hurting read throughput.",
+    "scenario": "同一个电商平台有两类读多写少的页面：商品库存页要求写库后秒级看到新值；运营指标看板允许落后几分钟。两者读都走缓存、写只更新数据库，且都不能牺牲读吞吐。",
+    "scenario_en": "One e-commerce platform has two read-heavy pages: the inventory page must show new values within seconds of a DB write, while the ops metrics dashboard may lag by a few minutes. Both read from cache while writes only touch the DB, and neither may sacrifice read throughput.",
     "options": [
       "写数据库后删除对应缓存条目（写时失效），下次读回填新值",
       "设置较短的 TTL，容忍短暂陈旧",
-      "对 feed/指标/分析类数据直接接受最终一致",
+      "对指标看板这类数据直接接受最终一致",
       "给每次读加分布式锁串行化"
     ],
     "answer": [
@@ -2056,12 +2056,12 @@
       1,
       2
     ],
-    "why": "没有完美方案，按新鲜度要求选：写时失效（最常用）、短 TTL、或对 feed/指标直接接受最终一致。给每次读加分布式锁会毁掉缓存的性能，不是常规解。",
-    "why_en": "Common fixes are invalidating the cache on writes, using short TTLs, or accepting eventual consistency for feeds and metrics.",
+    "why": "没有一招通吃，按每类数据的新鲜度要求选：库存页用写时失效（最常用），再配短 TTL 兜住失效丢失的情况；指标看板本来就允许落后几分钟，直接接受最终一致即可。给每次读加分布式锁会把读串行化，违反「不能牺牲读吞吐」，不是常规解。",
+    "why_en": "There is no one-size fix; match each data type's freshness need. The inventory page uses write-time invalidation (most common) plus a short TTL as a backstop if an invalidation is lost; the metrics dashboard already tolerates minutes of lag, so eventual consistency is fine. A distributed lock on every read serializes reads and violates the throughput constraint, so it is not a standard fix.",
     "options_en": [
       "Delete the cache entry after writing the DB (write-time invalidation); refill on next read.",
       "Use a short TTL and tolerate brief staleness.",
-      "Accept eventual consistency for feed/metrics/analytics data.",
+      "Accept eventual consistency for data like the metrics dashboard.",
       "Put a distributed lock on every read to serialize it."
     ],
     "tags": [
@@ -2096,13 +2096,13 @@
     "optionExplanations": [
       "对：写后删缓存、下次读回填新值，是最常用的失效手段。",
       "对：短 TTL 把陈旧上限压到过期时长，简单可控。",
-      "对：feed/指标/分析不需强一致，接受最终一致能简化架构。",
+      "对：指标看板允许落后几分钟，不需强一致，接受最终一致能简化架构。",
       "错：每次读都加分布式锁会摧毁缓存吞吐，不是常规解。"
     ],
     "optionExplanations_en": [
       "True: delete cache after a write and backfill on next read — the most common invalidation.",
       "True: a short TTL caps staleness at the expiry length, simple and controllable.",
-      "True: feeds/metrics/analytics don't need strong consistency, so eventual consistency simplifies things.",
+      "True: the metrics dashboard tolerates minutes of lag and does not need strong consistency, so eventual consistency simplifies things.",
       "False: a distributed lock per read destroys cache throughput and isn't a standard fix."
     ]
   },
@@ -2177,8 +2177,8 @@
     "sub": "problems",
     "q": "缓解热 key 的常见手段有哪些？（多选）",
     "q_en": "Which techniques commonly mitigate hot keys? (Select all)",
-    "scenario": "明星发文让单个 key 每秒被读 50 万次，全部哈希到同一个 Redis 分片，该分片 CPU 打满。",
-    "scenario_en": "A celebrity post drives 500k reads a second at one key, all hashing to a single Redis shard whose CPU is pinned.",
+    "scenario": "明星发文让单个 key 每秒被读 50 万次，全部哈希到同一个 Redis 分片，该分片 CPU 打满。日志显示其中约两成来自少数几个爬虫 IP 的高频重复请求，其余是正常用户。",
+    "scenario_en": "A celebrity post drives 500k reads a second at one key, all hashing to a single Redis shard whose CPU is pinned. Logs show about 20% of that comes from a few scraper IPs hammering the key; the rest is normal users.",
     "options": [
       "把热 key 复制到多个缓存节点，读请求负载均衡分摊",
       "把极热的值放进程内缓存做本地兜底，减少打 Redis",
@@ -2190,8 +2190,8 @@
       1,
       2
     ],
-    "why": "热 key 靠「分摊流量」：多节点复制 + 负载均衡、进程内本地兜底、对滥用限流。加长 TTL 只影响新鲜度，不能分摊单节点的流量压力。",
-    "why_en": "Hot keys are mitigated by replicating the key across nodes, adding a local in-process fallback, and rate-limiting abusive traffic.",
+    "why": "热 key 的核心是「把一个分片扛的流量摊开」：把 key 复制到多个节点做负载均衡、在应用进程内放一份本地副本兜底；爬虫那两成属于滥用流量，按来源限流能直接卸掉压力。加长 TTL 只影响多久过期，命中照样全打在同一个分片上，分摊不了流量。",
+    "why_en": "Hot keys are about spreading one shard's load: replicate the key across nodes behind load balancing and keep a local in-process copy. The scraper share is abusive traffic, so rate-limiting by source sheds it directly. A longer TTL only changes expiry; every hit still lands on the same shard, so it spreads nothing.",
     "options_en": [
       "Replicate the hot key across nodes and load-balance the reads.",
       "Put the very hot value in an in-process cache as a local fallback to spare Redis.",
@@ -2350,7 +2350,7 @@
     ],
     "optionExplanations": [
       "错：Cache-Aside 的查库在应用里，不是缓存查。",
-      "对：Cache-Aside 由应用查库回填；读穿透把这步下沉缓存。",
+      "对：Cache-Aside 由应用查库回填；Read-Through 把这步下沉到缓存层。",
       "错：Read-Through 由缓存层查库，不是应用查。",
       "错：miss 时总得有人查库，只是位置不同。"
     ],
@@ -2637,10 +2637,10 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "where-to-cache",
-    "scenario": "Strava 这类运动 App，用户在没有网络的偏远地区跑步时仍要记录数据，联网后再同步。",
-    "scenario_en": "In a Strava-like app, users still need to record run data in remote areas without network and sync later when online.",
-    "q": "这体现了哪一层缓存？",
-    "q_en": "Which cache layer does this represent?",
+    "scenario": "Strava 这类运动 App，用户在没有网络的偏远地区跑步时仍要记录数据并能查看最近的记录，联网后再同步到服务端。",
+    "scenario_en": "In a Strava-like app, users in remote areas without network must still record runs and view recent ones, syncing to the server once online.",
+    "q": "按缓存分层看，这属于哪一层？",
+    "q_en": "In the caching hierarchy, which layer is this?",
     "options": [
       "CDN 边缘缓存",
       "客户端 / 设备端缓存",
@@ -2650,8 +2650,8 @@
     "answer": [
       1
     ],
-    "why": "把数据存在用户设备上、离线可用、联网再同步，是典型的客户端/设备端缓存。它离请求方最近、省网络调用，但后端对其控制弱、失效更难。",
-    "why_en": "Keeping run data on the device while offline and syncing later is client-side caching, which is closest to the user but hardest to invalidate.",
+    "why": "只有设备本地这一层在断网时还能读写，所以是客户端/设备端这一层。注意：离线新记录的数据在同步前只有设备上这一份，严格说是本地持久化 + 待同步队列，丢了就真丢了，不能像普通缓存那样随时丢弃重建；已同步过、拿来离线查看的旧记录才是缓存副本。",
+    "why_en": "Only the on-device layer can still read and write while offline, so this is the client-side layer. Note that runs recorded offline exist only on the device until sync — that is local persistence plus a sync queue, not a disposable cache; only previously synced records viewed offline are true cached copies.",
     "options_en": [
       "CDN cache.",
       "Client-side / on-device cache.",
@@ -2759,18 +2759,18 @@
     "id": "sd-caching-043",
     "atomType": "consequence",
     "sub": "numbers",
-    "scenario": "峰值时段数据库 CPU 顶到 80%,采样显示几乎全花在一批反复执行的相同读查询上。",
-    "scenario_en": "At peak the database CPU hits 80%, and profiling shows almost all of it goes to a batch of the same read queries running over and over.",
+    "scenario": "峰值时段数据库 CPU 顶到 80%，采样显示几乎全花在一批反复执行的相同读查询上；这些查询已确认走索引、执行计划正常，结果允许落后几十秒。",
+    "scenario_en": "At peak the database CPU hits 80%, and profiling shows almost all of it goes to a batch of identical read queries running over and over. These queries are confirmed to use indexes with sound plans, and their results may lag by tens of seconds.",
     "q": "这个信号最支持哪条设计判断?",
     "q_en": "Which design judgment does this signal most support?",
     "options": [
-      "缓存这批热查询,把数据库负载砍掉七八成",
+      "缓存这批热查询的结果，让重复读不再打到数据库",
       "给数据库纵向升配更多 CPU 核心来硬扛峰值负载",
       "再给这些读查询加索引,进一步压低 CPU",
       "把这批读分摊到只读副本上做负载均衡"
     ],
     "options_en": [
-      "Cache these hot queries to cut database load by roughly 70-80%.",
+      "Cache these hot queries' results so repeated reads no longer hit the DB.",
       "Vertically scale the database with more CPU cores to brute-force the peak.",
       "Add more indexes to these read queries to push CPU down further.",
       "Spread these reads across read replicas to balance the load."
@@ -2778,8 +2778,8 @@
     "answer": [
       0
     ],
-    "why": "CPU 全耗在反复执行的相同读上,结果高度可复用;缓存这批热查询直接免掉重复计算,文章估算约砍掉 70-80% 的 DB 负载。升配或加副本仍在让库一遍遍重算同一批结果。",
-    "why_en": "The CPU is spent re-running identical reads, so the results are highly reusable — caching these hot queries removes that repeated work and cuts DB load by about 70-80%.",
+    "why": "CPU 花在「同样的查询一遍遍重算」上，结果又允许落后几十秒，缓存一次就能复用很多次，直接去掉重复计算；能省多少取决于命中率，命中率越高数据库负载降得越多。查询已经走索引，再加索引降不了重复执行本身；升配和只读副本都能扛，但每个副本仍在一遍遍重算同一批结果，是加机器而不是去掉浪费。",
+    "why_en": "The CPU is spent recomputing the same queries, and the results may lag tens of seconds, so one cached result serves many reads and removes the repeated work; the savings scale with the hit rate. The queries are already indexed, so more indexes don't remove repeated execution. Scaling up or adding replicas can absorb the load, but every node still recomputes the same results — more hardware rather than less waste.",
     "tags": [
       "caching",
       "trigger",
@@ -2798,15 +2798,15 @@
       }
     ],
     "optionExplanations": [
-      "对:相同读反复跑、结果可复用,缓存热查询免掉重复计算,DB 负载降约七八成。",
+      "对:相同读反复跑、结果可复用,缓存热查询免掉重复计算,命中率越高 DB 负载降得越多。",
       "升配 CPU 只是买时间,库还在一遍遍重算同一批查询,不治本。",
-      "这些查询多半已走索引;加索引降不了「重复执行」本身的开销。",
+      "这些查询已确认走索引;加索引降不了「重复执行」本身的开销。",
       "只读副本能分摊不同的读;这里是同一批查询反复跑,缓存更对症。"
     ],
     "optionExplanations_en": [
-      "Right: identical reads with reusable results — caching them removes the repeated compute and cuts DB load ~70-80%.",
+      "Right: identical reads with reusable results — caching them removes the repeated compute, and the higher the hit rate the more DB load drops.",
       "Scaling CPU only buys time; the DB still recomputes the same queries over and over.",
-      "These queries are likely already indexed; more indexes don't remove the cost of repeated execution.",
+      "These queries are confirmed to be indexed; more indexes don't remove the cost of repeated execution.",
       "Replicas spread different reads; with one repeated batch, caching fits better."
     ]
   },
@@ -2816,27 +2816,27 @@
     "id": "sd-caching-044",
     "atomType": "consequence",
     "sub": "numbers",
-    "scenario": "产品定了硬性 SLA:API 的 P99 要 <10ms;但底层数据库查询本身就要 30-50ms。",
-    "scenario_en": "The product sets a hard SLA: API p99 must be under 10ms, but the underlying database query alone takes 30-50ms.",
+    "scenario": "产品定了硬性 SLA：API 的 P99 要 <10ms。底层是一条已经调优过的多表聚合查询（索引齐全、执行计划已是最优），每次仍要 30-50ms；结果允许落后几秒，且 99.5% 的请求落在少量热点数据上。",
+    "scenario_en": "The product sets a hard SLA: API p99 must be under 10ms. The underlying query is an already-tuned multi-table aggregation (fully indexed, optimal plan) that still takes 30-50ms; results may lag a few seconds, and 99.5% of requests hit a small set of hot items.",
     "q": "面对这条延迟目标,现实的设计路径是?",
     "q_en": "Given this latency target, what is the realistic design path?",
     "options": [
-      "把热读放进内存缓存,命中约 1-2ms,压进预算",
-      "优化 SQL 与索引,把 30-50ms 的磁盘查询压到 10ms 以下",
+      "把热点结果放进内存缓存，命中只需约 1-2ms，压进预算",
+      "继续优化 SQL 与索引，把这条查询压到 10ms 以下",
       "调大数据库连接池并发,让更多查询同时跑",
       "直接放宽 SLA 到 50ms,反正用户感知不到"
     ],
     "options_en": [
-      "Put hot reads in an in-memory cache at ~1-2ms to fit the budget.",
-      "Optimize SQL and indexes to push the 30-50ms disk query under 10ms.",
+      "Put the hot results in an in-memory cache (~1-2ms on a hit) to fit the budget.",
+      "Keep tuning SQL and indexes to push this query under 10ms.",
       "Increase database connection-pool concurrency so more queries run at once.",
       "Just relax the SLA to 50ms since users won't notice."
     ],
     "answer": [
       0
     ],
-    "why": "<10ms 是给定的产品 SLA、不是推导结果,而磁盘查询 30-50ms 的地板已经超标;只有内存缓存(约 1-2ms)能把热读压进这个预算。这条 SLA 直接逼出「必须缓存」的路径,代价是陈旧与失效。",
-    "why_en": "The sub-10ms target is a given SLA, not a derived number, and a 30-50ms disk query already blows it — only an in-memory cache at 1-2ms fits the budget, which is why this SLA forces caching.",
+    "why": "查询已经调优到头，单次仍要 30-50ms，比预算高好几倍；结果能容忍几秒陈旧、请求又集中在少量热点上，所以缓存命中率能做到 99% 以上，P99 就落在 1-2ms 的命中路径上。前提是命中率要够高——如果超过 1% 的请求 miss，P99 就会被 30-50ms 的查库路径拉爆。再调 SQL 已经没有空间；加并发提高吞吐但不降低单条延迟；SLA 是给定硬约束，不能为了迁就实现放宽。",
+    "why_en": "The query is already fully tuned and still costs 30-50ms, several times the budget. Results tolerate seconds of staleness and traffic concentrates on a few hot items, so the hit rate can exceed 99% and p99 lands on the 1-2ms hit path. That depends on the hit rate: if more than 1% of requests miss, p99 falls back to the 30-50ms DB path. There is no tuning headroom left; more concurrency raises throughput but not per-query latency; the SLA is a given hard constraint.",
     "tags": [
       "caching",
       "trigger",
@@ -2862,14 +2862,14 @@
       }
     ],
     "optionExplanations": [
-      "对:只有内存命中 1-2ms 装得进 <10ms;SLA 是给定目标,逼出必须缓存。",
-      "索引也逃不掉磁盘访问地板,30-50ms 很难压到个位数毫秒。",
+      "对:只有内存命中 1-2ms 装得进 <10ms;SLA 是给定目标,逼出必须缓存,前提是命中率够高。",
+      "这条查询已经调优到头（索引齐全、计划最优），没有空间再压到个位数毫秒。",
       "加并发提高吞吐,但单条查询延迟不变,P99 还是 30-50ms。",
       "SLA 是产品给定的硬约束,不能为了迁就实现随手放宽。"
     ],
     "optionExplanations_en": [
-      "Right: only an in-memory hit at 1-2ms fits under 10ms; the SLA is given and forces caching.",
-      "Indexes can't escape the disk-access floor, so 30-50ms rarely drops to single-digit ms.",
+      "Right: only an in-memory hit at 1-2ms fits under 10ms; the SLA is given and forces caching, provided the hit rate is high enough.",
+      "This query is already tuned out (fully indexed, optimal plan), leaving no headroom to reach single-digit milliseconds.",
       "More concurrency raises throughput but not per-query latency; p99 stays 30-50ms.",
       "The SLA is a hard product constraint, not something to relax to suit the implementation."
     ]
@@ -2886,13 +2886,13 @@
     "q_en": "What is this third technique and how does it work?",
     "options": [
       "概率式提前过期:临近 TTL 时提前异步重建缓存",
-      "把 TTL 设为无限大,让这个热点 key 永不过期失效",
+      "把 TTL 设为无限大，并且之后不做任何刷新或失效，数据永远停在第一次写入的值",
       "让所有 key 共用同一到期时刻,到点统一刷新",
       "缓存 miss 时直接返回错误,把重试压力甩给客户端"
     ],
     "options_en": [
       "Probabilistic early expiration: rebuild the cache asynchronously as the TTL nears.",
-      "Set the TTL to infinite so this hot key never expires at all.",
+      "Set the TTL to infinite with no later refresh or invalidation, so the value stays frozen at its first write.",
       "Give every key the same expiry instant and refresh them together.",
       "On a miss, return an error and push the retry pressure to the client."
     ],
@@ -2931,13 +2931,13 @@
     ],
     "optionExplanations": [
       "对:临近 TTL 就按概率让个别请求提前后台重建,过期前已有人刷新,削平同刻峰。",
-      "永不过期会让数据永远陈旧,躲过击穿却牺牲一致性,不是同类手段。",
+      "永不过期又不刷新，feed 会永远是旧的；「永不过期」要配合写时失效或后台刷新才是合法的防击穿方案，这个选项两样都没有。",
       "让 key 统一到期只会制造更大的同刻击穿,正好反了。",
       "返回错误把压力甩给客户端,重试后照样一起打库,没解决击穿。"
     ],
     "optionExplanations_en": [
       "Right: near the TTL a few requests probabilistically rebuild early, so a refresh happens before expiry and flattens the spike.",
-      "Never expiring keeps data permanently stale — it dodges stampede but sacrifices consistency, a different tradeoff.",
+      "Never expiring with no refresh freezes the feed forever; 'no expiry' is only a valid stampede defense when paired with invalidation or background refresh, and this option has neither.",
       "Aligning all keys to one expiry instant only creates a bigger simultaneous stampede — the opposite.",
       "Returning errors pushes load to the client; retries still hit the DB together, so it doesn't solve stampede."
     ]
@@ -3015,8 +3015,8 @@
     "id": "sd-caching-047",
     "atomType": "consequence",
     "sub": "write-through",
-    "scenario": "系统写多读少,大量写入的记录之后几乎无人再读。团队用 Write-Through,每次写都同步塞进缓存。",
-    "scenario_en": "The system is write-heavy and read-light; most written records are rarely read again. The team uses Write-Through, inserting into the cache on every write.",
+    "scenario": "系统写多读少，大量写入的记录之后几乎无人再读。团队用 Write-Through，每次写都同步塞进缓存；缓存内存有上限，淘汰策略配成 allkeys-lru。",
+    "scenario_en": "The system is write-heavy and read-light; most written records are rarely read again. The team uses Write-Through, inserting into the cache on every write; cache memory is capped and the eviction policy is allkeys-lru.",
     "q": "这种搭配会怎样劣化缓存?",
     "q_en": "How does this pairing degrade the cache?",
     "options": [
@@ -3034,8 +3034,8 @@
     "answer": [
       0
     ],
-    "why": "写多读少时,Write-Through 把大量此后无人再读的数据也塞进缓存;它们占着有限内存,按 LRU 把真正的热点条目挤出去,命中率不升反降。这也是为什么它最适合写完马上要读的数据。",
-    "why_en": "In a write-heavy, read-light workload, write-through fills the cache with entries no one reads again; they occupy scarce memory and evict the actually-hot keys under LRU, so the hit rate drops.",
+    "why": "写多读少时,Write-Through 把大量此后无人再读的数据也塞进缓存;它们占着有限内存,按 LRU 把真正的热点条目挤出去,命中率不升反降。这也是为什么它最适合写完马上要读的数据。注意：淘汰行为取决于配置，Redis 默认 noeviction 会在满了之后拒绝写入，而不是淘汰。",
+    "why_en": "In a write-heavy, read-light workload, write-through fills the cache with entries no one reads again; they occupy scarce memory and evict the actually-hot keys under LRU, so the hit rate drops. Note that eviction depends on configuration: Redis defaults to noeviction, which rejects writes when full instead of evicting.",
     "tags": [
       "caching",
       "write-through",

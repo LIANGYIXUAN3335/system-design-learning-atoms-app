@@ -9,7 +9,7 @@
     "q": "最合适引入的搜索组件是？",
     "options": [
       "Postgres 的 LIKE 模糊查询",
-      "Redis 作为搜索层",
+      "只用 Redis 原生 key-value 结构（不装搜索模块）当搜索层",
       "Elasticsearch 专用搜索引擎",
       "只用 Cassandra 的二级索引"
     ],
@@ -18,7 +18,7 @@
     ],
     "options_en": [
       "Postgres LIKE pattern matching",
-      "Redis used as the search layer",
+      "Plain Redis key-value structures (no search module) as the search layer",
       "A purpose-built engine like Elasticsearch",
       "Cassandra secondary indexes alone"
     ],
@@ -46,7 +46,7 @@
           "none"
         ],
         [
-          "Redis",
+          "plain Redis",
           "no",
           "no",
           "low"
@@ -81,13 +81,13 @@
     "scenario_en": "An e-commerce product search needs full-text matching, relevance ranking, multi-field filters, and faceting over a large, complex dataset.",
     "optionExplanations": [
       "数据小、只做简单包含匹配时能先用它，但排序和 faceting 都要应用层手写，规模一大就撑不住。",
-      "Redis 适合按已知 key 读取或缓存热门结果，但撑不起相关性排序和分面统计，本质不是搜索引擎。",
+      "原生 Redis 只能按已知 key 读或缓存热门结果，没有倒排索引和相关性打分；Redis 的搜索模块能做一部分，但在大数据量复杂搜索上不如专用搜索引擎成熟。",
       "倒排索引加聚合原生覆盖打分排序、字段过滤和分面统计，复合搜索到这规模就该用它。",
       "写入扩展优先、查询按分区键固定时 Cassandra 合适，但它的二级索引扛不住这里的复合过滤和相关性排序。"
     ],
     "optionExplanations_en": [
       "Fine when data is small and matching is a simple substring check, but ranking and faceting end up hand-rolled in the app layer and slow down at scale.",
-      "Redis speeds up known-key reads or cached popular results, but it can't carry relevance ranking or faceting — it's not a search engine.",
+      "Plain Redis only reads by known key or caches hot results — no inverted index or relevance scoring. Redis's search module covers some of this, but is less mature than a dedicated engine for large, complex search.",
       "The inverted index plus native aggregations natively cover ranking, filtering, and faceting once search gets this compound.",
       "Cassandra fits when write scaling matters most and queries follow fixed partition keys, but its secondary indexes can't handle compound filtering and relevance here."
     ]
@@ -412,7 +412,7 @@
     "q": "用一个不带参数的简单 PUT 创建索引时，默认配置是？",
     "options": [
       "无 mapping、5 个 shard、0 个 replica",
-      "动态 mapping、1 个 shard、1 个 replica（之后可再改）",
+      "动态 mapping、1 个主分片、1 个 replica（replica 数之后可改，主分片数不能直接改）",
       "创建索引前必须先手动写出完整的 mapping，否则这次 PUT 会直接报错失败",
       "动态 mapping、10 个 shard、3 个 replica"
     ],
@@ -421,18 +421,18 @@
     ],
     "options_en": [
       "No mapping, five shards, zero replicas",
-      "Dynamic mapping, one shard, one replica, all adjustable later",
+      "Dynamic mapping, one primary shard, one replica (replicas adjustable later; the primary shard count is not directly changeable)",
       "You must hand-write a complete mapping before creating the index, or the PUT will fail outright",
       "Dynamic mapping, ten shards, three replicas"
     ],
-    "why": "默认是动态 mapping + 1 分片 + 1 副本，这些参数创建后还能更新；多数字段不该被搜索时就该显式设置 mapping。",
-    "why_en": "A bare PUT creates an index with dynamic mapping, one shard, and one replica, all adjustable later.",
+    "why": "7.0 起不带参数建索引默认是动态 mapping + 1 个主分片 + 1 个副本。副本数是动态设置，随时可改；主分片数是静态设置，创建后只能靠 split/shrink 或 reindex 到新索引来变。多数字段不该被搜索时就显式设置 mapping。",
+    "why_en": "Since 7.0, a bare index create gives dynamic mapping, one primary shard, and one replica. The replica count is a dynamic setting you can change any time; the primary shard count is static and can only change via split/shrink or reindexing into a new index. Set an explicit mapping when most fields shouldn't be searchable.",
     "tags": [
       "elasticsearch",
       "index",
       "defaults"
     ],
-    "codeSample": "PUT /books\n# 不带 body：动态 mapping + 1 shard + 1 replica\n# 等价于显式指定：\nPUT /books\n{ \"settings\": { \"number_of_shards\": 1, \"number_of_replicas\": 1 } }",
+    "codeSample": "PUT /books\n# 不带 body（ES 7.0+）：动态 mapping + 1 shard + 1 replica\n# 等价于显式指定：\nPUT /books\n{ \"settings\": { \"number_of_shards\": 1, \"number_of_replicas\": 1 } }",
     "lang": "json",
     "termDefinitions": [
       {
@@ -454,18 +454,18 @@
     "q_en": "What are the defaults when you create an index with a simple PUT and no extra parameters?",
     "optionExplanations": [
       "默认不是 5 个分片、0 副本，这个数字记错了。",
-      "没给参数时会先套上动态 mapping、1 个分片和 1 个副本这三项起步配置，之后都能再调整。",
+      "7.0 起没给参数时默认是动态 mapping、1 个主分片和 1 个副本；副本数之后可改，主分片数是静态设置，创建后不能直接改。",
       "mapping 可以留给动态推断，不是创建索引前必须先手写的东西。",
       "10 个分片、3 个副本不是默认值，要显式配置才会有。"
     ],
     "optionExplanations_en": [
       "The default isn't 5 shards and 0 replicas — that number is just wrong.",
-      "Leave the parameters out and you start with dynamic mapping, 1 shard, and 1 replica — all three stay adjustable later.",
+      "Since 7.0, leaving parameters out gives dynamic mapping, 1 primary shard, and 1 replica; the replica count can change later, but the primary shard count is static and can't be changed directly after creation.",
       "Mapping can be left to dynamic inference — it isn't a prerequisite you must hand-write before creating an index.",
       "10 shards and 3 replicas aren't the default; you'd have to configure that explicitly."
     ],
-    "scenario": "运维直接 PUT /books 建索引，没带任何 settings 或 mapping，现在要评估默认行为。",
-    "scenario_en": "An operator creates an index with a bare PUT /books, no settings and no mapping, and now needs to know the defaults."
+    "scenario": "运维在 Elasticsearch 7.x/8.x 上直接 PUT /books 建索引，没带任何 settings 或 mapping，现在要评估默认行为。",
+    "scenario_en": "An operator on Elasticsearch 7.x/8.x creates an index with a bare PUT /books, no settings and no mapping, and now needs to know the defaults."
   },
   {
     "id": "sd-deep-dives-elasticsearch-008",
@@ -588,7 +588,7 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "versioning",
-    "q": "写入返回的 _version 字段配合 ?version=N 更新，实现的是什么机制？",
+    "q": "读文档时拿到 _seq_no 和 _primary_term，写入时带 ?if_seq_no=N&if_primary_term=M，实现的是什么机制？",
     "options": [
       "悲观锁：更新前必须先锁住整份文档，其他并发写入排队等待",
       "乐观并发控制：版本不匹配就报错，客户端处理冲突后重试",
@@ -604,14 +604,14 @@
       "The server automatically merges the conflicting content of two concurrent writes",
       "Merely a durability acknowledgment sent back after the write succeeds"
     ],
-    "why": "带版本条件的更新只在版本匹配时生效，否则抛错——这是乐观并发控制的典型例子，把冲突交给客户端重试。",
-    "why_en": "Conditional updates on the version field are optimistic concurrency control: a mismatch fails the write and lets the client retry.",
+    "why": "条件写只在文档的 seq_no / primary_term 与读到时一致才生效，否则返回 409 version conflict——这是乐观并发控制，冲突交给客户端重新读再重试。旧的 ?version=N 内部版本写法 7.0 起已不可用。",
+    "why_en": "The conditional write only applies if the document's seq_no and primary_term still match what you read; otherwise it returns a 409 version conflict. That's optimistic concurrency control: the client re-reads and retries. The old internal ?version=N form no longer works since 7.0.",
     "tags": [
       "elasticsearch",
       "versioning",
       "occ"
     ],
-    "codeSample": "PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh?version=1\n{ \"price\": 13.99 }\n# 若当前 _version 不等于 1，请求失败，客户端重试",
+    "codeSample": "PUT /books/_doc/kLEHMYkBq7V9x4qGJOnh?if_seq_no=362&if_primary_term=2\n{ \"price\": 13.99 }\n# seq_no/primary_term 不匹配 → 409，客户端重读后重试",
     "lang": "json",
     "termDefinitions": [
       {
@@ -624,9 +624,14 @@
         "meaning": "先假设不会冲突，写入时校验版本号，不匹配就报错让客户端重试。",
         "meaningEn": "Optimistic concurrency control assumes no conflict and lets a version mismatch fail the write for the client to retry.",
         "fullName": "Optimistic Concurrency Control (OCC)"
+      },
+      {
+        "term": "_seq_no / _primary_term",
+        "meaning": "每次写入分配的序列号与主分片任期；读到后在写入时用 if_seq_no / if_primary_term 做条件写，实现乐观并发控制。",
+        "meaningEn": "The sequence number and primary term assigned to each write; send them back as if_seq_no / if_primary_term to make a conditional write for optimistic concurrency control."
       }
     ],
-    "q_en": "What mechanism do _version and ?version=N implement for updates?",
+    "q_en": "Reading a document returns _seq_no and _primary_term; writing with ?if_seq_no=N&if_primary_term=M implements what mechanism?",
     "optionExplanations": [
       "校验不持锁，不会阻塞其他并发写入，这不是悲观锁。",
       "版本号对不上就直接报错，冲突交给客户端处理后重试——典型的乐观并发控制。",
@@ -639,8 +644,8 @@
       "Elasticsearch won't merge two concurrent writes for you; it only rejects the one carrying a stale version.",
       "Durability confirmation is a separate concern, unrelated to this version check."
     ],
-    "scenario": "两个后台任务可能同时改同一本书的库存字段，后写的不能静默盖掉先写的。",
-    "scenario_en": "Two background jobs may update the same book's stock field at once, and the later write must not silently clobber the earlier one."
+    "scenario": "两个后台任务可能同时改同一本书的库存字段，后写的不能静默盖掉先写的（ES 7.x/8.x）。",
+    "scenario_en": "Two background jobs may update the same book's stock field at once, and the later write must not silently clobber the earlier one (ES 7.x/8.x)."
   },
   {
     "id": "sd-deep-dives-elasticsearch-011",
@@ -664,8 +669,8 @@
       "The write immediately fails and returns a version conflict error",
       "It silently overwrites a concurrent writer's changes, a lost update"
     ],
-    "why": "另一个进程同时更新同一文档时，不带版本条件的整文档 PUT 会把对方的修改直接覆盖；用 _version 条件更新能防住。",
-    "why_en": "A full-document PUT without a version check can silently overwrite a concurrent writer's changes.",
+    "why": "另一个进程同时更新同一文档时，不带条件的整文档 PUT 会把对方的修改直接覆盖；读时记下 _seq_no / _primary_term，写时带 if_seq_no + if_primary_term 做条件更新就能防住。",
+    "why_en": "A full-document PUT without a condition can silently overwrite a concurrent writer's changes; record _seq_no and _primary_term on read and write with if_seq_no + if_primary_term to prevent it.",
     "tags": [
       "elasticsearch",
       "versioning",
@@ -949,8 +954,8 @@
       "geo_point stores a single lat-lon point; geo_shape stores arbitrary geometry like polygons and lines"
     ],
     "tradeoff": "geo_point 单点查询 vs geo_shape 几何相交查询",
-    "why": "点用 geo_point（位置、地址），面/线/圆等任意几何用 geo_shape（配送区域、服务覆盖范围）。",
-    "why_en": "Use geo_point for a single coordinate like a restaurant location, and geo_shape for arbitrary geometries like delivery zones.",
+    "why": "点用 geo_point（位置、地址），多边形/线等几何用 geo_shape（配送区域、服务覆盖范围）；圆形范围要先用 circle ingest processor 近似成多边形再存。",
+    "why_en": "Use geo_point for a single coordinate like a restaurant location, and geo_shape for polygons and lines like delivery zones; a circular area must first be approximated as a polygon (e.g. via the circle ingest processor).",
     "tags": [
       "elasticsearch",
       "geospatial",
@@ -983,20 +988,20 @@
       },
       {
         "term": "geo_shape",
-        "meaning": "存多边形、线、圆等任意几何图形的字段类型。",
-        "meaningEn": "A geo_shape field stores arbitrary geometries like polygons, lines, or circles."
+        "meaning": "存多边形、线等任意几何图形的字段类型（圆需先近似成多边形）。",
+        "meaningEn": "A geo_shape field stores arbitrary geometries like polygons and lines (circles must first be approximated as polygons)."
       }
     ],
     "q_en": "How do geo_point and geo_shape split responsibilities?",
     "optionExplanations": [
       "说反了：实际是 geo_point 存单点、geo_shape 才存多边形区域。",
-      "geo_shape 明确支持多边形、线、圆这些复杂几何，不是只能存单点。",
+      "geo_shape 明确支持多边形、线这些复杂几何，不是只能存单点；圆形要先用 circle ingest processor 近似成多边形。",
       "geo_shape 目前仍是受支持的字段类型，并没有被废弃。",
       "只存餐厅、门店这类单点位置用 geo_point；要表达配送区、城市边界这类任意几何就上 geo_shape。"
     ],
     "optionExplanations_en": [
       "That's backwards: geo_point stores a single coordinate, and geo_shape is the one that holds polygons.",
-      "geo_shape explicitly supports polygons, lines, and circles — it isn't limited to single points.",
+      "geo_shape explicitly supports complex geometries like polygons and lines, not just single points; a circle must first be approximated as a polygon via the circle ingest processor.",
       "geo_shape is still a supported field type today; it hasn't been deprecated.",
       "Use geo_point for a single location like a restaurant or store, and geo_shape when you need arbitrary geometry like a delivery zone or city boundary."
     ],
@@ -1225,7 +1230,7 @@
     "sub": "relevance",
     "q": "不指定 sort 时，Elasticsearch 默认按什么排序？",
     "options": [
-      "按相关性 _score 降序，默认打分算法与 TF-IDF 相关",
+      "按相关性 _score 降序，默认打分算法是 BM25（TF-IDF 的改进版）",
       "按文档写入集群的先后时间从早到晚排列，最早被索引进来的文档排在最前面",
       "按文档 _id 字符串的字典顺序从小到大依次排列",
       "每次返回结果的顺序都是完全随机打乱、不可预测的"
@@ -1234,13 +1239,13 @@
       0
     ],
     "options_en": [
-      "Descending relevance _score, using a scoring algorithm related to TF-IDF",
+      "Descending relevance _score, scored by default with BM25 (a refinement of TF-IDF)",
       "In the order documents were written to the cluster, from earliest to latest, oldest indexed first",
       "In ascending lexicographic order of the document _id string",
       "In a fully random, unpredictable order shuffled on every request"
     ],
-    "why": "默认按 _score 相关性排序，打分算法与 TF-IDF（词频-逆文档频率）关系密切；排序方式可配置覆盖。",
-    "why_en": "Without an explicit sort, results are ordered by relevance score, computed with an algorithm closely related to TF-IDF.",
+    "why": "默认按 _score 相关性降序；5.0 起默认打分算法是 BM25，它在 TF-IDF（词频 × 逆文档频率）基础上加了词频饱和和文档长度归一化。排序方式可用 sort 覆盖。",
+    "why_en": "By default results are ordered by _score descending; since 5.0 the default scoring is BM25, which refines TF-IDF with term-frequency saturation and document-length normalization. An explicit sort overrides it.",
     "tags": [
       "elasticsearch",
       "relevance",
@@ -1256,13 +1261,13 @@
     ],
     "q_en": "How does Elasticsearch sort results when no sort is specified?",
     "optionExplanations": [
-      "不指定 sort 时按相关性 _score 降序，打分算法和 TF-IDF 密切相关。",
+      "不指定 sort 时按相关性 _score 降序，默认打分算法是 BM25（TF-IDF 的改进版）。",
       "插入顺序只有显式按时间字段排序才会生效，不是默认行为。",
       "字典序不反映文本相关性，默认排序不会按 _id 排。",
       "随机顺序不符合搜索引擎「最相关排前面」的基本目标。"
     ],
     "optionExplanations_en": [
-      "With no sort specified, results come back by relevance _score descending, using a TF-IDF-style scoring model.",
+      "With no sort specified, results come back by relevance _score descending, scored by default with BM25 (a refinement of TF-IDF).",
       "Insertion order only takes effect if you explicitly sort by a timestamp field — it isn't the default.",
       "Lexical ID order doesn't reflect text relevance, so that isn't the default either.",
       "Random ordering defeats the basic goal of a search engine — most relevant first."
@@ -1277,9 +1282,9 @@
     "topic": "system-design",
     "sub": "relevance",
     "q": "补全默认相关性打分的思想：",
-    "text": "默认打分与 {{TF-IDF}} 密切相关：{{词频}}（term frequency）衡量词在本文档出现多不多，{{逆文档频率}}（inverse document frequency）把在所有文档里都常见的词降权。",
-    "why": "TF-IDF = 本文档内频率 × 全局稀有度：一个词在这篇文档多、在语料库少，这篇文档就与该词高度相关。",
-    "why_en": "TF-IDF multiplies how often a term appears in a document by how rare it is across all documents.",
+    "text": "ES 5.0 起默认相似度算法是 {{BM25}}，它改进自经典的 {{TF-IDF}}：{{词频}}（term frequency）衡量词在本文档出现多不多（BM25 会让它饱和），{{逆文档频率}}（inverse document frequency）把在所有文档里都常见的词降权。",
+    "why": "BM25 仍是「本文档内频率 × 全局稀有度」的 TF-IDF 思路，但词频会饱和、并按文档长度归一化，避免长文档靠堆词刷分。",
+    "why_en": "BM25 keeps the TF-IDF idea of in-document frequency times global rarity, but saturates term frequency and normalizes by document length so long documents can't win just by repeating a term.",
     "tags": [
       "elasticsearch",
       "tf-idf",
@@ -1317,14 +1322,14 @@
       "Directly borrow the ORDER BY expression syntax from relational SQL",
       "Script-based sorting: compute the sort value with a Painless script"
     ],
-    "why": "脚本排序用 Painless 语言按文档字段计算排序值（如 price * 0.9），适合按派生值排序的场景。",
-    "why_en": "Script-based sorting uses the Painless language to sort by a computed value such as a discounted price.",
+    "why": "_script 排序用 Painless 按文档字段现算排序值（如 doc['price'].value * (1 - doc['discount'].value)）。它在查询时对每个命中文档执行，较贵；能改 mapping 时，写入时预计算 discounted_price 字段通常更好。",
+    "why_en": "_script sorting runs a Painless script over document fields to compute the sort value (e.g. doc['price'].value * (1 - doc['discount'].value)). It runs per hit at query time, so it's costly; if you can change the mapping, precomputing a discounted_price field at index time is usually better.",
     "tags": [
       "elasticsearch",
       "sorting",
       "painless"
     ],
-    "codeSample": "GET /books/_search\n{\n  \"sort\": [{ \"_script\": {\n    \"type\": \"number\",\n    \"script\": { \"source\": \"doc['price'].value * 0.9\" },\n    \"order\": \"asc\"\n  }}]\n}\n// 用 Painless 脚本按派生值排序",
+    "codeSample": "GET /books/_search\n{\n  \"sort\": [{ \"_script\": {\n    \"type\": \"number\",\n    \"script\": { \"source\": \"doc['price'].value * (1 - doc['discount'].value)\" },\n    \"order\": \"asc\"\n  }}]\n}\n// 用 Painless 脚本按派生值排序",
     "lang": "json",
     "termDefinitions": [
       {
@@ -1338,16 +1343,16 @@
       "ES 原生就支持服务端计算排序，不用把全量数据拉到客户端处理。",
       "物化视图是数据库层的手段，不是 ES 提供的排序机制。",
       "ES 查询 DSL 是 JSON，没有 SQL 的 ORDER BY 表达式语法。",
-      "_script 排序用 Painless 脚本按文档字段现算排序值，比如 price * 0.9。"
+      "_script 排序用 Painless 脚本按文档字段现算排序值，比如 price × (1 − discount)。"
     ],
     "optionExplanations_en": [
       "Elasticsearch natively supports server-side computed sorting — you don't need to pull everything to the client.",
       "A materialized view is a database-layer trick, not something Elasticsearch offers for sorting.",
       "The ES query DSL is JSON — there's no SQL-style ORDER BY expression syntax.",
-      "_script sorting runs a Painless script over document fields to compute the sort value on the fly, like price * 0.9."
+      "_script sorting runs a Painless script over document fields to compute the sort value on the fly, like price × (1 − discount)."
     ],
-    "scenario": "商品列表要按「打折后价格 = price × 0.9」排序，但索引里只存了原价字段。",
-    "scenario_en": "A product list must sort by the discounted price, price times 0.9, but only the original price field is indexed."
+    "scenario": "商品列表要按「折后价 = price × (1 − discount)」排序，每件商品的 discount 不同，索引里只有 price 和 discount 两个原始字段，暂时不能重建索引。",
+    "scenario_en": "A product list must sort by discounted price = price × (1 − discount), where each product has its own discount; the index only has the raw price and discount fields and can't be reindexed for now."
   },
   {
     "id": "sd-deep-dives-elasticsearch-023",
@@ -1355,30 +1360,30 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "sorting",
-    "q": "按 nested 字段排序（如按书的最高评论评分）时，为什么必须用 nested sort（带 path + mode）？",
+    "q": "按 nested 字段排序时，sort 里的 `nested.path` 和 `mode` 各起什么作用？",
     "options": [
-      "不这样写查询请求会直接被服务端拒绝并报语法错误",
-      "保证排序值来自同一个嵌套对象，并用 mode（如 max）决定多条评论取哪个值",
-      "带上 path 和 mode 只是为了让排序性能更好而已",
-      "nested 类型的字段在 Elasticsearch 里默认根本不能参与排序"
+      "不写它们服务端会直接报语法错误拒绝请求",
+      "path 让排序进入隐藏的嵌套文档取值，mode（如 max）决定一本书多条评论聚合成哪个排序值",
+      "两者只是性能优化，不影响排序结果",
+      "嵌套值会被自动扁平化进父文档，直接按 reviews.rating 排序就能得到同样正确的结果"
     ],
     "answer": [
       1
     ],
     "options_en": [
-      "Without it, the server rejects the request outright with a syntax error",
-      "It scopes the sort values to one nested object and uses a mode like max to pick a value",
-      "Adding path and mode is purely a performance nicety, nothing semantic",
-      "Nested-typed fields cannot take part in sorting at all by default in Elasticsearch"
+      "Without them the server rejects the request with a syntax error",
+      "path makes the sort read values from the hidden nested documents, and mode (e.g. max) decides how a book's many reviews collapse into one sort value",
+      "Both are pure performance hints with no effect on the result",
+      "Nested values are auto-flattened into the parent, so sorting on reviews.rating directly gives the same correct result"
     ],
-    "why": "nested sort 指定 path 进入嵌套文档，mode: max 表示取每本书评论里的最高分作为排序值。",
-    "why_en": "A nested sort scopes the sort values to the same nested object and uses a mode like max to pick one value per parent.",
+    "why": "nested 对象被索引成隐藏的独立文档，父文档上没有它们的值，所以排序要用 nested.path 进去取；一本书有多条评论，mode 决定取 max/min/avg 等哪一个（desc 时默认就是 max，显式写出更清楚）。不带 nested 时值对父文档不可见，排序会失效而不是报错。",
+    "why_en": "Nested objects are indexed as hidden separate documents, so the parent has no value of its own and the sort must reach in via nested.path. With several reviews per book, mode picks max/min/avg etc. (desc already defaults to max; writing it is for clarity). Without nested, the values are invisible to the parent and the sort silently fails rather than erroring.",
     "tags": [
       "elasticsearch",
       "sorting",
       "nested"
     ],
-    "codeSample": "GET /books/_search\n{\n  \"sort\": [{ \"reviews.rating\": {\n    \"order\": \"desc\",\n    \"mode\": \"max\",\n    \"nested\": { \"path\": \"reviews\" }\n  }}]\n}\n// mode: max 从每本书的多条评论里取最高分",
+    "codeSample": "GET /books/_search\n{\n  \"sort\": [{ \"reviews.rating\": {\n    \"order\": \"desc\",\n    \"mode\": \"max\",\n    \"nested\": { \"path\": \"reviews\" }\n  }}]\n}\n// path 进入嵌套评论；mode: max 从每本书的多条评论里取最高分（desc 默认即 max）",
     "lang": "json",
     "termDefinitions": [
       {
@@ -1387,21 +1392,21 @@
         "meaningEn": "A nested field indexes each array element as its own hidden document so multiple conditions can match the same sub-object."
       }
     ],
-    "q_en": "Why does sorting by a nested field require nested sort with path and mode?",
+    "q_en": "When sorting by a nested field, what do `nested.path` and `mode` in the sort clause each do?",
     "optionExplanations": [
-      "不带 path 未必直接报语法错，但排序语义会算错，问题不在报错本身。",
-      "path 限定排序值必须来自同一条嵌套评论，mode（如 max）再决定多条评论时取哪个值。",
-      "这里关键是语义正确，不只是为了让查询跑得更快。",
-      "nested 字段其实可以参与排序，只是必须显式带上 path 和 mode。"
+      "不带 path 未必报语法错，而是值对父文档不可见、排序失效，问题不在报错本身。",
+      "path 进入隐藏的嵌套文档取值，mode（如 max）再决定一本书多条评论时取哪个值。",
+      "这里关键是语义正确（取到哪个值），不只是为了让查询跑得更快。",
+      "嵌套值存放在隐藏的嵌套文档里，不会被扁平化进父文档；不带 nested 直接排序取不到值。"
     ],
     "optionExplanations_en": [
-      "Omitting path won't necessarily throw a syntax error, but the sort semantics come out wrong — the issue isn't a parse failure.",
-      "path pins the sort value to a single nested review, and mode (like max) decides which value wins when a book has several.",
-      "The point here is semantic correctness, not just making the query faster.",
-      "Nested fields can actually be sorted — it just requires explicitly specifying path and mode."
+      "Omitting path doesn't necessarily raise a syntax error; the values are just invisible to the parent so the sort fails — the issue isn't a parse failure.",
+      "path reaches into the hidden nested documents for values, and mode (like max) decides which value wins when a book has several.",
+      "The point is semantic correctness (which value is read), not just making the query faster.",
+      "Nested values live in hidden nested documents and are not flattened into the parent; sorting without nested can't read them."
     ],
-    "scenario": "一本书挂着多条 nested 评论，列表要按「这本书最高的一条评论评分」排序。",
-    "scenario_en": "A book carries many nested reviews, and the listing must sort by the highest review rating on that book."
+    "scenario": "一本书挂着多条 nested 评论，列表要按「这本书最高的一条评论评分」降序排序。",
+    "scenario_en": "A book carries many nested reviews, and the listing must sort descending by the highest review rating on that book."
   },
   {
     "id": "sd-deep-dives-elasticsearch-024",
@@ -1482,8 +1487,8 @@
       "Paging very deep proactively triggers an expensive segment merge",
       "The client must cache every previously fetched page locally"
     ],
-    "why": "取第 1000 页意味着先算出前 999 页再丢弃，排序和取回的开销随深度线性增长。",
-    "why_en": "Fetching a deep page forces the cluster to retrieve and sort every preceding document on each request and then discard them.",
+    "why": "每个 shard 都要取出并排序前 from+size 条，协调节点再合并 shards × (from+size) 条后丢掉前 from 条；开销随深度增长。这正是 ES 默认用 max_result_window=10,000 拦住深分页的原因。",
+    "why_en": "Every shard must fetch and sort its top from+size hits, and the coordinating node merges shards × (from+size) hits before discarding the first from; cost grows with depth. That's why ES caps it by default with max_result_window = 10,000.",
     "tags": [
       "elasticsearch",
       "pagination",
@@ -1500,18 +1505,18 @@
     "q_en": "Why is deep pagination with from/size expensive?",
     "optionExplanations": [
       "取第 1000 页要先算出并排好前 999 页再丢弃，开销随深度线性增长。",
-      "Elasticsearch 的搜索不会给整张索引加行级锁。",
+      "Elasticsearch 的搜索不会给整张索引加写锁。",
       "分页查询本身不会主动触发段合并。",
       "这是服务端重复计算的问题，不是要客户端在本地缓存全部翻页结果。"
     ],
     "optionExplanations_en": [
       "Getting page 1000 means computing and sorting all 999 pages before it, then discarding them — cost grows linearly with depth.",
-      "Elasticsearch search doesn't take a row-level lock across the whole index.",
+      "Elasticsearch search doesn't take a write lock across the whole index.",
       "Pagination itself doesn't trigger a segment merge.",
       "This is server-side repeated computation, not a requirement for the client to cache every prior page locally."
     ],
-    "scenario": "搜索结果页要让用户翻到第 1000 页，每页 20 条，请求写 from=19980&size=20。",
-    "scenario_en": "A results page lets users jump to page 1000 at twenty per page, issuing from=19980 and size=20."
+    "scenario": "搜索结果页要让用户翻到第 1000 页，每页 20 条，请求写 from=19980&size=20；团队已把 index.max_result_window 调大到 20,000 好让请求能过。",
+    "scenario_en": "A results page lets users jump to page 1000 at twenty per page, issuing from=19980 and size=20; the team has raised index.max_result_window to 20,000 so the request is allowed."
   },
   {
     "id": "sd-deep-dives-elasticsearch-026",
@@ -1658,7 +1663,7 @@
     "q": "关于 search_after 分页，哪些说法正确？（多选）",
     "options": [
       "深分页高效：每页只取上一页之后的文档",
-      "只能向前翻页，不能随机跳到第 N 页",
+      "不支持直接跳到第 N 页",
       "服务端为每个客户端保存游标状态",
       "客户端要自己记住上一页最后一条的 sort 值"
     ],
@@ -1669,12 +1674,12 @@
     ],
     "options_en": [
       "Deep paging stays efficient because each page only fetches documents after the previous one",
-      "You can only page forward, never jump to page N",
+      "It can't jump directly to page N",
       "The server keeps per-client cursor state",
       "The client must remember the previous page's last sort values"
     ],
-    "why": "search_after 把状态放在客户端（记 sort 值）、只能前进；若底层数据更新删除，之前页的文档还可能被漏掉——要一致快照得用 PIT。",
-    "why_en": "Search-after is efficient and duplicate-free but forward-only, with the client keeping the last sort values rather than the server holding cursor state.",
+    "why": "search_after 的游标就是上一页最后一条的 sort 值，由客户端带回来，服务端不存游标；它没有偏移量概念，所以不能跳页。不配 PIT 时，翻页期间的写入/删除可能导致漏或重，要一致快照得加 PIT。",
+    "why_en": "The search_after cursor is just the last hit's sort values, which the client sends back; the server holds no cursor. With no offset concept it can't jump to page N. Without a PIT, writes or deletes during paging can cause misses or duplicates; add a PIT for a consistent snapshot.",
     "tags": [
       "elasticsearch",
       "pagination",
@@ -1690,18 +1695,18 @@
     "q_en": "Which statements about search_after pagination are correct? (Select all that apply.)",
     "optionExplanations": [
       "深分页高效：每页只处理上一页之后的增量部分，不用重新排前面的文档。",
-      "只能往前翻，不支持随机跳到第 N 页——这是它比 from/size 少的能力。",
+      "不支持直接跳到第 N 页——它没有偏移量概念，这是它比 from/size 少的能力（反转排序可往回翻）。",
       "实际上服务端不保存游标状态，是无状态机制，这个说法反了。",
       "游标状态在客户端：要自己记住并传回上一页最后一条的 sort 值。"
     ],
     "optionExplanations_en": [
       "Deep paging stays fast because each page only processes the increment after the last one — no re-sorting everything before it.",
-      "It's forward-only — no jumping to page N — that's the capability it trades away versus from/size.",
+      "It can't jump directly to page N — there's no offset concept, which is the capability it trades away versus from/size (reversing the sort can page backward).",
       "The server actually doesn't hold cursor state — search_after is stateless, so this claim is backwards.",
       "The cursor state lives on the client: it has to remember and resend the previous page's last sort value."
     ],
-    "scenario": "日志检索要顺序翻几十万条结果，客户端是不保存会话状态的 Web 前端。",
-    "scenario_en": "A log search pages sequentially through hundreds of thousands of results from a stateless web front end."
+    "scenario": "日志检索要顺序翻几十万条结果；后端搜索服务不想为每个客户端保存游标或会话状态。",
+    "scenario_en": "A log search pages sequentially through hundreds of thousands of results, and the backend search service doesn't want to hold per-client cursor or session state."
   },
   {
     "id": "sd-deep-dives-elasticsearch-029",
@@ -1887,8 +1892,8 @@
       "Coordinating node",
       "Ingest node"
     ],
-    "why": "五种节点类型：Master（集群管理）、Data（存数据）、Coordinating（请求协调）、Ingest（数据摄入转换）、Machine Learning；没有 Gateway 节点。",
-    "why_en": "Elasticsearch nodes come in five types: master, data, coordinating, ingest, and machine learning.",
+    "why": "常见节点角色有 Master（集群管理）、Data（及 hot/warm/cold 等分层）、Ingest（写入前预处理）、ML 等；每个节点都能做请求协调，roles 设为空就是专职的 coordinating-only 节点。没有 Gateway 节点。",
+    "why_en": "Common node roles include master (cluster management), data (plus hot/warm/cold tiers), ingest (pre-index processing), and ML; every node can coordinate requests, and a node with empty roles is a dedicated coordinating-only node. There's no gateway node.",
     "tags": [
       "elasticsearch",
       "node-types",
@@ -2226,7 +2231,7 @@
     "sub": "master-election",
     "q": "集群启动时 master 是怎么产生的？",
     "options": [
-      "master-eligible 种子节点跑选举，同一时刻只有一个活跃 master",
+      "master-eligible 节点之间按多数派（quorum）投票选举，同一时刻只有一个活跃 master",
       "集群里所有节点同时并列担任 master，任何一台都能做集群级操作",
       "由发起请求的客户端在连接时直接指定哪个节点当 master，服务端完全不参与决策",
       "单纯比较各节点的 IP 地址大小，取数值最小的那个当 master"
@@ -2235,13 +2240,13 @@
       0
     ],
     "options_en": [
-      "Master-eligible seed nodes run an election so exactly one master is active at a time",
+      "Master-eligible nodes hold a majority (quorum) election so exactly one master is active at a time",
       "Every node acts as master simultaneously and any of them can run cluster-level operations",
       "The connecting client directly designates which node is master, with the server not deciding at all",
       "Simply compare every node's IP address and pick whichever has the smallest value"
     ],
-    "why": "seed nodes（master-eligible）之间执行 leader election 选出唯一 master；其余 master-eligible 节点 standby 等待接管。",
-    "why_en": "Seed nodes run a leader election so exactly one active master leads the cluster while other master-eligible nodes stand by.",
+    "why": "seed hosts 只负责让节点互相发现；真正投票的是 master-eligible 节点，要拿到多数派才能当选，因此同一时刻只有一个活跃 master，其余 master-eligible 节点待命接管。",
+    "why_en": "Seed hosts only let nodes discover each other; the master-eligible nodes do the voting, and a candidate needs a majority to win, so exactly one master is active while the other master-eligible nodes stand by.",
     "tags": [
       "elasticsearch",
       "leader-election",
@@ -2261,19 +2266,19 @@
     ],
     "q_en": "How is the master chosen when the cluster starts?",
     "optionExplanations": [
-      "有资格当选的种子节点之间跑选举算法，同一时刻只有一个活跃 master，其余待命接管。",
+      "有资格当选的 master-eligible 节点之间按多数派投票选举，同一时刻只有一个活跃 master，其余待命接管。",
       "多主会让集群级操作互相冲突，Elasticsearch 不允许同时存在两个活跃 master。",
       "客户端不参与集群内部的选主过程，这是节点之间自己决定的。",
       "选主基于选举协议，不是简单比较 IP 地址大小。"
     ],
     "optionExplanations_en": [
-      "The eligible seed nodes run a leader-election algorithm among themselves; only one master is active at a time, with the rest on standby to take over.",
+      "The master-eligible nodes elect among themselves by majority vote; only one master is active at a time, with the rest on standby to take over.",
       "Two active masters would collide on cluster-level operations, which Elasticsearch simply doesn't allow.",
       "The client has no say in cluster-internal leader election — the nodes settle it among themselves.",
       "Election runs on a proper voting protocol, not a plain comparison of IP addresses."
     ],
-    "scenario": "集群冷启动，5 台 master-eligible 节点同时上线，必须保证同一时刻只有一个 master。",
-    "scenario_en": "On a cold start five master-eligible nodes come up at once, and exactly one of them must end up as the active master."
+    "scenario": "集群冷启动，5 台 master-eligible 节点同时上线（通过 seed hosts 互相发现），必须保证同一时刻只有一个 master。",
+    "scenario_en": "On a cold start five master-eligible nodes come up at once (finding each other via seed hosts), and exactly one of them must end up as the active master."
   },
   {
     "id": "sd-deep-dives-elasticsearch-038",
@@ -2349,7 +2354,7 @@
       "每次都把命中文档的完整 _source 都取回来",
       "跨十个索引做 join 再在协调节点拼装结果",
       "带 from=100000 的深分页查询",
-      "完全不用碰源文档、仅靠索引内的字段就能回答的查询"
+      "只从索引侧结构（doc values / stored fields）取所需字段、不读取完整 _source 的查询"
     ],
     "answer": [
       3
@@ -2358,10 +2363,10 @@
       "Always fetching the full _source of every hit",
       "Joining across ten indices and stitching the results on the coordinating node",
       "A query with from=100000 deep pagination",
-      "A query answered entirely from indexed fields without touching the source document"
+      "A query that pulls the needed fields from index-side structures (doc values / stored fields) without reading the full _source"
     ],
-    "why": "最快的查询在 query 阶段就能出结果——把需要返回的数据以字段形式带进索引，省掉 fetch 阶段的文档访问。",
-    "why_en": "The ideal query is answered entirely from index structures without touching source documents, sometimes by pulling needed data into indexed fields.",
+    "why": "最省的查询只对 top-k 结果取少量字段，而且这些字段直接从 doc values 或 stored fields 读，不用加载、解析整份 _source。fetch 阶段仍然存在，但成本被压到最低。",
+    "why_en": "The cheapest query fetches only a few fields for the top-k hits, reading them from doc values or stored fields instead of loading and parsing the whole _source. The fetch phase still runs, but its cost is minimal.",
     "tags": [
       "elasticsearch",
       "performance",
@@ -2389,13 +2394,13 @@
       "每次都取完整 _source 意味着多付一次 fetch 阶段的开销，不是理想状态。",
       "Elasticsearch 没有关系型意义上的 join，这个选项设想了一个不存在的场景。",
       "深分页恰恰是要避免的低效模式，不是理想查询的样子。",
-      "完全不碰源文档、只靠索引里的字段就能回答，query 阶段就出结果，省掉 fetch 开销。"
+      "只从 doc values / stored fields 取少量字段、不加载解析完整 _source，fetch 阶段的成本被压到最低。"
     ],
     "optionExplanations_en": [
       "Fetching the full _source every time pays for an extra fetch-stage round trip — that's not the ideal case.",
       "Elasticsearch has no relational-style join, so this option imagines a scenario that doesn't exist.",
       "Deep pagination is exactly the inefficient pattern to avoid, not what an ideal query looks like.",
-      "Never touching the source document and answering purely from indexed fields means the result is ready at the query stage, skipping the fetch cost entirely."
+      "Reading only a few fields from doc values / stored fields without loading and parsing the full _source keeps the fetch phase's cost minimal."
     ],
     "scenario": "搜索接口只需要返回标题和价格两个字段，QPS 很高，每次查询的开销要压到最低。",
     "scenario_en": "A high-QPS search endpoint only needs to return title and price, so per-query cost must be as low as possible."
@@ -2482,13 +2487,13 @@
       "分片把文档和索引结构水平拆到多台节点，搜索在相关分片上并行执行，由协调节点合并排序。",
       "分片和数据加密是两回事，ES 不会因为分了片就自动加密存储。",
       "有多个分片，每个索引依然需要 mapping，分片不能免掉这一步。",
-      "Elasticsearch 是最终一致，分片不会把它变成强一致系统。"
+      "分片只解决水平扩展；ES 搜索是近实时（refresh 后才可见），各副本可见性可能短暂不同，分片不提供「任意时刻强一致」。"
     ],
     "optionExplanations_en": [
       "Sharding splits documents and index structure horizontally across nodes; search runs in parallel across the relevant shards and the coordinating node merges the results.",
       "Sharding and data encryption are unrelated — having shards doesn't automatically encrypt storage.",
       "Every index still needs mapping regardless of shard count — sharding doesn't remove that step.",
-      "Elasticsearch is eventually consistent; sharding doesn't turn it into a strongly consistent system."
+      "Sharding only buys horizontal scale; ES search is near real-time (visible after refresh) and copies can briefly differ in what they show, so sharding gives no instant-by-instant strong consistency."
     ],
     "scenario": "索引已经涨到 2TB、单机装不下，搜索还要求秒级返回，得靠某个机制横向摊开。",
     "scenario_en": "An index has grown to two terabytes, too big for one machine, yet search must still return within seconds."
@@ -2684,7 +2689,7 @@
     "sub": "segment-crud",
     "q": "插入一个新文档时，Lucene 实际做了什么？",
     "options": [
-      "攒批：文档进待写批次，凑够一批建成新 segment 刷盘",
+      "先进内存 indexing buffer（同时写 translog），refresh 时把这批文档建成一个新 segment",
       "把新文档直接插进已有 segment 的中间位置并改写它",
       "每插入一条文档就重写一遍整个索引",
       "文档只写进内存，永远不会刷到磁盘"
@@ -2693,13 +2698,13 @@
       0
     ],
     "options_en": [
-      "Batch first: documents accumulate, then a full batch is built into a new segment and flushed to disk",
+      "Docs go into an in-memory indexing buffer (and the translog); on refresh the batch is built into a new segment",
       "Insert the new document directly into the middle of an existing segment and rewrite it",
       "Rewrite the entire index for every single document inserted",
       "Write the document only to memory and never flush it to disk"
     ],
-    "why": "写入是批量构建新 segment 的过程，不修改既有 segment——这是不可变设计下高写入吞吐的来源。",
-    "why_en": "Inserts are batched into new segments that get flushed to disk, never modifying existing segments.",
+    "why": "写入不改已有 segment：文档先进 indexing buffer 并记 translog，refresh（默认约每秒或 buffer 满）把这批建成新 segment、变得可搜索；之后 flush 做 Lucene commit 真正 fsync 落盘。批量构建是高写入吞吐的来源。",
+    "why_en": "Writes never touch existing segments: documents enter the indexing buffer and the translog, a refresh (about once a second by default, or when the buffer fills) builds them into a new searchable segment, and a later flush performs the Lucene commit that fsyncs to disk. Batch building is where the high write throughput comes from.",
     "tags": [
       "elasticsearch",
       "segments",
@@ -2714,13 +2719,13 @@
     ],
     "q_en": "What does Lucene actually do when inserting a new document?",
     "optionExplanations": [
-      "新文档先进待写批次，攒够一批后构建成一个新 segment 刷到磁盘。",
+      "新文档先进内存 indexing buffer 并记 translog，refresh 时把这批建成一个新 segment；真正 fsync 落盘发生在之后的 flush。",
       "segment 一旦写成就不再被修改，不能把新文档插进已有 segment 中间。",
       "写入只影响新构建的 segment，不会碰既有索引的全量重写。",
       "数据最终会被刷到磁盘，不是永远只留在内存里。"
     ],
     "optionExplanations_en": [
-      "New documents first queue up in a pending batch, and once enough accumulate they get built into a brand-new segment flushed to disk.",
+      "New documents first go into the in-memory indexing buffer and the translog; a refresh builds the batch into a new segment, and the real fsync to disk happens at a later flush.",
       "A segment can't be modified once written, so a new document can't be inserted into the middle of an existing one.",
       "A write only produces a new segment — it never rewrites the whole existing index.",
       "The data does eventually get flushed to disk — it doesn't stay in memory forever."
@@ -2999,7 +3004,7 @@
     "q": "倒排索引（inverted index）是什么？它为什么让关键词搜索快？",
     "options": [
       "把全部文档按 ID 从小到大排好序，存成一份可顺序扫描的列表",
-      "「词 → 含该词的文档列表」的映射，把 O(n) 扫描变查表",
+      "「词 → 含该词的文档列表」的映射：先查词典再读该词的 posting list，代价与命中数相关、与全库大小无关",
       "对文档的原始内容整体做一次 gzip 压缩后存起来",
       "把出现过的所有词，都存进一棵普通的平衡二叉树里"
     ],
@@ -3008,12 +3013,12 @@
     ],
     "options_en": [
       "A list of all documents sorted by id ascending, stored as a sequentially scannable list",
-      "A mapping from term to the documents containing it, turning an O(n) scan into a table lookup",
+      "A term-to-documents mapping: look up the term, then read its posting list, so cost scales with matches rather than corpus size",
       "A single gzip compression pass run over the raw document content",
       "Storing every term that ever appeared in an ordinary balanced binary tree"
     ],
-    "why": "为每个唯一词记录它出现在哪些文档里——找「含 lazy 的书」不再扫 10 亿本书，直接查表。这是「复制数据并按检索方式重排」的经典应用。",
-    "why_en": "An inverted index maps each term to the documents containing it, turning a linear scan into a near constant-time lookup.",
+    "why": "倒排索引为每个词存一份 posting list。查询时在词典里定位这个词，再读它的 posting list，不再扫 10 亿本书。代价取决于命中数量，不是全库大小，也不是严格 O(1)。",
+    "why_en": "An inverted index keeps a posting list per term: the query locates the term in the dictionary and reads its posting list instead of scanning a billion books. Cost depends on the number of matches, not the corpus size, and it isn't strictly O(1).",
     "tags": [
       "elasticsearch",
       "inverted-index",
@@ -3023,25 +3028,25 @@
     "termDefinitions": [
       {
         "term": "inverted index（倒排索引）",
-        "meaning": "从词到包含该词的文档列表的映射，让关键词查找接近 O(1)。",
-        "meaningEn": "An inverted index maps each term to the documents containing it, turning search into a near constant-time lookup."
+        "meaning": "从词到包含该词的文档列表（posting list）的映射，查询代价取决于命中数而不是全库大小。",
+        "meaningEn": "An inverted index maps each term to the list of documents containing it (its posting list), so query cost scales with matches rather than corpus size."
       }
     ],
     "q_en": "What is an inverted index, and why does it make keyword search fast?",
     "optionExplanations": [
       "按 ID 排好序的一份列表不能直接支持按关键词查找。",
-      "从「词→含该词的文档列表」的映射入手，把全量扫描变成近似 O(1) 的直接查表。",
+      "从「词→含该词的文档列表」的映射入手：先查词典、再读该词的 posting list，把全量扫描变成按命中数付费的查找，不是严格 O(1)。",
       "gzip 压缩解决的是存储体积问题，不解决查找效率问题。",
       "平衡二叉树擅长范围顺序查询，不是词到文档集合的映射结构。"
     ],
     "optionExplanations_en": [
       "A list simply sorted by document ID can't directly support keyword lookup.",
-      "It maps each word to the list of documents containing it, turning a full scan into an almost O(1) table lookup.",
+      "It maps each word to the list of documents containing it: look up the term, then read its posting list, turning a full scan into a lookup whose cost scales with matches — not strictly O(1).",
       "gzip compression solves a storage-size problem, not a lookup-efficiency problem.",
       "A balanced binary tree is good at ordered range queries, not at mapping a word to its set of documents."
     ],
-    "scenario": "书库有 10 亿本书，用户搜「lazy」要在毫秒内拿到所有含这个词的书。",
-    "scenario_en": "A catalog holds a billion books, and a search for the word lazy must return every book containing it within milliseconds."
+    "scenario": "书库有 10 亿本书，用户搜「lazy」，要在毫秒级返回最相关的前 20 本，不能逐本扫描全文。",
+    "scenario_en": "A catalog holds a billion books, and a search for \"lazy\" must return the top 20 matches within milliseconds without scanning every book's text."
   },
   {
     "id": "sd-deep-dives-elasticsearch-052",
@@ -3159,13 +3164,13 @@
     "q_en": "How do the inverted index and doc values split work in search plus price sorting?",
     "optionExplanations": [
       "关键词先靠倒排索引找出候选文档，doc values 再给这些文档的排序字段值——两步各管一段。",
-      "只在不需要排序聚合的纯词项查询时，doc values 可能才不参与。",
+      "两者方向相反：倒排索引是「词 → 文档」，负责找出匹配；doc values 是「文档 → 字段值」，负责排序和聚合，不是用来做关键词匹配的。",
       "doc values 是列式取值结构，负责不了从 token 找文档这一步。",
       "倒排索引在查询的 query 阶段同样要用，不是只在写入时起作用。"
     ],
     "optionExplanations_en": [
       "Keywords first find candidate documents through the inverted index, then doc values supply the sort field values for those documents — two separate steps.",
-      "doc values might sit out only for a pure term-match query that needs no sorting or aggregation at all.",
+      "They point in opposite directions: the inverted index maps term to documents to find matches, while doc values map document to field value for sorting and aggregation, not keyword matching.",
       "doc values is a columnar lookup structure — it can't do the token-to-document step.",
       "The inverted index gets used during the query stage too, not only while writing."
     ],
@@ -3178,11 +3183,11 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "query-planning",
-    "q": "coordinating 节点上的查询规划器（query planner）靠什么决定执行方式？",
+    "q": "Elasticsearch / Lucene 执行多子句查询时，靠什么决定先执行哪个子句？",
     "options": [
       "每次都在几种候选执行计划里完全随机挑选一个来执行",
       "永远严格按照查询语句里写下来的先后顺序依次执行",
-      "统计信息：字段类型、词频、文档长度，据此选执行顺序",
+      "各子句的代价估计（如每个词的 posting list 长度、字段类型），先走最便宜、最稀疏的子句",
       "执行方式的选择只取决于集群里一共有多少个节点"
     ],
     "answer": [
@@ -3191,11 +3196,11 @@
     "options_en": [
       "Randomly picking one of several candidate execution plans completely at random each time",
       "Always strictly executing step by step in the exact order the query was written in",
-      "Statistics — field types, term frequencies, document lengths — used to pick the execution order",
+      "Each clause's cost estimate (e.g. posting-list length per term, field type), leading with the cheapest, sparsest clause",
       "The choice of execution style depends only on how many nodes the cluster happens to have"
     ],
-    "why": "规划器基于统计选择用哪个索引、按什么顺序执行、如何合并多节点结果；「数据依赖」的自适应正是数据库系统强大的原因。",
-    "why_en": "The query planner uses statistics on fields, term popularity, and document lengths to pick the cheapest execution order dynamically.",
+    "why": "执行顺序在每个 shard 上由 Lucene 决定：它估计每个子句的代价（posting list 有多长、能匹配多少文档），先用最稀疏的子句当领头，其他子句只去验证这些候选。顺序不同，耗时可以差几个数量级。",
+    "why_en": "Execution order is decided per shard by Lucene: it estimates each clause's cost (how long the posting list is, how many docs it can match), leads with the sparsest clause, and has the others only verify those candidates. A different order can cost orders of magnitude more.",
     "tags": [
       "elasticsearch",
       "query-planner",
@@ -3204,21 +3209,21 @@
     "termDefinitions": [
       {
         "term": "query planner（查询规划器）",
-        "meaning": "在 coordinating 节点上依据统计信息选择最优执行方式的组件。",
-        "meaningEn": "The query planner is the component on the coordinating node that uses statistics to choose the cheapest execution plan."
+        "meaning": "在每个 shard 上由 Lucene 按子句代价决定执行顺序的机制（ES 没有中心化的 cost-based planner）。",
+        "meaningEn": "The per-shard mechanism by which Lucene orders clause execution by cost; Elasticsearch has no centralized cost-based planner."
       }
     ],
-    "q_en": "What does the query planner on a coordinating node use to choose an execution plan?",
+    "q_en": "When Elasticsearch / Lucene runs a multi-clause query, what decides which clause runs first?",
     "optionExplanations": [
       "真要随机挑，性能会完全不可预测，跟实际表现不符。",
       "严格按语句写下的顺序执行等于忽视统计信息，会错失很大的优化空间。",
-      "规划器基于字段类型、热门关键词、文档长度等统计信息，动态选出最省时间的执行顺序。",
+      "Lucene 在每个 shard 上估计各子句的代价（posting list 长度、能匹配多少文档），先用最稀疏的子句领头，动态选出最省时间的执行顺序。",
       "节点数只是集群拓扑信息，不是查询代价估算依赖的关键统计量。"
     ],
     "optionExplanations_en": [
       "If it really picked at random, performance would be unpredictable, which doesn't match reality.",
       "Strictly following the order written in the query would ignore statistics and miss a lot of optimization headroom.",
-      "The planner uses statistics like field type, popular terms, and document length to dynamically pick the fastest execution order.",
+      "On each shard Lucene estimates every clause's cost (posting-list length, how many docs it can match) and leads with the sparsest clause, dynamically picking the cheapest order.",
       "Node count is just cluster topology, not a key statistic for estimating query cost."
     ],
     "scenario": "一次 bool 查询里既有高频词 match 又有 range 过滤，执行顺序不同耗时差几个数量级。",
@@ -3261,8 +3266,8 @@
       },
       {
         "term": "query planner（查询规划器）",
-        "meaning": "在 coordinating 节点上依据统计信息选择最优执行方式的组件。",
-        "meaningEn": "The query planner is the component on the coordinating node that uses statistics to choose the cheapest execution plan."
+        "meaning": "在每个 shard 上由 Lucene 按子句代价决定执行顺序的机制（ES 没有中心化的 cost-based planner）。",
+        "meaningEn": "The per-shard mechanism by which Lucene orders clause execution by cost; Elasticsearch has no centralized cost-based planner."
       }
     ],
     "q_en": "For the search \"bill nye\", with millions of \"bill\" hits and hundreds of \"nye\" hits, what is efficient?",
@@ -3503,22 +3508,22 @@
     "sub": "limitations",
     "q": "使用 Elasticsearch 时必须向面试官承认的一致性事实是？",
     "options": [
-      "搜索结果是最终一致的，会读到过期数据，容忍不了就换方案",
+      "搜索结果是最终一致的，可能读到过期数据，容忍不了就换方案",
       "Elasticsearch 对跨文档操作提供可串行化事务保证",
-      "Elasticsearch 每次写入都是同步落盘的强一致操作",
+      "Elasticsearch 每次写入一 ack 就立刻对所有搜索可见，是强一致操作",
       "主分片和副本之间的数据永远保持瞬时一致"
     ],
     "answer": [
       0
     ],
     "options_en": [
-      "Search results are eventually consistent and can be stale, so an intolerant use case needs another approach",
+      "Search results are eventually consistent and can be stale; if the use case can't tolerate that, use another approach",
       "Elasticsearch provides serializable transaction guarantees across documents",
-      "Every Elasticsearch write is a synchronously flushed, strongly consistent operation",
+      "Every Elasticsearch write is immediately visible to all searches once acked — a strongly consistent operation",
       "Data between the primary shard and its replicas is always instantaneously in sync"
     ],
-    "why": "从写入到可搜索有延迟，CDC 同步又加一层滞后——结果「必然」stale。设计时要明说这一点并确认业务能容忍。",
-    "why_en": "Elasticsearch is eventually consistent, so search results will be stale, sometimes significantly, and the design must tolerate that.",
+    "why": "写入 ES 默认会 fsync translog 并复制到 in-sync 副本才 ack，所以「持久」没问题；但要等 refresh（默认约 1s）才能被搜到，CDC 同步又再叠一层滞后。所以用户刚改完可能搜不到，设计时要明说并确认业务能容忍。C 错在「立刻可搜索」；D 错在各副本 refresh 时机不同，搜索结果可能短暂不一致。",
+    "why_en": "By default an ES write fsyncs the translog and replicates to in-sync copies before acking, so durability is fine; but it becomes searchable only after a refresh (~1s by default), and CDC adds more lag. A user may not find their just-changed name, so state this and confirm the business tolerates it. C is wrong about immediate searchability; D is wrong because each copy refreshes on its own schedule, so search results can briefly differ.",
     "tags": [
       "elasticsearch",
       "eventual-consistency",
@@ -3538,16 +3543,16 @@
     ],
     "q_en": "What consistency fact must you acknowledge when using Elasticsearch?",
     "optionExplanations": [
-      "结果必然是最终一致的，会读到过期数据，有时滞后还很明显——不能容忍就得换方案。",
+      "搜索结果是最终一致的，可能读到过期数据，有时滞后还很明显——不能容忍就得换方案。",
       "Elasticsearch 不提供跨文档的可串行化事务保证。",
-      "写入到可搜索之间存在刷新延迟，不是同步落盘的强一致操作。",
-      "主副本之间的同步也有延迟窗口，不是瞬时一致。"
+      "写入 ack 前已 fsync translog 并复制到 in-sync 副本，持久没问题；但要等 refresh 才能被搜到，并不是「ack 即可搜」的强一致操作。",
+      "主副本在 ack 前已同步复制，差异来自各 copy 各自 refresh 的时机，搜索结果可能短暂不一致。"
     ],
     "optionExplanations_en": [
-      "Results are necessarily eventually consistent — you can read stale data, sometimes noticeably delayed, and if the business can't tolerate that you need a different approach.",
+      "Search results are eventually consistent — you can read stale data, sometimes noticeably delayed — and if the business can't tolerate that you need a different approach.",
       "Elasticsearch doesn't offer serializable transactions across documents.",
-      "There's a refresh delay between writing and being searchable — it isn't a synchronous, strongly consistent write.",
-      "Replica sync also has a delay window — it isn't instantaneously consistent either."
+      "Before the ack, the write is already fsynced to the translog and replicated to in-sync copies, so durability is fine; but it's searchable only after a refresh, so it isn't 'searchable the moment it's acked'.",
+      "The primary-to-replica copy completes before the ack; differences come from each copy refreshing on its own schedule, so search results can briefly differ."
     ],
     "scenario": "用户改完昵称立刻搜自己：主库已更新，ES 靠 CDC 同步，产品问「能保证搜到吗」。",
     "scenario_en": "A user renames themselves and immediately searches for it: the primary store is updated but Elasticsearch syncs via CDC."
@@ -3951,7 +3956,7 @@
     "q": "即使不用 ES，也能从它的设计里借鉴哪些经验？（多选）",
     "options": [
       "在合适的层使用不可变数据，换取缓存、压缩与并发的简化",
-      "把查询执行与数据存储分离，各自独立优化（协调节点 vs 数据节点）",
+      "把查询协调与分片执行分开：协调节点负责 scatter-gather 和合并结果，数据节点负责存分片和本地检索",
       "按最常见的查询模式组织甚至复制数据（倒排索引、doc values）",
       "分布式架构会自动带来强一致，无需权衡"
     ],
@@ -3962,12 +3967,12 @@
     ],
     "options_en": [
       "Use immutable data at the right layer to simplify caching, compression, and concurrency",
-      "Separate query execution from data storage so each can be optimized independently, like coordinating vs data nodes",
+      "Separate query coordination from shard-level execution: coordinating nodes scatter-gather and merge, data nodes hold shards and search locally",
       "Organize or even duplicate data around the most common query patterns, like inverted indexes and doc values",
       "Distributed architecture automatically gives you strong consistency with no trade-off"
     ],
-    "why": "immutability、执行/存储分离、面向查询的索引结构是三大可迁移经验；分布式恰恰要求你直面 CAP 权衡而不是免除它。",
-    "why_en": "Elasticsearch teaches immutability, separating query execution from storage, and structuring data for query patterns, while distribution still forces CAP trade-offs.",
+    "why": "可迁移的三条经验：不可变 segment 简化缓存/压缩/并发；协调层与分片层分工（scatter-gather + 合并）；按查询模式组织甚至复制数据（倒排索引、doc values）。D 错：分布式不会自动带来强一致，网络分区时仍要在一致性和可用性间取舍。",
+    "why_en": "Three transferable lessons: immutable segments simplify caching, compression and concurrency; a coordination layer vs a shard layer (scatter-gather + merge); organizing or duplicating data for query patterns (inverted index, doc values). D is wrong: distribution doesn't give strong consistency for free; under partitions you still trade consistency against availability.",
     "tags": [
       "elasticsearch",
       "design-lessons",
@@ -3999,13 +4004,13 @@
     "q_en": "Even if you do not use Elasticsearch, which design lessons are reusable? (Select all that apply.)",
     "optionExplanations": [
       "在合适的层用不可变数据，换来缓存、压缩和并发处理的简化，这是 segment 设计给的经验。",
-      "把查询执行和数据存储分离、各自独立优化——协调节点和数据节点的分工就是直接例子。",
+      "把查询协调（scatter-gather 与合并结果）和分片执行（数据节点存分片并本地检索）分开——协调节点和数据节点的分工就是直接例子。",
       "按最常见的查询模式组织甚至复制数据——倒排索引和 doc values 就是两个具体产物。",
       "这个说法和 CAP 矛盾：分布式系统必须直面一致性和可用性的权衡，不能靠架构自动免除它。"
     ],
     "optionExplanations_en": [
       "Using immutable data at the right layer buys simpler caching, compression, and concurrency — that's the lesson segment design teaches.",
-      "Separating query execution from data storage so each can be tuned independently — the coordinating/data node split is a direct example.",
+      "Separating query coordination (scatter-gather and merging) from shard-level execution (data nodes hold shards and search locally) — the coordinating/data node split is a direct example.",
       "Organizing or even duplicating data around the most common query patterns — the inverted index and doc values are two concrete products of that.",
       "This contradicts CAP: distributed systems have to face the consistency/availability tradeoff head-on, not get it waived by architecture."
     ],
@@ -4095,10 +4100,10 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "pagination",
-    "scenario": "日志检索用 search_after 顺序翻几十万条，很多文档的 timestamp 撞在同一毫秒；工程师的 sort 只写了 [timestamp desc]，没带 _id 之类唯一 tie-breaker。",
+    "scenario": "日志检索用 search_after 顺序翻几十万条，没有开 PIT（point in time），很多文档的 timestamp 撞在同一毫秒；工程师的 sort 只写了 [timestamp desc]，没带任何唯一 tie-breaker。",
     "q": "少了唯一 tie-breaker，深翻页会怎么坏掉？",
     "options": [
-      "同 timestamp 的文档没有稳定顺序，游标切在这批中间，部分文档重复、部分被漏",
+      "同 timestamp 的文档没有稳定顺序，游标切在这批中间时可能部分重复、部分被漏",
       "Elasticsearch 直接拒绝该请求，强制你先补一个唯一排序键才允许继续往下翻页",
       "结果完整无缺，同 timestamp 的文档内部每次随机排列而已，对翻页完整性无伤大雅",
       "只有 _score 相关性打分会受影响，前后翻页返回的文档集合本身仍然正确"
@@ -4107,13 +4112,13 @@
       0
     ],
     "options_en": [
-      "Tied-timestamp docs have no stable order, so the cursor lands mid-group and some repeat while others are skipped",
+      "Tied-timestamp docs have no stable order, so when the cursor lands mid-group some may repeat and others may be skipped",
       "Elasticsearch rejects the request outright and forces you to add a unique sort key before letting you page further",
       "Results stay complete; tied-timestamp docs merely shuffle randomly within the group, harmless to pagination",
       "Only the _score relevance ranking is affected, and the set of documents returned across pages is still correct"
     ],
-    "why": "search_after 靠「取上一页最后一条 sort 值之后的文档」切页；排序键不唯一时同值文档没有全序，游标切不干净就会跨页重复或漏行。修法：sort 末尾补一个唯一键（如 _id）凑成全序，多存一列换来翻页不重不漏。",
-    "why_en": "Search_after pages by fetching docs after the previous page's last sort value, so a non-unique sort key leaves tied docs without a total order and the cursor can't split them cleanly — add a unique key like _id to the sort.",
+    "why": "search_after 取「上一页最后一条 sort 值之后」的文档；排序键不唯一时同值文档没有全序，游标落在同值组中间就可能跨页重复或漏行。修法：用 PIT（自动带 _shard_doc tiebreaker），或在 sort 末尾补一个唯一字段。",
+    "why_en": "search_after fetches docs after the last sort value of the previous page; with a non-unique sort key, tied docs have no total order, so a cursor landing mid-group may repeat or skip docs. Fix: use a PIT (which adds an implicit _shard_doc tiebreaker) or append a unique field to the sort.",
     "tags": [
       "elasticsearch",
       "pagination",
@@ -4142,15 +4147,15 @@
       }
     ],
     "q_en": "With no unique tie-breaker, how does deep pagination break?",
-    "scenario_en": "A log search pages through hundreds of thousands of results with search_after; many docs share the same millisecond timestamp, and the engineer sorted only by [timestamp desc] with no _id tie-breaker.",
+    "scenario_en": "A log search pages through hundreds of thousands of results with search_after without a point in time (PIT); many docs share the same millisecond timestamp, and the sort is only [timestamp desc] with no unique tie-breaker.",
     "optionExplanations": [
-      "同值文档缺全序，游标恰好落在这批中间时，无法判定「之后」是谁，于是这批文档在相邻页里重复或被跳过。",
+      "同值文档缺全序，游标恰好落在这批中间时，无法判定「之后」是谁，于是这批文档在相邻页里可能重复或被跳过。",
       "Elasticsearch 不会校验排序键唯一性、也不会拒绝，它照跑，坏结果要到翻页时才暴露。",
       "同值内部顺序不稳定不是「无伤大雅」——正是它导致游标切不干净，进而漏行/重复。",
       "问题出在切页边界而非打分，_score 正确也救不了缺失全序导致的重复与漏行。"
     ],
     "optionExplanations_en": [
-      "Tied docs lack a total order, so when the cursor sits inside that group there's no way to say what comes 'after' — those docs repeat or get skipped across adjacent pages.",
+      "Tied docs lack a total order, so when the cursor sits inside that group there's no way to say what comes 'after' — those docs may repeat or get skipped across adjacent pages.",
       "Elasticsearch doesn't check sort-key uniqueness or reject the request; it runs, and the bad result only surfaces once you page.",
       "Unstable order within a tie isn't 'harmless' — it's exactly what makes the cursor cut imprecisely and drop or duplicate rows.",
       "The failure is at the page boundary, not in scoring; a correct _score can't fix repeats and gaps caused by a missing total order."
@@ -4242,8 +4247,8 @@
     "scenario": "商品搜索要在用户用词和商品标题用词不完全一致时也能召回相关商品（按含义/意图匹配），而不只是命中相同的词。",
     "q": "要按「含义」而非「相同词」召回，mapping 里该用哪种字段能力？",
     "options": [
-      "embedding 字段做语义搜索：按含义相近召回，用词不同也能命中",
-      "text 字段配 custom analyzer：把词归一化后进倒排索引，本质仍是共享词元匹配",
+      "dense_vector（embedding 向量）字段做语义搜索：按含义相近召回，用词不同也能命中",
+      "text 字段配 custom analyzer（含同义词表）：仍是共享词元匹配，只能覆盖预先列出的同义词",
       "keyword 字段：把整个值当不可切分的原子，只能做精确相等匹配",
       "加大 from/size 分页深度，多翻几页自然覆盖到语义相近的结果"
     ],
@@ -4251,14 +4256,14 @@
       0
     ],
     "options_en": [
-      "An embedding field for semantic search: it recalls by closeness of meaning, matching even when the words differ",
-      "A text field with a custom analyzer: it normalizes tokens into the inverted index, but still matches on shared tokens",
+      "A dense_vector (embedding) field for semantic search: recalls by closeness of meaning even when words differ",
+      "A text field with a custom analyzer (incl. synonyms): still shared-token matching, covering only pre-listed synonyms",
       "A keyword field: it treats the whole value as one unsplittable atom and only does exact-equality matching",
       "Increase from/size pagination depth — page further and you'll eventually cover the semantically similar results"
     ],
     "tradeoff": "语义召回（embedding） vs 词元精确匹配（analyzer/keyword）",
-    "why": "要按含义而非相同词面召回，就需要 embedding 字段做语义搜索；custom analyzer 只是把词归一化后仍进倒排索引，本质还是共享词元匹配。代价：语义召回更重，也可能引入相关性噪声。",
-    "why_en": "To recall by meaning rather than by identical words you need an embedding field for semantic search; a custom analyzer only normalizes tokens into the inverted index and still relies on shared terms, at the cost of a heavier, noisier recall path.",
+    "why": "按含义召回要把文本编码成向量，用 dense_vector 做 kNN/语义搜索。analyzer 即使配同义词表，也只是把词归一化后进倒排索引，只能覆盖事先列出的词对，泛化不到含义。代价：向量召回更重，也可能带来相关性噪声，常和关键词检索做 hybrid。",
+    "why_en": "Recall by meaning needs text encoded as vectors in a dense_vector field for kNN/semantic search. Even with a synonym list, an analyzer only normalizes tokens into the inverted index and covers pre-listed pairs, not meaning in general. Cost: vector recall is heavier and can add relevance noise, so it's often combined with keyword search (hybrid).",
     "whenOtherWins": "当用户就是要精确命中相同词（如 SKU、书名、标签），text+analyzer 或 keyword 反而更合适，embedding 的语义召回会引入不相关结果。",
     "tags": [
       "elasticsearch",
@@ -4329,14 +4334,14 @@
     "q_en": "To recall by meaning rather than identical words, which mapping field capability fits?",
     "scenario_en": "A product search must recall relevant items even when the user's words and the product title's words don't fully match (matching by meaning/intent), not just hits on identical terms.",
     "optionExplanations": [
-      "embedding 把文本编码成向量，按含义相近召回，正好解决用词不一致却想匹配意图的场景。",
-      "分析器只能做小写、去词尾这类归一化，匹配仍落在共享词元上，用词完全不同就召不回。",
+      "dense_vector 存文本的 embedding 向量，按含义相近召回，正好解决用词不一致却想匹配意图的场景。",
+      "分析器（即使配同义词表）只覆盖预先列出的词对，匹配仍落在共享词元上，泛化不到含义，用词完全不同就召不回。",
       "keyword 把整值当原子只做精确相等，连近义词都匹配不了，更谈不上语义召回。",
       "分页只决定返回结果的哪一段，召回集合本身没变，翻再多页也变不出语义相近的新文档。"
     ],
     "optionExplanations_en": [
-      "An embedding encodes text into a vector and recalls by closeness of meaning — exactly the case where words differ but you want to match intent.",
-      "The analyzer can only lowercase and stem, but matching still rests on shared tokens, so completely different wording won't be recalled.",
+      "A dense_vector field stores the text's embedding and recalls by closeness of meaning — exactly the case where words differ but you want to match intent.",
+      "An analyzer, even with a synonym list, covers only pre-listed pairs and still matches on shared tokens; it can't generalize to meaning, so completely different wording won't be recalled.",
       "A keyword field treats the whole value as an atom for exact equality, so it can't even match synonyms, let alone do semantic recall.",
       "Pagination only picks which slice of results to return; the recalled set is unchanged, so paging further never conjures semantically similar new docs."
     ]
