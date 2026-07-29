@@ -46,53 +46,6 @@
     ]
   },
   {
-    "id": "sd-problem-breakdowns-chatgpt-002",
-    "format": "multi",
-    "atomType": "fact",
-    "topic": "system-design",
-    "sub": "requirements",
-    "scenario": "ChatGPT 设计题只有 45 分钟，深挖预算要留给流式返回和 GPU 调度，其余议题先划到线下。",
-    "scenario_en": "With only 45 minutes, the deep-dive budget goes to streaming and GPU scheduling, so everything else gets pushed below the line.",
-    "q": "哪些内容在本题里明确 below the line？（多选）",
-    "q_en": "What is explicitly below the line for this design? (Choose all that apply.)",
-    "options": [
-      "保存最终 assistant message",
-      "逐 token 持久化每个流式 chunk",
-      "鉴权、滥用治理和内容审核细节",
-      "GDPR、数据驻留、隐私合规"
-    ],
-    "answer": [
-      1,
-      2,
-      3
-    ],
-    "why": "系统只需要持久化最终回复，不要求每个 token 都成为 durable record；安全、合规、监控等也不是主线。这样深挖可以集中在 serving 系统本身。",
-    "why_en": "Per-token durability, moderation, compliance, and operations are scoped out so the design can focus on low-latency serving and GPU capacity.",
-    "tags": [
-      "chatgpt",
-      "requirements",
-      "scope"
-    ],
-    "options_en": [
-      "Persist only the final assistant message.",
-      "Persist every streamed token chunk individually.",
-      "Authentication, abuse prevention, and moderation details.",
-      "GDPR, data residency, and privacy compliance."
-    ],
-    "optionExplanations": [
-      "保存最终消息其实是本题范围内的基本要求，不属于 below the line，别把它和逐 token 持久化搞混。",
-      "确实被划出范围：不需要把每个流式 chunk 都变成 durable 记录，只保留最终回复即可。",
-      "同样在范围外：鉴权和内容审核有专门系统负责，这道题不用深挖它们的实现细节。",
-      "合规相关的 GDPR、数据驻留也被划出范围，留给专门团队处理，不是这次设计的重点。"
-    ],
-    "optionExplanations_en": [
-      "Saving the final message is actually in scope, not below the line — don't confuse it with per-token persistence.",
-      "This is genuinely out of scope: you don't need to make every streamed chunk a durable record, only the final reply.",
-      "Also out of scope: auth and moderation live in their own systems, so this design doesn't need to detail them.",
-      "GDPR and data residency are compliance concerns handled elsewhere, not part of this design's scope."
-    ]
-  },
-  {
     "id": "sd-problem-breakdowns-chatgpt-003",
     "format": "mcq",
     "atomType": "number",
@@ -402,7 +355,7 @@
     "answer": [
       3
     ],
-    "why": "Chat Service 负责认证后的编排和消息持久化，Inference Service 拥有 GPU worker。拆分后可以独立扩容、排队、调度 GPU，而不让普通请求层被 GPU 约束绑死。",
+    "why": "两层资源画像完全不同，耦在一起就是让便宜那层被昂贵那层绑架。拆开后:①两条独立扩容曲线——用户翻历史暴增只扩 Chat Service(秒级、便宜)，GPU 一张不加;耦合则为扛 HTTP 量连 GPU 一起扩，烧钱买闲置卡。②GPU 可当稀缺资源统一排队与 batching(利用率命根子)——散在每个实例里就没法全局批处理。③故障域隔离 + 部署粒度不同(GPU 节点要特定机型/驱动/几十GB 权重镜像)。",
     "why_en": "Separating chat orchestration from GPU inference lets the cheap stateless tier and expensive worker tier scale and schedule independently.",
     "whenOtherWins": "很小的内部 demo 可以把调用写在一个服务里；一旦 GPU 成为瓶颈，边界就必须清晰。",
     "tags": [
@@ -429,6 +382,54 @@
       "Handing GPU scheduling to the client is neither safe nor practical; scheduling authority has to stay server-side.",
       "The split has nothing to do with dropping history — Chat Service still persists messages, it just stops also owning GPU orchestration.",
       "Orchestration is cheap and stateless while GPU inference is expensive and stateful, so splitting lets each scale on its own curve."
+    ],
+    "table": {
+      "headers": [
+        "",
+        "Chat Service(编排层)",
+        "Inference Service(GPU 层)"
+      ],
+      "rows": [
+        [
+          "资源",
+          "CPU + 普通行存储",
+          "GPU(极贵、供给稀缺)"
+        ],
+        [
+          "扩容速度",
+          "秒级(拉个 pod)",
+          "慢(GPU 稀缺+加载权重几十秒~分钟)"
+        ],
+        [
+          "扩容信号",
+          "QPS、连接数",
+          "排队深度、token 吞吐、GPU 利用率"
+        ],
+        [
+          "工作特征",
+          "短、无状态、请求-响应",
+          "长、有状态(KV cache 驻显存)、流式"
+        ],
+        [
+          "调度需求",
+          "普通 LB 轮询",
+          "batching、排队、优先级、抢占"
+        ]
+      ]
+    },
+    "termDefinitions": [
+      {
+        "term": "两条扩容曲线",
+        "fullName": "",
+        "meaning": "拆分后两层各按自己的信号伸缩:Chat Service 看 QPS/连接数(秒级、便宜)，Inference 看排队深度/GPU 利用率(慢、极贵)。典型收益:用户翻历史导致请求暴增时只扩编排层，GPU 一张不加。耦合则被迫为 HTTP 量连 GPU 一起扩，买一堆闲置卡。",
+        "meaningEn": "After the split each layer scales on its own signal: Chat Service on QPS/connections (seconds, cheap), Inference on queue depth/GPU utilization (slow, very expensive). Typical win: a spike of users browsing history scales only the orchestration layer, adding zero GPUs. Coupled, you must scale GPUs to absorb HTTP volume and pay for idle cards."
+      },
+      {
+        "term": "batching（GPU 利用率）",
+        "fullName": "",
+        "meaning": "GPU 高效的关键是把多个推理请求拼成一批同时算。要做全局 batching，请求必须先汇聚到一个统一的队列——这只有把 GPU 收进独立的 Inference Service 才办得到;若 GPU 散在每个 Chat Service 实例里，各自为战就无法全局批处理与排队。",
+        "meaningEn": "GPU efficiency hinges on batching multiple inference requests to run together. Global batching requires requests to funnel into one queue — possible only when GPUs live behind a dedicated Inference Service; if GPUs are scattered across Chat Service instances, no global batching or queueing is possible."
+      }
     ]
   },
   {
@@ -800,12 +801,34 @@
     "q": "补全浏览器与内部服务两段流的选择：",
     "q_en": "Fill in the two streaming choices for the browser and internal services:",
     "text": "浏览器接收 token 用 {{SSE}}，因为它是单向 HTTP 推送；Inference Worker 到 Chat Service 用 {{gRPC server-streaming}}，因为它是服务间类型化流。",
-    "why": "两段流解决的是不同边界：用户边界追求简单兼容，内部边界追求高效契约。不要把一种协议硬套到所有连接上。",
+    "why": "两段流解决不同边界:用户边界要简单兼容(SSE=纯 HTTP，浏览器原生支持)，内部边界要高效契约(gRPC server-streaming)。关键澄清:流式≠面向浏览器——gRPC 正是服务器之间用的，它跑在 HTTP/2 上，能在一条已打开的流上连续推消息(.proto 里返回类型前加 stream 即可)。内部选 gRPC 还因为内建 deadline/cancel:用户点停止能一路传到 worker 立刻停，直接省 GPU。",
     "why_en": "The browser edge uses SSE while the internal worker hop uses gRPC server streaming because each boundary has different protocol needs.",
     "tags": [
       "chatgpt",
       "streaming",
       "protocols"
+    ],
+    "codeSample": "// ① .proto —— 返回类型前的 stream 就是 server streaming 开关\nservice Inference {\n  rpc Generate(GenerateRequest) returns (stream TokenChunk);  // 一请求，多响应\n}\n\n# ② 服务端(GPU worker)：不是 return，是 yield —— handler 是生成器\ndef Generate(self, request, context):\n    for token in model.generate(request.prompt):\n        if not context.is_active():        # 用户取消/超时 → 立刻停，省 GPU\n            return\n        yield TokenChunk(text=token, done=False)   # 每个 token 推一条\n    yield TokenChunk(text=\"\", done=True)\n\n# ③ 客户端(Chat Service)：迭代这条流，边收边处理\nstream = stub.Generate(GenerateRequest(run_id=rid, prompt=p), timeout=120)\nfor chunk in stream:\n    if chunk.done: break\n    redis.xadd(f\"run:{rid}\", {\"text\": chunk.text})   # 按 runId 解耦(卡017)\n\n# ④ 全景：worker --gRPC stream--> ChatSvc(A) --publish--> Redis run:{rid}\n#              浏览器 <--SSE-- ChatSvc(B) <--订阅-------------+",
+    "lang": "python",
+    "termDefinitions": [
+      {
+        "term": "gRPC 的四种调用模式",
+        "fullName": "",
+        "meaning": "①Unary:1请求→1响应(经典 RPC);②Server streaming:1请求→一串响应(逐 token 生成用这个);③Client streaming:一串请求→1响应;④Bidirectional:双向都流。在 .proto 里给参数或返回类型加 stream 关键字来声明。",
+        "meaningEn": "Four gRPC call types: (1) unary, one request → one response (classic RPC); (2) server streaming, one request → many responses (used for token-by-token generation); (3) client streaming, many requests → one response; (4) bidirectional, both stream. Declared by adding the stream keyword to the parameter or return type in the .proto."
+      },
+      {
+        "term": "gRPC 凭什么能流式",
+        "fullName": "",
+        "meaning": "因为 gRPC 跑在 HTTP/2 上:HTTP/2 原生支持在一条已打开的流上连续发多个 DATA frame，还能在一个 TCP 连接上多路复用多条流。所以服务端能在同一条流上持续推消息直到主动关闭——这与「是不是浏览器」无关。流式≠面向浏览器，服务器之间照样能流。",
+        "meaningEn": "Because gRPC runs on HTTP/2, which natively supports sending many DATA frames on one open stream and multiplexing multiple streams over one TCP connection. The server can keep pushing on that stream until it closes it — unrelated to whether a browser is involved. Streaming is not browser-specific; server-to-server streams fine."
+      },
+      {
+        "term": "为什么内部 gRPC、浏览器 SSE",
+        "fullName": "",
+        "meaning": "内部(worker↔Chat Service):二进制 protobuf 紧凑快、HTTP/2 多路复用、强类型契约、内建 deadline/cancel(用户点停止能传到 worker 立刻停、直接省 GPU)。浏览器侧:对 gRPC 支持差(要 grpc-web+代理)，而 SSE 就是普通 HTTP、天然可用。别把一种协议硬套到所有连接上。",
+        "meaningEn": "Internal (worker↔Chat Service): compact binary protobuf, HTTP/2 multiplexing, strongly-typed contracts, built-in deadlines/cancellation (a user pressing stop propagates to the worker and halts it, saving GPU). Browser side: poor native gRPC support (needs grpc-web + a proxy), while SSE is plain HTTP and works out of the box. Do not force one protocol onto every connection."
+      }
     ]
   },
   {
@@ -2744,16 +2767,16 @@
     "optionExplanations": [
       "缓存是每台 worker 本地的，命中只发生在同一台机器上，路由必须带一点粘性。",
       "把每段前缀复制到所有 worker，显存开销乘以机器数，反而更早触发驱逐。",
-      "KV cache 是显存里的中间张量，搬到远端 Redis 的传输成本比重算还高。",
+      "错：KV cache 驻留 GPU 显存、几十 MB~几 GB，且布局绑死在该卡的显存/并行切分/精度上。显存带宽 TB/s vs 网络约 12.5GB/s，差两三个数量级——拉过来可能比重算还慢，prefix caching 的意义就没了。",
       "大 batch 提升的是吞吐，不会让某台 worker 恰好持有这段对话的前缀。"
     ],
     "optionExplanations_en": [
       "The cache is local to each worker, so a hit only happens on the same machine — routing needs some stickiness.",
       "Replicating every prefix to every worker multiplies memory use and triggers eviction sooner.",
-      "The KV cache is intermediate tensors in GPU memory; shipping them to remote Redis costs more than recomputing.",
+      "Wrong: the KV cache lives in GPU HBM at tens of MB to several GB, and its layout is bound to that card memory/parallel sharding/precision. HBM bandwidth is TB/s vs ~12.5 GB/s network — two to three orders of magnitude — so fetching it can cost more than recomputing, defeating prefix caching.",
       "Bigger batches raise throughput but do nothing to put this conversation on a worker that already holds its prefix."
     ],
-    "why": "前缀缓存只在命中时省钱，请求散开就没有一台 worker 保持热前缀，每轮都要全价重算。代价是路由带上粘性，负载均衡和故障转移的自由度变小。",
+    "why": "前缀缓存只在命中时省钱，请求散开就没有一台 worker 保持热前缀，每轮都要全价重算。核心原则:请求是 KB 级、KV cache 是 GB 级且绑在那张卡的显存布局上——把请求路由到缓存所在的机器，而不是把缓存搬过来(搬小的，别搬大的)。代价是路由带上粘性，负载均衡和故障转移的自由度变小，所以实践中是软亲和。",
     "why_en": "Prefix caching only pays off on a hit, so turns of one conversation have to land on the same warm worker — the price is stickier routing and less freedom to balance load.",
     "tradeoff": "缓存命中率 vs 调度自由度",
     "whenOtherWins": "如果对话轮次间隔很久、前缀早被驱逐，粘性只会制造热点，不如按负载自由派发。",
@@ -2778,8 +2801,55 @@
         "term": "forward pass",
         "meaning": "模型的一次前向计算，在解码阶段对应产出一个 token。",
         "meaningEn": "A forward pass is one pass through the model, producing one token during decoding."
+      },
+      {
+        "term": "cache-aware routing（会话粘性）",
+        "fullName": "",
+        "meaning": "调度器不再随手发给任意空闲 worker，而是把同一 chat 的后续轮次尽量送回「前缀 KV 已热在显存里」的那台。原则:请求 KB 级、缓存 GB 级——把计算搬到数据旁边。代价:粘性削弱负载均衡与故障转移自由度，所以用软亲和(命中不了就退化成全价重算)。",
+        "meaningEn": "Instead of dispatching to any idle worker, the scheduler routes later turns of the same chat back to the worker whose prefix KV is already hot in GPU memory. Principle: the request is KBs, the cache is GBs — move compute to the data. Cost: affinity weakens load balancing and failover, so use soft affinity (fall back to full recompute on a miss)."
+      },
+      {
+        "term": "KV cache 为何搬不动",
+        "fullName": "",
+        "meaning": "①体量:几十 MB~几 GB/对话，120k 并发就是几十上百 TB;②带宽:GPU 显存 TB/s vs 网络约 12.5GB/s，差 2-3 个数量级，拉一次可能比重算 prefill 还慢;③不可移植:布局绑在该卡显存布局、模型并行切分、精度、paged attention 页表上，不是能随便序列化的 blob。",
+        "meaningEn": "Why the KV cache cannot be moved: (1) size — tens of MB to GBs per conversation, tens to hundreds of TB at 120k concurrency; (2) bandwidth — GPU HBM at TB/s vs ~12.5 GB/s network, 2-3 orders of magnitude, so one fetch can cost more than recomputing prefill; (3) non-portable — the layout is bound to that card memory layout, model-parallel sharding, precision, and paged-attention page tables, not a serializable blob."
+      },
+      {
+        "term": "分层 KV 卸载（进阶）",
+        "fullName": "tiered KV offload",
+        "meaning": "2026 年确有系统把 KV cache 卸载/共享到 CPU 内存、SSD 或跨节点池(vLLM CPU offload、LMCache、Mooncake 式 disaggregated prefill)，但靠的是 RDMA/NVLink 超高带宽互联 + 专门分页格式，不是「扔进 Redis」;且即便有共享池，本地亲和命中仍快一个数量级，亲和路由依然是第一优先。面试可作加分补充，别当主答案。",
+        "meaningEn": "Tiered KV offload: some 2026 systems do offload/share KV cache to CPU RAM, SSD, or cross-node pools (vLLM CPU offload, LMCache, Mooncake-style disaggregated prefill), but via RDMA/NVLink ultra-high-bandwidth interconnects and purpose-built paged formats — not \"put it in Redis\". Even with a shared pool, a local affinity hit remains an order of magnitude faster, so affinity routing stays first priority. Use as a bonus point, not the main answer."
       }
-    ]
+    ],
+    "table": {
+      "headers": [
+        "",
+        "请求(prompt)",
+        "KV cache"
+      ],
+      "rows": [
+        [
+          "大小",
+          "几 KB",
+          "几十 MB ~ 几 GB"
+        ],
+        [
+          "在哪",
+          "网络上传输",
+          "GPU 显存(HBM)，绑该卡布局"
+        ],
+        [
+          "带宽",
+          "网络 ~12.5 GB/s(100Gbps)",
+          "HBM ~TB/s，差 2-3 个数量级"
+        ],
+        [
+          "结论",
+          "搬它(路由到缓存所在机器)",
+          "别搬它(搬完可能比重算还慢)"
+        ]
+      ]
+    }
   },
   {
     "id": "sd-problem-breakdowns-chatgpt-053",
@@ -4231,6 +4301,862 @@
         "term": "embedding",
         "meaning": "把文本编码成一个向量，语义相近的文本在向量空间里距离也相近，可以用来做近似检索。",
         "meaningEn": "An embedding encodes text as a vector so that semantically similar text ends up close together, enabling approximate similarity search."
+      }
+    ]
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "tool-calling",
+    "scenario": "用户问「北京现在几度」——模型权重里没有实时天气。",
+    "scenario_en": "A user asks \"what is the temperature in Beijing now\" — no live weather lives in the weights.",
+    "q": "模型怎么拿到它不知道的信息？",
+    "q_en": "How does the model get information it does not have?",
+    "options": [
+      "模型输出一次结构化 tool call(工具名+JSON 参数)，由编排层执行后把结果喂回",
+      "让模型自己直接发 HTTP 请求出去，在 GPU 进程里内置网络客户端和各家 API 的密钥",
+      "把全世界的实时数据都预先塞进模型权重",
+      "直接回答「我不知道」，不做任何补救"
+    ],
+    "options_en": [
+      "The model emits a structured tool call (name + JSON args); the orchestrator executes it and feeds the result back",
+      "Let the model issue HTTP requests itself, embedding a network client and every API key inside the GPU process",
+      "Pre-bake all the world's live data into the model weights",
+      "Just answer \"I do not know\" with no remedy"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：模型输出的不只是文本，还可能是一次结构化调用请求;真正执行由编排层完成，结果作为新消息回灌。",
+      "错：把网络和密钥放进 GPU 进程 = 最贵的节点干最不可信的 I/O，安全和成本双输。",
+      "错：权重是静态的，实时数据永远塞不完也会过期。",
+      "错：工具调用正是为了补上这类能力，放弃不是设计。"
+    ],
+    "optionExplanations_en": [
+      "Right: the model may emit a structured call request, not just text; execution happens in the orchestrator and the result is fed back as a new message.",
+      "Wrong: networking and keys inside the GPU process puts the least trusted I/O on the most expensive node — losing on both security and cost.",
+      "Wrong: weights are static; live data can never be fully baked in and goes stale.",
+      "Wrong: tool calling exists precisely to fill this gap; giving up is not a design."
+    ],
+    "why": "tool calling:模型除了输出文本，还能输出一次结构化调用(工具名+JSON 参数)。它自己不执行——编排层解析、执行、把结果作为新消息喂回模型，再由模型给最终答案。模型负责「决定调什么」，系统负责「真正执行」。",
+    "why_en": "Tool calling: besides text, the model can emit a structured call (tool name + JSON args). It does not execute anything — the orchestrator parses, executes, and feeds the result back as a new message for the model to produce a final answer. The model decides what to call; the system does the calling.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "agent",
+      "tool-calling"
+    ],
+    "termDefinitions": [
+      {
+        "term": "tool call",
+        "fullName": "工具调用",
+        "meaning": "模型的一种输出形态:不是给用户看的文本，而是一段结构化请求(工具名 + JSON 参数)，表示「我需要调这个工具」。模型不执行它;由编排层执行并把结果回灌。这让静态权重能接上实时数据与外部动作。",
+        "meaningEn": "A tool call is an output mode where the model emits a structured request (tool name + JSON args) meaning \"I need this tool\", rather than user-facing text. The model does not execute it; the orchestrator does and feeds the result back — connecting static weights to live data and external actions."
+      }
+    ],
+    "id": "sd-problem-breakdowns-chatgpt-075"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "agent-loop",
+    "scenario": "一次用户提问可能需要先查天气、再查日历。",
+    "scenario_en": "One user question may need a weather lookup, then a calendar lookup.",
+    "q": "带工具的一次请求，完整流程是？",
+    "q_en": "What is the full flow of one tool-enabled request?",
+    "options": [
+      "模型→tool call→编排层执行→结果当新消息喂回→再调模型，循环到模型给出最终文本",
+      "编排层先把所有可能用到的工具统统执行一遍，再把全部结果一起塞给模型，让它自己从里面挑一个用",
+      "模型只能调用一次工具，拿到结果后必须立刻结束",
+      "工具执行完直接把原始结果返回用户，不再经过模型"
+    ],
+    "options_en": [
+      "model → tool call → orchestrator executes → result fed back as a new message → model again, looping until it returns final text",
+      "The orchestrator first executes every tool that might be relevant, then hands all of the results to the model at once so it can pick one to use",
+      "The model may call a tool only once and must finish right after the result",
+      "The raw tool result goes straight to the user without passing through the model"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：这是 agent 循环。一次用户请求因此展开成 N 次推理 + M 次工具执行。",
+      "错：盲目全跑一遍浪费成本和时间，也做不到「按需、按上一步结果决定下一步」。",
+      "错：多步任务(先查天气再查日历)需要多轮，硬限一次做不了。",
+      "错：原始结果通常要模型消化成自然语言，且可能还要接着调下一个工具。"
+    ],
+    "optionExplanations_en": [
+      "Right: this is the agent loop. One user request expands into N inferences + M tool executions.",
+      "Wrong: blindly running everything wastes cost and time and cannot decide the next step from the previous result.",
+      "Wrong: multi-step tasks (weather then calendar) need several rounds; capping at one makes them impossible.",
+      "Wrong: raw results usually need the model to turn them into natural language, and another tool may follow."
+    ],
+    "why": "agent 循环:模型输出 tool call → 编排层执行 → 结果追加进上下文 → 再调模型，循环到模型给出最终文本。所以一次用户请求 = N 次推理 + M 次工具执行，这是与纯对话最大的架构差别。",
+    "why_en": "The agent loop: the model emits a tool call → the orchestrator executes it → the result is appended to the context as a new message → the model is invoked again → repeat until it stops asking for tools and returns final text. So one user request = N inferences + M tool executions — the biggest architectural difference from plain chat.",
+    "diagram": "flowchart LR\n  U[\"用户提问\"] --> M[\"调模型\"]\n  M -->|\"输出 tool call\"| E[\"编排层执行工具\"]\n  E -->|\"结果当新消息追加\"| M\n  M -->|\"输出最终文本\"| R[\"回给用户\"]",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "agent",
+      "loop"
+    ],
+    "termDefinitions": [
+      {
+        "term": "agent 循环",
+        "fullName": "agent loop",
+        "meaning": "模型→tool call→执行→结果回灌→再调模型的反复过程，直到模型给出最终文本。关键后果:一次用户请求展开成 N 次推理 + M 次工具执行，于是延迟、成本、取消、失败处理都要按「多步」重新设计。",
+        "meaningEn": "The agent loop repeats model → tool call → execute → feed result back → model again, until the model returns final text. Key consequence: one user request expands into N inferences + M tool executions, so latency, cost, cancellation, and failure handling must all be redesigned for multi-step."
+      }
+    ],
+    "id": "sd-problem-breakdowns-chatgpt-076"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "loop-placement",
+    "scenario": "要决定 agent 循环跑在哪一层。",
+    "scenario_en": "Deciding which layer runs the agent loop.",
+    "q": "agent 循环应该放在哪？",
+    "q_en": "Where should the agent loop live?",
+    "options": [
+      "放编排层;Inference 层保持「文本进、token 出」的纯函数",
+      "放 GPU 推理层，让 worker 自己执行工具，省掉一次网络往返、还能直接复用显存里的上下文",
+      "放浏览器，让客户端自己执行工具再把结果传回",
+      "放数据库的存储过程里"
+    ],
+    "options_en": [
+      "In the orchestration layer; the inference layer stays a pure \"text in → tokens out\" function",
+      "In the GPU inference layer so the worker executes tools itself, saving a network hop and reusing the context already in GPU memory",
+      "In the browser, letting the client execute tools and send results back",
+      "In database stored procedures"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：工具执行是 I/O 密集且不可信，绝不能占着最贵的 GPU;推理层保持纯函数才好排队、批处理、伸缩。",
+      "错：工具多是等网络的慢 I/O，占着 GPU 空转极浪费;还把不可信代码放进最贵最敏感的节点。",
+      "错：客户端不可信，工具凭证和权限不能交给它;且客户端环境无法保证。",
+      "错：存储过程既无沙箱也无外呼能力，完全不合适。"
+    ],
+    "optionExplanations_en": [
+      "Right: tool execution is I/O-heavy and untrusted and must not occupy the most expensive GPU; a pure inference layer stays easy to queue, batch, and scale.",
+      "Wrong: tools mostly wait on slow network I/O, idling the GPU, and it puts untrusted code on the most expensive, most sensitive node.",
+      "Wrong: the client is untrusted; tool credentials and permissions cannot be handed to it, and its environment is unguaranteed.",
+      "Wrong: stored procedures have neither sandboxing nor outbound capability."
+    ],
+    "why": "循环放编排层，Inference 保持「文本进、token 出」纯函数。因为:①工具是等网络的慢 I/O，占 GPU 空转极浪费;②工具外呼不可信，不该进最贵最敏感的节点;③纯函数推理层才好排队与独立伸缩(卡008)。",
+    "why_en": "Put the loop in the orchestration layer (Chat/Agent Service) and keep inference a pure \"text in → tokens out\" function. Because: (1) tool execution waits on slow network I/O and would idle the GPU; (2) tool code/outbound calls are untrusted and must stay off the most expensive, most sensitive node; (3) only a pure inference layer stays easy to queue, batch, and scale independently (see card 008).",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "agent",
+      "service-boundary"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-077"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "fact",
+    "sub": "tool-registry",
+    "scenario": "模型要能挑对工具、填对参数。",
+    "scenario_en": "The model must pick the right tool and fill the right args.",
+    "q": "模型怎么知道有哪些工具、怎么调？",
+    "q_en": "How does the model know which tools exist and how to call them?",
+    "options": [
+      "工具用 JSON schema 声明(名字/参数/描述)，随请求传给模型，模型按名字产出调用",
+      "模型凭训练时的记忆去猜测工具名和参数格式，运行时完全不需要给它传递任何工具声明、描述或参数说明",
+      "把工具的完整源码贴进 prompt 让模型自己阅读",
+      "每次让用户手动输入工具名和参数"
+    ],
+    "options_en": [
+      "Tools are declared as JSON schemas (name/params/description), passed with the request; the model emits a call by name",
+      "The model guesses tool names and argument formats purely from training memory, with no tool declarations, descriptions, or parameter specs passed at runtime whatsoever",
+      "Paste each tool's full source code into the prompt for the model to read",
+      "Make the user type the tool name and arguments every time"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：schema 是模型与系统之间的契约——描述让模型知道「何时用」，参数结构让输出可被机器校验和执行。",
+      "错：不传声明就没有契约，模型只能瞎猜名字和参数，无法校验也无法演进。",
+      "错：源码又长又含无关细节，浪费上下文还泄露实现。",
+      "错：让用户手填就失去了自动化意义。"
+    ],
+    "optionExplanations_en": [
+      "Right: the schema is the contract between model and system — the description tells the model when to use it, and the parameter structure makes the output machine-validatable and executable.",
+      "Wrong: with no declaration there is no contract; the model can only guess names and args, with no validation or evolution path.",
+      "Wrong: source code is long, full of irrelevant detail, wastes context, and leaks implementation.",
+      "Wrong: making the user type it defeats the automation."
+    ],
+    "why": "工具注册表:每个工具用 JSON schema 声明名字、参数结构、用途描述，随请求一起给模型。描述决定模型「何时选它」，参数结构让输出能被机器校验后执行。还要管版本(schema 变更兼容)和授权(哪些用户/租户能看到哪些工具)。",
+    "why_en": "A tool registry declares each tool with a JSON schema — name, parameter structure, and a description — passed along with the request. The description drives when the model selects it; the parameter structure makes the output machine-validatable before execution. Also manage versioning (schema compatibility) and authorization (which users/tenants see which tools).",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "schema",
+      "registry"
+    ],
+    "termDefinitions": [
+      {
+        "term": "工具 schema",
+        "fullName": "tool schema",
+        "meaning": "用 JSON Schema 声明一个工具:名字、参数结构与类型、用途描述。它是模型与系统的契约——描述影响模型「何时选用」，参数结构让模型输出可被校验后安全执行。配套还要有版本管理与按用户/租户的可见性授权。",
+        "meaningEn": "A tool schema declares a tool in JSON Schema: name, parameter structure and types, and a description. It is the contract between model and system — the description shapes when the model selects it, and the parameter structure lets the output be validated before safe execution. Versioning and per-user/tenant visibility must accompany it."
+      }
+    ],
+    "id": "sd-problem-breakdowns-chatgpt-078"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "sandbox",
+    "scenario": "code interpreter 要执行模型生成的任意代码。",
+    "scenario_en": "A code interpreter must run arbitrary model-generated code.",
+    "q": "执行环境该怎么设计？",
+    "q_en": "How should the execution environment be designed?",
+    "options": [
+      "放隔离沙箱:独立容器、无网络或受控出网、CPU/内存/时长上限、用完即弃",
+      "直接在 Chat Service 进程里 exec，省掉容器启动开销，反正代码是模型生成的应该不会有恶意",
+      "直接在 GPU worker 上跑，好复用它已有的运行环境",
+      "交给用户本地机器执行"
+    ],
+    "options_en": [
+      "Run in an isolated sandbox: its own container, no or controlled egress, CPU/memory/time limits, destroyed after use",
+      "Just exec inside the Chat Service process to skip container startup — the code is model-generated so it should not be malicious",
+      "Run it on the GPU worker to reuse its existing runtime environment",
+      "Hand it to the user's local machine to execute"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：模型生成的代码等同不可信输入，必须隔离 + 限额 + 即弃，防止逃逸、耗尽资源和横向移动。",
+      "错：同进程 exec 等于把不可信代码请进你的服务里，可读环境变量、密钥、内网，灾难性。",
+      "错：GPU 节点最贵最敏感，让不可信代码上去既浪费又危险。",
+      "错：客户端不可信、环境不可控，也拿不到服务端数据。"
+    ],
+    "optionExplanations_en": [
+      "Right: model-generated code is untrusted input and needs isolation + quotas + disposal to prevent escape, resource exhaustion, and lateral movement.",
+      "Wrong: exec in-process invites untrusted code into your service where it can read env vars, secrets, and the internal network — catastrophic.",
+      "Wrong: the GPU node is the most expensive and most sensitive; untrusted code there is both wasteful and dangerous.",
+      "Wrong: the client is untrusted, its environment uncontrolled, and it cannot reach server-side data."
+    ],
+    "why": "模型生成的代码 = 不可信输入。执行环境要:独立容器/微 VM 隔离、默认无网络(需要时走受控出网)、CPU/内存/磁盘/时长硬上限、用完即销毁、最小权限(不挂密钥不进内网)。这正是「沙箱是目标、容器是手段」在这里的落地。",
+    "why_en": "Model-generated code is untrusted input. The execution environment needs: an isolated container/microVM, no network by default (controlled egress when needed), hard CPU/memory/disk/time limits, destruction after use, and least privilege (no secrets mounted, no internal network). This is \"sandbox is the goal, container is the mechanism\" applied here.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "sandbox",
+      "security"
+    ],
+    "termDefinitions": [
+      {
+        "term": "沙箱执行",
+        "fullName": "sandboxed execution",
+        "meaning": "把不可信代码关进受限环境执行:独立容器或微 VM、默认断网、CPU/内存/时长配额、只读或临时文件系统、用完即销毁、不挂任何密钥。目标是即使代码是恶意的，也炸不出这个盒子、拖不垮宿主、够不到内网。",
+        "meaningEn": "Sandboxed execution confines untrusted code: an isolated container or microVM, network off by default, CPU/memory/time quotas, read-only or ephemeral filesystem, destroyed after use, no secrets mounted. The goal is that even malicious code cannot escape the box, exhaust the host, or reach the internal network."
+      }
+    ],
+    "id": "sd-problem-breakdowns-chatgpt-079"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "egress-security",
+    "scenario": "工具要访问外部 API(天气、搜索、第三方服务)。",
+    "scenario_en": "Tools must reach external APIs (weather, search, third-party services).",
+    "q": "安全上最该守住什么？",
+    "q_en": "What must you enforce for security?",
+    "options": [
+      "出网白名单 + 禁访内网与云元数据端点;密钥留在工具侧，不进模型上下文",
+      "允许工具访问任意地址，并把所有 API 密钥直接写进 system prompt，方便模型自己拼装完整请求",
+      "只靠模型自觉，提示它不要访问内网地址",
+      "所有工具请求都走同一个高权限共享账号"
+    ],
+    "options_en": [
+      "An egress allowlist + blocking internal and cloud-metadata endpoints; keys stay tool-side, never in the model context",
+      "Let tools reach any address and put every API key directly in the system prompt so the model can assemble full requests itself",
+      "Rely on the model's discretion, prompting it not to touch internal addresses",
+      "Route all tool requests through one shared high-privilege account"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：出网白名单挡住 SSRF 与内网元数据端点;密钥只在工具侧使用，模型看不到就无法被诱导泄露。",
+      "错：密钥进 prompt 等于把凭证交给一个可被 prompt injection 操纵的组件，必然泄露。",
+      "错：提示词不是安全边界，模型可被注入内容操纵，安全必须由系统强制。",
+      "错：共享高权限账号一旦被滥用，爆炸半径覆盖全部租户，也无法审计到人。"
+    ],
+    "optionExplanations_en": [
+      "Right: an egress allowlist blocks SSRF and cloud metadata endpoints, and keys used only tool-side cannot be coaxed out of a model that never sees them.",
+      "Wrong: keys in the prompt hand credentials to a component steerable by prompt injection — leakage is inevitable.",
+      "Wrong: prompting is not a security boundary; the model can be manipulated by injected content, so the system must enforce it.",
+      "Wrong: one shared high-privilege account makes the blast radius all tenants and destroys per-user auditability."
+    ],
+    "why": "工具是唯一能对外动手的部分，边界必须系统强制而非提示词:①出网白名单，禁访内网与云元数据端点(防 SSRF);②密钥留工具侧，绝不进模型上下文(会被 prompt injection 套出);③按租户最小权限。",
+    "why_en": "Tools are the only part that acts on the outside world, so the boundary must be system-enforced, not prompt-enforced: (1) an egress allowlist explicitly blocking internal ranges and cloud metadata endpoints (anti-SSRF); (2) keys stay tool-side and never enter the model context (the model can be steered by prompt injection); (3) least privilege per user/tenant for auditability.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "security",
+      "ssrf"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSRF",
+        "fullName": "Server-Side Request Forgery",
+        "meaning": "诱导服务端替攻击者发起请求，去访问它本不该访问的地址——典型目标是内网服务和云元数据端点(可取出实例凭证)。工具层能对外发请求，天然是 SSRF 高危面，必须用出网白名单在系统层挡住，而不是靠提示模型「别去」。",
+        "meaningEn": "SSRF (Server-Side Request Forgery) tricks the server into making requests on the attacker's behalf to addresses it should not reach — typically internal services and cloud metadata endpoints that hand out instance credentials. A tool layer that makes outbound requests is inherently high-risk and must be blocked by a system-level egress allowlist, not by telling the model not to."
+      },
+      {
+        "term": "prompt injection",
+        "fullName": "",
+        "meaning": "攻击者把指令藏在模型会读到的内容里(网页、文档、工具返回结果)，诱导模型执行非预期动作或泄露上下文。因此提示词不是安全边界:凡是密钥、权限、出网这类控制，必须由系统强制，不能寄望模型「守规矩」。",
+        "meaningEn": "Prompt injection hides instructions in content the model reads (web pages, documents, tool outputs) to make it take unintended actions or leak its context. Hence prompting is not a security boundary: secrets, permissions, and egress must be system-enforced rather than trusted to the model."
+      }
+    ],
+    "id": "sd-problem-breakdowns-chatgpt-080"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "loop-budget",
+    "scenario": "模型可能反复调工具、迟迟不给最终答案。",
+    "scenario_en": "The model may keep calling tools and never settle on a final answer.",
+    "q": "为什么必须给 agent 循环封顶？",
+    "q_en": "Why must the agent loop be capped?",
+    "options": [
+      "不封顶模型可能无限循环调工具，持续烧 GPU 和外部 API 配额",
+      "因为循环超过三次以后模型的回答质量必然下降，这是模型架构决定的硬性限制",
+      "因为 HTTP 协议不允许在一个请求内发起多次调用",
+      "不用封顶，模型总会自己停下来"
+    ],
+    "options_en": [
+      "Uncapped, the model can loop on tools forever, continuously burning GPU and external API quota",
+      "Because answer quality necessarily degrades past three iterations — a hard limit set by the model architecture",
+      "Because HTTP does not permit multiple calls within one request",
+      "No cap needed; the model always stops on its own"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：循环是模型自己决定何时停的，属于不可信控制流，必须由系统加硬上限(步数/总 token/总时长/花费)。",
+      "错：三次并非架构硬限;质量与步数没有这种固定关系。",
+      "错：这是服务端内部的多次调用，与 HTTP 请求数无关。",
+      "错：模型可能陷入重复调用同一工具的死循环，不能寄望它自觉。"
+    ],
+    "optionExplanations_en": [
+      "Right: the model decides when to stop, so the loop is untrusted control flow and needs hard system limits (steps/total tokens/wall time/spend).",
+      "Wrong: three is not an architectural limit; quality has no such fixed relation to step count.",
+      "Wrong: these are internal server-side calls, unrelated to HTTP request counts.",
+      "Wrong: the model can get stuck re-calling the same tool; self-restraint cannot be assumed."
+    ],
+    "why": "循环由模型自己决定何时停 = 不可信控制流，必须由系统封顶:最大步数、总 token 预算、总时长、总花费，任一触顶就中止并给用户一个降级回复。否则一个陷入重复调用的会话能无限烧 GPU 和第三方 API 配额。",
+    "why_en": "The model decides when to stop, making the loop untrusted control flow that the system must cap: max steps, total token budget, wall-clock limit, and spend cap — hitting any one aborts with a graceful degraded reply. Otherwise a session stuck re-calling a tool burns GPU and third-party quota without bound.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "agent",
+      "cost-control"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-081"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "tool-latency-ux",
+    "scenario": "一次带工具的回答要经过多轮推理与外部调用。",
+    "scenario_en": "A tool-enabled answer passes through several inferences and external calls.",
+    "q": "延迟和 UX 该怎么处理？",
+    "q_en": "How do you handle latency and UX?",
+    "options": [
+      "延迟成倍放大;要流式推「正在调用 X」的状态事件，让用户看到进度",
+      "工具调用完全不影响延迟，因为工具执行和模型推理是彻底并行的，用户根本感知不到变化",
+      "把超时调长，让用户多等一会就行",
+      "关掉流式，等全部完成再一次性返回"
+    ],
+    "options_en": [
+      "Latency multiplies; stream \"calling X\" status events so the user sees progress",
+      "Tool calls do not affect latency at all because execution and inference are fully parallel and users notice nothing",
+      "Just raise the timeout and let users wait longer",
+      "Turn off streaming and return everything at once when done"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：N 次往返让总时长成倍增长，此时流式的价值从「逐字出文」变成「持续展示进度」。",
+      "错：工具执行与推理是串行依赖的(要拿结果才能继续)，延迟必然叠加。",
+      "错：调长超时只是容忍慢，没解决用户干等时的感知问题。",
+      "错：关掉流式让用户面对更长的空白，体验更差。"
+    ],
+    "optionExplanations_en": [
+      "Right: N round trips multiply total time, so streaming shifts value from token-by-token text to continuous progress display.",
+      "Wrong: tool execution and inference are serially dependent (the result is needed to continue), so latency adds up.",
+      "Wrong: a longer timeout only tolerates slowness without addressing the perceived dead wait.",
+      "Wrong: disabling streaming leaves the user staring at a longer blank — worse experience."
+    ],
+    "why": "工具循环是串行依赖，N 次往返让总时长成倍增长。流式的意义随之改变:除了逐字吐文，更要推「正在调用搜索」这类状态事件。TTFT 也要重定义为首个可见事件，而非首个正文 token。",
+    "why_en": "The tool loop is serially dependent (you need the result to continue), so N round trips multiply total time. Streaming's purpose shifts: beyond token-by-token text, push status events like \"searching\" and \"got results\" so the user sees progress instead of a dead wait. TTFT must be redefined as the first visible event, not the first content token.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "latency",
+      "streaming"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-082"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "parallel-tools",
+    "scenario": "模型一次输出多个 tool call，其中一个执行失败。",
+    "scenario_en": "The model emits several tool calls at once and one of them fails.",
+    "q": "该怎么处理？",
+    "q_en": "How should this be handled?",
+    "options": [
+      "并行执行;失败的把错误信息当结果喂回，让模型自己决定重试或换路",
+      "只要有任何一个工具失败就立刻终止整轮对话并向用户报错，因为无法保证最终结果的完整性",
+      "静默忽略失败的那个，假装它成功了",
+      "一律串行执行，任一失败就整轮重头再来"
+    ],
+    "options_en": [
+      "Execute in parallel; feed the failure back as a result so the model can retry or reroute itself",
+      "Abort the entire turn and error to the user if any tool fails, since result completeness cannot be guaranteed",
+      "Silently ignore the failed one and pretend it succeeded",
+      "Always run serially and restart the whole turn on any failure"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：独立的调用并行跑省时间;错误作为结构化结果回灌，模型往往能自行降级或换工具。",
+      "错：单个工具失败就整轮失败太脆，很多情况下模型能绕过去。",
+      "错：假装成功会让模型基于错误前提编造答案，比失败更糟。",
+      "错：串行浪费时间，重头再来还会重复已成功的调用与花费。"
+    ],
+    "optionExplanations_en": [
+      "Right: independent calls run in parallel to save time, and feeding the error back as a structured result often lets the model degrade or switch tools itself.",
+      "Wrong: failing the whole turn on one tool is brittle; the model can often work around it.",
+      "Wrong: pretending success makes the model fabricate on a false premise — worse than failing.",
+      "Wrong: serial execution wastes time, and restarting repeats already-successful calls and their cost."
+    ],
+    "why": "相互独立的 tool call 应并行执行以省时间。失败不要直接炸整轮:把错误信息当作该工具的结构化结果喂回，模型通常能自行重试、换工具或降级作答。重试要幂等(带调用 id 去重)，避免副作用型工具被重复执行。",
+    "why_en": "Independent tool calls should run in parallel to save time. A failure should not blow up the turn: feed the error back as that tool's structured result and the model can usually retry, switch tools, or degrade gracefully. Retries must be idempotent (dedupe by call id) so side-effecting tools are not executed twice.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "failure-handling",
+      "idempotency"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-083"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "consequence",
+    "sub": "tools-prefix-cache",
+    "scenario": "每轮工具结果都被追加进对话上下文。",
+    "scenario_en": "Each tool result is appended to the conversation context.",
+    "q": "工具循环对 prefix caching 有什么影响？",
+    "q_en": "How does the tool loop affect prefix caching?",
+    "options": [
+      "前缀稳定增长、只在末尾追加 → prefix cache 命中收益更大，亲和路由更值",
+      "工具结果会让整个上下文彻底重排，导致前缀缓存永远失效，所以有工具时就应该直接关掉 prefix caching",
+      "没有影响，工具和 KV cache 互不相干",
+      "每次工具调用都会自动清空该 worker 的 KV cache"
+    ],
+    "options_en": [
+      "The prefix grows stably with append-only additions → prefix cache hits pay off more, making affinity routing more valuable",
+      "Tool results completely reorder the context so the prefix cache is always invalidated, meaning prefix caching should be disabled whenever tools are on",
+      "No effect; tools and the KV cache are unrelated",
+      "Every tool call automatically clears that worker's KV cache"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：循环里每步都把结果追加到末尾，前缀不变，正是 prefix cache 最理想的形态——同一轮内多次推理都能命中。",
+      "错：追加不是重排;前缀保持不变，缓存反而更有用。",
+      "错：工具让上下文越滚越长，直接放大 prefill 成本，关系极大。",
+      "错：工具调用不触碰 KV cache，缓存失效来自驱逐或前缀变化。"
+    ],
+    "optionExplanations_en": [
+      "Right: each loop step appends to the end while the prefix stays fixed — the ideal shape for prefix caching, since multiple inferences within one turn all hit.",
+      "Wrong: appending is not reordering; the prefix stays intact and the cache becomes more useful.",
+      "Wrong: tools make the context grow, directly amplifying prefill cost — highly relevant.",
+      "Wrong: tool calls do not touch the KV cache; invalidation comes from eviction or prefix change."
+    ],
+    "why": "循环每步只在上下文末尾追加(tool call+结果)，前缀不变——正是 prefix cache 最理想的形态:同一轮内 N 次推理都命中同一段热前缀。且上下文越滚越长、prefill 更贵，亲和路由(卡052)更值。",
+    "why_en": "Each agent-loop step only appends (tool call + result) to the end while the prefix stays fixed — the ideal shape for prefix caching, since the N inferences within one turn all hit the same hot prefix. Conversely, tool results make the context grow, raising prefill cost, which further amplifies the value of affinity routing (card 052).",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "prefix-cache",
+      "context-cost"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-084"
+  },
+  {
+    "topic": "system-design",
+    "format": "mcq",
+    "atomType": "fit",
+    "sub": "tool-cancellation",
+    "scenario": "用户在多步工具执行途中点了「停止生成」。",
+    "scenario_en": "The user hits \"stop generating\" mid-way through multi-step tool execution.",
+    "q": "取消信号要传到哪些地方？",
+    "q_en": "Where must the cancellation signal reach?",
+    "options": [
+      "既停正在跑的推理，也停正在执行的工具，并终止后续循环",
+      "只需要停模型推理就够了，正在执行的工具可以让它自己跑完，反正结果不会展示给用户",
+      "只要前端不再显示就行，后端继续跑完",
+      "不支持取消，必须等整个循环结束"
+    ],
+    "options_en": [
+      "Stop the running inference, stop the in-flight tool, and abort the remaining loop",
+      "Stopping inference is enough; let the in-flight tool finish since its result will not be shown anyway",
+      "Just stop displaying on the frontend and let the backend finish",
+      "No cancellation; the whole loop must run to completion"
+    ],
+    "answer": [
+      0
+    ],
+    "optionExplanations": [
+      "对：取消要贯穿整条链路——推理、工具、以及「还没开始的下一步」，否则钱照烧、副作用照发生。",
+      "错：工具可能有副作用(下单、发消息)，让它跑完既花钱又可能造成不可逆动作。",
+      "错：前端不显示不等于后端停止，GPU 和 API 配额照样被消耗。",
+      "错：长循环不支持取消，用户体验和成本控制都不可接受。"
+    ],
+    "optionExplanations_en": [
+      "Right: cancellation must traverse the whole chain — inference, tools, and the not-yet-started next step — or you keep paying and side effects still happen.",
+      "Wrong: tools may have side effects (placing orders, sending messages); letting one finish costs money and can be irreversible.",
+      "Wrong: hiding it on the frontend does not stop the backend; GPU and API quota keep being consumed.",
+      "Wrong: no cancellation on a long loop is unacceptable for both UX and cost control."
+    ],
+    "why": "取消要贯穿整条链路:①中止推理(gRPC deadline/cancel 直达 worker，立刻释放 GPU);②中止正在执行的工具(尤其有副作用的);③标记该 run 取消，阻止进入下一步。只停一处就会继续烧钱或造成不可逆副作用。",
+    "why_en": "Cancellation must traverse the whole chain: (1) abort the running inference (a gRPC deadline/cancel reaching the worker frees the GPU immediately); (2) abort the in-flight tool, especially side-effecting ones; (3) mark the run cancelled so the loop does not advance. Stopping only one place keeps burning money or causes irreversible side effects.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "cancellation"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-085"
+  },
+  {
+    "topic": "system-design",
+    "format": "multi",
+    "atomType": "contrast",
+    "sub": "tool-mistakes",
+    "scenario": "复盘 tool/agent 层的设计失误。",
+    "scenario_en": "Reviewing design mistakes in the tool/agent layer.",
+    "q": "下面哪些是 tool/agent 设计的常见失分？（多选）",
+    "q_en": "Which are common mistakes in tool/agent design? (multi-select)",
+    "options": [
+      "让 GPU worker 直接执行工具，把不可信 I/O 放到最贵的节点上",
+      "不给循环封顶，模型可无限调用工具持续烧 GPU",
+      "把 API 密钥放进 system prompt 交给模型自己拼装请求",
+      "把 agent 循环放编排层、工具跑在隔离沙箱、循环设硬上限——这其实是正确做法而非失分点"
+    ],
+    "options_en": [
+      "Letting the GPU worker execute tools, putting untrusted I/O on the most expensive node",
+      "Leaving the loop uncapped so the model can call tools forever and burn GPU",
+      "Putting API keys in the system prompt for the model to assemble requests itself",
+      "Running the agent loop in the orchestrator, tools in an isolated sandbox, with a hard loop cap — this is correct practice, not a mistake"
+    ],
+    "answer": [
+      0,
+      1,
+      2
+    ],
+    "optionExplanations": [
+      "失误：工具是等网络的慢 I/O 且不可信，占着 GPU 既浪费又危险。",
+      "失误：循环是模型决定的不可信控制流，不封顶就是无底洞。",
+      "失误：模型可被 prompt injection 操纵，密钥进上下文必然泄露。",
+      "这是对的：编排层跑循环 + 沙箱执行 + 硬上限，正是本块的三条主线。"
+    ],
+    "optionExplanations_en": [
+      "Mistake: tools are slow, untrusted I/O; occupying a GPU with them is wasteful and dangerous.",
+      "Mistake: the loop is untrusted, model-decided control flow; uncapped it is a bottomless pit.",
+      "Mistake: the model is steerable by prompt injection, so keys in context will leak.",
+      "This is correct: orchestrator-run loop + sandboxed execution + hard caps are the three throughlines here."
+    ],
+    "why": "三条主线:①工具执行归编排层，Inference 保持纯函数(不让不可信慢 I/O 占 GPU);②不可信代码进隔离沙箱、密钥不进模型上下文、出网走白名单;③循环由模型决定何时停，所以必须系统封顶(步数/token/时长/花费)。",
+    "why_en": "Three throughlines: (1) tool execution belongs to the orchestrator while inference stays a pure function (never let untrusted slow I/O occupy GPUs); (2) untrusted code goes in an isolated sandbox, keys never enter the model context, egress goes through an allowlist; (3) the model decides when to stop, so the system must cap steps/tokens/time/spend.",
+    "tags": [
+      "chatgpt",
+      "tools",
+      "agent",
+      "mistakes"
+    ],
+    "termDefinitions": [],
+    "id": "sd-problem-breakdowns-chatgpt-086"
+  },
+  {
+    "id": "sd-problem-breakdowns-chatgpt-087",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "streaming-flow",
+    "scenario": "用户的 SSE 落在负载均衡随手挑的一台 Chat Service 上，而 GPU worker 早在 800ms 前就开始往 gen:{runId} 里 XADD token 了。",
+    "scenario_en": "The user's SSE lands on whichever Chat Service the load balancer picked, but the GPU worker started XADDing tokens to gen:{runId} 800ms earlier.",
+    "q": "这段 XREAD 续读循环的起始 ID 应该传什么？",
+    "q_en": "What starting ID should this XREAD loop pass?",
+    "options": [
+      "`$`：只收订阅之后新产生的 delta，先跑那 800ms 的 token 就丢了",
+      "`0-0`：从流头读起，重连时换成浏览器回传的 Last-Event-ID 接着读",
+      "`*`：交给 Redis 自动挑一个投递起点，客户端不必关心具体位置",
+      "先查 Postgres 里已落库的 assistant message，按它的长度换算出偏移量"
+    ],
+    "options_en": [
+      "`$`: take only deltas produced after subscribing, losing the first 800ms of tokens.",
+      "`0-0`: read from the head, switching to the browser's Last-Event-ID on reconnect.",
+      "`*`: let Redis pick a delivery start point so the client need not track position.",
+      "Query the persisted assistant message in Postgres and derive an offset from its length."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "`$` 的语义是「我订阅之后的」，worker 比连接先启动这 800ms 的 token 永远补不回来，用户看到答案缺开头。",
+      "`0-0` 从流的第一条读起，worker 早跑的那段照样收得到；重连时把 Last-Event-ID 当游标，同一行代码覆盖两种情况。",
+      "`*` 只是 XADD 时「让 Redis 生成条目 ID」的占位符，XREAD 的起始位置参数不接受它，写了会直接报错。",
+      "落库发生在整段生成结束之后，流播到一半时 Postgres 里根本还没有这条 assistant message，换算不出任何偏移量。"
+    ],
+    "optionExplanations_en": [
+      "`$` means \"only what comes after I subscribe,\" so the 800ms the worker ran ahead is lost and the answer is missing its opening.",
+      "`0-0` reads from the first entry so early tokens still arrive, and Last-Event-ID covers reconnects with the same line of code.",
+      "`*` is the XADD placeholder for \"let Redis generate the entry ID\"; XREAD's start argument rejects it.",
+      "The message is persisted only after generation finishes, so mid-stream there is nothing in Postgres to measure."
+    ],
+    "why": "起始游标要按「谁先启动没人保证」来挑：从 `0-0` 读才兜得住 worker 跑在前面的情况，重连之后再把位置交给 Last-Event-ID。代价是首连要重放已产出的那一段。",
+    "why_en": "Since nothing guarantees the connection beats the worker, the first read must start at 0-0 and later reconnects resume from the browser's Last-Event-ID.",
+    "whenOtherWins": "如果协议保证客户端先建流、拿到 200 之后 worker 才开始生成，`$` 能省掉首连重放的那点开销；但这个顺序要靠额外的握手来保证，通常不值得。",
+    "tradeoff": "`0-0` 全量重放 vs `$` 只收新的：前者多读一段换「绝不丢开头」",
+    "codeSample": "// Chat Service —— 任意一台实例都能跑，进程里只有局部变量\napp.get('/runs/:runId/stream', async (req, res) => {\n  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });\n  res.flushHeaders();\n\n  // 首连 '0-0' = 从流开头读，补上 worker 先跑那段；重连则用浏览器回传的游标\n  let lastId = req.headers['last-event-id'] || '0-0';\n\n  const sub = redis.duplicate();        // XREAD BLOCK 会占住整条连接\n  await sub.connect();\n  req.on('close', () => sub.quit());\n\n  while (!res.writableEnded) {\n    const batch = await sub.xread('BLOCK', 15000,\n      'STREAMS', `gen:${req.params.runId}`, lastId);\n    if (!batch) { res.write(': ka\\n\\n'); continue; }   // 心跳，防代理掐闲置连接\n    for (const [id, fields] of batch[0][1]) {\n      lastId = id;\n      const f = Object.fromEntries(chunk2(fields));\n      if (f.done) { res.write('event: done\\ndata: {}\\n\\n'); return res.end(); }\n      res.write(`id: ${id}\\ndata: ${JSON.stringify({ tok: f.tok })}\\n\\n`);\n    }\n  }\n});",
+    "lang": "javascript",
+    "tags": [
+      "chatgpt",
+      "redis-streams",
+      "sse"
+    ],
+    "termDefinitions": [
+      {
+        "term": "XREAD BLOCK",
+        "meaning": "阻塞式读取 Stream：没有新条目时挂住连接，XADD 一落地立刻返回，不是轮询。",
+        "meaningEn": "XREAD BLOCK holds the connection until a new entry is appended, so it pushes rather than polls."
+      },
+      {
+        "term": "$",
+        "meaning": "Redis Stream 里表示「当前最大 ID」的特殊游标，含义是只要此刻之后新增的条目。",
+        "meaningEn": "In Redis Streams, $ is the special cursor meaning \"only entries added after now.\""
+      },
+      {
+        "term": "0-0",
+        "meaning": "Stream 的最小条目 ID，用作起始游标即表示从流的第一条开始读。",
+        "meaningEn": "0-0 is the lowest stream entry ID, used as a cursor to read from the very beginning."
+      },
+      {
+        "term": "Last-Event-ID",
+        "meaning": "SSE 协议规定的请求头：浏览器断线重连时自动回传它最后收到的事件 id。",
+        "meaningEn": "Last-Event-ID is the SSE header a browser automatically resends with the last event id it received."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-chatgpt-088",
+    "format": "code",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "streaming-flow",
+    "scenario": "一条答案播到一半，那台 Chat Service 被 deploy 换掉，浏览器 3 秒后自动重连并落到另一台实例上。",
+    "scenario_en": "Mid-answer the Chat Service pod is replaced by a deploy, and the browser reconnects three seconds later onto a different instance.",
+    "q": "新实例靠什么知道该从哪个 token 往下接？",
+    "q_en": "How does the new instance know which token to resume from?",
+    "options": [
+      "新实例向所有 GPU worker 广播询问，找出谁正在为这个 runId 生成",
+      "服务端在 Redis 里另建一张 runId → 已推送偏移量的表，每推一条就更新",
+      "SSE 每条事件带 `id:`，浏览器重连自动回传 Last-Event-ID",
+      "客户端把已收到的全文整段回传，服务端做字符串 diff 算出中间缺了哪一段"
+    ],
+    "options_en": [
+      "The new instance broadcasts to every GPU worker asking who is generating this runId.",
+      "The server keeps a separate runId → pushed-offset table in Redis, updated on every token.",
+      "Each SSE event carries `id:`, which the browser resends as the Last-Event-ID header on reconnect.",
+      "The client resends everything it received so the server can diff the text and find the gap."
+    ],
+    "answer": [
+      2
+    ],
+    "optionExplanations": [
+      "广播查询要求 worker 之间互相可寻址，正好把刚解耦掉的耦合又加回来，而且 worker 本身可能也已经换过了。",
+      "多一张表就多一处要和实际推送保持一致的状态，写它的实例崩了表就落后于真实进度，反而制造了新的不一致来源。",
+      "游标由客户端持有并自动回传，服务端因此不需要为任何一条连接保存进度，这正是实例能随便被杀掉的前提。",
+      "回传全文既浪费带宽又不可靠——token 可能只差半个字，字符串 diff 在多字节字符上很容易切错位置。"
+    ],
+    "optionExplanations_en": [
+      "Broadcasting requires workers to be addressable again, reintroducing the coupling the runId channel just removed.",
+      "An extra table is extra state to keep in sync; if the instance writing it dies, the table lags real progress.",
+      "The cursor lives on the client and comes back automatically, so no instance needs to store per-connection progress.",
+      "Resending the full text wastes bandwidth and diffing is fragile across multi-byte characters."
+    ],
+    "why": "SSE 协议自带断点续传，游标由客户端保管并自动回传。服务端因此不必为任何一条连接存进度——这才是实例敢被随时杀掉的原因。",
+    "why_en": "SSE has resumption built in: the server writes an id, the browser returns it as Last-Event-ID, and that stream entry ID becomes the XREAD cursor so no server-side per-connection state exists.",
+    "codeSample": "// 服务端：每条 SSE 事件都带上 Stream entry ID\nres.write(`id: ${id}\\ndata: ${JSON.stringify({ tok })}\\n\\n`);\n\n// 浏览器：EventSource 断线后自动重连，无需任何自定义代码\nconst es = new EventSource(`/runs/${runId}/stream`);\nes.onmessage = e => append(JSON.parse(e.data).tok);\n// 重连请求会自动带上: Last-Event-ID: 1718...-0\n\n// 新实例：把这个头当游标接着读，服务端不存任何 per-connection 状态\nlet lastId = req.headers['last-event-id'] || '0-0';\nawait sub.xread('BLOCK', 15000, 'STREAMS', `gen:${runId}`, lastId);",
+    "lang": "javascript",
+    "tags": [
+      "chatgpt",
+      "sse",
+      "reconnect"
+    ],
+    "termDefinitions": [
+      {
+        "term": "EventSource",
+        "meaning": "浏览器内置的 SSE 客户端，断线后会自动重连并回传上次的事件 id。",
+        "meaningEn": "EventSource is the browser's built-in SSE client that auto-reconnects and resends the last event id."
+      },
+      {
+        "term": "Stream entry ID",
+        "meaning": "Redis 为 Stream 每条条目生成的单调递增 ID，形如 1718000000000-0。",
+        "meaningEn": "A Redis stream entry ID is the monotonically increasing identifier like 1718000000000-0 assigned to each entry."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-chatgpt-089",
+    "format": "code",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "fanout",
+    "scenario": "单台 Chat Service 要同时挂住 1 万条 SSE，每条都在自己的 gen:{runId} 上 XREAD BLOCK 等着。",
+    "scenario_en": "One Chat Service instance holds 10k concurrent SSE streams, each blocked on XREAD for its own gen:{runId}.",
+    "q": "这个写法先撞到哪堵墙，该怎么改？",
+    "q_en": "Which wall does this hit first, and what is the fix?",
+    "options": [
+      "Redis 内存被这些 Stream 撑爆，改成把每个 delta 直接写进 Postgres",
+      "阻塞读占满 Redis 连接数，热路径改走 Pub/Sub、Stream 只留作补洞",
+      "BLOCK 超时会累积成 CPU 空转，把超时调短、改用更密的轮询节奏",
+      "token 会乱序到达前端，改由客户端按 seq 字段重排之后再渲染"
+    ],
+    "options_en": [
+      "Redis memory blows up from these streams, so write every delta straight to Postgres instead.",
+      "Blocking reads exhaust Redis connections, so move the hot path to Pub/Sub and keep Streams for gap-fill.",
+      "BLOCK timeouts accumulate into CPU spin, so shorten the timeout and poll more frequently.",
+      "Tokens arrive out of order, so have the client reorder them by a seq field before rendering."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "内存这一层已经被 MAXLEN 加 TTL 封顶了；而且把每个 token 写 Postgres 是数量级更贵的写放大，方向完全反了。",
+      "一条 XREAD BLOCK 独占一条 Redis 连接，1 万条流就是 1 万条；而一条 SUBSCRIBE 连接能挂上万个 channel，双写正是拿来换连接数的。",
+      "BLOCK 期间连接是挂起的，不消耗 CPU；把超时调短只会让空转的往返变多，正好放大了要解决的问题。",
+      "单条 Stream 内条目严格有序，一条流上不会乱序；乱序是多路合并才需要操心的事。"
+    ],
+    "optionExplanations_en": [
+      "Memory is already capped by MAXLEN plus TTL, and per-token Postgres writes are an order of magnitude more expensive.",
+      "Each blocking XREAD owns a Redis connection, while one SUBSCRIBE connection can carry tens of thousands of channels.",
+      "A blocked connection burns no CPU; shortening the timeout just adds idle round trips.",
+      "Entries within one stream are strictly ordered, so a single stream never arrives out of order."
+    ],
+    "why": "阻塞读是按连接计费的：1 万条流就要 1 万条 Redis 连接，先打爆的是 maxclients 而不是内存。所以大规模才拆成双写——Pub/Sub 一条共享连接送实时，Stream 只在重连时被 XRANGE 查一次。",
+    "why_en": "Blocking reads cost one Redis connection each, so maxclients breaks before memory does, which is why large scale splits into Pub/Sub for live delivery and Streams for gap-fill.",
+    "whenOtherWins": "并发只有几百条流时纯 Stream 更该选：单一机制、一次 XADD 就是全部真相，不用维护 XADD 和 PUBLISH 之间的双写一致性，也少一条代码路径。",
+    "tradeoff": "纯 Stream vs Pub/Sub+Stream 双写：省下连接数，换来双写不原子和两条代码路径",
+    "codeSample": "// worker：双写——Stream 留痕，Pub/Sub 走热路径\nawait redis.xadd(`gen:${runId}`, 'MAXLEN', '~', 2000, '*', 'tok', tok);\nawait redis.publish(`gen:${runId}`, tok);\n\n// Chat Service：一条共享连接 SUBSCRIBE 上万个 channel，不再一流一连接\nawait shared.subscribe(`gen:${runId}`, tok => res.write(`data: ${tok}\\n\\n`));\n\n// 重连补洞仍然只能问 Stream —— Pub/Sub 没有历史\nconst missed = await redis.xrange(`gen:${runId}`, `(${lastId}`, '+');\nfor (const [id, f] of missed) res.write(`id: ${id}\\ndata: ${f[1]}\\n\\n`);",
+    "lang": "javascript",
+    "tags": [
+      "chatgpt",
+      "fanout",
+      "pubsub"
+    ],
+    "termDefinitions": [
+      {
+        "term": "maxclients",
+        "meaning": "Redis 允许的最大并发客户端连接数上限，默认约一万，超出就拒绝新连接。",
+        "meaningEn": "maxclients is Redis's cap on concurrent client connections, around ten thousand by default."
+      },
+      {
+        "term": "XRANGE",
+        "meaning": "按 ID 区间一次性取回 Stream 里的历史条目，用来补重连期间漏掉的那一段。",
+        "meaningEn": "XRANGE fetches historical stream entries in an ID range, used to backfill what a reconnect missed."
+      }
+    ]
+  },
+  {
+    "id": "sd-problem-breakdowns-chatgpt-090",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "statelessness",
+    "scenario": "有人质疑：Chat Service 进程里明明存着一张 runId → SSE response 的 Map，还握着上万条 socket，凭什么叫无状态？",
+    "scenario_en": "Someone objects that Chat Service holds a runId → SSE response map and thousands of live sockets, so how can it be called stateless?",
+    "q": "这里的「无状态」到底在说什么？",
+    "q_en": "What does \"stateless\" actually mean here?",
+    "options": [
+      "指进程内存里确实不留任何数据，每次都从 Redis 重新读出来再用",
+      "指这份状态短命、非权威，没有任何组件需要查它落在哪台机器上",
+      "指该服务自己不写数据库，持久化一律交给下游的 Postgres 去负责",
+      "指所有实例内存里的那张 Map 内容一致，靠 Redis 做实时双向同步"
+    ],
+    "options_en": [
+      "It means the process truly keeps nothing in memory and re-reads everything from Redis.",
+      "It means the state is short-lived, non-authoritative, and nobody needs to look up which machine holds it.",
+      "It means the service writes no database itself, leaving persistence to Postgres downstream.",
+      "It means every instance's map holds identical contents, kept in sync through Redis."
+    ],
+    "answer": [
+      1
+    ],
+    "optionExplanations": [
+      "字面理解，但做不到也没必要——socket 本身就是内核里的状态，任何持长连接的服务都不可能真的零内存状态。",
+      "三个特性缺一不可：丢了只损失一次重连（短命、非权威），且不存在 runId → 实例 IP 的目录（不可寻址），LB 才敢随便分、deploy 才敢随便杀。",
+      "写不写库和有没有状态是两回事：一个把会话进度只存在自己内存里的服务，即使一行库都不写，照样是有状态的。",
+      "跨实例同步那张 Map 恰恰是把无状态做成了有状态，还平白引入一个分布式一致性问题，而这里根本不需要。"
+    ],
+    "optionExplanations_en": [
+      "Literal but impossible — a socket is itself kernel state, so no long-connection service is ever truly memory-free.",
+      "All three properties matter: losing it costs only one reconnect, and no runId → instance directory exists, so the LB can route freely.",
+      "Writing to a database is orthogonal; a service keeping session progress only in memory is stateful even with zero writes.",
+      "Syncing that map across instances would manufacture exactly the distributed-consistency problem this design avoids."
+    ],
+    "why": "判据不是「内存里有没有东西」，而是「别人要给它发东西时，需不需要先查它在哪」。socket 本身就是内核状态，真正决定可替换性的是系统里不存在那张目录。",
+    "why_en": "The test is not whether memory holds anything but whether anyone must look up where a connection lives before sending to it.",
+    "tradeoff": "订阅式 fanout vs 连接注册表：前者无目录可查、实例可随时替换，后者能直连但扩缩容要重平衡",
+    "tags": [
+      "chatgpt",
+      "statelessness",
+      "fanout"
+    ],
+    "termDefinitions": [
+      {
+        "term": "可寻址状态 (addressable state)",
+        "meaning": "别的组件必须先查出它在哪台实例上才能投递的状态，是有状态路由的根源。",
+        "meaningEn": "Addressable state is state other components must locate on a specific instance before they can deliver to it."
+      },
+      {
+        "term": "连接注册表 (connection registry)",
+        "meaning": "记录「哪个用户或会话的连接挂在哪台服务器」的全局表，WhatsApp 这类按身份寻址的系统需要它。",
+        "meaningEn": "A connection registry maps each user or session to the server holding its connection, needed when connections are addressed by identity."
       }
     ]
   }
