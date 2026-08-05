@@ -39,7 +39,7 @@
         [
           "LSM 树",
           "写优化·顺序写+后台合并",
-          "Cassandra、RocksDB、DynamoDB"
+          "Cassandra、RocksDB、LevelDB"
         ]
       ]
     },
@@ -661,21 +661,21 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "index-cost",
-    "scenario": "评审会上要为「这张表再加一个索引」列出全部真实代价，据此决定加还是不加。",
+    "scenario": "评审会上要为「这张表再加一个普通（非唯一）索引」列出全部真实代价，据此决定加还是不加。",
     "q": "给一张表新增一个索引，真实代价有哪些？（多选）",
     "options": [
       "写变慢：每次 INSERT / UPDATE / DELETE 都要顺带更新这个索引（写放大）",
       "占磁盘：索引是表旁边一份独立的 B 树结构，需要额外存储",
       "占内存翻倍：多一个索引，RAM 占用就翻一倍",
-      "没人用的索引纯亏：白维护 + 白占盘却零读收益，应监控并删除"
+      "没有查询用到的普通索引纯亏：白维护 + 白占盘却零读收益，应监控并删除（承担唯一约束的索引除外）"
     ],
     "answer": [
       0,
       1,
       3
     ],
-    "why": "加索引两类真实代价：写变慢（每次增删改都要同步维护索引）和占磁盘（独立 B 树结构）。内存常被高估——缓冲池只缓存热页，冷索引几乎不占 RAM。真正要防的是没人查却拖慢写入的索引。",
-    "why_en": "Adding an index has two real costs: slower writes (every insert/update/delete must maintain it — write amplification, the main one) and extra disk (a separate B-tree). Memory is overhyped: the buffer pool is an LRU cache that keeps only hot pages, so cold indexes barely touch RAM (no doubling). The real danger is unused indexes that slow every write for zero read benefit — monitor and drop them.",
+    "why": "加索引的主要代价是写变慢（每次增删改都要维护它）和占磁盘（独立 B 树）。内存不会「翻倍」：buffer pool 只留常被访问的页；但写入时要改的索引页也会被读进内存，写多的表上这部分并不小。没有查询用、也不承担唯一约束的普通索引只有成本没有收益，应监控使用率后删除。",
+    "why_en": "The main costs are slower writes (every insert/update/delete maintains it) and extra disk (a separate B-tree). Memory does not \"double\": the buffer pool keeps frequently touched pages, though index pages modified by writes are also pulled in, which matters on write-heavy tables. An ordinary index that no query reads and that enforces no uniqueness is pure cost; monitor usage and drop it.",
     "table": {
       "headers": [
         "代价",
@@ -707,24 +707,24 @@
       "prerequisite"
     ],
     "q_en": "Adding an index to a table has real costs — which are they? (select all that apply)",
-    "scenario_en": "In a design review you have to list every real cost of adding one more index to this table before deciding to ship it.",
+    "scenario_en": "In a design review you have to list every real cost of adding one more ordinary (non-unique) index to this table before deciding to ship it.",
     "options_en": [
       "Slower writes: every INSERT/UPDATE/DELETE also has to update this index (write amplification).",
       "More disk usage: an index is a separate B-tree structure next to the table, needing extra storage.",
       "Memory usage roughly doubles: adding one more index doubles RAM usage.",
-      "An unused index is pure loss: maintained and stored for zero read benefit, so it should be monitored and dropped."
+      "An ordinary index no query uses is pure loss: maintained and stored for zero read benefit, so monitor and drop it (indexes enforcing uniqueness are the exception)."
     ],
     "optionExplanations": [
       "写变慢是主要代价：每次 INSERT/UPDATE/DELETE 除了改主表，还要同步维护这个索引，拖慢写入吞吐。",
       "占磁盘是实打实的开销：索引是表旁边一份独立的 B 树结构，宽字段索引甚至能接近原表体积。",
-      "错——内存占用常被夸大：缓冲池是 LRU 缓存，只留热页在内存，冷索引几乎不占 RAM，不会「翻一倍」。",
-      "对，没人用的索引纯亏：白白维护、白占磁盘，读收益是零，应该靠监控使用率定期清理。"
+      "错——内存不会「翻倍」：缓冲池只留常被访问的页。但写入时要改的索引页也会被读进内存，写多的表上这部分并不小。",
+      "对，没有查询用、也不承担唯一约束的普通索引纯亏：白白维护、白占磁盘，读收益是零，应该靠监控使用率定期清理。"
     ],
     "optionExplanations_en": [
       "Slower writes are the main cost: every INSERT/UPDATE/DELETE has to update the main table plus keep this index in sync, dragging down write throughput.",
       "Extra disk usage is a real cost too — an index is a separate B-tree structure next to the table, and on wide columns it can approach the table's own size.",
-      "Wrong — the memory hit is often overstated: the buffer pool only keeps hot pages resident, so a cold index barely touches RAM; it doesn't double usage.",
-      "Right — an unused index is pure loss: it's maintained and stored for zero read benefit, so it should be found via usage monitoring and dropped."
+      "Wrong: memory does not \"double\", since the buffer pool keeps only frequently touched pages; though index pages modified by writes are also pulled in, which matters on write-heavy tables.",
+      "Right: an ordinary index that no query reads and that enforces no uniqueness is pure loss, maintained and stored for zero read benefit, so find it via usage monitoring and drop it."
     ]
   },
   {
@@ -1420,19 +1420,19 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "lsm",
-    "scenario": "指标写入服务每秒 10 万条 INSERT，主键是随机 UUID，索引走 B 树。",
+    "scenario": "指标写入服务每秒 10 万条 INSERT，主键是随机 UUID，索引走 B 树，索引大小远超 buffer pool 内存。",
     "q": "B 树在每秒 10 万级写入下的瓶颈出在哪？",
     "options": [
       "内存空间完全不够，存不下树的根节点数据",
-      "每次写要定位叶页、读入、改、写回——随机寻道成瓶颈",
+      "每次写要定位叶页、读入、改、写回，随机 UUID 让这些页散落各处，随机 I/O 成瓶颈",
       "树在高并发写入场景下会逐渐失去自身的平衡",
-      "键的数量一旦超出限制，就会溢出单个节点并触发频繁分裂"
+      "节点里的键一旦超过上限，B 树就拒绝写入并报错，直到重建索引"
     ],
     "answer": [
       1
     ],
-    "why": "O(log n) 只说明很快找到“哪一页要改”。真正贵的是后半段：把散落在磁盘/SSD 各处的小页读进缓存、改成脏页、之后再刷回去；页满了还可能 split。十万级写入会把这些小而分散的页操作放大成随机 I/O 瓶颈。",
-    "why_en": "O(log n) only means the database quickly finds which page to change. The expensive part comes after that: load scattered small pages, dirty them in cache, flush them back later, and sometimes split full pages. At very high write rates, those scattered page operations become the random I/O bottleneck.",
+    "why": "O(log n) 只说明能很快找到「要改哪一页」。真正贵的是：随机 UUID 让每笔写落在不同的旧页上，索引又远大于内存，这些页要从磁盘/SSD 读进来、改成脏页、再刷回去，页满还会 split 加更多写。十万级写入把这些分散的页操作放大成随机 I/O 瓶颈。",
+    "why_en": "O(log n) only means finding which page to modify is fast. The real cost: random UUIDs land each write on a different old page, and with the index far larger than memory those pages must be read from disk/SSD, dirtied and flushed back, with splits adding more writes when pages fill. At 100k writes/s these scattered page operations become a random I/O bottleneck.",
     "tags": [
       "btree",
       "lsm",
@@ -1440,9 +1440,9 @@
     ],
     "options_en": [
       "There isn't nearly enough memory to hold the tree's root node data.",
-      "Every write has to locate the leaf page, read it in, modify it, write it back — random seeks become the bottleneck.",
+      "Each write must locate a leaf page, read it in, modify it and write it back; random UUIDs scatter these pages, so random I/O becomes the bottleneck",
       "Under heavy concurrent writes, the tree gradually loses its own balance.",
-      "Once the key count exceeds a limit, it overflows a single node and triggers frequent splits."
+      "Once a node exceeds its key limit, the B-tree rejects writes with an error until the index is rebuilt"
     ],
     "diagram": "flowchart LR\n    subgraph BT[\"B-tree: many tiny jumps\"]\n      W1[\"write key=18\"] --> P7[\"leaf page P7\"]\n      W2[\"write key=853\"] --> P31[\"leaf page P31\"]\n      W3[\"write key=4400\"] --> P4[\"leaf page P4\"]\n      P7 --> D[\"dirty pages in cache\"]\n      P31 --> D\n      P4 --> D\n      D --> F[\"flush P7, P31, P4 later\"]\n      P31 --> S[\"maybe split if full\"]\n    end\n    subgraph LSM[\"LSM: one conveyor belt\"]\n      A1[\"write key=18\"] --> WAL[\"append WAL\"]\n      A2[\"write key=853\"] --> WAL\n      A3[\"write key=4400\"] --> WAL\n      WAL --> MEM[\"memtable\"]\n      MEM --> SST[\"batch flush sorted file\"]\n    end",
     "codeSample": "# B-tree: 找路很快，但每个 key 可能改不同旧页\nfor key, value in incoming_writes:\n  page_id = btree_find_leaf(key)       # O(log n): fast route lookup\n  page = page_cache.load(page_id)      # may touch scattered pages\n  page.put(key, value)                 # modify old page in place\n  page_cache.mark_dirty(page)\n  if page.is_full():\n    split_page(page)                   # extra page writes + parent update\n\npage_cache.flush_dirty_pages()         # later writes P7, P31, P4...\n\n# LSM: 先把小写入排成连续流水账\nfor key, value in incoming_writes:\n  wal.append(key, value)               # sequential append\n  memtable.put(key, value)             # memory update\n\nif memtable.too_large():\n  flush_as_sorted_sstable(memtable)    # batch write",
@@ -1508,18 +1508,18 @@
       }
     ],
     "q_en": "Where does a B-tree bottleneck show up at around one hundred thousand writes per second?",
-    "scenario_en": "A metrics ingestion service takes a hundred thousand inserts per second with random UUID keys on a B-tree index.",
+    "scenario_en": "A metrics ingest service does 100k INSERTs per second with random UUID primary keys on a B-tree index, and the index is far larger than the buffer pool.",
     "optionExplanations": [
       "根节点很小，内存完全放得下；瓶颈不在存不下根节点。",
       "对，O(log n) 只帮你快速定位该改哪一页，真正贵的是把这页从磁盘读入、改成脏页、可能分裂后再写回——十万级写入把这些放大成随机 I/O 瓶颈。",
       "B 树是自平衡结构，高并发写入不会让它失去平衡，split/merge 机制会一直维持平衡。",
-      "键数量超出节点容量时节点会分裂（split）成两个，而不是溢出报错。"
+      "节点满了会分裂成两个、继续写入，不会报错拒写。"
     ],
     "optionExplanations_en": [
       "The root node is tiny and fits in memory easily — that's not where the bottleneck is.",
       "Right — O(log n) only finds the page fast; the expensive part is loading it from disk, dirtying it, maybe splitting it, and writing it back — at six-figure write rates that becomes a random-I/O bottleneck.",
       "A B-tree is self-balancing — heavy concurrent writes don't throw it out of balance; split/merge keeps it balanced continuously.",
-      "When a node's key count exceeds capacity it splits into two nodes — it doesn't overflow or error out."
+      "A full node splits in two and writes continue; it never rejects writes with an error."
     ]
   },
   {
@@ -1528,19 +1528,19 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "lsm",
-    "scenario": "同一张表要在 Postgres 和 Cassandra 上各建一次索引，你发现两边的建法根本不同。",
+    "scenario": "同一张表要在 Postgres 和 Cassandra 上各建一次。Postgres 的表数据存在 heap 里，B 树索引另建；Cassandra 的表数据直接以 LSM（memtable + SSTable）形式按 partition key 组织。你发现两边加索引的方式根本不同。",
     "q": "B 树和 LSM 树（日志结构合并树）在「索引与表的关系」上的根本差异是？",
     "options": [
-      "两者都是可以随意加在任意列上的独立索引结构",
-      "LSM 可以随意加在任意列上，B 树反而做不到这点",
-      "B 树可建在任意列；LSM 是整表存储格式，按主键排序",
-      "两者其实都是整张表的存储格式，都没有独立索引"
+      "两个系统里，B 树和 LSM 都是可以随意加在任意列上的独立索引结构",
+      "在 Cassandra 里 LSM 可以随意加在任意列上，Postgres 的 B 树反而做不到",
+      "在 Postgres 里 B 树是挂在某列上的独立索引；在 Cassandra 里 LSM 就是整表的存储格式，按主键排序，其他列的查询要靠额外的二级索引结构",
+      "两个系统里 B 树和 LSM 都只是整张表的存储格式，都没有独立索引"
     ],
     "answer": [
       2
     ],
-    "why": "B 树是「一列一棵」的独立索引；LSM 不是这么用的——它是整张表的存储格式，按主键排序，主键查询极快，二级索引要靠额外结构。",
-    "why_en": "A B-tree is a separate index you can create on any column, while an LSM tree is the storage format for the entire table sorted by primary key.",
+    "why": "题面已给出两个系统的组织方式：Postgres 是 heap 表 + 独立 B 树索引，所以任意列都能单独建一棵；Cassandra 的表本身就是按主键组织的 LSM，主键查询快，其他列要靠额外的二级索引。注意这是这两个系统的选择，不是数据结构的限制：InnoDB 用 B 树存整表，MyRocks 用 LSM 存二级索引。",
+    "why_en": "The stem fixes how each system is organized: Postgres is a heap plus standalone B-tree indexes, so any column can get its own tree; Cassandra's table itself is an LSM keyed by primary key, fast for key lookups, with other columns needing an extra secondary index. This is a choice these two systems make, not a limit of the structures: InnoDB stores whole tables in B-trees, and MyRocks stores secondary indexes in an LSM.",
     "tags": [
       "lsm",
       "btree",
@@ -1571,10 +1571,10 @@
       ]
     },
     "options_en": [
-      "Both are standalone index structures you can freely add to any column.",
-      "LSM can be freely added to any column, while B-tree oddly can't.",
-      "B-tree can be built on any column; LSM is the whole table's storage format, sorted by primary key.",
-      "Both are actually whole-table storage formats, and neither has a standalone index."
+      "In both systems, B-trees and LSMs are standalone index structures you can add on any column",
+      "In Cassandra an LSM can be added on any column, while Postgres B-trees cannot",
+      "In Postgres a B-tree is a standalone index on a column; in Cassandra the LSM is the table's storage format sorted by primary key, and queries on other columns need an extra secondary-index structure",
+      "In both systems, B-trees and LSMs are only table storage formats, with no standalone indexes"
     ],
     "tradeoff": "按列建索引的灵活性 vs 整表按主键排序换写入吞吐",
     "termDefinitions": [
@@ -1596,18 +1596,18 @@
       }
     ],
     "q_en": "What is the fundamental difference between B-trees and LSM trees in how they relate to the table?",
-    "scenario_en": "You index the same table once in Postgres and once in Cassandra, and find the two approaches are nothing alike.",
+    "scenario_en": "The same table is built in Postgres and in Cassandra. Postgres keeps table rows in a heap and builds B-tree indexes separately; Cassandra stores the table itself as an LSM (memtable + SSTables) organized by partition key. You notice adding an index works completely differently on each.",
     "optionExplanations": [
-      "「都是可加在任意列的独立索引」只适用于 B 树；LSM 本身就是整表存储格式，不是外挂索引。",
-      "说反了：能任意列建索引的是 B 树，LSM 是按主键组织的整表存储格式。",
-      "对，B 树是可加在任意列的独立索引；LSM 则是整表本身按主键排序存储，这是两者最根本的区别。",
-      "B 树恰恰是独立索引，不是整表存储格式——只有 LSM 才是「表即存储」。"
+      "「都是可加在任意列的独立索引」不符合 Cassandra：那里 LSM 本身就是整表存储格式，不是外挂索引。",
+      "说反了：Postgres 里能对任意列单独建 B 树，Cassandra 里 LSM 是按主键组织的整表存储。",
+      "对：Postgres 是 heap 表 + 独立 B 树索引；Cassandra 的表本身就是按主键组织的 LSM，其他列要靠额外的二级索引。",
+      "Postgres 里 B 树恰恰是独立索引，不是整表存储格式。"
     ],
     "optionExplanations_en": [
-      "\"Both can be freely added to any column\" only describes B-tree; LSM itself is the whole table's storage format, not a bolt-on index.",
-      "Backwards — it's B-tree that can index any column freely; LSM is the whole table organized and stored by primary key.",
-      "Right — a B-tree is a standalone index you can add to any column, while LSM is the table's own storage format sorted by primary key; that's the fundamental split.",
-      "A B-tree is exactly a standalone index, not a whole-table storage format — it's LSM where the table itself is the storage."
+      "\"Both are standalone indexes on any column\" does not fit Cassandra, where the LSM is the table's own storage format rather than a bolt-on index.",
+      "Backwards: in Postgres you can build a B-tree on any column, while in Cassandra the LSM is the whole table organized by primary key.",
+      "Right: Postgres is a heap plus standalone B-tree indexes; Cassandra's table itself is an LSM keyed by primary key, and other columns need an extra secondary index.",
+      "In Postgres a B-tree is exactly a standalone index, not the table's storage format."
     ]
   },
   {
@@ -1812,13 +1812,13 @@
     ],
     "q_en": "What data structure is a memtable usually implemented with?",
     "optionExplanations": [
-      "无序数组按插入顺序追加确实快，但 flush 成 SSTable 前需要按 key 排序，无序数组做不到。",
+      "无序数组也能在 flush 前再排序（RocksDB 有这种 vector memtable，适合纯批量导入），但读 memtable 时点查和范围扫描都要全扫，所以通常不用它。",
       "布隆过滤器是查找 SSTable 时用来快速排除不可能命中的文件，不是内存里承接写入的结构。",
       "对，memtable 是有序结构（红黑树/跳表），保持 key 有序才能写满后直接顺序 flush 成 SSTable。",
       "堆文件是无序存储，跟 memtable 需要保持有序、方便顺序刷盘的要求正相反。"
     ],
     "optionExplanations_en": [
-      "An unsorted append-only array is fast to write to, but flushing to an SSTable requires key order, which an unsorted array can't give you.",
+      "An unsorted array can be sorted at flush time (RocksDB's vector memtable does this for bulk loads), but point and range reads against the memtable then need a full scan, so it is not the usual choice.",
       "A Bloom filter is used later to quickly rule out SSTables that can't contain a key — it's not the in-memory structure that absorbs writes.",
       "Right — a memtable is an ordered structure (red-black tree or skip list); staying key-sorted lets it flush straight into a sorted SSTable once full.",
       "A heap file is unordered storage, the opposite of what a memtable needs — staying ordered so it can flush sequentially."
@@ -2073,9 +2073,9 @@
     "topic": "system-design",
     "sub": "lsm",
     "q": "补全 LSM 树的三大读优化：",
-    "text": "{{布隆过滤器}}能快速断定某 key「一定不在」某个 SSTable，跳过多数文件；{{稀疏索引}}记录每个块的键范围，范围不含目标就整个跳过；不同的 {{compaction}} 策略在写放大与文件数之间做权衡。",
-    "why": "三板斧把读放大压回可用水平：布隆过滤器排除「确定没有」，稀疏索引排除「范围不符」，compaction 控制文件总数。",
-    "why_en": "LSM reads are rescued by bloom filters that rule files out, sparse indexes that skip out-of-range blocks, and compaction strategies that bound the file count.",
+    "text": "{{布隆过滤器}}能快速断定某 key「一定不在」某个 SSTable，跳过多数文件；SSTable 内的{{稀疏索引}}记录每个数据块的起始键，只读可能含目标的那一个块；不同的 {{compaction}} 策略在写放大与一次读要查的 SSTable 数之间做权衡。",
+    "why": "三板斧各管一层：布隆过滤器排除「确定没有」的文件，稀疏索引在文件内只定位一个块，compaction 控制一次读要翻的文件数。",
+    "why_en": "Each tool works at a different level: bloom filters rule out whole files, the sparse index narrows a file down to one block, and compaction bounds how many files a read must check.",
     "tags": [
       "lsm",
       "bloom-filter",
@@ -2187,8 +2187,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "lsm",
-    "scenario": "LSM 引擎逐个排查 SSTable，每打开一个文件就是一次磁盘 I/O，能不开就不开。",
-    "q": "你在找 user_id=500，某个 SSTable（有序字符串表）的稀疏索引显示它只含键 1000-2000。接下来？",
+    "scenario": "LSM 引擎逐个排查 SSTable，每打开一个文件就是一次磁盘 I/O，能不开就不开。每个 SSTable 的元数据都记着它的最小键和最大键。",
+    "q": "你在找 user_id=500，某个 SSTable（有序字符串表）的元数据显示它的键范围是 1000-2000。接下来？",
     "options": [
       "直接跳过整个文件——键范围不含目标，不可能命中",
       "还是要打开全文件扫描确认",
@@ -2198,8 +2198,8 @@
     "answer": [
       0
     ],
-    "why": "SSTable 内部有序，稀疏索引记录每块的键范围；目标键落在范围之外就能整文件跳过，一次 I/O 都不用花。",
-    "why_en": "Because SSTables are sorted, a sparse index showing the file only holds keys 1000 to 2000 lets you skip it entirely when looking for key 500.",
+    "why": "SSTable 内部有序，元数据里的最小/最大键就是它的范围；500 落在 1000-2000 之外，整份文件不可能命中，直接跳过，一次 I/O 都不用花。文件内部再用稀疏索引定位到具体块。",
+    "why_en": "An SSTable is sorted, so its smallest/largest key in metadata bounds its contents; 500 falls outside 1000-2000, so the file cannot match and is skipped with zero I/O. Inside a file, the sparse index then narrows to a specific block.",
     "tags": [
       "lsm",
       "sparse-index"
@@ -2233,17 +2233,17 @@
         "meaningEn": "A bloom filter is a probabilistic structure that can quickly say an element is definitely absent, though a maybe-present answer still needs verification."
       }
     ],
-    "q_en": "You are looking for user_id=500, but an SSTable sparse index says it only covers keys 1000-2000. What next?",
-    "scenario_en": "The LSM engine checks SSTables one by one, and every file it opens costs a disk I/O, so it avoids opening any it can.",
+    "q_en": "You are looking for user_id=500, and an SSTable's metadata says its key range is 1000-2000. What next?",
+    "scenario_en": "The LSM engine checks SSTables one by one, and every file it opens costs a disk I/O, so it avoids opening any it can. Each SSTable's metadata records its smallest and largest key.",
     "optionExplanations": [
-      "对，稀疏索引已经显示这个文件只含 1000-2000，500 落在范围外，整份文件直接略过，连一次磁盘读都省了。",
-      "如果只是为了排除，打开全文件扫描反而是最贵的路径——这正是稀疏索引和范围检查要避免的开销。",
+      "对，元数据里的键范围是 1000-2000，500 落在范围外，整份文件直接略过，连一次磁盘读都省了。",
+      "如果只是为了排除，打开全文件扫描反而是最贵的路径——这正是键范围检查要避免的开销。",
       "compaction 是后台异步整理任务，不是每次点查前都要跑一遍的前置步骤。",
       "布隆过滤器是用来判断成员是否可能存在的，这里已经能直接用键范围排除，不需要再查布隆过滤器。"
     ],
     "optionExplanations_en": [
-      "Right — the sparse index already shows this file spans 1000 to 2000; 500 falls outside that, so the whole file gets skipped, saving even a single disk read.",
-      "Opening and scanning the whole file just to rule it out would be the most expensive path — exactly what the range check avoids.",
+      "Right: the metadata says this file spans 1000 to 2000; 500 falls outside that, so the whole file gets skipped, saving even a single disk read.",
+      "Opening and scanning the whole file just to rule it out would be the most expensive path, which is exactly what the key-range check avoids.",
       "Compaction is asynchronous background housekeeping, not a step that has to run before every point lookup.",
       "A Bloom filter answers whether a key might exist at all; here the key range already rules the file out, no filter check needed."
     ]
@@ -2257,25 +2257,25 @@
     "scenario": "同一个 LSM 库跑两个集群：一个是写重的日志摄入，一个是读重的用户档案查询。",
     "q": "size-tiered 与 leveled 两种 compaction 策略的取舍是？",
     "options": [
-      "两者在写放大和产生的文件数量上完全等价",
-      "size-tiered 写放大小、文件多；leveled 相反",
-      "leveled compaction 策略的写放大最小、文件数也最少",
+      "两者在写放大和一次读要查的文件数上完全等价",
+      "size-tiered 写放大小、一次读可能要查的重叠文件多；leveled 相反",
+      "leveled 写放大最小、一次读要查的文件也最少",
       "size-tiered 策略只能被用在纯内存表这种场景上"
     ],
     "answer": [
       1
     ],
-    "why": "选 B。size-tiered 像“攒够同尺寸文件再合并”：少搬数据、写放大小，但同一 key 范围可能散在更多文件里。leveled 像“持续整理货架”：读时文件少，但数据会被反复重写到下一层。",
-    "why_en": "Choose B. Size-tiered compaction waits until similarly sized files accumulate, so it rewrites less data but leaves more files to check. Leveled compaction keeps data organized into levels with fewer files per key range, but it rewrites data more often.",
+    "why": "size-tiered 攒够同尺寸文件再合并，少搬数据、写放大小，但同一 key 可能散在多个重叠的 SSTable 里，读要多查几份。leveled 让每层内 key 范围不重叠，一次读每层最多查一个文件，代价是数据被反复重写下推，写放大高。注意 leveled 磁盘上的总文件数不一定少，少的是每次读要查的文件数。",
+    "why_en": "Size-tiered merges once similarly sized files accumulate, so it rewrites less data, but a key may be spread across several overlapping SSTables that a read must check. Leveled keeps key ranges non-overlapping within each level, so a read checks at most one file per level, at the cost of repeatedly rewriting data downward. Leveled does not necessarily have fewer files on disk; it has fewer files per read.",
     "tags": [
       "lsm",
       "compaction",
       "contrast"
     ],
     "options_en": [
-      "The two are completely equivalent in write amplification and file count.",
-      "Size-tiered has smaller write amplification but more files; leveled is the opposite.",
-      "Leveled compaction has the smallest write amplification and the fewest files, both at once.",
+      "The two are equivalent in write amplification and in how many files a read must check.",
+      "Size-tiered has smaller write amplification but more overlapping files per read; leveled is the opposite.",
+      "Leveled has both the smallest write amplification and the fewest files per read.",
       "Size-tiered compaction only works for purely in-memory tables."
     ],
     "tradeoff": "写放大 vs 读时要查的文件数",
@@ -2325,15 +2325,15 @@
     "q_en": "What is the tradeoff between size-tiered and leveled compaction?",
     "scenario_en": "The same LSM database runs two clusters: one is write-heavy log ingestion, the other read-heavy profile lookups.",
     "optionExplanations": [
-      "两者在写放大和文件数上并不等价——这正是这两种策略要权衡的地方，选哪个要看读写比例。",
-      "对，size-tiered 攒够同尺寸文件才合并，写放大小但文件散；leveled 持续把数据下推到下一层，读时文件少但写放大更高。",
-      "leveled 确实文件少，但代价是数据要被反复重写下推，写放大反而更高，不是「最小」。",
+      "两者在写放大和一次读要查的文件数上并不等价——这正是这两种策略要权衡的地方，选哪个要看读写比例。",
+      "对，size-tiered 攒够同尺寸文件才合并，写放大小但同一 key 可能散在多个重叠文件里；leveled 每层 key 范围不重叠，一次读每层最多查一个文件，但数据被反复重写，写放大更高。",
+      "leveled 一次读要查的文件确实少，但代价是数据要被反复重写下推，写放大反而更高，不是「最小」。",
       "两种 compaction 策略都是磁盘上的 SSTable 合并策略，跟纯内存表没有关系。"
     ],
     "optionExplanations_en": [
-      "The two aren't equivalent on write amplification or file count — that tradeoff is exactly the point, and it depends on the read/write ratio.",
-      "Right — size-tiered waits to accumulate same-sized files before merging, low write amplification but scattered files; leveled keeps pushing down a level, fewer files but more rewrites.",
-      "Leveled does keep file count low, but the cost is data getting rewritten and pushed down repeatedly, so its write amplification is actually higher.",
+      "The two aren't equivalent on write amplification or files checked per read; that tradeoff is exactly the point, and it depends on the read/write ratio.",
+      "Right: size-tiered waits to accumulate same-sized files, so write amplification is low but a key may sit in several overlapping files; leveled keeps key ranges non-overlapping per level, so a read checks at most one file per level, at the cost of more rewrites.",
+      "Leveled does mean fewer files per read, but the cost is data getting rewritten and pushed down repeatedly, so its write amplification is actually higher, not the smallest.",
       "Both compaction strategies are about merging on-disk SSTables — neither is limited to a purely in-memory table."
     ]
   },
@@ -2634,8 +2634,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "hash-index",
-    "scenario": "哈希索引的桶数组容量固定，1000 万个 email 哈希后必然有多个键落进同一个桶。",
-    "q": "哈希索引如何处理哈希冲突？",
+    "scenario": "PostgreSQL 的哈希索引用桶数组组织数据，1000 万个 email 哈希后必然有多个键落进同一个桶。",
+    "q": "这种哈希索引如何处理同一个桶里的多个键？",
     "options": [
       "直接丢弃发生冲突的那一整对键值数据",
       "每次发生冲突时都要重建整个哈希索引",
@@ -2645,8 +2645,8 @@
     "answer": [
       2
     ],
-    "why": "常见做法是桶内多条目+链式溢出：Postgres 哈希索引的桶可以链接溢出页。只要哈希函数好、负载因子合理，平均查找仍是 O(1)。",
-    "why_en": "Collisions are handled by letting buckets hold multiple entries and chain to overflow pages, keeping average lookups constant time with a good hash function.",
+    "why": "PostgreSQL 哈希索引的桶页可以放多条目，放满后链接溢出页；索引增长时还会分裂桶来控制负载因子。只要哈希函数分布均匀，平均查找仍是 O(1)。其他系统也可能用 open addressing 等方案。",
+    "why_en": "In PostgreSQL a bucket page holds multiple entries and chains to overflow pages when full, and buckets are split as the index grows to keep the load factor in check. With a good hash function the average lookup stays O(1). Other systems may use schemes such as open addressing.",
     "tags": [
       "hash-index",
       "collision"
@@ -2674,8 +2674,8 @@
         "meaningEn": "PostgreSQL is a popular open-source relational database whose default indexes are almost all B-trees."
       }
     ],
-    "q_en": "How does a hash index handle hash collisions?",
-    "scenario_en": "A hash index has a fixed bucket array, and hashing ten million emails inevitably lands several keys in the same bucket.",
+    "q_en": "How does this hash index handle multiple keys landing in the same bucket?",
+    "scenario_en": "A PostgreSQL hash index organizes entries in a bucket array, and hashing ten million emails inevitably lands several keys in the same bucket.",
     "optionExplanations": [
       "直接丢弃冲突的键会丢数据，任何正确的索引实现都不会这么做。",
       "冲突只需要处理这一条，不需要重建整个索引——这个代价太夸张了。",
@@ -3030,22 +3030,22 @@
     "q": "geohash 的核心思想是什么？",
     "options": [
       "把地球投影到平面网格再取模",
-      "递归四等分区域并编码，2D 变 1D 字符串",
+      "交替二分经度和纬度，交错比特后 base32 编码，2D 变有序 1D 字符串",
       "给每个城市或区域分配一个全局唯一的随机数字 ID",
       "用 R 树的矩形逐个包裹坐标点"
     ],
     "answer": [
       1
     ],
-    "why": "想象把世界四等分并标号，再对每格继续四等分——geohash 就是这个过程的 base32 编码。近处的两家餐厅往往共享「9q8yyk」这样的前缀。",
-    "why_en": "Geohash recursively subdivides the world and base32-encodes the path, turning a 2D location into a 1D string where nearby places usually share a prefix.",
+    "why": "geohash 交替对经度、纬度二分，每次二分记 1 bit，两路比特交错（每两 bit 相当于一次四等分），每 5 bit 编成一个 base32 字符。所以每多一个字符格子细分 32 份。附近的点通常共享长前缀，例如「9q8yyk」。",
+    "why_en": "Geohash alternately bisects longitude and latitude, recording one bit per split and interleaving the bits (every two bits is roughly one quartering); every 5 bits become one base32 character, so each extra character subdivides a cell 32 ways. Nearby points usually share a long prefix such as \"9q8yyk\".",
     "tags": [
       "geohash",
       "encoding"
     ],
     "options_en": [
       "Project the earth onto a flat grid and take a modulo.",
-      "Recursively quarter regions and encode them, turning 2D into a 1D string.",
+      "Alternately bisect longitude and latitude, interleave the bits and base32-encode them, turning 2D into an ordered 1D string.",
       "Assign each city or region a globally unique random numeric ID.",
       "Wrap each coordinate one by one in an R-tree rectangle."
     ],
@@ -3070,13 +3070,13 @@
     "scenario_en": "You need proximity search over ten million restaurants, but the database only offers one-dimensional ordered indexes like B-trees.",
     "optionExplanations": [
       "投影到网格取模会丢失空间局部性——geohash 的关键恰恰是保留「越近前缀越长共享」这个特性，取模做不到。",
-      "对，geohash 就是不断把区域四等分、编号，再把这串编号做 base32 编码，附近的点自然共享长前缀。",
+      "对，geohash 交替二分经度和纬度，比特交错后每 5 bit 编成一个 base32 字符，附近的点自然共享长前缀。",
       "geohash 编码的是地理坐标本身，不是给城市分配的任意标识符，跟城市 ID 无关。",
       "R 树才是用嵌套矩形包裹坐标点，这不是 geohash 的思路——geohash 不建树。"
     ],
     "optionExplanations_en": [
       "Projecting to a grid and taking a modulus loses spatial locality — geohash's whole point is that nearby points share long prefixes, which a modulus can't preserve.",
-      "Right — geohash repeatedly quarters a region and numbers it, then base32-encodes that numbering, so nearby points naturally share a long prefix.",
+      "Right: geohash alternately bisects longitude and latitude, interleaves the bits and encodes every 5 bits as a base32 character, so nearby points naturally share a long prefix.",
       "Geohash encodes the actual geographic coordinate, not some arbitrary ID assigned to a city — unrelated to city IDs.",
       "Wrapping points in nested rectangles is the R-tree's approach, not geohash's — geohash doesn't build a tree at all."
     ]
@@ -3391,19 +3391,19 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "quadtree",
-    "scenario": "要给生产库加空间索引，团队在自研一套四叉树和复用现成结构之间权衡实现成本。",
-    "q": "四叉树如今在生产数据库里少见的主要原因是？",
+    "scenario": "要给生产库加空间索引，团队在自研一套四叉树和用 geohash 复用现有 B 树索引之间权衡实现成本。",
+    "q": "相比 geohash，自研四叉树的主要额外成本是？",
     "options": [
       "它的查询复杂度普遍被认为是一种纯粹的线性增长的退化模式",
       "它根本没有办法用来表示密集聚集的热点区域范围",
       "它受到了专利授权方面相当严格的法律限制约束",
-      "需要专门树结构，不像 geohash 复用现成 B 树"
+      "需要专门实现和维护一套树结构，不像 geohash 复用现成 B 树"
     ],
     "answer": [
       3
     ],
-    "why": "geohash 借力打力（B 树现成），四叉树却要专门实现和维护一套树结构，实现复杂度让多数数据库转向 geohash 或 R 树。但它的递归细分思想奠定了 R 树的基础，Google Maps 的瓦片也有它的影子。",
-    "why_en": "Quadtrees require specialized tree structures instead of reusing existing B-trees like geohash does, which is why modern databases prefer geohash or R-tree variants.",
+    "why": "geohash 把坐标变成字符串后直接用现成 B 树；四叉树要专门实现存储、分裂、并发和恢复，而且不平衡、不易映射到磁盘页。数据库自带空间索引时多选 R 树（GiST）这类平衡结构；PostgreSQL SP-GiST 也提供四叉树实现。它的递归细分思想仍广泛用于内存空间划分和地图瓦片。",
+    "why_en": "Geohash turns coordinates into strings that the existing B-tree indexes directly; a quadtree needs its own storage, splitting, concurrency and recovery code, and it is unbalanced and maps poorly to disk pages. Databases with built-in spatial indexes mostly use balanced structures like R-trees (GiST), though PostgreSQL SP-GiST does ship a quadtree implementation. Its recursive subdivision idea lives on in in-memory spatial partitioning and map tiles.",
     "tags": [
       "quadtree",
       "implementation-cost"
@@ -3412,7 +3412,7 @@
       "Its query complexity is widely thought to degrade into a purely linear growth pattern.",
       "It supposedly has no way to represent the range of a densely clustered hot spot.",
       "It's supposedly bound by fairly strict patent-licensing legal restrictions.",
-      "It needs a dedicated tree structure, unlike geohash which reuses the existing B-tree."
+      "It needs a dedicated tree structure to build and maintain, unlike geohash which reuses the existing B-tree."
     ],
     "termDefinitions": [
       {
@@ -3431,19 +3431,19 @@
         "meaningEn": "A B-tree is a self-balancing multi-way search tree that keeps data sorted with many children per node."
       }
     ],
-    "q_en": "Why are quadtrees less common in production databases today?",
-    "scenario_en": "Adding spatial indexing to a production database, the team weighs building a quadtree themselves against reusing what's already there.",
+    "q_en": "Compared with geohash, what is the main extra cost of building a quadtree?",
+    "scenario_en": "Adding spatial indexing to a production database, the team weighs building its own quadtree against using geohash on top of the existing B-tree index.",
     "optionExplanations": [
       "四叉树的查询复杂度不是纯线性的，它的问题在实现和维护成本，不是算法复杂度差。",
       "四叉树恰恰能通过持续细分来表示密集热点区域，这不是它的短板。",
       "四叉树是公开的经典数据结构，不存在专利限制这回事。",
-      "对，geohash 借力现成的 B 树设施，四叉树却要专门实现和维护一整套树结构，这份复杂度让多数数据库转而选择别的方案。"
+      "对，geohash 借力现成的 B 树设施，四叉树却要专门实现和维护一整套树结构，这是它相对 geohash 的主要额外成本。"
     ],
     "optionExplanations_en": [
       "A quadtree's query complexity isn't purely linear — its real problem is implementation and maintenance cost, not algorithmic complexity.",
       "A quadtree is actually good at representing dense hot spots by subdividing further — that's not a weakness of it.",
       "A quadtree is a well-known public data structure — no patent restriction is involved.",
-      "Right — geohash rides on existing B-tree infrastructure, while a quadtree needs a dedicated tree implementation, and that complexity pushed most databases elsewhere."
+      "Right: geohash rides on existing B-tree infrastructure, while a quadtree needs a dedicated tree implementation to build and maintain; that is its main extra cost relative to geohash."
     ]
   },
   {
@@ -3457,14 +3457,14 @@
     "options": [
       "一种把整个空间固定切成四等分的树结构",
       "一种把二维坐标编码压缩成字符串的方案",
-      "用灵活重叠矩形包裹数据，是主流数据库默认空间索引",
+      "用灵活重叠矩形包裹数据，是 PostGIS（GiST）、MySQL 等关系库常用的空间索引",
       "一种只能用在纯内存数据库里的哈希表的变体索引结构"
     ],
     "answer": [
       2
     ],
-    "why": "R 树不按固定格子切空间，而是让矩形贴着数据的实际聚集自适应生长、允许重叠；这让它成为现代生产库的空间索引标配。",
-    "why_en": "R-trees group spatial data into flexible overlapping rectangles that adapt to where data actually clusters, and they are the default spatial index in PostGIS and MySQL.",
+    "why": "R 树不按固定格子切空间，而是让最小外接矩形贴着数据聚集自适应生长、允许重叠，点和多边形能放进同一个索引。PostGIS（GiST 上的 R-tree 式实现）、MySQL InnoDB、Oracle Spatial 都用它；也有系统走别的路，如 SQL Server 的网格分解、MongoDB 的 S2 单元。",
+    "why_en": "An R-tree does not cut space into a fixed grid; its minimum bounding rectangles grow to fit where data clusters and may overlap, so points and polygons share one index. PostGIS (an R-tree-style index on GiST), MySQL InnoDB and Oracle Spatial use it; other systems take different routes, such as SQL Server's grid tessellation or MongoDB's S2 cells.",
     "tags": [
       "rtree",
       "spatial-index",
@@ -3497,7 +3497,7 @@
     "options_en": [
       "A tree structure that rigidly quarters the entire space.",
       "A scheme that encodes two-dimensional coordinates down into a string.",
-      "It wraps data in flexible, overlapping rectangles, and is the default spatial index in mainstream databases.",
+      "It wraps data in flexible, overlapping rectangles, and is the common spatial index in relational databases like PostGIS (GiST) and MySQL.",
       "A hash-table variant index that can only be used inside a pure in-memory database."
     ],
     "termDefinitions": [
@@ -3522,13 +3522,13 @@
     "optionExplanations": [
       "固定四等分是四叉树的做法，R 树的矩形是贴着数据聚集自适应生成的，不是固定网格。",
       "把坐标编码成字符串是 geohash 的方案，R 树保留的是真正的树结构和矩形包围盒。",
-      "对，R 树用贴合数据的重叠矩形层层包裹，是当前主流数据库（PostGIS、MySQL 等）的默认空间索引。",
+      "对，R 树用贴合数据的重叠矩形层层包裹，是 PostGIS（GiST）、MySQL 等关系库常用的空间索引。",
       "R 树不是哈希变体，也不局限于内存数据库——它是磁盘型数据库里广泛使用的持久化空间索引。"
     ],
     "optionExplanations_en": [
       "Fixed quartering is the quadtree's approach; an R-tree's rectangles adapt to where the data clusters, not a fixed grid.",
       "Encoding coordinates into a string is geohash's approach; an R-tree keeps a real tree structure with bounding-box hierarchy.",
-      "Right — an R-tree wraps clustered data in overlapping rectangles at each level, the default spatial index in mainstream databases like PostGIS and MySQL.",
+      "Right: an R-tree wraps clustered data in overlapping rectangles at each level, the common spatial index in relational databases like PostGIS (GiST) and MySQL.",
       "An R-tree isn't a hash variant and isn't limited to in-memory databases — it's widely used, persistent, in disk-based databases."
     ]
   },
@@ -3975,10 +3975,10 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "inverted-index",
-    "scenario": "文章表存了 100 万篇正文、正文列已建 B 树，产品要搜正文里任意位置出现的「database」。",
+    "scenario": "文章表有 100 万篇文章，`title` 列（短字符串）已建普通 B 树索引；产品要搜标题里任意位置出现的「database」。",
     "q": "为什么 LIKE '%database%' 这种查询即使有 B 树索引也用不上？",
     "options": [
-      "B 树只加速前缀/后缀匹配，其余只能逐字符扫描",
+      "普通 B 树只能利用固定前缀（如 `'database%'`）定位；`%database%` 没有前缀，只能全扫",
       "LIKE 语法本身就禁止使用索引",
       "B 树根本不支持字符串类型",
       "因为这条查询根本没有写任何 WHERE 过滤子句"
@@ -3986,8 +3986,8 @@
     "answer": [
       0
     ],
-    "why": "中缀匹配让 B 树的有序性完全失效，数据库只能把每篇内容整个读进内存逐字符找。文本越多越慢——像逐页读完整座图书馆。",
-    "why_en": "A B-tree only helps prefix or reversed-suffix matches, so a pattern that can appear anywhere in the text forces a full scan of every row's content.",
+    "why": "B 树按 key 字典序排列，只有模式左边固定（前缀匹配 `'database%'`）时才能二分定位到起点再顺扫。`%database%` 左边是通配符，起点无法确定，B 树的有序性完全用不上，只能逐行逐字符比对。后缀匹配 `'%database'` 同样用不上普通 B 树，除非另建 `reverse(title)` 表达式索引；任意位置匹配要靠 trigram（pg_trgm GIN）或倒排索引。",
+    "why_en": "A B-tree is ordered lexicographically, so it can seek only when the left side of the pattern is fixed (a prefix match like `'database%'`). With a leading wildcard in `%database%` there is no starting point, so the ordering is useless and every row is scanned. A suffix match `'%database'` cannot use a plain B-tree either unless you add a separate `reverse(title)` expression index; matching anywhere needs a trigram (pg_trgm GIN) or an inverted index.",
     "codeSample": "SELECT * FROM posts WHERE content LIKE '%database%';\n-- B 树只能加速前缀匹配 'database%'，中缀匹配只能全表扫描",
     "lang": "sql",
     "tags": [
@@ -3997,7 +3997,7 @@
     ],
     "diagram": "flowchart LR\n  A[\"Text\"] --> B[\"Tokens\"]\n  B --> C[\"Inverted index\"]\n  C --> D[\"Posting lists\"]",
     "options_en": [
-      "A B-tree only speeds up prefix or suffix matches; anything else forces a character scan.",
+      "A plain B-tree can only seek on a fixed prefix (like `'database%'`); `%database%` has no prefix, so it falls back to a full scan",
       "The LIKE syntax itself forbids using an index.",
       "B-trees do not support string types at all.",
       "Because this query has no WHERE filter clause at all."
@@ -4025,15 +4025,15 @@
       }
     ],
     "q_en": "Why can a B-tree index not help a LIKE \"%database%\" query?",
-    "scenario_en": "An articles table holds a million bodies with a B-tree on the body column, and the product searches for the word database anywhere inside them.",
+    "scenario_en": "An articles table holds a million articles with a plain B-tree index on the short `title` column, and the product wants to find \"database\" anywhere inside the title.",
     "optionExplanations": [
-      "对，中缀匹配用不上 B 树的有序性，数据库只能把内容整篇读进来逐字符找，文本越多越慢。",
+      "对，B 树按 key 有序，只有模式左边固定才能定位起点；`%database%` 没有固定前缀，有序性用不上，只能逐行比对。",
       "LIKE 本身不禁止用索引——前缀匹配（如 'db%'）就能用上 B 树，只是中缀（%xx%）用不上。",
       "B 树完全支持字符串类型的键，问题不在类型支持，而在中缀匹配破坏了有序性。",
       "有没有 WHERE 子句跟索引能不能用得上无关，问题出在 LIKE 的匹配模式（前缀 vs 中缀）。"
     ],
     "optionExplanations_en": [
-      "Right — infix matching can't use a B-tree's sortedness at all, so it has to load the whole text and scan character by character.",
+      "Right: a B-tree is ordered by key and can seek only when the left side of the pattern is fixed; `%database%` has no fixed prefix, so the ordering is useless and every row is compared.",
       "LIKE itself doesn't ban index use — a prefix pattern like 'db%' can still use a B-tree; only an infix pattern (%xx%) can't.",
       "A B-tree fully supports string-typed keys — the issue is infix matching destroys the sortedness a B-tree relies on, not type support.",
       "Whether there's a WHERE clause has nothing to do with index usability — the real issue is LIKE's pattern, prefix versus infix."
@@ -4341,10 +4341,10 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "composite-index",
-    "scenario": "feed 查询是 WHERE user_id=? AND created_at>? ORDER BY created_at，表上只有两个单列索引。",
+    "scenario": "feed 查询是 WHERE user_id=? AND created_at>? ORDER BY created_at，表上只有两个单列索引 idx_user、idx_time，没有复合索引。",
     "q": "对上面的 feed 查询用两个单列索引（idx_user、idx_time），数据库要做哪些额外工作？",
     "options": [
-      "两个索引各查一遍、结果集求交集、最后还要再排序",
+      "没有一条路径能一次有序遍历同时完成过滤和排序：要么用一个索引取行再逐行核对另一条件（常常还要显式排序），要么两个索引各查一遍求交集再排序",
       "数据库会自动合并成一个复合索引",
       "只用其中任意一个单列索引就等价于复合索引的效果",
       "数据库会直接报错拒绝执行"
@@ -4352,14 +4352,14 @@
     "answer": [
       0
     ],
-    "why": "两个单列索引意味着两次大范围检索 + 交集 + 显式排序，比复合索引的单次有序遍历贵得多——这正是复合索引成为最常见优化的原因。",
-    "why_en": "With two separate indexes the database must fetch both large result sets, intersect them, and then sort, instead of one ordered traversal of a composite index.",
+    "why": "单列索引各自只按一列有序。优化器只能二选一或组合：用 idx_user 取出该用户全部行再过滤时间并排序；沿 idx_time 有序扫但要丢弃大量别人的行；或两边各查一遍求交集（PostgreSQL bitmap AND / MySQL index merge）再排序。哪条都比复合索引 (user_id, created_at) 的单次有序遍历多做事。",
+    "why_en": "Each single-column index is ordered by one column only. The optimizer picks one or combines them: fetch the user's rows via idx_user then filter by time and sort; walk idx_time in order but discard other users' rows; or scan both and intersect (PostgreSQL bitmap AND / MySQL index merge) then sort. Every path does more work than one ordered pass over a composite (user_id, created_at) index.",
     "tags": [
       "composite-index",
       "index-intersection"
     ],
     "options_en": [
-      "Query each index separately, intersect the two large result sets, and then sort them.",
+      "Neither path finishes filtering and ordering in one ordered pass: either use one index and check the other condition row by row (often plus an explicit sort), or scan both indexes, intersect, then sort.",
       "The database automatically merges them into a composite index.",
       "Using just one of the single-column indexes is equivalent to a composite index.",
       "The database simply throws an error."
@@ -4377,15 +4377,15 @@
       }
     ],
     "q_en": "For the feed query above, what extra work does the database do with two single-column indexes?",
-    "scenario_en": "The feed query filters on user_id and created_at and orders by created_at, and the table only has two single-column indexes.",
+    "scenario_en": "The feed query is WHERE user_id=? AND created_at>? ORDER BY created_at, and the table only has two single-column indexes, idx_user and idx_time, with no composite index.",
     "optionExplanations": [
-      "对，两个单列索引各自扫一遍范围结果、再求交集、最后还要单独排序，比复合索引的单次有序遍历多好几步。",
+      "对，单列索引各自只按一列有序：要么取一个索引的行再逐行核对另一条件并排序，要么两个索引求交集后再排序，都比复合索引的单次有序遍历多做事。",
       "数据库不会自动把两个独立索引合并成一个复合索引，那是需要显式建的另一种索引。",
       "单独用其中一个索引只能覆盖一个过滤条件，另一条件还是要逐行核对，效果达不到复合索引的水平。",
       "两个单列索引是合法查询计划，数据库会执行、只是效率更低，不会直接报错拒绝。"
     ],
     "optionExplanations_en": [
-      "Right — two single-column indexes each get scanned for a range, then intersected, then still need an explicit sort — several more steps than a composite index.",
+      "Right: each single-column index is ordered by one column only, so you either fetch rows via one index and check the other condition and sort, or intersect both indexes and then sort; either does more work than one ordered pass over a composite index.",
       "A database doesn't automatically merge two independent indexes into a composite one — that's a separate index you'd have to create explicitly.",
       "Using just one of the two indexes only covers one filter condition; the other still needs row-by-row checking.",
       "Two single-column indexes make a valid, if slower, query plan — the database executes it, it doesn't error out and refuse."
@@ -4403,7 +4403,7 @@
       "会变成两棵完全独立的 B 树结构",
       "键是两列元组，先按 user_id、组内再按 created_at 排序",
       "一张哈希表里还嵌套着一棵 B 树",
-      "如果只按时间列排序，那就变成单列索引了，跟本题问的这种两列复合索引是两回事"
+      "键只按 created_at 排序，user_id 只是挂在叶子上的附带值"
     ],
     "answer": [
       1
@@ -4420,7 +4420,7 @@
       "It becomes two completely independent B-tree structures.",
       "Each key is a two-column tuple, sorted by user_id then created_at within each group.",
       "A hash table with a B-tree nested inside it.",
-      "If it were sorted only by the time column, that would just be a single-column index — a different thing from the two-column composite index this question asks about."
+      "Keys are sorted by created_at only; user_id is just a payload attached at the leaf."
     ],
     "termDefinitions": [
       {
@@ -4440,13 +4440,13 @@
       "复合索引不是两棵独立的树，而是一棵树，键是两列拼成的元组，这正是它能一次搞定两个维度的原因。",
       "对，键是 (user_id, created_at) 这样的元组，先按第一列排、组内再按第二列排，二维查询被压成一维有序扫描。",
       "复合索引底层还是 B 树，不会额外嵌套一张哈希表；哈希和 B 树是两种不同的结构。",
-      "如果只按 created_at 排序，就成了单列索引，跟这里问的两列复合索引是两回事。"
+      "这把列的主次弄反了：user_id 是键的第一部分、参与排序，不是附带值。"
     ],
     "optionExplanations_en": [
       "A composite index isn't two separate trees — it's one tree whose key is the two columns combined into a tuple, which handles both dimensions in one pass.",
       "Right — the key is a tuple like (user_id, created_at): sorted by the first column, then the second within each group, one ordered scan for a 2D query.",
       "A composite index is still just a B-tree underneath — no hash table nested inside; hash and B-tree are different structures.",
-      "Sorting only by created_at would just be a single-column index, a different thing from the two-column composite index here."
+      "This reverses the column priority: user_id is the leading part of the key and takes part in the ordering; it is not a payload."
     ]
   },
   {
@@ -4455,19 +4455,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "composite-index",
-    "scenario": "表上只有复合索引 (user_id, created_at)，现在来了个只按时间范围查全站的报表查询。",
+    "scenario": "表上只有复合索引 (user_id, created_at)，user_id 有上百万个不同值。现在来了个只按时间范围查全站的报表查询。",
     "q": "复合索引 (user_id, created_at) 对「只按 created_at 过滤」的查询有帮助吗？",
     "options": [
       "有，任何用到这个索引里任意一列的查询都会自动被加速",
       "有帮助，但速度只能提升大约一半左右",
       "有没有帮助其实取决于这张表本身的大小",
-      "没有——B 树只服务列清单的前缀；跳过第一列就用不上"
+      "基本帮不上——索引按 user_id 优先排序，created_at 在整个索引里不是有序的，无法按时间范围直接定位"
     ],
     "answer": [
       3
     ],
-    "why": "这是最左前缀规则：索引按 user_id 优先排序，只查 created_at 时条目对它而言是乱序的。列的顺序至关重要。",
-    "why_en": "No, because a B-tree composite index only serves prefixes of its column list, so skipping the leading user id column makes it useless.",
+    "why": "最左前缀规则：B 树按 (user_id, created_at) 排序，只查 created_at 时它在全索引里是乱序的，只能整棵扫。部分引擎有 skip scan，但只在首列取值很少时划算；本题 user_id 有上百万个值，等于跳上百万次，不如另建 created_at 索引。",
+    "why_en": "Leftmost-prefix rule: the B-tree is ordered by (user_id, created_at), so created_at alone is unordered across the index and would require scanning all of it. Some engines offer skip scan, but it only pays off when the leading column has few distinct values; with millions of user_ids here, build a separate created_at index instead.",
     "tags": [
       "composite-index",
       "leftmost-prefix"
@@ -4476,7 +4476,7 @@
       "Yes — any query touching any column in this index gets automatically sped up.",
       "It helps, but only speeds things up by roughly half.",
       "Whether it helps actually depends on how big the table itself is.",
-      "No — a B-tree only serves prefixes of its column list; skip the first column and it can't be used."
+      "Essentially no — the index is ordered by user_id first, so created_at is not ordered across the index and a time range can't be located directly."
     ],
     "termDefinitions": [
       {
@@ -4491,18 +4491,18 @@
       }
     ],
     "q_en": "Does the composite index (user_id, created_at) help a query that filters only by created_at?",
-    "scenario_en": "The table only has the composite index (user_id, created_at), and now a reporting query filters site-wide by time range alone.",
+    "scenario_en": "The table only has the composite index (user_id, created_at), and user_id has millions of distinct values. Now a reporting query filters site-wide by time range alone.",
     "optionExplanations": [
       "夸大了：复合索引只服务「从第一列开始」的查询前缀，不是任何包含索引列的查询都能沾光。",
       "「快一半」是拍脑袋的估计——真实情况是完全用不上索引，要退化成扫描不含 user_id 过滤的那部分数据。",
       "表大小只影响「用不上索引」这件事有多疼，不影响用不用得上——结构决定的事，不是数据量决定的。",
-      "对，最左前缀规则：跳过第一列 user_id，剩下的 created_at 在索引里其实是乱序的，帮不上忙。"
+      "对，最左前缀规则：索引按 user_id 优先排序，created_at 在整个索引里不是有序的，无法按时间范围直接定位。"
     ],
     "optionExplanations_en": [
       "Overstated — a composite index only serves query prefixes starting from its first column, not any query that merely mentions an indexed column.",
       "\"About half as fast\" is a made-up number — the real outcome is the index is unusable at all, degrading toward a scan without the user_id filter.",
       "Table size only affects how painful it is that the index can't be used — whether it can be used is a structural fact, not a data-volume one.",
-      "Right — the leftmost-prefix rule: skipping user_id means the remaining created_at values are effectively unordered inside the index, so it can't help."
+      "Right, the leftmost-prefix rule: the index is ordered by user_id first, so created_at is not ordered across the index and a time range can't be located directly."
     ]
   },
   {
@@ -4511,19 +4511,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "composite-index",
-    "scenario": "要建复合索引：status 只有 3 个取值、user_id 上百万种，查询还总要 ORDER BY created_at。",
-    "q": "「复合索引列怎么排」的经验法则及其例外是？",
+    "scenario": "高频查询是 WHERE status=? AND user_id=? ORDER BY created_at。status 只有 3 个取值、user_id 上百万种，你要定复合索引的列序。",
+    "q": "这个查询的复合索引列该怎么排？",
     "options": [
       "永远按字母表顺序把索引列排列，不用管查询模式",
       "把数据类型占用字节数最长的列放在最前面",
-      "选择性最高的列在前；但常排序列纳入索引能省排序",
+      "等值过滤列放前面（多个等值列之间再参考选择性和前缀复用），排序 / 范围列放最后，这样能省掉排序",
       "顺序其实无所谓，查询优化器会自动帮你重新排列"
     ],
     "answer": [
       2
     ],
-    "why": "「most selective first」是常见口诀，但查询模式可以推翻它：频繁 ORDER BY 的列进索引能直接消掉排序操作。按真实查询设计而非教条。",
-    "why_en": "The rule of thumb is most selective column first, but query patterns can trump selectivity, such as including a frequently sorted column to eliminate sort operations.",
+    "why": "status 和 user_id 都是等值条件，放在前面后，索引里满足条件的那一段就按 created_at 有序，ORDER BY 不用再排。两个等值列谁前谁后，对这个查询影响不大；若还有「只按 user_id 查」的查询，就把 user_id 放第一位复用前缀。「选择性最高在前」只是等值列之间的参考，不是总规则。",
+    "why_en": "status and user_id are both equality predicates; putting them first makes the matching slice of the index ordered by created_at, so ORDER BY needs no sort. The order between the two equality columns barely matters for this query; if other queries filter by user_id alone, lead with user_id to reuse the prefix. \"Most selective first\" is only a tie-breaker among equality columns, not the overall rule.",
     "tags": [
       "composite-index",
       "column-order",
@@ -4532,7 +4532,7 @@
     "options_en": [
       "Always order index columns alphabetically, regardless of query pattern.",
       "Put whichever column's data type takes the most bytes first.",
-      "Most selective column first; but a column frequently sorted on can be included to skip a sort step.",
+      "Equality-filter columns first (ordering among them by selectivity and prefix reuse), sort/range columns last, so the sort step disappears.",
       "Order doesn't actually matter — the query optimizer automatically rearranges it for you."
     ],
     "termDefinitions": [
@@ -4547,18 +4547,18 @@
         "meaningEn": "A composite index is a single B-tree index whose key concatenates multiple columns, sorted by the first column and then the rest."
       }
     ],
-    "q_en": "What is the rule of thumb for ordering composite-index columns, and what is the exception?",
-    "scenario_en": "You're designing a composite index where status has three distinct values, user_id has millions, and the query always orders by created_at.",
+    "q_en": "How should the composite-index columns be ordered for this query?",
+    "scenario_en": "The hot query is WHERE status=? AND user_id=? ORDER BY created_at. status has three distinct values and user_id has millions, and you need to pick the composite-index column order.",
     "optionExplanations": [
       "字母顺序完全跟查询模式无关，是拍脑袋的规则，不是真实经验法则。",
       "字段类型长度和索引效率没有必然关系，决定顺序的应该是选择性和查询模式。",
-      "对，「选择性最高的列在前」是常见口诀，但如果某列经常出现在 ORDER BY 里，把它纳入索引能直接省掉一次排序，这个例外要看真实查询。",
+      "对，等值列放前面，ORDER BY 的列放后面，匹配的那一段索引就按 created_at 有序，不用再排序；多个等值列之间再看选择性和前缀复用。",
       "索引列的物理顺序是建索引时就固定的，优化器不会替你重排索引结构。"
     ],
     "optionExplanations_en": [
       "Alphabetical order has nothing to do with query patterns — an arbitrary rule, not a real heuristic.",
       "A column's data-type byte length has no real bearing on index efficiency — selectivity and query pattern should decide order.",
-      "Right — \"most selective column first\" is the common rule of thumb, but a column frequently in ORDER BY can skip a sort step if included — depends on the real query.",
+      "Right: equality columns first and the ORDER BY column after them, so the matching slice of the index is already ordered by created_at and needs no sort; among equality columns, consider selectivity and prefix reuse.",
       "The physical order of index columns is fixed at creation time — the optimizer doesn't rearrange that structure for you."
     ]
   },
@@ -4569,9 +4569,9 @@
     "topic": "system-design",
     "sub": "composite-index",
     "q": "补全面试常见的复合索引设计：",
-    "text": "订单历史查询：({{customer_id}}, order_date)；事件处理：(status, {{priority}}, created_at)；活动流：({{user_id}}, type, timestamp)。",
-    "why": "三个经典模板都遵循同一套路：先按「谁/什么状态」定位，再按时间或优先级有序扫描——过滤列在前、排序列在后。",
-    "why_en": "Classic composite indexes pair an identifying column like customer id, status, or user id with ordering columns like date, priority, or timestamp.",
+    "text": "订单历史查询（WHERE customer_id=? ORDER BY order_date）：({{customer_id}}, order_date)；事件处理（WHERE status='pending' ORDER BY priority, created_at）：(status, {{priority}}, created_at)；活动流（WHERE user_id=? AND type=? ORDER BY timestamp）：({{user_id}}, type, timestamp)。",
+    "why": "三条查询都是同一个套路：WHERE 里的等值列放前面，ORDER BY 的列按顺序跟在后面，所以每个空直接从对应查询里抄出来。",
+    "why_en": "All three follow one pattern: equality columns from the WHERE clause go first, then the ORDER BY columns in order, so each blank is read straight off its query.",
     "tags": [
       "composite-index",
       "patterns"
@@ -4865,20 +4865,20 @@
     "options": [
       "最近的点可能就贴在象限边界另一侧的相邻象限里",
       "本象限里的点没有按到我的距离排好序，结果顺序是乱的",
-      "四叉树不平衡，我所在的这个叶象限有可能恰好是空的",
+      "叶象限里存的是近似坐标，距离算不准",
       "象限用 geohash 字符串编号，前缀比较有时会把邻居判成远点"
     ],
     "options_en": [
       "The nearest point may sit just across the boundary in an adjacent quadrant.",
       "Points in this quadrant aren't sorted by distance to me, so the order is scrambled.",
-      "A quadtree is unbalanced, so my leaf quadrant might happen to be empty.",
+      "Leaf quadrants store only approximate coordinates, so distances are miscalculated.",
       "Quadrants are labeled by geohash strings, and prefix comparison sometimes misjudges neighbors as far."
     ],
     "answer": [
       0
     ],
-    "why": "下钻只覆盖了一块方格，真正的最近邻可能落在紧贴边界的相邻象限。所以邻近查询要走完整链：定位目标象限 → 检查同层相邻象限 → 按搜索半径上钻覆盖更大范围或下钻更精细。代价：一次邻近查询要触碰多个象限节点，不是单点查找。",
-    "why_en": "Drilling down only covers one cell, but the true nearest neighbor can fall in an adjacent quadrant hugging the boundary. So a proximity search runs the full loop: find the target quadrant, check same-level neighbors, then move up or down levels by the search radius. The cost: one query touches several quadrant nodes, not a single lookup.",
+    "why": "下钻只覆盖了一块方格，查询圆可能跨出边界，真正的最近邻可能落在紧贴边界的相邻象限（叶象限甚至可能是空的）。所以邻近查询要走完整链：定位目标象限 → 检查同层相邻象限 → 按搜索半径上钻覆盖更大范围或下钻更精细。代价：一次邻近查询要触碰多个象限节点，不是单点查找。",
+    "why_en": "Drilling down only covers one cell, and the query circle can cross its boundary, so the true nearest neighbor can fall in an adjacent quadrant hugging the boundary (the leaf may even be empty). So a proximity search runs the full loop: find the target quadrant, check same-level neighbors, then move up or down levels by the search radius. The cost: one query touches several quadrant nodes, not a single lookup.",
     "tags": [
       "quadtree",
       "spatial-index",
@@ -4909,13 +4909,13 @@
     "optionExplanations": [
       "对，边界是人为切的，最近邻可能就在隔壁象限，所以必须再查同层相邻象限并按半径调层。",
       "排序不是问题——问题是完整性：漏了相邻象限里更近的点，排不排序都补不回来。",
-      "四叉树按点密度自适应细分，空象限不是漏点的原因；漏点来自没查边界外的邻居。",
+      "四叉树存的是原始坐标，距离可以精确计算；漏点来自没查边界外的邻居，不是距离算不准。",
       "把坐标编成前缀字符串是 geohash 的做法；四叉树直接切分空间、用树导航，不靠前缀比较。"
     ],
     "optionExplanations_en": [
       "Right — the boundary is arbitrary, the nearest neighbor may be next door, so you must also check same-level neighbors and adjust levels by radius.",
       "Ordering isn't the issue — completeness is: a closer point in an adjacent quadrant is missed whether or not you sort.",
-      "A quadtree subdivides adaptively by point density; an empty quadrant isn't why points are missed — skipping boundary neighbors is.",
+      "A quadtree stores exact coordinates, so distances can be computed precisely; points are missed because boundary neighbors are skipped, not because distances are inaccurate.",
       "Encoding coordinates into prefix strings is geohash's approach; a quadtree partitions space directly and navigates the tree, not by prefixes."
     ]
   },

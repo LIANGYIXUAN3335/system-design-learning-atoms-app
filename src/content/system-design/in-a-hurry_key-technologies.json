@@ -801,13 +801,13 @@
           "Postgres",
           "关系型 SQL",
           "强一致",
-          "读易写难",
+          "读副本易扩，写需分片",
           "事务/关系"
         ],
         [
           "Redis",
           "内存 KV",
-          "单主强",
+          "异步复制，failover 可能丢写",
           "集群可扩",
           "热点低延迟"
         ],
@@ -1121,14 +1121,14 @@
     "options": [
       "需要，必须给 S3 设计分片方案",
       "需要，S3 单账户有 10TB 的硬容量上限",
-      "不需要，托管 Blob 存储视为无限扩展",
+      "不需要，托管 Blob 存储的容量扩展可当作 given",
       "取决于文件类型"
     ],
     "answer": [
       2
     ],
-    "why": "S3 这类托管 Blob 存储可视为无限扩展：存储量和请求量都不设实际上限（账户限额内）。面试中不必为它的扩展性操心，当作 given。",
-    "why_en": "Hosted blob storage like S3 is effectively infinitely scalable, so treat its scalability as a given in interviews.",
+    "why": "S3 的总存储量没有上限、单对象最大 5TB，扩容由服务商负责，普通读写量下面试里当 given 即可。注意请求速率有按 prefix 的基线（约 3,500 写 / 5,500 读每秒），极高 QPS 时要分散 key prefix 或加 CDN，这时才值得展开。",
+    "why_en": "S3 has no total storage limit and objects up to 5TB, and the provider handles capacity, so at ordinary volume treat it as a given. Request rate does have a per-prefix baseline (about 3,500 writes / 5,500 reads per second); only at very high QPS do you spread key prefixes or add a CDN.",
     "tags": [
       "blob-storage",
       "scalability",
@@ -1137,23 +1137,23 @@
     "options_en": [
       "Yes, you must design a sharding scheme for S3",
       "Yes, an S3 account has a hard 10TB capacity ceiling",
-      "No — treat hosted blob storage as infinitely scalable",
+      "No — treat hosted blob storage capacity scaling as a given",
       "It depends on the file type"
     ],
     "optionExplanations": [
       "托管 Blob 存储的分片扩展是服务商内部的事，面试里不需要你自己为 S3 设计分片方案。",
       "S3 并没有 10TB 这样的硬性存储上限，这个数字是编出来的限制。",
-      "对，托管 Blob 存储可以当作无限扩展来处理，账户配额内的存储量和请求量都不用你操心。",
+      "对，托管 Blob 存储的容量扩展可以当作 given，普通读写量下不用你操心；只有请求速率极高时才需要考虑 key prefix 分布。",
       "扩展性的 given 待遇不因文件类型而变，图片、视频、文档同样适用这个假设。"
     ],
     "optionExplanations_en": [
       "Sharding a managed blob store is the provider's internal problem - you don't need to design a sharding scheme for S3 in an interview.",
       "S3 has no hard 10TB storage ceiling; that number is a fabricated constraint.",
-      "Right - treat hosted blob storage as effectively infinitely scalable; storage and request volume are the provider's concern within account limits.",
+      "Right - capacity scaling of hosted blob storage can be treated as a given at ordinary volume; only at very high request rates do key prefix distribution and CDNs matter.",
       "Treating scalability as a given doesn't depend on file type - images, video, and documents all get the same assumption."
     ],
-    "scenario": "45 分钟的设计里媒体文件已经放进 S3，只剩 20 分钟，面试官问存储的扩展性要不要展开讲。",
-    "scenario_en": "Media files already sit in S3 and you have 20 minutes left when the interviewer asks whether storage scalability needs designing."
+    "scenario": "45 分钟的设计里媒体文件已经放进 S3，读写量是普通产品级别，只剩 20 分钟，面试官问存储的扩展性要不要展开讲。",
+    "scenario_en": "Media files already sit in S3 with ordinary product-level read/write volume, and you have 20 minutes left when the interviewer asks whether storage scalability needs designing."
   },
   {
     "id": "sd-in-a-hurry-key-technologies-021",
@@ -1174,8 +1174,8 @@
     "answer": [
       0
     ],
-    "why": "大文件上传的标准答案是分块：失败可从断点续传、分块可并行提速。S3 的 multipart upload API 开箱即用。",
-    "why_en": "Chunked uploads via the multipart upload API let large files resume after failure and upload parts in parallel.",
+    "why": "大文件上传用分块：失败只重传出问题的那一块，各块可并行；S3 的 multipart upload 原生支持，单次 PUT 超过 5GB 也只能走它。",
+    "why_en": "Use chunked upload for large files: only failed parts are retried and parts upload in parallel. S3 multipart upload supports this natively and is required above the 5GB single-PUT limit.",
     "whenOtherWins": "小文件一次性上传更简单，没必要引入分块的复杂度。",
     "tags": [
       "blob-storage",
@@ -1205,15 +1205,15 @@
     ],
     "optionExplanations": [
       "对，分块上传能断点续传、还能并行加速，网络不稳时失败了只重传出问题的那一块，不用从头再来。",
-      "整个文件一次 PUT，网络中断就前功尽弃，几个 GB 的视频重传一次代价太大。",
+      "整个文件一次 PUT，网络中断就要整份重传；而且 S3 单次 PUT 上限 5GB，更大的文件根本传不上去。",
       "先压缩成 zip 再单次上传既没解决断点续传的问题，压缩大视频收益也有限，白白多了一步。",
-      "改用 FTP 没有解决核心诉求：断点续传和并行加速需要的是分块协议，不是换传输协议。"
+      "FTP 虽能用 REST 命令续传，但不支持多块并行写同一个文件，S3 也不提供 FTP 接口，浏览器早已不支持 FTP。"
     ],
     "optionExplanations_en": [
       "Right - chunked upload resumes from where it failed and can run parts in parallel, so a flaky network only costs you the failed chunk, not a full restart.",
-      "A single PUT for the whole file means any network drop wastes the entire multi-gigabyte transfer and forces a full retry.",
+      "A single PUT means any drop forces a full retry, and S3 caps a single PUT at 5GB, so larger files can't go this way at all.",
       "Zipping first and uploading once doesn't solve resumability, and compressing large video buys little, just adding an extra step.",
-      "Switching to FTP doesn't address the real need: resumable, parallel transfer comes from a chunking protocol, not a different transport."
+      "FTP can resume with the REST command, but it can't write parts of one file in parallel, S3 doesn't expose FTP, and browsers dropped FTP support."
     ]
   },
   {
@@ -1226,15 +1226,15 @@
     "q_en": "Why is `LIKE \"%term%\"` not a scalable full-text search approach?",
     "options": [
       "语法不合法",
-      "触发全表扫描，无法利用索引",
+      "前导通配符用不上普通 B-tree 索引，通常退化成大范围扫描",
       "只能匹配英文",
       "会锁住整张表导致写入阻塞"
     ],
     "answer": [
       1
     ],
-    "why": "前导通配符让数据库很难利用普通索引，只能扫描大量行并逐条比对文本；数据越大越慢。全文搜索通常需要倒排索引，把“词 -> 包含它的文档列表”预先建好，再按相关性排序。",
-    "why_en": "A leading-wildcard LIKE query usually forces a large scan, while full-text search relies on an inverted index from term to matching documents.",
+    "why": "前导通配符让普通 B-tree 索引用不上，数据库只能扫描大量行逐条比对，数据越大越慢；它也不做分词和相关性排序。PostgreSQL 的 pg_trgm 索引能加速子串匹配，但全文搜索的标准做法仍是倒排索引（词 → 文档列表）加相关性排序。",
+    "why_en": "A leading wildcard can't use a normal B-tree index, so the database scans many rows and compares text one by one; it also has no tokenization or relevance ranking. PostgreSQL's pg_trgm index can speed up substring matching, but full-text search normally uses an inverted index plus relevance scoring.",
     "tags": [
       "search",
       "full-table-scan",
@@ -1257,21 +1257,21 @@
     "diagram": "flowchart LR\n  Q[\"term\"] --> Inv[(\"inverted index\")]\n  Inv --> D1[\"doc 17\"]\n  Inv --> D2[\"doc 42\"]\n  Inv --> D3[\"doc 88\"]\n  Like[\"LIKE %term%\"] --> Scan[\"scan many rows\"]",
     "options_en": [
       "The syntax is invalid",
-      "It triggers a full table scan and can't use an index",
+      "A leading wildcard can't use a normal B-tree index, so it usually degrades to a large scan",
       "It can only match English text",
       "It locks the whole table and blocks writes"
     ],
-    "codeSample": "-- 反模式：前导通配符迫使全表扫描\nSELECT * FROM documents WHERE document_text LIKE '%term%';\n-- 搜索优化数据库改用倒排索引查词\nGET /documents/_search { \"query\": { \"match\": { \"text\": \"term\" } } }",
+    "codeSample": "-- 反模式：前导通配符用不上普通 B-tree 索引，通常导致大范围扫描\nSELECT * FROM documents WHERE document_text LIKE '%term%';\n-- 搜索优化数据库改用倒排索引查词\nGET /documents/_search { \"query\": { \"match\": { \"text\": \"term\" } } }",
     "lang": "sql",
     "optionExplanations": [
       "语法本身没问题，LIKE 是合法 SQL，问题不在能不能跑，而在跑起来有多慢。",
-      "对，前导通配符让数据库用不上普通索引，只能逐行扫描比对，文档越多越慢，搜索优化数据库靠倒排索引解决这个问题。",
+      "对，前导通配符让数据库用不上普通 B-tree 索引，通常只能大范围扫描比对，文档越多越慢，搜索优化数据库靠倒排索引解决这个问题。",
       "语言支持不是这里的短板，LIKE 能匹配任何语言的文本，慢的原因跟语言无关。",
       "LIKE 查询不会锁住整张表，它是普通的读操作，跟写入阻塞没有关系。"
     ],
     "optionExplanations_en": [
       "The syntax itself is fine - LIKE is valid SQL; the problem isn't whether it runs, it's how slow it runs at scale.",
-      "Right - a leading wildcard makes the database unable to use a normal index, forcing a row-by-row scan that gets slower as documents grow; a search-optimized database fixes this with an inverted index.",
+      "Right - a leading wildcard keeps the database from using a normal B-tree index, so it usually scans many rows and gets slower as documents grow; a search-optimized database fixes this with an inverted index.",
       "Language support isn't the gap here - LIKE can match text in any language, so that's not why it's slow.",
       "A LIKE query doesn't lock the whole table; it's an ordinary read and has nothing to do with blocking writes."
     ]
@@ -1832,10 +1832,10 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "load-balancer-l4-l7",
-    "scenario": "你的实时聊天设计里客户端和服务器之间是长连接 websocket，现在要选负载均衡器的类型。",
-    "scenario_en": "Your real-time chat design uses long-lived WebSocket connections between clients and servers, and you need to choose the load balancer type.",
-    "q": "经验法则告诉你选哪种？",
-    "q_en": "Which load balancer type does the rule of thumb suggest?",
+    "scenario": "实时聊天的入口后面只有一类 WebSocket 网关服务，不需要按路径或 Header 分流到不同后端；预计几百万并发长连接，你希望负载均衡层不终结 TLS、每条连接的开销尽量小，只按连接把流量分到网关节点。",
+    "scenario_en": "Behind the real-time chat entry there is only one WebSocket gateway service, with no need to route by path or header to different backends. You expect millions of concurrent long-lived connections and want the load balancer to not terminate TLS and keep per-connection overhead minimal, just spreading connections across gateway nodes.",
+    "q": "在这些约束下最合适的负载均衡器类型是？",
+    "q_en": "Under these constraints, which load balancer type fits best?",
     "options": [
       "L7（应用层）负载均衡器",
       "L4（传输层）负载均衡器",
@@ -1845,8 +1845,8 @@
     "answer": [
       1
     ],
-    "why": "经验法则：有 websocket 这类持久连接就用 L4；否则 L7 更灵活，能按内容路由到不同服务并减小下游连接负担。",
-    "why_en": "With persistent connections like websockets you likely want a layer four load balancer, otherwise layer seven offers more routing flexibility.",
+    "why": "常见经验是「长连接偏 L4、需要内容路由用 L7」，但这只是倾向：L7（ALB、NGINX）同样原生支持 WebSocket。本题明确不需要路由、不终结 TLS、连接量巨大，所以 L4 最合适；如果要按路径分到多个服务或在边缘做鉴权，就该选 L7。",
+    "why_en": "The common heuristic is \"long-lived connections lean L4, content routing needs L7,\" but it is only a lean — L7 balancers like ALB and NGINX support WebSocket natively. Here there's no routing need, no TLS termination at the LB, and huge connection counts, so L4 fits best; if you needed path-based routing or edge auth, L7 would win.",
     "whenOtherWins": "普通的无状态 HTTP 请求用 L7 更好：按路径/内容灵活路由到不同服务，同时最小化下游连接数。",
     "tags": [
       "load-balancer",
@@ -1897,14 +1897,14 @@
       ]
     },
     "optionExplanations": [
-      "L7 按内容路由更灵活，但需要终结每条连接来读 HTTP 内容，长连接场景下这个开销不划算。",
-      "对，websocket 这类长连接经验法则用 L4：在传输层转发连接，不用逐条解析应用层内容，开销更小。",
+      "L7 也能承载 WebSocket，但要在 LB 上终结 TLS 和 TCP、维持两段连接；题面不需要内容路由，这份开销换不来收益。",
+      "对，只需按连接分发、不终结 TLS，L4 在传输层转发 TCP 连接，每连接开销最小，适合百万级长连接。",
       "DNS 轮询只能粗粒度分流，不会感知节点健康或连接状态，长连接故障转移时会有明显问题。",
       "多台服务器同时处理 websocket 连接时仍然需要有人分配流量，完全不做负载均衡会导致某些节点过载。"
     ],
     "optionExplanations_en": [
-      "L7 routes by content more flexibly, but it must terminate every connection to read HTTP payloads, which is costly overhead for long-lived connections.",
-      "Right - the rule of thumb for long-lived connections like websockets is L4: forward at the transport layer without parsing every application payload, which costs less.",
+      "L7 can carry WebSocket too, but it terminates TLS and TCP and holds two connections per client; with no content routing needed here, that cost buys nothing.",
+      "Right — you only need per-connection distribution without TLS termination, so L4 forwarding TCP connections has the least per-connection overhead at million-connection scale.",
       "DNS round robin only spreads traffic coarsely and has no sense of node health or connection state, causing real problems during failover of long-lived connections.",
       "Multiple servers still need something distributing websocket connections between them; skipping load balancing entirely just overloads some nodes."
     ]
@@ -1964,15 +1964,15 @@
     "q_en": "What are common load balancers, and what changes at extremely high traffic?",
     "options": [
       "常见的只有 DNS；极大流量靠加缓存",
-      "AWS ELB、NGINX、HAProxy",
+      "AWS ELB、NGINX、HAProxy；极大流量时在前面加一层 L4 分发（硬件 LB 或 Maglev/Katran 这类软件 L4 LB）并水平扩展",
       "Kafka、Flink；极大流量用流处理",
       "Redis、Memcached；极大流量加分片"
     ],
     "answer": [
       1
     ],
-    "why": "常见选择：托管的 AWS ELB、开源的 NGINX 和 HAProxy。流量极端大时，专用硬件负载均衡器性能会超过自托管的软件方案。",
-    "why_en": "Common load balancers are AWS ELB, NGINX, and HAProxy, and at extreme traffic specialized hardware load balancers outperform software ones.",
+    "why": "常见选择：托管的 AWS ELB、开源的 NGINX 和 HAProxy。流量极大时通常在 L7 前面加一层 L4 分发，可以是专用硬件 LB，也可以是 Maglev、Katran 这类跑在通用服务器上的软件 L4 LB；哪种更快取决于实现，不是硬件必然胜出。",
+    "why_en": "Common choices are managed AWS ELB and open-source NGINX and HAProxy. At extreme traffic you usually put an L4 tier in front of L7, either dedicated hardware or software L4 balancers like Maglev or Katran on commodity servers; which is faster depends on the implementation, hardware does not automatically win.",
     "tags": [
       "load-balancer",
       "technologies",
@@ -1980,7 +1980,7 @@
     ],
     "options_en": [
       "Only DNS is common; extreme traffic is handled by adding caching",
-      "AWS ELB, NGINX, HAProxy",
+      "AWS ELB, NGINX, HAProxy; at extreme traffic add an L4 tier in front (hardware LBs or software L4 LBs like Maglev/Katran) and scale out",
       "Kafka, Flink; extreme traffic is handled with stream processing",
       "Redis, Memcached; extreme traffic is handled by sharding"
     ],
@@ -2044,13 +2044,13 @@
     },
     "optionExplanations": [
       "DNS 并不是负载均衡器的全部选择，加缓存也解决不了「请求怎么分发到多台机器」这个问题。",
-      "对，这是最常被提到的组合：一个云托管、两个开源自建，极端流量下还可以换成专用硬件方案。",
+      "对，这是最常被提到的组合：一个云托管、两个开源自建；极端流量下通常在前面加一层 L4 分发（硬件或 Maglev/Katran 这类软件 L4 LB）并水平扩展。",
       "Kafka、Flink 是流处理技术，负责消费和计算数据流，不承担把请求分发到多台服务器的职责。",
       "Redis、Memcached 是缓存产品，用来加速读取，不是负责流量分发的负载均衡组件。"
     ],
     "optionExplanations_en": [
       "DNS isn't the whole story on load balancers, and adding caching doesn't solve the problem of distributing requests across machines.",
-      "Right - common load balancers are managed AWS ELB and open-source NGINX or HAProxy; at extreme traffic, dedicated hardware balancers outperform software ones.",
+      "Right - the commonly cited set is managed AWS ELB plus open-source NGINX or HAProxy; at extreme traffic you usually add an L4 tier in front (hardware, or software L4 LBs like Maglev/Katran) and scale out.",
       "Kafka and Flink are stream-processing technologies for consuming and computing over data streams, not for distributing requests across servers.",
       "Redis and Memcached are caching products for faster reads, not load-balancing components responsible for distributing traffic."
     ],
@@ -2684,15 +2684,15 @@
     "q_en": "Which pattern and component fit best?",
     "options": [
       "只在数据库存最新余额",
-      "事件溯源：交易写入 Kafka 流，可重放",
+      "事件溯源：每笔交易作为不可变事件追加到持久事件日志（如事件存储或 Kafka），可重放",
       "把每一笔交易记录直接写进 Memcached 缓存",
       "每天对账户做全量快照，其余丢弃"
     ],
     "answer": [
       1
     ],
-    "why": "事件溯源把状态变化存成事件序列，重放即可重建任意时点状态——审计、回滚、重建账户状态全都顺带解决，配 Kafka 这类流是标准组合。",
-    "why_en": "Event sourcing on a stream like Kafka stores every transaction as a replayable event, enabling audits, rollbacks, and state reconstruction.",
+    "why": "事件溯源把每笔状态变化存成不可变事件，重放到某一时刻即可重建账户状态，审计也顺带解决；「回滚」是追加一条补偿事件，不删改历史。事件日志可以是专用事件存储、append-only ledger 表，或配了长期保留、按账户分区的 Kafka；Kafka 不提供按账户的条件写，并发控制要另外设计。",
+    "why_en": "Event sourcing stores every state change as an immutable event, so replaying to a point in time rebuilds any account and gives you an audit trail; a \"rollback\" is a new compensating event, not an edit to history. The log can be a dedicated event store, an append-only ledger table, or Kafka with long retention and per-account partitioning; Kafka has no per-account conditional append, so concurrency control needs its own design.",
     "whenOtherWins": "如果业务只需要当前状态、不要求审计与重放，直接存最新值的普通数据库更简单省事。",
     "tags": [
       "streams",
@@ -2703,7 +2703,7 @@
     "tradeoff": "事件溯源（可审计、可重放）vs 只存最新值（简单但丢历史）",
     "options_en": [
       "Only store the latest balance in the database",
-      "Event sourcing: write transactions to a Kafka stream that can be replayed",
+      "Event sourcing: append every transaction as an immutable event to a durable event log (an event store or Kafka), replayable",
       "Write every transaction record straight into a Memcached cache",
       "Take a full daily snapshot of accounts and discard the rest"
     ],
@@ -2752,13 +2752,13 @@
     },
     "optionExplanations": [
       "只存最新余额能查到当前状态，但没有历史事件可用来审计或回滚到某个时间点。",
-      "对，事件溯源把每笔交易写成可重放的事件流，配 Kafka 这类流，审计、回滚、重建任意时点状态全都顺带解决。",
+      "对，事件溯源把每笔交易追加成不可变事件，重放即可重建任意时点状态，审计顺带解决；回滚是追加补偿事件而不是改历史。",
       "Memcached 不是持久化账本，进程重启或缓存故障交易记录就没了，不能拿来存交易。",
       "每天做一次全量快照只留住整点状态，两次快照之间发生的变化仍然会丢失，回滚不到精确时刻。"
     ],
     "optionExplanations_en": [
       "Storing only the latest balance answers what the current state is, but leaves no history to audit or roll back to a specific moment.",
-      "Right - event sourcing writes every transaction as a replayable event on a stream like Kafka, which solves audit, rollback, and state reconstruction all at once.",
+      "Right - event sourcing appends every transaction as an immutable event, so replay rebuilds any point-in-time state and audit comes for free; a rollback is a compensating event, not an edit to history.",
       "Memcached isn't a durable ledger - a restart or cache failure wipes out transaction records, so it's the wrong place to keep them.",
       "A daily full snapshot only preserves state at fixed checkpoints; anything that changes between snapshots is still lost, so you can't roll back to an exact moment."
     ]
@@ -2863,8 +2863,8 @@
     "termDefinitions": [
       {
         "term": "消费者组",
-        "meaning": "一组共同消费同一流分区的消费者；不同消费者组彼此独立、互不影响。",
-        "meaningEn": "A consumer group is a set of consumers sharing a stream partition, and different consumer groups read independently.",
+        "meaning": "一组协作消费同一 topic 的消费者，topic 的各分区在组内分摊、每个分区同一时刻只给组内一个消费者；不同消费者组各自记录 offset、互不影响。",
+        "meaningEn": "A set of consumers that share a topic's partitions, each partition assigned to one consumer in the group at a time; different groups track their own offsets independently.",
         "fullName": "Consumer Group"
       }
     ],
@@ -3340,14 +3340,14 @@
     "options": [
       "活锁；双方各自加随机延迟即可",
       "是锁过期太快导致的，把 TTL 调大就能解决",
-      "死锁：双方互等对方释放，锁逻辑要集中管理",
+      "死锁：双方循环等待；让所有进程按同一全局顺序取锁（并把取锁逻辑集中在一处，便于强制这个顺序）",
       "脑裂；靠增加节点就能解决"
     ],
     "answer": [
       2
     ],
-    "why": "两个进程各持一把锁并等待对方，就是死锁。常见错误是把锁散布在四处的代码和基础设施中，导致依赖关系难以看清——集中管理锁逻辑才好预防。",
-    "why_en": "Two processes each holding one lock while waiting for the other is a deadlock, and scattering lock acquisition across far-flung code makes it hard to prevent.",
+    "why": "两个进程各持一把锁并等待对方，构成循环等待，就是死锁。根因是取锁顺序不一致，所以标准预防是所有进程按同一全局顺序（如先司机后订单，或按 key 排序）取锁；把取锁逻辑集中在一处，是为了让这个顺序能被统一强制、不被散落的代码打破。另可给锁设等待超时作为兜底。",
+    "why_en": "Each process holds one lock while waiting for the other, a circular wait, which is a deadlock. The root cause is inconsistent acquisition order, so the standard prevention is for every process to acquire locks in one global order (e.g. driver before order, or sorted by key); centralizing lock acquisition makes that order enforceable instead of being broken by scattered code. A lock-wait timeout is a useful backstop.",
     "tags": [
       "distributed-lock",
       "deadlock",
@@ -3356,7 +3356,7 @@
     "options_en": [
       "A livelock; adding random delay on each side is enough",
       "The lock's TTL is too short; increasing it fixes everything",
-      "A deadlock: both sides wait on each other; keep lock logic centralized to prevent it",
+      "A deadlock: a circular wait; have every process acquire locks in one global order (and centralize lock acquisition so that order is enforced)",
       "Split-brain; adding more nodes fixes it"
     ],
     "termDefinitions": [
@@ -3376,13 +3376,13 @@
     "optionExplanations": [
       "活锁指的是双方都在不断重试却谁也拿不到锁，这里是双方互相等待对方释放，属于死锁不是活锁。",
       "这跟锁的存活时间长短没关系，就算 TTL 调得再大，两边互相等待的僵局照样解不开。",
-      "对，两个进程各持一把锁互相等待对方释放就是死锁，常见诱因是锁散落在各处代码里，集中管理锁逻辑才好预防。",
+      "对，两个进程各持一把锁循环等待对方释放就是死锁；根因是取锁顺序不一致，标准预防是统一全局取锁顺序，集中管理取锁逻辑则让这个顺序更容易被强制。",
       "脑裂说的是集群对状态产生了分歧，跟两个进程互相等待对方的锁完全是两回事。"
     ],
     "optionExplanations_en": [
       "A livelock is both sides endlessly retrying without ever succeeding - here both sides are simply waiting on each other, which is a deadlock, not a livelock.",
       "This has nothing to do with how long a lock's timer is set; even a huge TTL doesn't break the standoff of both sides waiting on each other.",
-      "Right - two processes each holding one lock while waiting on the other is a deadlock, usually caused by lock logic scattered across the codebase; keeping it centralized helps prevent it.",
+      "Right - two processes each holding one lock in a circular wait is a deadlock; the root cause is inconsistent acquisition order, so the standard prevention is one global lock order, and centralizing acquisition makes that order easier to enforce.",
       "Split-brain describes a cluster disagreeing about state, an entirely different problem from two processes waiting on each other's locks."
     ],
     "scenario": "派单服务每次匹配要同时锁住司机和订单，两个进程按不同顺序取锁后整体卡住不动。",
@@ -3514,9 +3514,9 @@
     "sub": "cache-write-strategy",
     "q": "补全三种缓存写策略：",
     "q_en": "Fill in the three cache write strategies:",
-    "text": "{{Write-Through}}：同时写缓存和底层存储，一致但写更慢；{{Write-Around}}：绕过缓存直接写存储，减少缓存污染但后续读可能变慢；{{Write-Back}}：先写缓存、异步落库，写快但缓存故障可能丢数据。",
-    "why": "三种写策略是「一致性、读性能、写性能」间的取舍：Write-Through 求一致、Write-Around 防污染、Write-Back 求写速但担丢失风险。",
-    "why_en": "Write-through favors consistency, write-around avoids cache pollution, and write-back is fastest for writes but risks data loss.",
+    "text": "{{Write-Through}}：同时写缓存和底层存储，缓存与存储更容易保持一致，但写更慢；{{Write-Around}}：绕过缓存直接写存储，减少缓存污染但后续读可能变慢；{{Write-Back}}（又称 Write-Behind）：先写缓存、异步落库，写快但缓存故障可能丢数据。（判分：第三空同时接受 Write-Back / Write-Behind）",
+    "why": "三种写策略是「一致性、读性能、写性能」间的取舍：Write-Through 让缓存和存储更容易保持一致、但每次写都付两份延迟；Write-Around 防止只写不读的数据污染缓存；Write-Back（Write-Behind）写最快，但缓存节点在落库前故障会丢数据。",
+    "why_en": "The three write strategies trade off consistency, read performance and write performance: write-through keeps cache and store more easily in sync but pays both latencies on every write; write-around keeps write-only data from polluting the cache; write-back (write-behind) is fastest for writes but loses data if the cache fails before flushing.",
     "tags": [
       "cache",
       "write-strategy"
@@ -3529,14 +3529,14 @@
       "rows": [
         [
           "Write-Through",
-          "consistent, slower"
+          "easier to keep consistent, slower"
         ],
         [
           "Write-Around",
           "less pollution"
         ],
         [
-          "Write-Back",
+          "Write-Back (Write-Behind)",
           "fast, may lose data"
         ]
       ]
@@ -3544,8 +3544,8 @@
     "termDefinitions": [
       {
         "term": "Write-Through",
-        "meaning": "写入时同时更新缓存和底层存储，保证一致但写入更慢。",
-        "meaningEn": "Write-through writes to the cache and the store at the same time, staying consistent at the cost of slower writes."
+        "meaning": "写入时同时更新缓存和底层存储，缓存与存储更容易保持一致，但写入更慢。",
+        "meaningEn": "Write-through writes to the cache and the store at the same time, keeping them more easily in sync at the cost of slower writes."
       },
       {
         "term": "Write-Around",
@@ -3554,8 +3554,8 @@
       },
       {
         "term": "Write-Back",
-        "meaning": "先写缓存、异步落底层存储，写入快但缓存故障可能丢数据。",
-        "meaningEn": "Write-back writes to the cache first and flushes to the store asynchronously, which is fast but risks data loss if the cache fails."
+        "meaning": "先写缓存、异步落底层存储（又称 Write-Behind），写入快但缓存故障可能丢数据。",
+        "meaningEn": "Write-back (also called write-behind) writes to the cache first and flushes to the store asynchronously, which is fast but risks data loss if the cache fails."
       }
     ]
   },

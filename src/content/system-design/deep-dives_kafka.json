@@ -12,14 +12,14 @@
     "options": [
       "内存缓存，用来加速数据库读取",
       "关系型数据库，靠事务和 SQL 管理数据",
-      "分布式事件流平台：既能当消息队列，也能当流处理系统",
+      "分布式事件流平台：持久化、可重放的分区日志，可当消息队列用，也是流处理的数据底座",
       "对象存储，专门存放图片视频这类大文件，按整块读写"
     ],
     "answer": [
       2
     ],
-    "why": "Kafka 是开源分布式事件流平台，同一套日志既能按队列消费，也能按流消费；配置好复制和确认后还能提供很强的防丢消息保证。",
-    "why_en": "Kafka is a distributed event-streaming platform usable as either a message queue or a stream processor, with strong loss guarantees when configured properly.",
+    "why": "Kafka 官方定位是 distributed event streaming platform：核心是持久化、可重放的分区日志。同一份日志可以被消费组分摊着读（像队列），也可以被多个系统各自从任意 offset 重放；真正的窗口/状态计算由 Kafka Streams 或 Flink 这类引擎完成。配置好复制因子、acks=all 和 min.insync.replicas 后，可以提供很强的防丢保证。",
+    "why_en": "Kafka describes itself as a distributed event streaming platform whose core is a durable, replayable partitioned log. Consumer groups can share that log like a queue, other systems can replay it from any offset, and windowed/stateful computation is done by engines like Kafka Streams or Flink. With proper replication factor, acks=all, and min.insync.replicas, it gives strong durability guarantees.",
     "tags": [
       "kafka",
       "overview"
@@ -27,7 +27,7 @@
     "options_en": [
       "An in-memory cache used to speed up database reads.",
       "A relational database managed with transactions and SQL.",
-      "A distributed event-streaming platform usable as a queue or a stream processor.",
+      "A distributed event-streaming platform: a durable, replayable partitioned log usable as a message queue and as the backbone for stream processing.",
       "An object store for large files like images and videos, read and written as whole blobs."
     ],
     "termDefinitions": [
@@ -40,13 +40,13 @@
     "optionExplanations": [
       "缓存靠淘汰策略控温内存、不做持久化存储，Kafka 靠保留策略管理数据，两者读写模式完全不同。",
       "Kafka 没有 SQL 引擎和跨消息事务，把它当数据库查询会找不到对应能力。",
-      "这是 Kafka 官方自我定位：日志既能一次性消费当队列用，也能保留重放当流用。",
+      "这是 Kafka 官方的定位：核心是持久化、可重放的分区日志，既能被消费组当队列分摊着读，也能保留下来重放，给流处理引擎当数据底座。",
       "大文件该进 S3 这类对象存储；Kafka 消息设计成小而快，塞大文件会拖垮吞吐。"
     ],
     "optionExplanations_en": [
       "Caches bound their size with eviction, not retention, and don't persist data the way Kafka's log does.",
       "Kafka has no SQL engine or cross-message transactions, so treating it like a database misses the point.",
-      "This matches Kafka's own tagline: one log, consumed once like a queue or replayed like a stream.",
+      "This matches Kafka's own positioning: a durable, replayable partitioned log that consumer groups can share like a queue or replay later, serving as the data backbone for stream-processing engines.",
       "Large files belong in an object store like S3; Kafka messages are meant to stay small and fast."
     ]
   },
@@ -295,9 +295,9 @@
     "sub": "terminology",
     "q": "补全 Kafka 基本架构术语：",
     "q_en": "Fill in the basic Kafka architecture terms:",
-    "text": "集群由多台 {{broker}}（服务器）组成，负责存数据、服务客户端；每个分区是一个有序、{{不可变}}、持续追加的消息序列（像日志文件）；{{topic}} 则是分区的逻辑分组。",
-    "why": "broker 是物理承载、partition 是有序追加日志、topic 是逻辑分组——三层各司其职，是 Kafka 架构的骨架。",
-    "why_en": "Brokers are the physical servers, partitions are ordered immutable append-only logs, and a topic is the logical grouping of partitions.",
+    "text": "集群由多台 {{broker}}（服务器）组成，负责存数据、服务客户端；每个分区是一个有序、持续追加的消息序列（像日志文件），已写入的消息{{不可变}}（不能原地修改，只能追加新消息）；{{topic}} 则是分区的逻辑分组。",
+    "why": "broker 是物理承载，partition 是有序追加的日志、写入后不能原地修改，topic 是分区的逻辑分组——三层各司其职，是 Kafka 架构的骨架。",
+    "why_en": "Brokers are the physical servers, a partition is an ordered append-only log whose records can't be modified in place once written, and a topic is the logical grouping of partitions.",
     "tags": [
       "kafka",
       "terminology"
@@ -801,21 +801,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "routing",
-    "scenario": "分区号已经算出来了，生产者接下来要把这条消息真正发出去。",
-    "scenario_en": "The partition number is already known, and the producer now needs to send the message to the right broker.",
+    "scenario": "分区号已经算出来了，生产者接下来要把这条消息真正发出去。这个分区有 3 个副本，分布在 3 台 broker 上。",
+    "scenario_en": "The partition number is already known, and the producer now needs to actually send the message. This partition has 3 replicas spread across 3 brokers.",
     "q": "分区确定之后，生产者怎么知道该把消息发给哪台 broker？",
     "q_en": "After the partition is chosen, how does the producer know which broker to send to?",
     "options": [
-      "发给任意一台 broker，由它负责转发，多引入一跳没有必要的转发延迟",
-      "把消息广播给所有 broker，让每台机器都白白处理一遍",
-      "现查一次外部 DNS 记录，Kafka 协议里并不存在这类查询",
-      "读集群元数据里的分区→broker 映射，直连目标 broker"
+      "发给任意一台 broker，由它转发给正确的机器",
+      "把消息广播给所有 broker",
+      "现查一次外部 DNS 记录",
+      "用本地缓存的集群元数据查出该分区当前的 leader broker，直连它"
     ],
     "answer": [
       3
     ],
-    "why": "分区到 broker 的映射存在集群元数据里，由 controller 维护；生产者用它直连目标 broker，不经过中间转发。",
-    "why_en": "Cluster metadata maintained by the controller maps partitions to brokers, and the producer sends straight to the broker hosting that target partition.",
+    "why": "客户端向任意 broker 发 Metadata 请求，拿到「分区 → 当前 leader broker」的映射并缓存；算出分区后直接把生产请求发给该分区的 leader。broker 不会替你转发——发错会返回 NOT_LEADER 类错误，客户端刷新 metadata 再重发。这份映射由 controller 产生并传播到各 broker。",
+    "why_en": "The client sends a Metadata request to any broker, caches the partition-to-current-leader map, and sends the produce request straight to that partition's leader. Brokers do not forward produce requests; a misdirected request gets a NOT_LEADER-type error and the client refreshes metadata and retries. The controller produces and propagates this metadata to the brokers.",
     "tags": [
       "kafka",
       "routing",
@@ -823,10 +823,10 @@
     ],
     "diagram": "flowchart LR\n    P[\"生产者\"] -->|hash key mod N| PT[\"确定分区\"]\n    PT -->|metadata lookup| B[\"leader broker\"]\n    B -->|复制| F1[\"follower\"]\n    B -->|复制| F2[\"follower\"]",
     "options_en": [
-      "Send to any broker and let it forward the message, adding an unnecessary extra forwarding hop of latency.",
-      "Broadcast the message to every broker, making every machine waste effort handling it.",
-      "Look it up via an external DNS query, a lookup that does not exist in the Kafka protocol.",
-      "Read the partition-to-broker map in the cluster metadata and send straight to the broker holding that partition."
+      "Send to any broker and let it forward to the right machine.",
+      "Broadcast the message to every broker.",
+      "Look it up with an external DNS query.",
+      "Use the locally cached cluster metadata to find the partition's current leader broker and send straight to it."
     ],
     "termDefinitions": [
       {
@@ -846,16 +846,16 @@
       }
     ],
     "optionExplanations": [
-      "把任意 broker 当代理会多一次网络跳转，Kafka 客户端本来就能找到 leader。",
+      "Kafka 的 broker 不会转发生产请求；发错会收到 NOT_LEADER 类错误，客户端要刷新 metadata 后重发。",
       "广播给所有 broker 会白白浪费网络和处理资源，不是实际做法。",
       "DNS 只解析主机名，不能告诉某个 partition 当前 leader 是谁。",
-      "客户端刷新并缓存 metadata；算出 partition 后，请求直接打到该 partition 的 leader。"
+      "客户端缓存 metadata 里的「分区 → 当前 leader」映射；算出 partition 后，请求直接发给该 partition 的 leader。"
     ],
     "optionExplanations_en": [
-      "Treating any broker as a proxy would add an extra network hop; the Kafka client can already find the leader.",
+      "Brokers do not forward produce requests; a misdirected request gets a NOT_LEADER-type error and the client must refresh metadata and resend.",
       "Broadcasting to every broker would waste network and processing resources for no reason.",
       "DNS resolves hostnames; it does not know which broker currently leads a specific partition.",
-      "The client refreshes and caches metadata; after choosing the partition, it sends the request to that partition's leader."
+      "The client caches the partition-to-current-leader map from metadata; after choosing the partition, it sends the request straight to that partition's leader."
     ]
   },
   {
@@ -922,14 +922,14 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "log-structure",
-    "scenario": "面试官问你 append-only 这个设计选择给 Kafka 换来了什么。",
-    "scenario_en": "The interviewer asks what Kafka gets from choosing an append-only design.",
+    "scenario": "面试官问你：Kafka 把每个分区做成「只在末尾追加、写入后不改」的日志，这个选择本身换来了什么。",
+    "scenario_en": "The interviewer asks what Kafka gains from the choice itself of making each partition a log that is only appended to and never modified after writing.",
     "q": "append-only 日志设计给 Kafka 带来哪些好处？（多选）",
     "q_en": "What benefits does Kafka get from an append-only log design? Select all that apply.",
     "options": [
       "不可变性：简化复制、加速恢复、避免原地修改带来的一致性问题",
       "高效：只在末尾追加，把磁盘寻道这个大瓶颈降到最低",
-      "可扩展：加分区、跨 broker 分布就能扩容，分区还能复制容错",
+      "消费者可以用一个递增的 offset 标记进度，并能回到旧 offset 重放",
       "支持对历史消息做原地 UPDATE"
     ],
     "answer": [
@@ -937,17 +937,17 @@
       1,
       2
     ],
-    "why": "不可变 + 顺序写 + 易分片是追加日志的三大红利；代价正是不能原地修改，只能靠保留策略或压缩清理。",
-    "why_en": "The append-only log gives immutability, sequential-write efficiency, and easy horizontal scaling, at the cost of never updating messages in place.",
+    "why": "只追加 + 不可变带来三件事：复制只需按顺序追加（A）、顺序写避开磁盘寻道（B）、每条消息位置固定所以一个 offset 就能表示进度并支持重放（C）。代价是不能原地修改（D 错）。水平扩展来自分区化，是另一个设计决定。",
+    "why_en": "Append-only plus immutability gives three things: replication is just sequential appends (A), sequential writes avoid disk seeks (B), and fixed message positions let a single offset represent progress and enable replay (C). The cost is no in-place edits (D is wrong). Horizontal scaling comes from partitioning, a separate design decision.",
     "tags": [
       "kafka",
       "append-only",
       "immutability"
     ],
     "options_en": [
-      "Immutability: simplifies replication, speeds recovery, avoids consistency issues from in-place edits.",
-      "Efficiency: appending only at the end minimizes disk-seek time, a major bottleneck elsewhere.",
-      "Scalability: adding partitions across brokers scales out, and partitions can be replicated for fault tolerance.",
+      "Immutability: simpler replication, faster recovery, no consistency problems from in-place edits.",
+      "Efficiency: appending only at the end minimizes disk seeks, a major bottleneck.",
+      "Consumers can track progress with a single increasing offset and rewind to an older offset to replay.",
       "Supports in-place UPDATE of historical messages."
     ],
     "termDefinitions": [
@@ -965,13 +965,13 @@
     "optionExplanations": [
       "不可变性让 follower 只需按顺序追加复制、不用处理并发修改冲突，简化了复制和故障恢复。",
       "顺序写把随机寻道这个磁盘大瓶颈降到最低，同样的硬件能撑更高吞吐。",
-      "分区可以分布到不同 broker 上，天然具备水平扩展和副本容错，这是易分片带来的红利。",
+      "消息写入后位置固定不变，所以一个递增的 offset 就能表示消费进度，回退 offset 即可重放。",
       "Kafka 协议里没有原地 UPDATE，改数据只能追加新消息或靠日志压缩清理旧版本。"
     ],
     "optionExplanations_en": [
       "Immutability lets followers replicate new appends without ever reconciling concurrent edits, which simplifies both replication and recovery.",
       "Sequential writes avoid random disk seeks, the dominant bottleneck for a lot of storage systems, so the same disk handles far higher throughput.",
-      "More partitions can spread across more brokers, which is where horizontal scaling and replica-based fault tolerance come from.",
+      "Because a message's position never changes after it is written, a single increasing offset can represent progress, and rewinding the offset replays old messages.",
       "There's no in-place UPDATE in the Kafka protocol; changing data means appending a new message or cleaning old versions via compaction."
     ]
   },
@@ -981,31 +981,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "log-structure",
-    "scenario": "有人问能不能像数据库那样对 Kafka 里的某条历史消息发 DELETE。",
-    "scenario_en": "Someone asks whether they can send a database-style DELETE for one old Kafka message.",
+    "scenario": "有人问能不能像数据库那样，对 Kafka 分区中间的某一条历史消息单独发 DELETE。",
+    "scenario_en": "Someone asks whether they can send a database-style DELETE for one specific old message in the middle of a Kafka partition.",
     "q": "已写入分区的消息最终是如何被移除的？",
     "q_en": "How are messages that were written to a partition eventually removed?",
     "options": [
-      "消费后立即被删除，忽略了多消费组还要重放的需求",
-      "调用一个 DELETE 命令删除指定消息，Kafka 协议里根本不存在这个命令",
-      "只能靠保留策略（retention）到期或日志压缩，绝不原地修改",
-      "由消费者自行负责清理，把物理删除的职责错放在客户端"
+      "消费后立即被删除",
+      "调用按消息 ID 删除单条消息的命令",
+      "不能单删某条；常规上靠保留策略（retention）到期或日志压缩清理，消息不会被原地修改",
+      "由消费者自行负责物理清理"
     ],
     "answer": [
       2
     ],
-    "why": "消息一旦写入就不可变；清理只发生在 retention 到期或 compaction 时，这一点支撑了复制和恢复的简单性。",
-    "why_en": "Messages are never altered in place and are removed only through retention policies or log compaction.",
+    "why": "Kafka 没有「按单条消息删除」。常规退场路径是 retention 到期或 compaction（同 key 旧版本被清，tombstone 可让 key 最终消失）；另外管理员可用 DeleteRecords 把某 offset 之前的记录整段截掉，但那是前缀截断，不是挑一条删。消息本身从不原地改写。",
+    "why_en": "Kafka has no delete-one-message operation. Normal removal is retention expiry or compaction (older versions of a key are cleaned, and a tombstone can eventually remove the key). An admin can also use DeleteRecords to truncate everything before an offset, but that is prefix truncation, not picking one message. Messages are never rewritten in place.",
     "tags": [
       "kafka",
       "retention",
       "compaction"
     ],
     "options_en": [
-      "Deleted immediately after being consumed, ignoring that other consumer groups may still need to replay it.",
-      "Removed by calling a DELETE command on a specific message, a command that does not exist in the Kafka protocol.",
-      "Only through retention expiry or log compaction, never modified in place.",
-      "Cleanup is the consumer's own responsibility, wrongly places physical-deletion duty on the client."
+      "It is deleted right after being consumed.",
+      "Call a command that deletes a single message by ID.",
+      "You cannot delete one message; normally removal happens via retention expiry or log compaction, and messages are never modified in place.",
+      "The consumer is responsible for physical cleanup."
     ],
     "termDefinitions": [
       {
@@ -1021,14 +1021,14 @@
     ],
     "optionExplanations": [
       "多个消费组可能各自独立重放同一段日志，消费后立即删除会直接破坏流模式的用法。",
-      "Kafka 协议没有按消息 ID 删除的命令，这不是它的设计目标。",
-      "消息只有两条退场路径：保留策略到期，或日志压缩清理掉重复 key 的旧版本，绝不会被原地改写。",
+      "Kafka 没有按消息 ID 删除单条消息的命令（DeleteRecords 只能按 offset 截掉前缀），这不是它的设计目标。",
+      "不能单删某条：常规退场靠 retention 到期或 compaction 清掉同 key 旧版本，管理员另可用 DeleteRecords 截前缀；消息从不被原地改写。",
       "消费者只负责移动自己的 offset，物理删除是 broker 端的职责，不该甩给客户端。"
     ],
     "optionExplanations_en": [
       "Multiple consumer groups may replay the same log independently; deleting right after one consumer reads it would break that streaming use case entirely.",
-      "There's no delete-by-message-ID command in the Kafka protocol — that was never a design goal.",
-      "A message only exits two ways: retention time runs out, or log compaction clears out older versions of the same key — it's never rewritten in place.",
+      "Kafka has no delete-one-message-by-ID command (DeleteRecords only truncates a prefix up to an offset); that was never a design goal.",
+      "You cannot delete a single message: normal removal is retention expiry or compaction of older versions of a key, and an admin can also truncate a prefix with DeleteRecords; messages are never rewritten in place.",
       "Consumers only move their own offset forward; physical deletion is the broker's job, not something to push onto the client."
     ]
   },
@@ -1473,31 +1473,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "controller",
-    "scenario": "你想弄清楚「controller」到底是不是一台独立于集群之外的管理服务器。",
-    "scenario_en": "You need to clarify whether the controller is a separate management server outside the Kafka cluster.",
+    "scenario": "你想弄清楚「controller」到底是不是一台独立于 Kafka 集群之外的第三方管理服务器。",
+    "scenario_en": "You want to clarify whether the \"controller\" is a third-party management server outside the Kafka cluster.",
     "q": "Kafka controller 是什么？",
     "q_en": "What is the Kafka controller?",
     "options": [
-      "broker 集群里的一个角色：管元数据、监控健康、分配 leader",
-      "独立于 Kafka 集群之外单独部署的一台管理服务器，会额外引入要单独运维的组件",
-      "客户端库自带的一部分，把服务端职责错放在客户端库上",
-      "ZooKeeper 的另一个叫法，其实两者运行在完全不同的层级"
+      "Kafka 集群内部的一个角色：管元数据、跟踪 broker 存活、选分区 leader",
+      "Kafka 集群之外单独部署的第三方管理服务器",
+      "客户端库自带的一部分",
+      "ZooKeeper 的另一个叫法"
     ],
     "answer": [
       0
     ],
-    "why": "controller 是集群内的角色：分区→broker 的映射、leader 选举、故障时的重新分配都归它管。",
-    "why_en": "The controller is a role held by one broker within the cluster, maintaining metadata and managing leadership and replication.",
+    "why": "controller 是 Kafka 自己的角色：管分区→leader 映射、broker 上下线、选 leader。ZooKeeper 模式由某台 broker 兼任；Kafka 4.0 起只有 KRaft，是 Raft quorum，常用专门节点，但仍属于 Kafka 集群。",
+    "why_en": "The controller is Kafka's own role: it keeps the partition-to-leader map, tracks brokers joining and leaving, and elects leaders. Legacy ZooKeeper mode used a broker; since Kafka 4.0 only KRaft exists, a Raft quorum often on dedicated nodes, still part of the Kafka cluster.",
     "tags": [
       "kafka",
       "controller",
       "metadata"
     ],
     "options_en": [
-      "A role inside the broker cluster: it keeps metadata, watches broker health, and assigns partition leaders.",
-      "A separate management server deployed outside the Kafka cluster, adding a component to operate on its own.",
-      "Part of the client library, wrongly places a server-side duty on the client library.",
-      "Just another name for ZooKeeper, when in fact the two run at entirely different layers."
+      "A role inside the Kafka cluster: it manages metadata, tracks broker liveness, and elects partition leaders.",
+      "A third-party management server deployed outside the Kafka cluster.",
+      "Part of the client library.",
+      "Just another name for ZooKeeper."
     ],
     "termDefinitions": [
       {
@@ -1517,16 +1517,16 @@
       }
     ],
     "optionExplanations": [
-      "它由某个 broker 承担，手里握着 metadata 和选主流程，崩溃后会再选出新 controller。",
-      "controller 是 broker 之一,不是外部独立服务器,不会引入额外要运维的机器。",
+      "握着 metadata 和选主流程；可由 broker 兼任或用专门节点，失效后重新选出。",
+      "专用 controller 节点也是 Kafka 集群的一部分，不是外部第三方服务。",
       "客户端库负责发消息拉消息，不负责集群元数据管理。",
-      "ZooKeeper/KRaft 提供协调存储；controller 是使用这层协调信息的 Kafka 角色。"
+      "ZooKeeper（旧模式）/KRaft 提供协调存储；controller 是使用这层协调信息的 Kafka 角色，并不等于 ZooKeeper。"
     ],
     "optionExplanations_en": [
-      "One broker holds the controller role, owns metadata and leader-election flow, and a new controller is elected if it dies.",
-      "The controller is one of the brokers, not an external server, so it adds no separate machine to operate.",
+      "It holds metadata and the election flow; a broker or dedicated nodes can host it, and a new one is elected on failure.",
+      "Even dedicated controller nodes are part of the Kafka cluster, not an external third-party service.",
       "Client libraries handle sending and fetching messages, not cluster metadata management.",
-      "ZooKeeper or KRaft provides coordination storage; the controller is the Kafka role using that coordination information."
+      "ZooKeeper (legacy mode) or KRaft provides coordination storage; the controller is the Kafka role using that coordination information, not ZooKeeper itself."
     ]
   },
   {
@@ -2006,8 +2006,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "blob-antipattern",
-    "scenario": "设计 YouTube：上传的视频要交给转码 worker 异步处理，你打算用 Kafka 传递这个任务。",
-    "scenario_en": "For YouTube uploads, the video must be handed to transcoding workers asynchronously through Kafka.",
+    "scenario": "设计 YouTube：上传的视频动辄几百 MB 到几 GB，要交给转码 worker 异步处理，你打算用 Kafka 传递这个任务。",
+    "scenario_en": "Designing YouTube: uploaded videos are often hundreds of MB to several GB, and they must be handed to transcoding workers asynchronously; you plan to use Kafka to pass the task.",
     "q": "视频文件本体应该怎么走？",
     "q_en": "How should the actual video file move through the pipeline?",
     "options": [
@@ -2019,8 +2019,8 @@
     "answer": [
       2
     ],
-    "why": "往 Kafka 塞大 blob 是经典反模式：Kafka 不是数据库也不是文件存储；消息应该小而快，大文件放 S3、消息里放指针。",
-    "why_en": "Storing large blobs in Kafka is an anti-pattern; keep the video in S3 and put only a small pointer message in Kafka.",
+    "why": "Kafka 适合小而多的消息；几百 MB 的 blob 会远超默认约 1MB 的消息上限，即使调大也会拖慢复制和整个分区。通用做法（claim-check 模式）是大文件放对象存储，消息只带 key/URL，worker 拿到后自己下载。",
+    "why_en": "Kafka is built for many small messages; a blob of hundreds of MB far exceeds the default ~1MB message limit and, even if raised, slows replication and the whole partition. The common practice (the claim-check pattern) is to keep the file in object storage and send only its key or URL, which the worker uses to download it.",
     "whenOtherWins": "消息本体只有几 KB 的结构化事件时直接放消息里就行，没必要绕一趟对象存储。",
     "tradeoff": "指针+对象存储换来轻量快速的消息 vs 直接塞大 blob 换来省一次存储调用但拖垮吞吐",
     "tags": [
@@ -2073,15 +2073,15 @@
       ]
     },
     "optionExplanations": [
-      "单条消息动辄几百 MB，直接击穿建议的消息大小上限，会拖慢整个分区。",
+      "单条消息动辄几百 MB，远超默认约 1MB 的消息上限，即使调大也会拖慢复制和整个分区。",
       "切片后仍是大量大消息灌进 Kafka，只是换了个形式，问题没解决。",
-      "Kafka 消息只放几十字节的 S3 key，转码 worker 拿到指针后自己去对象存储下载——这是官方推荐的做法。",
+      "Kafka 消息只放几十字节的 S3 key，转码 worker 拿到指针后自己去对象存储下载——这是业界通用的 claim-check 做法。",
       "headers 设计用来放小的键值元数据，不是用来塞视频这种大内容的。"
     ],
     "optionExplanations_en": [
-      "A single message pushing hundreds of MB blows straight through the recommended size limit and drags down the whole partition.",
+      "A single message of hundreds of MB far exceeds the default ~1MB message limit and, even if raised, drags down replication and the whole partition.",
       "Slicing into chunks still floods Kafka with lots of large messages — same problem in a different shape, not actually solved.",
-      "Kafka messages carry just a few dozen bytes for the S3 key; the worker fetches the pointer and downloads from object storage itself — the officially recommended pattern.",
+      "Kafka messages carry just a few dozen bytes for the S3 key; the worker fetches the pointer and downloads from object storage itself — the common claim-check pattern.",
       "Headers are meant for small key-value metadata, not for stuffing large content like video into."
     ]
   },
@@ -2155,31 +2155,31 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "scaling",
-    "scenario": "集群里加了几台新 broker 来扩容，但没人动过原有 topic 的分区数。",
-    "scenario_en": "The cluster added new brokers for scale, but nobody changed the partition count of the existing topic.",
-    "q": "往集群里加了新 broker，但 topic 的分区数没跟上，会怎样？",
-    "q_en": "What happens if you add brokers but do not increase the topic's partition count?",
+    "scenario": "某 topic 只有 3 个分区，原本分布在 3 台 broker 上。现在又加了 3 台新 broker 来扩容，没人改分区数，也没人做分区重分配（reassignment）。",
+    "scenario_en": "A topic has only 3 partitions, spread across 3 brokers. Three new brokers are added for scale, but nobody changes the partition count or runs a partition reassignment.",
+    "q": "往集群里加了新 broker，但分区数和分区分布都没动，会怎样？",
+    "q_en": "What happens if you add brokers but change neither the topic's partition count nor its partition placement?",
     "options": [
-      "新 broker 会自动切分现有分区，Kafka 并不会主动帮你重新切分",
-      "分区不足时新 broker 分不到活，横向扩容白加",
-      "消息开始成批丢失，把并行度问题误判成持久性问题",
-      "整个集群拒绝启动，加 broker 本身并不影响集群的启动"
+      "新 broker 会自动切分现有分区",
+      "新 broker 接不到这个 topic 的任何负载，扩容对它白加",
+      "消息开始成批丢失",
+      "整个集群拒绝启动"
     ],
     "answer": [
       1
     ],
-    "why": "并行度上限由分区数决定：加 broker 的同时必须保证足够的分区，否则新机器接不到负载。",
-    "why_en": "If a topic is under-partitioned, newly added brokers cannot take on any load, so more partitions must accompany more brokers.",
+    "why": "Kafka 不会自动把已有分区搬到新 broker，也不会自动切分分区；3 个分区仍留在原来 3 台上。而且这个 topic 最多只有 3 个分区可分配，就算做 reassignment 也只能用到 3 台。要吃到新机器，需要做 partition reassignment，并在需要更多并行度时增加分区数。",
+    "why_en": "Kafka neither moves existing partitions to new brokers nor splits partitions automatically, so the 3 partitions stay on the original 3 brokers. And with only 3 partitions, even a reassignment could use at most 3 brokers for this topic. To use the new machines you need a partition reassignment, plus more partitions when you need more parallelism.",
     "tags": [
       "kafka",
       "scaling",
       "partitions"
     ],
     "options_en": [
-      "The new brokers automatically re-split existing partitions, something Kafka never does automatically for you.",
-      "With too few partitions the new brokers get no work, so the scale-out is wasted.",
-      "Messages start getting dropped in batches, mistaking a parallelism problem for a durability problem.",
-      "The whole cluster refuses to start, adding brokers by itself never affects whether the cluster starts."
+      "The new brokers automatically split the existing partitions.",
+      "The new brokers get none of this topic's load, so the scale-out is wasted for it.",
+      "Messages start getting dropped in batches.",
+      "The whole cluster refuses to start."
     ],
     "termDefinitions": [
       {
@@ -2194,14 +2194,14 @@
       }
     ],
     "optionExplanations": [
-      "分区数是显式配置项，Kafka 不会主动帮你重新切分现有 topic。",
-      "已有分区还是只能分布在原来那几台 broker 上，新机器接不到任何负载，这正是横向扩容白费的原因。",
+      "Kafka 不会自动切分现有分区；分区数是显式配置项，也不会自动搬到新 broker。",
+      "已有分区仍留在原来那几台 broker 上，没人做 reassignment，新机器接不到这个 topic 的任何负载，扩容白费。",
       "分区不足只影响并行度上限，不影响消息的持久性，不会造成丢消息。",
       "加 broker 本身不会导致集群拒绝启动。"
     ],
     "optionExplanations_en": [
-      "Partition count is an explicit setting; Kafka never re-slices an existing topic for you automatically.",
-      "Existing partitions stay pinned to the original brokers, so new machines get no load at all — exactly why the scale-out was wasted.",
+      "Kafka never splits existing partitions automatically; partition count is an explicit setting, and partitions are not moved to new brokers on their own either.",
+      "Existing partitions stay on the original brokers and nobody ran a reassignment, so the new machines get none of this topic's load and the scale-out is wasted for it.",
       "Under-partitioning only caps parallelism; it doesn't cause message loss.",
       "Adding a broker by itself never makes the cluster refuse to start."
     ]
@@ -2212,21 +2212,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "scaling",
-    "scenario": "集群里有些 topic 吞吐很高、有些很低，你要决定该以什么颗粒度来做扩容规划。",
-    "scenario_en": "Some topics in the cluster have high throughput and others are low volume, so you need the right scaling granularity.",
-    "q": "Kafka 的扩容通常以什么为单位来思考？",
-    "q_en": "What unit do you usually think in when scaling Kafka?",
+    "scenario": "集群里有些 topic 吞吐很高、有些很低。你要决定「分区数」（也就是消费并行度上限）应该在什么颗粒度上设定。",
+    "scenario_en": "Some topics in the cluster have high throughput and others low. You need to decide at what granularity the partition count, which caps consumer parallelism, should be set.",
+    "q": "分区数应该在什么颗粒度上设定？",
+    "q_en": "At what granularity should the partition count be set?",
     "options": [
-      "整个集群一起统一扩容，会让低吞吐 topic 也占用多余资源",
-      "按 broker 数量逐台增加，新机器如果没有分区可接依旧空闲",
-      "按 topic 扩：高吞吐 topic 多给分区，低吞吐的不用扩",
-      "按消费者数量决定扩容规模，把因果关系完全颠倒了过来"
+      "整个集群统一设一个分区数，所有 topic 一样",
+      "按 broker 数量设定，每台 broker 固定对应一个分区",
+      "按 topic 设定：高吞吐 topic 多给分区，低吞吐的少给",
+      "按当前消费者数量设定，以后不再调整"
     ],
     "answer": [
       2
     ],
-    "why": "扩容思考单位是 topic：给需要的 topic 增加分区数，让它吃到更多 broker 的并行度。",
-    "why_en": "You usually scale topics rather than the whole cluster, adding partitions to whichever topics actually need more parallelism.",
+    "why": "分区数是 topic 级配置（创建 topic 时指定、可单独增加），决定该 topic 能被多少消费者并行处理。所以按各 topic 自己的吞吐需求单独设定。集群层面的磁盘/网络容量仍按 broker 规划，那是另一个问题。",
+    "why_en": "Partition count is a per-topic setting (chosen at creation, can be increased per topic) and caps how many consumers can process that topic in parallel, so it is sized per topic by its own throughput. Cluster-wide disk and network capacity is still planned in brokers, which is a separate question.",
     "tags": [
       "kafka",
       "scaling",
@@ -2257,10 +2257,10 @@
       ]
     },
     "options_en": [
-      "Scale the whole cluster uniformly, which wastes extra resources on low-throughput topics too.",
-      "Scale broker count one at a time, the new machine still sits idle without partitions to take on.",
-      "Scale per topic: give high-throughput topics more partitions and leave low-throughput ones as they are.",
-      "Let consumer count decide the scaling amount, which completely reverses cause and effect."
+      "One partition count for the whole cluster, the same for every topic.",
+      "Set it by broker count, with each broker fixed to one partition.",
+      "Set it per topic: more partitions for high-throughput topics, fewer for low-throughput ones.",
+      "Set it to the current consumer count and never adjust it."
     ],
     "termDefinitions": [
       {
@@ -2280,16 +2280,16 @@
       }
     ],
     "optionExplanations": [
-      "统一扩容会让低吞吐 topic 也占用多余资源，颗粒度太粗。",
-      "只加 broker、不加分区，新机器依旧没有分区可接，仍然空闲。",
-      "各 topic 按自己的吞吐需求单独决定分区数：高吞吐的多给分区，低吞吐的单 broker 就够，这才是实际的扩容思路。",
-      "消费者数量应该跟着分区数走，而不是倒过来用消费者数量决定扩容规模。"
+      "统一设一个分区数会让低吞吐 topic 也占用多余资源，高吞吐 topic 又可能不够，颗粒度太粗。",
+      "分区数不是按 broker 台数一一对应的；一台 broker 可以放多个分区，也不该让分区数被机器数锁死。",
+      "分区数是 topic 级配置：各 topic 按自己的吞吐需求单独决定，高吞吐的多给分区，低吞吐的少给。",
+      "消费者数量应该跟着分区数走（并行度上限），而不是用当前消费者数量固定分区数且不再调整。"
     ],
     "optionExplanations_en": [
-      "Scaling the whole cluster uniformly wastes resources on low-throughput topics too — too coarse a unit.",
-      "Just adding brokers without adding partitions leaves the new machines with nothing to pick up.",
-      "Each topic sizes its own partition count to its own throughput — heavy topics get more partitions, light ones stay on a single broker — that's the actual scaling unit.",
-      "Consumer count should follow partition count, not the other way around deciding how much to scale."
+      "One uniform partition count gives low-throughput topics wasted resources and may not be enough for high-throughput ones; too coarse a unit.",
+      "Partition count is not tied one-to-one to broker count; a broker can host many partitions, and the count should not be locked to machine count.",
+      "Partition count is a per-topic setting: each topic sizes it to its own throughput, more for heavy topics and fewer for light ones.",
+      "Consumer count should follow the partition count (the parallelism cap), not the other way around with the partition count frozen to today's consumers."
     ]
   },
   {
@@ -2478,8 +2478,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "hot-partition",
-    "scenario": "点击数据天然带地域属性，且地域和广告 ID 相互独立变化，想更均匀地分摊爆款广告流量。",
-    "scenario_en": "Click data has a natural region attribute that varies independently from ad id, and you want to spread a viral ad more evenly.",
+    "scenario": "点击数据天然带地域属性，且地域和广告 ID 相互独立变化。你想把爆款广告的流量摊到多个分区，同时仍让「同一广告、同一地域」的点击落在同一分区里保序、便于聚合。",
+    "scenario_en": "Click data has a natural region attribute that varies independently of ad ID. You want to spread a viral ad across partitions while still keeping clicks for the same ad and the same region in one partition, in order and easy to aggregate.",
     "q": "在这个前提下，最合适的 key 设计是？",
     "q_en": "Under this premise, what is the best key design?",
     "options": [
@@ -2491,8 +2491,8 @@
     "answer": [
       0
     ],
-    "why": "复合 key 用一个独立变化的属性把热 key 拆开：同一广告不同地域进不同分区，同地域内仍保序。",
-    "why_en": "A compound key like ad ID plus region spreads the hot ad across partitions using an attribute that varies independently.",
+    "why": "复合 key 用一个独立变化的属性把热 key 拆开：同一广告的不同地域进不同分区，同一广告同一地域仍在一个分区内保序。时间戳做 key 虽然也能打散，但同一广告同一地域的数据会被拆散，满足不了题面的保序要求；broker 编号和消息大小不是业务属性。",
+    "why_en": "A compound key splits the hot key using an independently varying attribute: different regions of the same ad go to different partitions, while one ad in one region stays ordered in one partition. A timestamp key also spreads load but scatters the same ad and region, breaking the ordering requirement; broker number and message size are not business attributes.",
     "whenOtherWins": "找不到与热 key 独立变化的属性时，随机加盐是退而求其次的选择。",
     "tradeoff": "复合 key 换来可控的分摊+局部有序 vs 随机加盐换来更均匀但聚合更零散",
     "tags": [
@@ -2519,14 +2519,14 @@
       }
     ],
     "optionExplanations": [
-      "把 ad id 和地域组合成 key，同一广告按地域分流、同一地域内部仍保序，聚合口径也清晰。",
-      "同一时刻大量点击可能共享同一时间戳，反而无法有效分摊。",
+      "把 ad id 和地域组合成 key，同一广告按地域分流、同一广告同一地域内部仍保序，聚合口径也清晰。",
+      "时间戳做 key 虽然也能打散负载，但会把同一广告同一地域的点击拆到不同分区，失去保序和聚合所需的分组。",
       "broker 编号是路由的结果而不是原因，不能拿来当分区 key 的业务属性。",
       "消息大小跟业务实体毫无关联，反映不出需要分摊的维度。"
     ],
     "optionExplanations_en": [
-      "Combine ad id with region as the key: the same ad fans out by region while staying ordered within each region, keeping aggregation clean.",
-      "A lot of clicks can share the exact same timestamp at once, so it fails to actually spread anything.",
+      "Combine ad id with region as the key: the same ad fans out by region while one ad in one region stays ordered within a partition, keeping aggregation clean.",
+      "A timestamp key can spread load too, but it scatters clicks for the same ad and region across partitions, losing the grouping needed for ordering and aggregation.",
       "Broker number is the result of routing, not a business attribute you can use as a partitioning key.",
       "Message size has nothing to do with the business entity, so it doesn't reflect the dimension you actually need to spread."
     ]
@@ -2537,21 +2537,21 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "hot-partition",
-    "scenario": "允许牺牲一点实时性，希望用最省事的方式防止热分区被打爆。",
-    "scenario_en": "You can trade a little freshness for the easiest way to keep a hot partition from being overwhelmed.",
+    "scenario": "允许牺牲一点实时性，希望用最省事的方式防止热分区的消费端被打爆。",
+    "scenario_en": "You can trade a little freshness for the simplest way to keep the consumers of a hot partition from being overwhelmed.",
     "q": "「背压（back pressure）」方案具体是怎么做的？",
     "q_en": "How does the back-pressure approach work here?",
     "options": [
-      "直接丢弃超出容量的消息，意味着数据永久丢失，不符合可靠性要求",
-      "把热分区手动迁到更大的机器上，但同一个 key 依旧是那个热 key，治标不治本",
-      "生产者检查分区的消费延迟（lag），太高就主动放慢发送；托管服务往往有内置机制",
-      "把消息转发到备用集群，会引入额外的一致性和路由复杂度"
+      "直接丢弃超出容量的消息",
+      "把热分区手动迁到更大的机器上",
+      "在生产端加一层逻辑：监控该分区的 consumer lag，超过阈值就主动放慢发送",
+      "把消息转发到备用集群"
     ],
     "answer": [
       2
     ],
-    "why": "背压 = 让生产者感知下游压力并降速，简单直接；代价是数据进入系统变慢。",
-    "why_en": "Back pressure has the producer watch partition lag and slow down when it grows too high, a simple fix if you can tolerate the delay.",
+    "why": "背压就是让上游感知下游压力并降速，代价是数据进入系统变慢。按 lag 降速是应用层自己做的；Kafka 内建的相关手段是 broker 端 quotas（按客户端限速）和 producer 缓冲满时阻塞发送。丢消息丢数据；换大机器热 key 仍在同一分区；转发到备用集群复杂度高。",
+    "why_en": "Back pressure means the upstream senses downstream pressure and slows down, at the cost of slower ingestion. Slowing on lag is application-level logic; Kafka's built-in related tools are broker-side quotas (per-client throttling) and the producer blocking when its buffer is full. Dropping loses data, a bigger machine leaves the hot key on one partition, and a standby cluster adds complexity.",
     "whenOtherWins": "实时性是硬要求时不能靠降速——去 key、加盐或复合 key 才是正解。",
     "tradeoff": "背压换来简单省事的降速 vs 加盐/复合 key 换来不牺牲实时性的分摊",
     "tags": [
@@ -2560,10 +2560,10 @@
       "back-pressure"
     ],
     "options_en": [
-      "Drop messages that exceed capacity outright, meaning permanent data loss, which violates the reliability bar.",
-      "Manually move the hot partition to a bigger machine, but the same key stays the same hot key.",
-      "The producer checks partition lag and proactively slows down when it gets too high; managed services often build this in.",
-      "Forward the messages to a standby cluster, introduces extra consistency and routing complexity."
+      "Drop messages that exceed capacity.",
+      "Manually move the hot partition to a bigger machine.",
+      "Add producer-side logic that watches the partition's consumer lag and slows sending once it passes a threshold.",
+      "Forward the messages to a standby cluster."
     ],
     "termDefinitions": [
       {
@@ -2579,14 +2579,14 @@
     ],
     "optionExplanations": [
       "丢消息意味着数据永久丢失，不符合大多数场景的可靠性要求。",
-      "换大机器只是抬高上限,同一个 key 还是全打到一个分区,热点没消除。",
-      "生产者持续检查消费延迟（lag），超过阈值就主动放慢发送，托管服务往往内置这个机制。",
+      "换大机器只是抬高上限，同一个 key 还是全打到一个分区，热点没消除。",
+      "这是应用层自己实现的背压：生产端持续监控 consumer lag，超过阈值就主动放慢发送；Kafka 本身不会按 lag 自动降速，内建的是 broker quotas 和缓冲满时阻塞。",
       "转发到备用集群会引入额外的一致性和路由复杂度，成本远高于简单降速。"
     ],
     "optionExplanations_en": [
       "Dropping messages means permanent data loss, which doesn't meet most reliability requirements.",
       "A bigger machine just raises the ceiling; the same key still lands on one partition, so the hotspot remains.",
-      "The producer keeps checking consumer lag and slows down once it crosses a threshold — managed services often build this in already.",
+      "This is application-level back pressure: the producer side keeps monitoring consumer lag and slows sending past a threshold. Kafka does not throttle on lag by itself; its built-ins are broker quotas and blocking when the producer buffer is full.",
       "Rerouting to a standby cluster brings in extra consistency and routing complexity, costing far more than simply slowing down."
     ]
   },
@@ -2637,21 +2637,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "durability",
-    "scenario": "生产者发送消息时把 acks 参数设成了 all，你要说清这具体等待了什么。",
-    "scenario_en": "The producer sends messages with acks set to all, and you need to explain what it waits for.",
+    "scenario": "生产者把 acks 设成了 all，topic 的 min.insync.replicas = 2，你要说清这具体等待了什么。",
+    "scenario_en": "The producer sets acks to all, and the topic has min.insync.replicas = 2. You need to explain exactly what it waits for.",
     "q": "acks=all 的含义是？",
     "q_en": "What does acks=all mean?",
     "options": [
-      "等所有消费者都确认收到才算成功，跟生产者到副本之间的确认机制无关",
-      "所有 in-sync replicas（ISR）都收到，生产者才收到确认",
-      "leader 一收到就立刻确认，follower 还没同步完就可能已经丢了数据",
-      "不需要任何确认，发出去就算完，吞吐最高但完全不管数据是否真的送达"
+      "等所有消费者都确认收到才算成功",
+      "leader 等当前所有 in-sync replicas（ISR）都写入后，才给生产者确认",
+      "leader 一收到就立刻确认",
+      "不需要任何确认"
     ],
     "answer": [
       1
     ],
-    "why": "acks=all 让确认等到全部 ISR 落地，即便 leader 随后立刻挂掉消息也不丢——这是 Kafka 能提供的最强持久性设置。",
-    "why_en": "With acks set to all, the producer is acknowledged only after every in-sync replica has the message, the strongest durability guarantee available.",
+    "why": "acks=all 让 leader 等当前 ISR 全部写入再确认。配合 min.insync.replicas=2，ISR 不足 2 时写入直接被拒，所以每条被确认的消息至少在两个副本上，leader 随后挂掉也能由另一个 ISR 副本接替而不丢。没有这个配置时，ISR 缩到只剩 leader 就退化成 acks=1。",
+    "why_en": "With acks=all the leader waits for every current ISR member to write the message before acknowledging. Combined with min.insync.replicas=2, writes are rejected when the ISR drops below 2, so every acknowledged message is on at least two replicas and survives a leader crash. Without that setting, an ISR shrunk to just the leader makes it behave like acks=1.",
     "tags": [
       "kafka",
       "durability",
@@ -2682,10 +2682,10 @@
       ]
     },
     "options_en": [
-      "Wait until every consumer confirms receipt, unrelated to the producer-to-replica acknowledgment mechanism.",
-      "The producer is acknowledged only once every in-sync replica has the message.",
-      "The leader acknowledges as soon as it receives the message, data can already be lost before a follower finishes syncing.",
-      "No acknowledgment is needed at all; fire and forget, the highest throughput but with zero regard for whether data truly arrived."
+      "Wait until every consumer confirms receipt.",
+      "The leader acknowledges the producer only after every current in-sync replica has written the message.",
+      "The leader acknowledges as soon as it receives the message.",
+      "No acknowledgment is needed at all."
     ],
     "termDefinitions": [
       {
@@ -2708,13 +2708,13 @@
     ],
     "optionExplanations": [
       "acks 是生产者到 broker 副本之间的确认机制，跟消费者是否收到无关。",
-      "只有当全部 in-sync replicas 都落地，生产者才收到确认——这是 Kafka 能给的最强持久性设置。",
+      "leader 等当前 ISR 全部写入才确认；配合 min.insync.replicas=2，每条被确认的消息至少在两个副本上，这是 Kafka 能给的最强持久性设置。",
       "acks=1 只等 leader 写入就确认，follower 还没同步完时数据仍可能丢。",
       "acks=0 完全不等确认，吞吐最高但完全不管消息是否真的送达。"
     ],
     "optionExplanations_en": [
       "acks is the confirmation between producer and broker replicas — it has nothing to do with whether a consumer received anything.",
-      "Confirmation only comes back once every in-sync replica has the message — Kafka's strongest durability setting.",
+      "The leader waits for every current ISR member before acknowledging; with min.insync.replicas=2 every acknowledged message sits on at least two replicas — Kafka's strongest durability setting.",
       "acks=1 confirms as soon as the leader writes it; if followers haven't caught up yet, that data can still be lost.",
       "acks=0 waits for no confirmation at all — highest throughput, but no guarantee the message ever actually arrived."
     ]
@@ -2759,31 +2759,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "availability",
-    "scenario": "面试官抛出一个略显不现实的问题：「如果整个 Kafka 集群都挂了怎么办」。",
-    "scenario_en": "The interviewer asks the somewhat unrealistic question, what if the entire Kafka cluster goes down?",
+    "scenario": "面试官抛出一个略显不现实的问题：「如果整个 Kafka 集群都挂了怎么办」，你只想花半分钟回应，然后回到更值得讨论的部分。",
+    "scenario_en": "The interviewer throws out a somewhat unrealistic question, \"What if the whole Kafka cluster goes down?\", and you want to spend about thirty seconds on it before returning to more worthwhile topics.",
     "q": "面对「Kafka 整个挂了怎么办」这个问题，合理的回应是？",
     "q_en": "How should you respond to the question, what if all of Kafka goes down?",
     "options": [
-      "立刻开始详细设计 Kafka 的灾备集群，会挤占更值得讨论的消费者故障话题",
-      "承认系统必然会彻底瘫痪，这个断言过于绝对也不准确",
-      "点出「Kafka 永远可用、偶尔一致」，把话题引向更现实的消费者故障",
-      "建议改用数据库轮询代替 Kafka，轮询数据库拿不到分区并行和保序能力"
+      "立刻开始详细设计 Kafka 的跨区域灾备集群",
+      "断言整个系统必然彻底瘫痪、无法补救",
+      "简短说明：多副本让整集群宕机概率很低，真挂了生产端可本地缓冲或降级、恢复后重放；然后把话题引向更常见的消费者故障",
+      "建议改用数据库轮询代替 Kafka"
     ],
     "answer": [
       2
     ],
-    "why": "行话是「Kafka 永远可用、偶尔一致」；比整个 Kafka 挂掉更值得设计的是消费者挂掉时的 offset 与再均衡处理。",
-    "why_en": "Kafka is usually treated as always available and sometimes consistent, so it is worth gently steering the discussion toward the far more realistic consumer failure.",
+    "why": "整集群宕机概率低，值得一句话交代应对（生产端缓冲/降级、恢复后重放），不值得占用大段时间；更常见、更值得设计的是消费者挂掉时的 offset 提交和 rebalance。注意不要说「Kafka 永远可用」——默认配置下 Kafka 在副本不足时宁可暂停写入也不丢已确认数据，偏向一致性。",
+    "why_en": "A full-cluster outage is unlikely, so it deserves one sentence on mitigation (producer buffering or degradation, replay after recovery) rather than a long detour; the more common and worthwhile case is consumer failure, with offset commits and rebalancing. Avoid saying \"Kafka is always available\": with default settings Kafka would rather stop accepting writes when replicas are short than lose acknowledged data, which favors consistency.",
     "tags": [
       "kafka",
       "availability",
       "interview"
     ],
     "options_en": [
-      "Immediately start designing a detailed Kafka disaster-recovery cluster, crowding out the far more worthwhile consumer-failure discussion.",
-      "Concede that the system will inevitably be completely down, too absolute and inaccurate a claim to make.",
-      "Note that Kafka is 'always available, sometimes consistent,' and steer toward the more realistic consumer failure.",
-      "Suggest replacing Kafka with database polling, database polling cannot match partitioned parallelism or ordering."
+      "Immediately start designing a detailed cross-region Kafka disaster-recovery cluster.",
+      "Assert that the whole system will inevitably go down with no way to recover.",
+      "Briefly note that replication makes a full-cluster outage unlikely, and if it happens producers can buffer locally or degrade and replay after recovery; then steer to the more common consumer failures.",
+      "Suggest replacing Kafka with database polling."
     ],
     "termDefinitions": [
       {
@@ -2794,14 +2794,14 @@
     ],
     "optionExplanations": [
       "花大量时间设计一个概率极低的场景，会挤占更值得讨论的消费者故障话题。",
-      "『必然瘫痪』是过于绝对的断言，Kafka 的复制设计正是为了避免这种单点前提。",
-      "用这句话快速承认边界，再把讨论拉回 offset 提交、rebalance 这些常见故障链条。",
+      "「必然瘫痪、无法补救」是过于绝对的断言，Kafka 的复制设计正是为了避免这种单点前提。",
+      "一句话交代：多副本使整集群宕机很少见，真挂了靠生产端缓冲/降级与恢复后重放；然后把讨论拉回 offset 提交、rebalance 这些常见故障链条。",
       "轮询数据库拿不到 Kafka 的分区并行和保序能力，是不对等的降级替代。"
     ],
     "optionExplanations_en": [
       "Spending a lot of time designing a near-zero-probability scenario would crowd out the more useful discussion of consumer failure.",
-      "'Inevitable total failure' is too absolute a claim — Kafka's replication design exists specifically to avoid that single point of failure.",
-      "Use that line to acknowledge the boundary quickly, then move back to common failure chains like offset commits and rebalances.",
+      "\"Inevitable, unrecoverable total failure\" is too absolute a claim — Kafka's replication design exists specifically to avoid that single point of failure.",
+      "Give a one-sentence answer: replication makes a full outage rare, and if it happens rely on producer buffering or degradation and replay after recovery; then move back to common failure chains like offset commits and rebalances.",
       "Polling a database can't match Kafka's partition parallelism and ordering guarantees — not an equivalent substitute."
     ]
   },
@@ -3037,21 +3037,21 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "producer-retries",
-    "scenario": "生产者配置了自动重试（retries: 5），但没有额外配置幂等模式。",
-    "scenario_en": "The producer has automatic retries configured, but idempotence has not been configured.",
-    "q": "开启生产者自动重试时必须同时注意什么，才能不引入新问题？",
-    "q_en": "What must you also consider when enabling producer retries?",
+    "scenario": "生产者（Java 客户端，显式设置了 enable.idempotence=false）配置了 acks=all 和自动重试（retries: 5）。下游要求同一条事件不能在 topic 里写出两份，且消费端不做去重。",
+    "scenario_en": "The producer (Java client, with enable.idempotence=false set explicitly) uses acks=all and automatic retries (retries: 5). Downstream requires that one event is never written to the topic twice, and consumers do no dedup.",
+    "q": "在这个要求下，开启自动重试时还应该同时做什么？",
+    "q_en": "Under this requirement, what else should you do when enabling retries?",
     "options": [
-      "必须同时关闭消息压缩，压缩只影响消息大小，跟重复无关",
-      "必须开启幂等生产者（idempotent）模式",
-      "必须把 acks 设为 0，acks=0 反而让重试判断更不可靠",
-      "必须相应减小分区数，分区数决定的是并行度而非重试安全"
+      "同时关闭消息压缩",
+      "开启幂等生产者（enable.idempotence=true）",
+      "把 acks 设为 0",
+      "相应减小分区数"
     ],
     "answer": [
       1
     ],
-    "why": "网络抖动下生产者可能把已成功的发送误判为失败而重发；幂等模式保证这类重试不产生重复消息。",
-    "why_en": "Enable idempotent producer mode so a retry after a falsely presumed failure does not create a duplicate message.",
+    "why": "响应丢失或超时时，生产者会把其实已经写入的批次再发一次，造成重复。开启幂等后，broker 按 producer ID + 序号丢弃同一生产者会话内、同一分区上的重复批次（max.in.flight.requests.per.connection ≤ 5 时还能保持分区内顺序）。压缩和分区数跟重复无关；acks=0 连确认都不等，更没法可靠判断要不要重试。注意：Kafka 3.0+ Java 客户端默认已开启幂等；它只防单个生产者会话内的重试重复，跨生产者重启或端到端 exactly-once 要靠事务或下游去重。",
+    "why_en": "When a response is lost or times out, the producer resends a batch that was actually written, creating a duplicate. With idempotence on, the broker drops duplicate batches by producer ID + sequence number within one producer session and partition (and keeps per-partition order when max.in.flight.requests.per.connection ≤ 5). Compression and partition count are unrelated to duplicates; acks=0 waits for no acknowledgment, so retry decisions become even less reliable. Note: Java clients on Kafka 3.0+ enable idempotence by default; it only prevents retry duplicates within one producer session — across producer restarts or end to end you need transactions or downstream dedup.",
     "tags": [
       "kafka",
       "producer",
@@ -3060,10 +3060,10 @@
     "codeSample": "const producer = kafka.producer({\n  retry: { retries: 5, initialRetryTime: 100 },\n  idempotent: true, // dedupes retried sends\n});",
     "lang": "javascript",
     "options_en": [
-      "You must also turn off message compression, compression only affects size, unrelated to duplicates.",
-      "You must also turn on idempotent producer mode.",
-      "You must set acks to 0, acks=0 actually makes the retry decision even less reliable.",
-      "You must correspondingly reduce the partition count, partition count governs parallelism, not retry safety."
+      "Also turn off message compression.",
+      "Turn on idempotent producer mode (enable.idempotence=true).",
+      "Set acks to 0.",
+      "Reduce the partition count accordingly."
     ],
     "termDefinitions": [
       {
@@ -3079,16 +3079,16 @@
       }
     ],
     "optionExplanations": [
-      "压缩只影响消息大小，跟重试是否产生重复消息无关。",
+      "压缩只影响消息大小，跟重试是否产生重复消息无关，没必要关。",
       "必须开启幂等生产者模式：broker 靠生产者 ID 和序号识别重复发送并去重，避免『以为没发出去』的重试造成重复消息。",
-      "acks=0 完全不等确认，重试判断反而更不可靠，方向反了。",
-      "分区数决定的是并行度，跟单个生产者的重试安全无关。"
+      "acks=0 完全不等确认，重试判断反而更不可靠，方向反了，也解决不了重复。",
+      "分区数决定的是并行度，跟单个生产者的重试安全无关，没必要为此减小。"
     ],
     "optionExplanations_en": [
-      "Compression only affects message size, unrelated to whether retries produce duplicates.",
+      "Compression only affects message size and is unrelated to whether retries produce duplicates, so there is no need to turn it off.",
       "You need idempotent-producer mode: the broker recognizes duplicate sends by producer ID and sequence number and dedupes them, preventing a 'thought it failed' retry from creating a duplicate message.",
-      "acks=0 waits for no confirmation at all, which makes retry decisions even less reliable — the opposite direction from what's needed.",
-      "Partition count decides parallelism, unrelated to a single producer's retry safety."
+      "acks=0 waits for no confirmation at all, which makes retry decisions even less reliable — the opposite direction, and it does nothing about duplicates.",
+      "Partition count decides parallelism and is unrelated to a single producer's retry safety, so there is no reason to reduce it."
     ]
   },
   {
@@ -3097,21 +3097,21 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "consumer-retries",
-    "scenario": "消费者处理一条消息失败了，你想知道 Kafka 本身能不能帮你自动重试。",
-    "scenario_en": "A consumer fails while handling a message, and you want to know whether Kafka retries that work for you.",
+    "scenario": "你用的是经典 consumer group（KafkaConsumer + subscribe），没有用 Spring Kafka、Kafka Streams 等框架，也没有用 share group。消费者处理一条消息失败了，你想知道 Kafka 本身能不能帮你按退避自动重试，并把重试耗尽的消息送进 DLQ。",
+    "scenario_en": "You use a classic consumer group (KafkaConsumer + subscribe), with no framework like Spring Kafka or Kafka Streams and no share groups. A consumer fails while handling a message, and you want to know whether Kafka itself retries it with backoff and sends exhausted messages to a DLQ.",
     "q": "消费端处理失败的重试，Kafka 的原生支持情况是？",
     "q_en": "What native support does Kafka provide for retrying failed consumer processing?",
     "options": [
-      "内建指数退避重试，开箱即用，这其实是托管队列服务才有的能力",
-      "失败消息自动进 DLQ，忽略了 DLQ 是重试耗尽后的终点",
-      "不内建消费者重试，需自建 retry topic 处理失败消息",
-      "自动跳过失败消息继续往下读，Kafka 不会替你做这种取舍判断"
+      "内建指数退避重试，开箱即用",
+      "处理失败的消息会自动进入 DLQ",
+      "不内建；常见做法是自建 retry topic（再加一个 DLQ topic）处理失败消息",
+      "自动跳过失败消息继续往下读"
     ],
     "answer": [
       2
     ],
-    "why": "Kafka 不替你做消费重试：把失败消息移到自定义 retry topic 反复处理，既能无限重试又不阻塞主消费。",
-    "why_en": "Kafka has no built-in consumer retries, so the common pattern is a custom retry topic processed by a separate consumer.",
+    "why": "经典 consumer group 只负责拉取消息和提交 offset，不知道你的业务处理成败：不提交 offset 或 seek 回去可以重读，但退避、重试计数和 DLQ 都要自己做（或交给框架）。常见做法：失败消息写进 retry topic，由独立消费者按次数重试，超限后写进 DLQ，主消费不被阻塞。Kafka 也不会替你自动跳过失败消息。（Kafka 4.x 的 share group 有投递计数和重投，不在本题范围。）",
+    "why_en": "A classic consumer group only fetches messages and commits offsets; it does not know whether your processing succeeded. You can re-read by not committing or by seeking back, but backoff, retry counting, and DLQ are yours to build (or a framework's). The common pattern writes failures to a retry topic consumed by a separate consumer with a retry limit, then to a DLQ, so the main consumer is not blocked. Kafka also never silently skips a failed message for you. (Share groups in Kafka 4.x add delivery counts and redelivery, but they are out of scope here.)",
     "diagram": "flowchart LR\n    T[主 topic] --> C[消费者]\n    C -- 处理失败 --> R[重试 topic]\n    R --> RC[重试消费者]\n    RC -- 重试次数超限 --> D[(DLQ 死信队列)]\n    RC -- 成功 --> OK[完成]",
     "tags": [
       "kafka",
@@ -3119,10 +3119,10 @@
       "retry-topic"
     ],
     "options_en": [
-      "Built-in exponential-backoff retries, ready out of the box, a capability that actually belongs to managed queue services.",
-      "Failed messages automatically land in a DLQ, ignoring that a DLQ is the endpoint only after retries are exhausted.",
-      "No built-in consumer retries; the common pattern is a custom retry topic for failed messages.",
-      "Automatically skip the failed message and keep reading, a call Kafka never makes on your behalf."
+      "Built-in exponential-backoff retries, ready out of the box.",
+      "Failed messages land in a DLQ automatically.",
+      "Not built in; the common pattern is a custom retry topic (plus a DLQ topic) for failed messages.",
+      "Automatically skips the failed message and keeps reading."
     ],
     "termDefinitions": [
       {
@@ -3144,15 +3144,15 @@
       }
     ],
     "optionExplanations": [
-      "内建指数退避重试是 SQS 等托管队列服务的能力，不是 Kafka 原生具备的。",
+      "经典 consumer 没有内建的退避重试逻辑；连 SQS 这类托管队列也不是原生指数退避，而是 visibility timeout 到期后重投。",
       "DLQ 是重试次数用尽后的终点，不是失败后立刻发生的第一步，这个说法搞反了流程顺序。",
-      "Kafka 不内建消费重试：常见做法是自建一个重试 topic，让独立消费者反复处理失败消息，不阻塞主消费。",
+      "这是答案：重试要靠自建的 retry topic 加 DLQ，Kafka 本身不代办。",
       "Kafka 不会替你判断该不该跳过失败消息，不存在这种自动静默跳过的行为。"
     ],
     "optionExplanations_en": [
-      "Built-in exponential-backoff retry is a managed-queue feature like SQS's, not something Kafka has natively.",
+      "A classic consumer has no built-in backoff-retry logic; even managed queues like SQS don't do native exponential backoff, they redeliver after the visibility timeout expires.",
       "A DLQ is where a message lands after retries are exhausted, not the first thing that happens on failure — this mixes up the order of events.",
-      "Kafka doesn't retry consumption natively — the common pattern is a self-built retry topic that an independent consumer works through, without blocking the main flow.",
+      "This is the answer: retries rely on a self-built retry topic plus a DLQ; Kafka itself does not handle them.",
       "Kafka never silently skips a failed message for you — that call is left entirely to the application."
     ]
   },
@@ -3411,31 +3411,31 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "performance",
-    "scenario": "面试官问你，如果只能优化 Kafka 性能里的一件事，你会先从哪里下手。",
-    "scenario_en": "The interviewer asks where you would start if you could optimize only one part of Kafka performance.",
-    "q": "对 Kafka 性能影响最大的单一决策是？",
-    "q_en": "What single decision has the biggest impact on Kafka performance?",
+    "scenario": "面试官问：讨论 Kafka 的吞吐和扩展性，下面几项里你会先从哪一项入手？",
+    "scenario_en": "The interviewer asks: when discussing Kafka throughput and scalability, which of the following would you start with?",
+    "q": "下列选项中，哪一项对 Kafka 的并行度和负载均衡影响最大、最该先讨论？",
+    "q_en": "Among these options, which has the biggest effect on Kafka parallelism and load balance and should be discussed first?",
     "options": [
-      "分区 key 的选择：决定分布是否均匀、并行度上限",
-      "压缩算法的选择，省的是带宽，补不回分区不均的损失",
-      "客户端使用的编程语言，客户端语言带来的开销远小于分区策略",
-      "消息字段的命名规范，只影响可读性，不触及并行处理能力"
+      "分区 key 的选择：决定消息在分区间是否分布均匀、会不会出热分区",
+      "压缩算法的选择",
+      "客户端使用的编程语言",
+      "消息字段的命名规范"
     ],
     "answer": [
       0
     ],
-    "why": "批量、压缩都是锦上添花；决定并行度和均衡度的分区策略才是性能的根，也是面试讨论的主线。",
-    "why_en": "The partition key choice dominates performance because it determines parallelism and load balance, so it should be where the interview discussion starts.",
+    "why": "分区 key 决定每条消息落到哪个分区：key 倾斜会造成热分区，而一个分区同一时刻只被组内一个消费者处理，热分区的吞吐就成了上限，加机器也救不回来。压缩（和 batching）是真实的吞吐旋钮，但修不了分布不均；客户端语言和字段命名的影响小得多。所以在这四项里先谈分区 key。",
+    "why_en": "The partition key decides which partition each message lands in. Key skew creates hot partitions, and since one partition is consumed by only one consumer in a group at a time, the hot partition caps throughput no matter how many machines you add. Compression (and batching) are real throughput levers but cannot fix skew; client language and field naming matter far less. So among these four, start with the partition key.",
     "tags": [
       "kafka",
       "performance",
       "partition-key"
     ],
     "options_en": [
-      "The choice of partition key: it decides how evenly messages spread and caps parallelism.",
-      "The choice of compression algorithm, saves bandwidth but cannot recover the loss from uneven partitioning.",
-      "The programming language of the client, the overhead from client language choice is far smaller than partition strategy.",
-      "Naming conventions for message fields, only affects readability, never touches parallel-processing capacity."
+      "The partition key choice: it decides whether messages spread evenly across partitions or create hot partitions.",
+      "The compression algorithm choice.",
+      "The client programming language.",
+      "Naming conventions for message fields."
     ],
     "termDefinitions": [
       {
@@ -3448,13 +3448,13 @@
       "key 选不好会出热分区，再多的批量和压缩优化都补不回并行度的损失——这是性能讨论真正该从哪里开始。",
       "压缩能省网络带宽，但省不回分区不均带来的并行度浪费，量级远小于分区策略。",
       "客户端语言差异带来的开销远小于分区策略的影响，不是决定性因素。",
-      "字段命名只影响可读性和序列化大小，不触及并行处理能力。"
+      "字段命名只影响可读性，不触及并行处理能力。"
     ],
     "optionExplanations_en": [
       "A poorly chosen key produces a hot partition, and no amount of batching or compression can buy back the lost parallelism — that's why this is where the discussion should start.",
       "Compression saves network bandwidth, but it can't make up for the parallelism lost to an unbalanced partition — a much smaller factor than partitioning strategy.",
       "Differences between client languages cost far less than partitioning strategy does — not the deciding factor.",
-      "Field naming only affects readability and serialized size — it doesn't touch parallel processing at all."
+      "Field naming only affects readability and doesn't touch parallel processing at all."
     ]
   },
   {
@@ -3517,9 +3517,9 @@
     "sub": "retention",
     "q": "补全保留策略的配置项：",
     "q_en": "Fill in the retention policy configuration fields:",
-    "text": "保留策略通过 {{retention.ms}}（按时间）和 {{retention.bytes}}（按大小）配置；加长保留时要权衡 {{存储成本}} 和性能。",
-    "why": "两个维度共同决定日志何时被清理；长保留支持重放，但磁盘账单和恢复时间都会涨。",
-    "why_en": "Retention is configured by time with retention.ms and by size with retention.bytes, and longer retention costs more storage and slower recovery.",
+    "text": "保留策略通过 {{retention.ms}}（按时间）和 {{retention.bytes}}（按每个分区的大小）配置；保留越久越能支持重放，但磁盘占用更大，broker 恢复和分区迁移要搬的数据也更多。",
+    "why": "两个 topic 级配置共同决定日志段何时被删：retention.ms 按时间，retention.bytes 按每个分区的大小，先触发的那个生效。保留越久，越能让消费者回放旧数据，代价是磁盘用量，以及故障恢复、分区迁移时要复制的数据更多。",
+    "why_en": "Two topic-level configs decide when log segments are deleted: retention.ms by time and retention.bytes by per-partition size, whichever triggers first. Longer retention lets consumers replay older data, at the cost of disk usage and more data to copy during recovery or partition reassignment.",
     "tags": [
       "kafka",
       "retention",
@@ -3536,7 +3536,8 @@
         "meaning": "按大小控制分区最多保留多少数据的配置项。",
         "meaningEn": "retention.bytes is the config that caps how much data a partition keeps, measured in bytes."
       }
-    ]
+    ],
+    "text_en": "Retention is configured by {{retention.ms}} (by time) and {{retention.bytes}} (by size, per partition); longer retention allows more replay but uses more disk and means more data to move during broker recovery and partition reassignment."
   },
   {
     "id": "sd-deep-dives-kafka-061",
@@ -3792,29 +3793,29 @@
     "sub": "managed-services",
     "scenario": "生产环境里自己运维 Kafka 集群的扩容、打补丁、监控要花不少心思。",
     "scenario_en": "Running Kafka in production takes work for scaling, patching, and monitoring.",
-    "q": "生产环境里，很多 Kafka 扩容运维负担是靠什么消除的？",
+    "q": "生产环境里，很多 Kafka 扩容和运维负担是靠什么减掉的？",
     "q_en": "What removes much of Kafka's production scaling and operations burden?",
     "options": [
-      "靠手写脚本迁移分区，手工操作容易出错也难以规模化",
-      "托管服务（Confluent Cloud、AWS MSK）替你扩容",
-      "Kafka 会自动无限扩容，扩容始终需要显式配置分区和 broker",
-      "换成单机部署省去运维，会直接丢掉副本带来的容错能力"
+      "靠手写脚本迁移分区",
+      "用托管服务（Confluent Cloud、AWS MSK）接管大部分扩容、打补丁和监控工作",
+      "Kafka 自带无限自动扩容，不需要任何配置",
+      "换成单机部署，省掉集群运维"
     ],
     "answer": [
       1
     ],
-    "why": "托管 Kafka 把扩容动态化了，但面试考的是你懂不懂分区、复制这些底层原理，不是背托管产品的按钮位置。",
-    "why_en": "Managed services like Confluent Cloud and AWS MSK handle much of the scaling for you, but interviews still test whether you understand the underlying mechanics.",
+    "why": "托管服务接管了打补丁、broker 故障替换、监控，以及不同程度的扩容（例如 MSK 存储自动扩容、Serverless/弹性集群按负载伸缩），但分区数、key 设计等容量规划仍要你做——面试考的正是这些底层原理。手写脚本容易出错；自建 Kafka 不会无配置地自动扩容；单机部署丢掉副本容错。",
+    "why_en": "Managed services take over patching, broker replacement, monitoring, and varying degrees of scaling (e.g., MSK storage auto-scaling, serverless/elastic clusters that scale with load), but capacity planning such as partition count and key design is still yours — which is what interviews test. Hand-written scripts are error-prone; self-managed Kafka does not scale itself without configuration; a single node gives up replica fault tolerance.",
     "tags": [
       "kafka",
       "managed-services",
       "msk"
     ],
     "options_en": [
-      "By hand-writing scripts to migrate partitions, manual work that is error-prone and hard to scale.",
-      "Managed services like Confluent Cloud and AWS MSK handle most of the scaling for you.",
-      "Kafka scales automatically without limit, scaling always still needs explicit partition and broker configuration.",
-      "Switching to a single-node deployment to avoid ops work, which throws away the fault tolerance replicas provide."
+      "By hand-writing scripts to migrate partitions.",
+      "Managed services like Confluent Cloud and AWS MSK take over most of the scaling, patching, and monitoring work.",
+      "Kafka scales itself without limit and needs no configuration.",
+      "Switch to a single-node deployment to skip cluster operations."
     ],
     "termDefinitions": [
       {
@@ -3837,13 +3838,13 @@
     "optionExplanations": [
       "手写脚本迁移分区容易出错，也难以规模化，正是托管服务想替你消除的负担。",
       "托管服务（Confluent Cloud、AWS MSK）把扩容、打补丁、故障切换这些操作性工作接管过去，但面试仍要懂底层的分区、复制概念。",
-      "扩容始终需要显式配置分区和 broker，不存在无限自动扩容的能力。",
+      "自建 Kafka 的扩容需要显式配置分区和 broker，不存在无配置的无限自动扩容。",
       "单机部署没有副本，一旦这台机器故障就直接丢数据或不可用，用可用性换运维简单不划算。"
     ],
     "optionExplanations_en": [
       "Hand-written scripts for migrating partitions are error-prone and don't scale well — exactly the burden managed services aim to remove.",
       "Managed services (Confluent Cloud, AWS MSK) take over most of the operational work — scaling, patching, failover — but interviews still expect you to understand the underlying partition and replication concepts.",
-      "Scaling always requires explicitly configuring partitions and brokers; there's no such thing as unlimited automatic scale-out.",
+      "Self-managed Kafka scaling needs explicit partition and broker configuration; there is no unlimited, configuration-free automatic scale-out.",
       "A single-node deployment has no replicas, so one machine failing means data loss or downtime — trading away fault tolerance isn't worth the ops savings."
     ]
   }

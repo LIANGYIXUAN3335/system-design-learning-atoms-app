@@ -58,10 +58,10 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "why-btree-fails",
-    "q": "在 latitude(纬度)一列上建 B-tree 索引,再查\"2 公里内的司机\",会取回什么?",
-    "q_en": "If you index only latitude with a B-tree and search for drivers within 2 km, what does it return?",
-    "scenario": "网约车派单要找乘客 2 公里内的司机,司机表 1000 万行,只在 latitude 上建了 B-tree 索引。",
-    "scenario_en": "Dispatch needs drivers within two kilometers of a rider, the driver table has ten million rows, and the only index is a B-tree on latitude.",
+    "q": "这个纬度索引本身最多能把候选行缩到什么范围?",
+    "q_en": "How far can the latitude index by itself narrow the candidate rows?",
+    "scenario": "网约车派单要找乘客 2 公里内的司机,司机表 1000 万行,只在 latitude 上建了 B-tree 索引。查询条件里有纬度范围,也有最终的距离过滤。",
+    "scenario_en": "Dispatch needs drivers within two kilometers of a rider, the driver table has ten million rows, and the only index is a B-tree on latitude. The query has a latitude range and a final distance filter.",
     "options": [
       "只返回真正 2 公里内的司机",
       "返回一个以查询点为圆心、2 公里为半径的圆",
@@ -71,8 +71,8 @@
     "answer": [
       2
     ],
-    "why": "单列索引只按一个维度排序:纬度索引给你一条水平条带,经度索引给你一条垂直条带,都包含海量与你毫无关系的点。",
-    "why_en": "Indexing latitude alone returns a horizontal strip of the earth, full of points that share latitude but can be thousands of kilometers away.",
+    "why": "单列索引只按一个维度排序:纬度索引只能把候选缩到「纬度在范围内」的一条水平条带,经度可能差几千公里;最终结果靠距离过滤也能算对,但要先把整条带的行都读出来逐行算。",
+    "why_en": "A single-column index sorts by one dimension only: the latitude index narrows candidates to a horizontal strip of matching latitude, whose longitudes can be continents apart. The distance filter can still produce the right final answer, but only after reading and checking every row in that strip.",
     "tags": [
       "proximity",
       "btree",
@@ -93,15 +93,15 @@
       }
     ],
     "optionExplanations": [
-      "这假设单列索引能直接算距离,但纬度索引只按一个维度排序,压根不知道经度差多远。",
+      "只缩到真正 2 公里内的司机,需要同时约束经纬度;纬度索引只能缩到纬度带,真正的 2 公里要靠后面的距离过滤。",
       "圆形结果需要同时约束经纬度两个维度,单靠纬度索引连经度信息都没用上,画不出圆。",
-      "纬度索引只按纬度排序,取回的是同纬度的一整条横带,里面混着经度差几千公里的点。",
+      "纬度索引只按纬度排序,能缩到的是同纬度的一整条横带,里面混着经度差几千公里的点,要逐行做距离过滤才能得出最终结果。",
       "只要纬度落在范围内就会命中大量行,不会是空结果,反而会取回一大批无关的点。"
     ],
     "optionExplanations_en": [
-      "This assumes a single-column index can compute distance, but a latitude index only sorts by latitude and knows nothing about longitude.",
+      "Narrowing to exactly the drivers within 2 km needs both latitude and longitude constrained; a latitude index only narrows to a latitude strip, and the real 2 km comes from the distance filter afterward.",
       "A circle needs both latitude and longitude constraints; an index on latitude alone never touches longitude at all.",
-      "A latitude-only index returns a horizontal band of matching latitude — full of points whose longitude can be worlds apart.",
+      "A latitude-only index sorts by latitude and narrows to a whole horizontal strip, full of points whose longitude can be worlds apart; you must distance-filter row by row to get the final result.",
       "Plenty of rows share that latitude range, so you get a flood of loosely related points, not an empty result."
     ]
   },
@@ -284,12 +284,12 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "candidate-set",
-    "q": "贯穿所有空间索引的统一思想是什么?",
-    "q_en": "What is the common idea behind every spatial index?",
-    "scenario": "邻近查询要在 50 毫秒内返回半径 2 公里内的司机,而任何索引的格子都是方的、半径是圆的。",
-    "scenario_en": "A proximity query must return drivers inside a two-kilometer radius in fifty milliseconds, but every index cell is a square while the radius is a circle.",
+    "q": "在这种格子 / 外包矩形式的空间索引里,统一的查询思路是什么?",
+    "q_en": "With cell- or bounding-box-based spatial indexes like this, what is the common query pattern?",
+    "scenario": "邻近查询要在 50 毫秒内返回半径 2 公里内的司机,而索引的格子 / 外包矩形都是方的、查询半径是圆的。",
+    "scenario_en": "A proximity query must return drivers inside a two-kilometer radius in fifty milliseconds, but the index's cells or bounding boxes are squares while the radius is a circle.",
     "options": [
-      "永远先缩到一小撮候选,再靠精确距离/几何计算收尾",
+      "先用索引便宜地缩到一小撮候选,再用精确距离 / 几何计算收尾",
       "能精确算出最近的 K 个点,不用后续计算",
       "只有全部数据能塞进内存才有效",
       "必须先配合一个机器学习模型预测出热点区域才能工作"
@@ -297,8 +297,8 @@
     "answer": [
       0
     ],
-    "why": "每种结构只是\"便宜地生成候选集\"的不同方式;真正的答案永远由候选集上的精确距离或几何数学算出——永远要后过滤。",
-    "why_en": "A spatial index never produces the final answer; it cheaply narrows everything down to a small candidate set that exact math then finishes.",
+    "why": "格子和外包矩形是方的、查询范围是圆的,索引命中的格子里一定混着圆外的点、边角也要多查一圈。所以这类结构都是「便宜地生成候选集」,真正的答案由候选集上的精确距离或几何计算算出。",
+    "why_en": "Cells and bounding boxes are squares while the query is a circle, so matched cells always include points outside the radius. These structures cheaply generate a candidate set, and exact distance or geometry math on that set produces the real answer.",
     "tags": [
       "proximity",
       "candidate-set",
@@ -306,7 +306,7 @@
     ],
     "diagram": "flowchart TD\n  A[\"Earth space\"] --> B[\"Coarse cells\"]\n  B --> C[\"Candidate cells\"]\n  C --> D[\"Exact distance filter\"]",
     "options_en": [
-      "It always narrows down to a small candidate set first, then finishes with exact distance or geometry math.",
+      "First use the index to cheaply narrow down to a small candidate set, then finish with exact distance or geometry math.",
       "It precisely returns the nearest K points with no follow-up math needed.",
       "It only works if the entire dataset fits in memory.",
       "It must be paired with a machine-learning model that predicts hot regions to work."
@@ -319,14 +319,14 @@
       }
     ],
     "optionExplanations": [
-      "每种空间结构做的都是同一件事:先便宜地缩小到一小撮候选,真正的答案永远靠精确计算收尾。",
-      "这把索引当成了终点,但没有哪种空间结构能直接给出精确排序结果,后面永远要跟一步精确计算。",
+      "格子 / 外包矩形这类结构做的都是同一件事:先便宜地缩小到一小撮候选,真正的答案靠候选集上的精确计算收尾。",
+      "这把索引当成了终点,但格子 / 外包矩形这类结构本身给不出精确的圆内结果,后面要跟一步精确计算。",
       "磁盘友好的结构(如 BKD、R-tree)正是为了让索引能超出内存工作,并不要求数据全常驻内存。",
       "候选集生成靠的是几何或哈希规则,是确定性算法,不需要引入机器学习模型。"
     ],
     "optionExplanations_en": [
-      "Every spatial structure does the same job: cheaply narrow to a small candidate set, then exact math finishes the real answer.",
-      "No spatial structure hands back a precisely ranked final answer by itself — exact math always has to run afterward.",
+      "Cell- and bounding-box-style structures all do the same job: cheaply narrow to a small candidate set, then exact math on that set finishes the real answer.",
+      "This treats the index as the finish line, but cell- or bounding-box-style structures cannot by themselves give an exact in-circle result; an exact computation step follows.",
       "Disk-friendly structures like BKD and R-trees exist precisely so the index can work beyond RAM, not the opposite.",
       "Candidate generation runs on deterministic geometry or hashing rules; it never needs a machine learning model."
     ]
@@ -535,19 +535,19 @@
     "sub": "quadtree",
     "q": "在四叉树里做邻近搜索,候选集由什么组成?",
     "q_en": "In a quadtree proximity search, what forms the candidate set?",
-    "scenario": "四叉树里查乘客 2 公里内的司机,而最近的那个司机可能就站在 cell 边界的另一侧。",
-    "scenario_en": "You are searching a quadtree for drivers within two kilometers of a rider, and the closest driver may be sitting just across a cell boundary.",
+    "scenario": "四叉树里查乘客 2 公里内的司机,最近的司机可能就站在 cell 边界另一侧;密集区的叶子可能比 2 公里小得多。",
+    "scenario_en": "In a quadtree, you look up drivers within 2 km of a rider. The nearest driver may sit just across a cell boundary, and leaves in dense areas can be much smaller than 2 km.",
     "options": [
       "取回整棵树全部叶子节点里存的所有点",
-      "走到匹配叶子,加邻居叶子点,精确算距离",
+      "下钻找出所有与 2 公里查询圆相交的叶子,取出它们的点,再精确算距离",
       "只取根节点里存的全部点",
       "随机抽样出一批点做候选"
     ],
     "answer": [
       1
     ],
-    "why": "沿途每层和 cell 中点比南北/东西,落入匹配象限直到叶子;因为最近的点可能就在边界另一侧,所以邻居叶子也要带上,最后精确距离定胜负。",
-    "why_en": "You walk down to the matching leaf, add points from neighboring leaves so boundary cases are not missed, then exact distance math picks the winners.",
+    "why": "候选集 = 所有和查询圆相交的叶子里的点。只看查询点所在的叶子不够:最近的点可能在边界另一侧,密集区的小叶子还可能跨好几层邻居。拿到所有相交叶子,最后用精确距离过滤。",
+    "why_en": "The candidate set is the points in every leaf whose cell intersects the query circle. The leaf containing the query point is not enough: the nearest point may sit across a boundary, and in dense areas the circle can span several rings of small leaves. Collect all intersecting leaves, then filter by exact distance.",
     "tags": [
       "quadtree",
       "search",
@@ -555,7 +555,7 @@
     ],
     "options_en": [
       "Fetch all the points stored in every leaf of the entire tree.",
-      "Walk to the matching leaf, add points from neighboring leaves, then compute exact distance.",
+      "Descend to every leaf whose cell intersects the 2 km query circle, collect their points, then compute exact distances.",
       "Only the points stored at the root node.",
       "A random sample of points used as candidates."
     ],
@@ -573,13 +573,13 @@
     ],
     "optionExplanations": [
       "取回全部叶子等于放弃了索引的意义,quadtree 的价值就在于只下钻到匹配的那几个叶子。",
-      "沿途逐层比较落入哪个象限,走到匹配叶子后还要带上邻居叶子的点,因为最近点可能就在边界那一侧。",
+      "沿途逐层比较落入哪个象限,再收集所有与查询圆相交的叶子里的点,因为最近点可能在边界另一侧,密集区的小叶子还会跨好几层邻居;最后用精确距离过滤。",
       "根节点通常不直接存数据点,真正的数据都下沉在叶子里,取根节点拿不到候选。",
       "随机抽样无法保证覆盖真正邻近的点,quadtree 靠的是确定性的空间下钻,不是抽样。"
     ],
     "optionExplanations_en": [
       "Fetching every leaf throws away the whole point of the index — quadtree's value is narrowing down to just the matching leaves.",
-      "You walk down comparing quadrants at each level, then add neighboring leaves too, since the true nearest point can sit just across a boundary.",
+      "Walk down comparing quadrants, then collect the points in every leaf that intersects the query circle: the nearest point may be across a boundary, and small leaves in dense areas can span several rings. Finally filter by exact distance.",
       "The root node usually doesn't hold data points directly; the actual points sink down into the leaves.",
       "Random sampling can't guarantee it catches the truly nearest points — a quadtree relies on deterministic descent, not sampling."
     ]
@@ -759,8 +759,8 @@
     "answer": [
       1
     ],
-    "why": "四叉树在内存里依然无处不在(地图瓦片、碰撞检测);只是当索引必须住在磁盘上、大过 RAM 时,才需要更结实的结构。",
-    "why_en": "Quadtrees remain everywhere in memory, from map tiles to game collision detection, just not as on-disk database indexes.",
+    "why": "四叉树今天的主场在内存:地图瓦片、碰撞检测。A 错在「默认」:主流数据库默认的磁盘空间索引一般是 R-tree 族(如 PostGIS GiST)、BKD(Lucene)或编码键加 B-tree(如 MongoDB S2)。磁盘四叉树也有(如 PostgreSQL SP-GiST quad_point_ops),但不是默认选择。",
+    "why_en": "Quadtrees mostly live in memory today: map tiles and collision detection. A is wrong because of the word \"default\". Mainstream databases usually default to the R-tree family (e.g., PostGIS GiST), BKD (Lucene), or encoded keys on a B-tree (e.g., MongoDB S2). On-disk quadtrees do exist, such as PostgreSQL SP-GiST's quad_point_ops, but they are not the default.",
     "tags": [
       "quadtree",
       "use-cases",
@@ -780,13 +780,13 @@
       }
     ],
     "optionExplanations": [
-      "主流数据库的磁盘空间索引早就换成了 BKD 或 R-tree,quadtree 的磁盘问题没被解决,不会被选用。",
+      "主流库默认的磁盘空间索引一般是 R-tree 族、BKD 或编码键 + B-tree;磁盘四叉树也有(如 PostgreSQL SP-GiST quad_point_ops),但不是默认选择。",
       "quadtree 在内存里依然活跃,比如地图瓦片渲染、游戏引擎的碰撞检测,这些场景不需要它上磁盘。",
       "它不只是教材案例,今天很多实际的内存场景仍在用,只是数据库索引这个战场让位给了别的结构。",
       "分布式对象存储管理的是文件而不是空间坐标,和quadtree解决的邻近搜索问题不是一回事。"
     ],
     "optionExplanations_en": [
-      "Mainstream databases moved on-disk spatial indexes to BKD or R-trees long ago; quadtree's disk problem was never solved for that role.",
+      "Mainstream databases usually default to the R-tree family, BKD, or encoded keys on a B-tree; on-disk quadtrees exist (e.g., PostgreSQL SP-GiST quad_point_ops) but are not the default.",
       "Quadtrees stay busy in memory — map tile rendering, game engine collision detection — places that never need it on disk.",
       "It's not just a textbook example; plenty of real in-memory workloads still use it, it just lost the on-disk database battle.",
       "Distributed object storage manages files, not spatial coordinates — a different problem from the proximity search quadtrees solve."
@@ -935,15 +935,15 @@
     "scenario_en": "You want the k-d tree idea to work on disk, where the data far exceeds RAM and writes are bulk imports that rarely change.",
     "options": [
       "把整棵树改造成一张哈希表",
-      "点打包进磁盘页大小的块,整树一次性批量构建",
+      "点打包进固定容量的磁盘块,每棵树一次性批量构建",
       "给每个节点单独加一层缓存",
       "改用 GPU 并行地把整棵树一次性构建出来"
     ],
     "answer": [
       1
     ],
-    "why": "BKD 用\"页大小的块\"解决磁盘问题,但代价是整树批量构建——本质上是 write-once,天生不爱频繁变动的数据。",
-    "why_en": "A BKD tree packs points into disk-page-sized blocks and is built once from a batch, making it disk friendly but essentially write-once.",
+    "why": "BKD 把点按块打包写盘,解决了指针结构的随机 I/O 问题。代价是每棵树一次性批量构建、构建后不可修改。要支持写入,就得维护多棵树再定期合并重建(Bkd-tree 论文用 logarithmic method,Lucene 靠 segment merge)。所以最适合本题「批量导入为主」的负载。",
+    "why_en": "BKD packs points into disk blocks, which fixes the random I/O problem of pointer-based trees. The cost is that each tree is bulk-built once and never modified afterward. To support writes, a system keeps several trees and periodically merges and rebuilds them (the logarithmic method in the Bkd-tree paper, segment merges in Lucene). That makes it a natural fit for this bulk-load-heavy workload.",
     "tags": [
       "bkd-tree",
       "disk",
@@ -951,7 +951,7 @@
     ],
     "options_en": [
       "Turn the whole tree into a hash table.",
-      "Pack points into disk-page-sized blocks and build the whole tree once in a batch.",
+      "Points are packed into fixed-capacity disk blocks, and each tree is bulk-built in one pass.",
       "Add a separate cache layer to every node.",
       "Rebuild the whole tree in parallel on a GPU in one pass."
     ],
@@ -971,13 +971,13 @@
     ],
     "optionExplanations": [
       "哈希表没有排序和范围查询能力,BKD 树要解决的恰恰是范围/邻近查询,改成哈希表方向就错了。",
-      "BKD 把点打包进磁盘页大小的块解决磁盘问题,但代价是整树要一次性批量构建,天生不爱频繁更新。",
+      "BKD 把点打包进固定容量的磁盘块解决磁盘问题,代价是每棵树要一次性批量构建、构建后不可修改;支持写入要靠多棵树加定期合并重建。",
       "加缓存能缓解重复查询,但不解决树本身怎样在磁盘上保持磁盘友好的结构问题。",
       "GPU 能加速批量计算,但 BKD 的关键创新在于块结构而不是构建时用了什么硬件。"
     ],
     "optionExplanations_en": [
       "A hash table has no ordering or range-query ability, but that's exactly what BKD needs to solve — wrong direction entirely.",
-      "BKD packs points into disk-page-sized blocks to fix the disk problem, at the cost of building the whole tree once in a batch — essentially write-once.",
+      "BKD packs points into fixed-capacity disk blocks to fix the disk problem, at the cost of bulk-building each tree once with no later edits; supporting writes takes multiple trees plus periodic merge and rebuild.",
       "A cache layer could speed up repeated queries, but it doesn't address how the tree itself stays disk-friendly.",
       "A GPU can speed up batch computation, but BKD's real innovation is the block layout, not which hardware built it."
     ]
@@ -1061,10 +1061,10 @@
     "sub": "r-tree",
     "q": "R-tree 在空间索引史上的地位是什么?",
     "q_en": "What was the R-tree's role in spatial-index history?",
-    "scenario": "1984 年数据库要索引县界多边形和高速公路线,索引又必须住在磁盘上、边写边查。",
-    "scenario_en": "In 1984 a database had to index county polygons and highway lines while keeping the index on disk and writable in place.",
+    "scenario": "1984 年,数据库要索引县界多边形和高速公路线。索引必须放在磁盘上,还要边写边查;当时已有的 K-D-B-tree 这类磁盘结构只索引点。",
+    "scenario_en": "In 1984 a database needs to index county polygons and highway lines. The index must live on disk and support writes interleaved with queries. Existing disk-based structures such as the K-D-B-tree index only points.",
     "options": [
-      "第一个为磁盘设计,同时解决形状与磁盘问题",
+      "像 B-tree 一样平衡、页式的磁盘树,能直接索引多边形/线等有面积的对象",
       "第一个只能活在内存里的空间索引",
       "其实它是 geohash 的直接前身",
       "只被用来做图形渲染,并不做索引"
@@ -1072,15 +1072,15 @@
     "answer": [
       0
     ],
-    "why": "之前的树都假设数据是点、且都是指针结构;R-tree 从数据库需求出发,同时搞定了多边形/线等形状和磁盘友好两大难题。",
-    "why_en": "The R-tree was the first spatial index built from the ground up for on-disk databases, solving both the shapes problem and the disk problem.",
+    "why": "R-tree 之前已有点数据的磁盘结构(K-D-B-tree、grid file)。R-tree 的贡献是在一棵 B-tree 式的平衡页式树里,用最小外接矩形索引多边形、线这类有面积的对象,并支持动态插入和删除。所以它成了空间数据库索引的基础。",
+    "why_en": "Disk-based structures for points already existed before the R-tree (K-D-B-tree, grid file). The R-tree's contribution was to index extended objects such as polygons and lines, via minimum bounding rectangles, inside a balanced, paged, B-tree-like tree that supports dynamic inserts and deletes. That made it the foundation of spatial database indexing.",
     "tags": [
       "r-tree",
       "history",
       "spatial-tree"
     ],
     "options_en": [
-      "The first index designed from scratch for disk, solving both the shape problem and the disk problem.",
+      "A balanced, paged, B-tree-like disk tree that can directly index extended objects such as polygons and lines.",
       "The first spatial index that only ever lived in memory.",
       "It was actually the direct predecessor of geohash.",
       "It was used only for rendering graphics, not indexing."
@@ -1094,14 +1094,14 @@
       }
     ],
     "optionExplanations": [
-      "早期空间树只当数据是点、结构全靠指针跳转;R-tree 换了个出发点,把形状表达和磁盘友好一起做进设计里。",
-      "恰恰相反,R-tree 的历史意义正在于它是第一个为磁盘数据库设计的空间索引,不是只活在内存里。",
+      "之前已有点数据的磁盘结构(K-D-B-tree、grid file);R-tree 的贡献是用最小外接矩形在平衡页式树里直接索引多边形、线等有面积的对象,并支持动态插入删除。",
+      "恰恰相反,R-tree 是面向磁盘数据库的页式结构,不是只活在内存里。",
       "geohash 走的是完全不同的编码键路线,和 R-tree 的矩形嵌套树结构没有继承关系。",
       "R-tree 是数据库索引结构,渲染只是空间数据的一种应用场景,不是它被发明的目的。"
     ],
     "optionExplanations_en": [
-      "Earlier trees assumed point data and pure pointer structures; R-tree was built from database needs, solving both shapes and disk-friendliness at once.",
-      "The opposite is true — R-tree's historic significance is being the first spatial index designed for on-disk databases, not memory-only use.",
+      "Disk structures for points already existed (K-D-B-tree, grid file); the R-tree's contribution is indexing extended objects like polygons and lines via bounding rectangles in a balanced paged tree with dynamic inserts and deletes.",
+      "The opposite: the R-tree is a paged structure built for disk-based databases, not a memory-only one.",
       "Geohash follows the completely separate encoded-key route; it has no lineage connection to R-tree's nested-rectangle structure.",
       "R-tree is a database indexing structure; rendering is just one application of spatial data, not why it was invented."
     ]
@@ -1112,21 +1112,21 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "r-tree",
-    "q": "为什么县界、高速公路这类几何对象放不进四叉树?",
-    "q_en": "Why can't county boundaries or highways fit cleanly into a quadtree?",
+    "q": "为什么县界、高速公路这类几何对象放不进现有的点四叉树?",
+    "q_en": "Why can't county borders and highways fit into the existing point quadtree?",
     "scenario": "现有索引是点四叉树,新需求要索引县界、高速公路和星巴克的配送区多边形。",
     "scenario_en": "Your existing index is a point quadtree, and now you must index county boundaries, highways, and Starbucks delivery polygons.",
     "options": [
       "它们对坐标精度的要求太高了",
       "四叉树的实现只支持整数坐标",
       "这些几何对象体积太大,内存里根本放不下",
-      "四叉树假设一物一坐标,县却是跨格的多边形"
+      "点四叉树假设一物一坐标,县却是跨格的多边形"
     ],
     "answer": [
       3
     ],
-    "why": "点索引的世界观是\"万物有一个坐标\";而公路是线、县是多边形,连星巴克都有个多边形配送区——形状数据需要能包住形状的索引。",
-    "why_en": "A county sprawls across many cells rather than sitting at one spot, so point-oriented indexes like quadtrees cannot meaningfully hold it.",
+    "why": "点索引的世界观是「每个对象有一个坐标」。公路是线、县是多边形,会横跨很多格,点四叉树没法决定存进哪个节点。有些变体(MX-CIF、PMR)可把形状切进多个格子,但更通用的做法是换成能包住形状的索引(R-tree)。",
+    "why_en": "A point index assumes every object has one coordinate. Highways are lines and counties are polygons that span many cells, so a point quadtree cannot decide which node should hold them. Some quadtree variants (MX-CIF, PMR) can store shapes by splitting them across cells, but the usual move is an index that bounds shapes, such as an R-tree.",
     "tags": [
       "r-tree",
       "shapes",
@@ -1136,7 +1136,7 @@
       "Their coordinates need too much decimal precision.",
       "A quadtree's implementation only supports integer coordinates.",
       "These geometry objects are simply too large to fit in memory.",
-      "A quadtree assumes one coordinate per object, but a county spans many cells."
+      "A point quadtree assumes one coordinate per object, but a county is a polygon spanning many cells."
     ],
     "termDefinitions": [
       {
@@ -1149,13 +1149,13 @@
       "精度和这道题的核心矛盾无关,不管坐标多精确,一个多边形照样会跨越多个格子。",
       "quadtree 对坐标类型没有限制,浮点坐标一样能用,问题不出在数字类型上。",
       "多边形对象本身不大,真正的麻烦是它跨越多个格子后该存进哪个节点没法确定。",
-      "quadtree 默认每个对象只有一个坐标,而县界、公路这类形状会横跨很多格,压根塞不进这个假设。"
+      "点四叉树默认每个对象只有一个坐标,而县界、公路这类形状会横跨很多格,压根塞不进这个假设。"
     ],
     "optionExplanations_en": [
       "Precision isn't the real conflict here — however precise the coordinates are, a polygon still spans multiple cells.",
       "A quadtree places no restriction on coordinate type; floats work fine, so this isn't a numeric-type issue.",
       "The polygon object itself isn't large; the real trouble is deciding which single cell it belongs to once it spans several.",
-      "A quadtree assumes one coordinate per object, but shapes like county borders or highways sprawl across many cells, breaking that assumption."
+      "A point quadtree assumes one coordinate per object, but shapes like county borders or highways sprawl across many cells, breaking that assumption."
     ]
   },
   {
@@ -1347,8 +1347,8 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "r-tree",
-    "q": "实践中大家真正部署的 R-tree 变体是什么?",
-    "q_en": "Which R-tree variant is commonly deployed in practice?",
+    "q": "要压低重叠,最常被采用的 R-tree 变体是什么?",
+    "q_en": "Which R-tree variant is most commonly adopted to reduce overlap?",
     "scenario": "要在生产上部署 R-tree 索引一批高度重叠的配送区多边形,得挑一个能压低重叠的变体。",
     "scenario_en": "You are deploying an R-tree in production over heavily overlapping delivery polygons and need the variant that keeps overlap down.",
     "options": [
@@ -1360,8 +1360,8 @@
     "answer": [
       0
     ],
-    "why": "重叠是 R-tree 的命门,而 R*-tree 的插入启发式正是为压低重叠而生,因此成为几乎所有现代 R-tree 实现的基础。",
-    "why_en": "The R-star-tree refinement keeps overlap low through smarter insertion heuristics and underlies almost every modern R-tree implementation.",
+    "why": "重叠是 R-tree 的命门。R*-tree(Beckmann et al. 1990)插入时用更好的启发式压低重叠,还加了强制重插,是最常被采用的变体,如 SQLite 的 R*Tree 模块、Boost.Geometry 的 rstar。也有系统用自己的分裂算法,如 PostgreSQL GiST。",
+    "why_en": "Overlap is the R-tree's weak spot. The R*-tree (Beckmann et al. 1990) uses better insertion heuristics plus forced reinsertion to reduce overlap, and it is the most commonly adopted variant, for example in SQLite's R*Tree module and Boost.Geometry's rstar. Some systems use their own split algorithms instead, such as PostgreSQL GiST.",
     "tags": [
       "r-tree",
       "r-star-tree",
@@ -1388,15 +1388,15 @@
       }
     ],
     "optionExplanations": [
-      "重叠正是 R-tree 的命门,R*-tree 用更聪明的插入启发式主动压低重叠,因此成了几乎所有现代实现的基础。",
-      "原始 1984 版没有针对重叠做优化,插入顺序不同重叠程度差异很大,生产系统不会直接用它。",
-      "这个变体名字听着专业,但实际生产系统里几乎不出现,是个干扰项。",
+      "重叠是 R-tree 的命门,R*-tree 用更好的插入启发式加强制重插主动压低重叠,是最常被采用的变体(如 SQLite R*Tree、Boost.Geometry rstar)。",
+      "原始版的 quadratic/linear split 对重叠控制较弱,高度重叠的数据上通常不是首选。",
+      "R2-tree 不是常见的标准 R-tree 变体,常见的是 R*-tree、R+-tree、Hilbert R-tree。",
       "R-tree 靠的是嵌套矩形而不是哈希,改成哈希表会丢掉范围/邻近查询所需要的空间排序结构。"
     ],
     "optionExplanations_en": [
-      "Overlap is R-tree's Achilles heel, and the R-star-tree's smarter insertion heuristics actively keep it low — that's why it underlies almost every modern implementation.",
-      "The original 1984 version has no overlap optimization, so overlap varies wildly with insertion order — production systems don't use it as-is.",
-      "This variant name sounds plausible but almost never shows up in real production systems — it's a distractor.",
+      "Overlap is the R-tree's weak spot; the R*-tree reduces it with better insertion heuristics plus forced reinsertion and is the most commonly adopted variant (e.g., SQLite R*Tree, Boost.Geometry rstar).",
+      "The original quadratic/linear split controls overlap weakly and is usually not the first choice on heavily overlapping data.",
+      "R2-tree is not a common standard R-tree variant; the common ones are the R*-tree, R+-tree and Hilbert R-tree.",
       "R-tree relies on nested rectangles, not hashing; rewriting it as a hash table would lose the spatial ordering range queries need."
     ]
   },
@@ -1747,8 +1747,8 @@
     "sub": "geohash",
     "q": "为什么说 geohash 字符串和整数只是同一份 bits 的两种读法?",
     "q_en": "Why are a geohash string and integer just two readings of the same bits?",
-    "scenario": "Redis 用 52 位整数存位置,业务侧代码却按 geohash 字符串写,担心两套编码对不上。",
-    "scenario_en": "Redis stores positions as fifty-two-bit integers while your application code speaks geohash strings, and you worry the two encodings disagree.",
+    "scenario": "系统里同一种 geohash 编码(同样的经纬度范围、同样的 bit 交错顺序,精度 12 字符 = 60 bit),一部分代码存成 base32 字符串,另一部分存成 64 位整数列,团队担心两边对不上。",
+    "scenario_en": "The system uses one geohash encoding (same lat/lon ranges, same bit interleaving, 12 characters = 60 bits). Some code stores it as a base32 string and some as a 64-bit integer column. The team worries the two won't match.",
     "options": [
       "每字符 5 bit,换个读法就是整数",
       "字符串其实是整数经过压缩编码后的产物",
@@ -1758,8 +1758,8 @@
     "answer": [
       0
     ],
-    "why": "geohash 底层就是 bits:32 进制字符只是给人看的分组。字符串或整数只是编码外衣,任何一种排序索引都能吃。",
-    "why_en": "Each geohash character is exactly five bits, so the same bits read as an integer or text behave identically in any sorted index.",
+    "why": "geohash 底层就是一串交错的 bit。base32 字符只是每 5 bit 一组给人看,整数是同一串 bit 的另一种读法。编码定义相同、bit 数是 5 的倍数时,两者可无损互转。注意:Redis 内部 52 位 geohash 用不同的纬度范围,GEOHASH 命令会重新编码成标准字符串,不能直接按 bit 对拼。",
+    "why_en": "A geohash is a sequence of interleaved bits. The base32 string groups every 5 bits into one readable character; the integer is another reading of the same bits. As long as both sides use the same encoding and the bit count is a multiple of 5, the two convert losslessly and work with any sorted index. Caveat: Redis's internal 52-bit geohash uses a different latitude range, and its GEOHASH command re-encodes to a standard string, so you cannot map those bits directly.",
     "tags": [
       "geohash",
       "bits",
@@ -2012,7 +2012,7 @@
     "scenario": "两个司机相距 1 米却分处 geohash 格子两侧,而派单要求半径内一个都不能漏。",
     "scenario_en": "Two drivers stand one meter apart but on opposite sides of a geohash cell boundary, and dispatch cannot afford to miss anyone inside the radius.",
     "options": [
-      "1 米之隔却跨格子边界,前缀完全不同,会被漏掉",
+      "1 米之隔却跨格子边界,共享前缀可能很短甚至为零,会被漏掉",
       "格子太大导致内存直接爆掉",
       "字符串比较的速度太慢了",
       "geohash 根本表达不了南半球的经纬度坐标"
@@ -2020,8 +2020,8 @@
     "answer": [
       0
     ],
-    "why": "空间被硬性切格,边界两侧的近邻前缀毫无共同点——这是所有编码键方案的固有代价,必须用邻居格子查询来补救。",
-    "why_en": "Two points a meter apart can straddle a cell boundary and get completely different prefixes, so a naive prefix scan misses the closest driver.",
+    "why": "空间被硬性切成格子,边界两侧的近邻可能只有很短的公共前缀;在赤道、本初子午线这类顶层边界上甚至一个字符都不共享。朴素前缀查询会漏掉它们,这是编码键方案的固有代价,要靠查邻居格子来补。",
+    "why_en": "Space is cut into hard cells, so neighbors on opposite sides of a boundary may share only a short prefix, and at top-level boundaries like the equator or prime meridian, no prefix at all. A naive prefix query misses them. This is inherent to encoded-key schemes and is fixed by also querying neighbor cells.",
     "tags": [
       "geohash",
       "boundary",
@@ -2052,7 +2052,7 @@
       ]
     },
     "options_en": [
-      "Two points a meter apart can straddle a cell boundary and get totally different prefixes, so a naive scan misses them.",
+      "Only 1 m apart but across a cell boundary, so their shared prefix can be short or even empty, and the driver gets missed.",
       "Cells are so large that memory usage explodes.",
       "String comparisons are simply too slow.",
       "Geohash cannot represent southern-hemisphere coordinates at all."
@@ -2065,13 +2065,13 @@
       }
     ],
     "optionExplanations": [
-      "空间被硬性切成格子,边界两侧即便只隔1米,前缀也可能毫无共同点,朴素前缀查询会直接漏掉最近的司机。",
+      "空间被硬性切成格子,边界两侧即便只隔1米,公共前缀也可能很短甚至为零,朴素前缀查询会直接漏掉最近的司机。",
       "geohash 存的只是一个短字符串或整数,占用内存很小,不存在因格子大小导致内存爆掉的问题。",
       "字符串前缀比较是数据库最擅长的B-tree操作之一,速度不是geohash的瓶颈所在。",
       "geohash 对南北半球一视同仁,坐标编码不区分半球,能正常表达任何纬度。"
     ],
     "optionExplanations_en": [
-      "Space is cut into rigid cells, so two points a meter apart across a boundary can get unrelated prefixes, missing the closest driver.",
+      "Space is cut into rigid cells, so two points a meter apart across a boundary may share only a short prefix or none, and a naive prefix query misses the closest driver.",
       "Geohash stores just a short string or integer — tiny memory footprint, so cell size isn't a memory-blowup risk.",
       "Prefix comparison is one of the things B-tree indexes do best; speed isn't where geohash struggles.",
       "Geohash treats both hemispheres the same way — coordinate encoding doesn't care which hemisphere a latitude falls in."
@@ -2085,8 +2085,8 @@
     "sub": "geohash",
     "q": "geohash 边界问题的标准解法是什么?",
     "q_en": "What is the standard fix for geohash boundary problems?",
-    "scenario": "geohash 邻近查询既不能漏掉格子边界另一侧 1 米外的司机,也不允许退化成全表扫描。",
-    "scenario_en": "Your geohash proximity query can neither miss a driver one meter across a cell boundary nor fall back to a full table scan.",
+    "scenario": "geohash 邻近查询的精度已经按半径选好(格子边长不小于查询半径),既不能漏掉格子边界另一侧 1 米外的司机,也不允许退化成全表扫描。",
+    "scenario_en": "The geohash precision is already chosen from the search radius (cell side ≥ radius). The proximity query must not miss a driver 1 m across a cell boundary, and must not fall back to a full table scan.",
     "options": [
       "直接把格子的边长加大一倍",
       "改用位数更长的 geohash 前缀",
@@ -2096,8 +2096,8 @@
     "answer": [
       2
     ],
-    "why": "\"查九宫格+后过滤\"是几乎所有生产编码键索引都在跳的舞:环形查询保召回,精确距离保准确。",
-    "why_en": "The standard fix queries the cell plus its eight neighbors as one unit and then post-filters candidates by exact distance.",
+    "why": "先按半径选精度,让格子边长 ≥ 半径;再查查询点所在格和 8 个邻居,3×3 九宫格就能完整盖住查询圆。环形查询保召回,精确距离过滤保准确。",
+    "why_en": "First choose a precision whose cell side is at least the radius. Then querying the home cell plus its 8 neighbors (a 3×3 block) fully covers the query circle. The ring query guarantees recall, and exact-distance filtering guarantees precision.",
     "tags": [
       "geohash",
       "3x3",
@@ -2180,9 +2180,9 @@
     "sub": "geohash",
     "q": "补全编码键查询的通用模式:",
     "q_en": "Complete the common encoded-key query pattern:",
-    "text": "编码键索引的通用舞步:查自己所在格子加 {{8}} 个邻居(共 {{9}} 格),再按{{精确距离}}后过滤——几乎所有生产系统都是这套\"query-the-ring-and-post-filter\"。",
-    "why": "环形查询解决边界漏报,后过滤解决\"在窗口内但太远\"的误报;两步合起来才是完整的邻近查询。",
-    "why_en": "Almost every production encoded-key index queries the ring of nine cells and then post-filters by exact distance.",
+    "text": "编码键索引的常见舞步:先按查询半径选精度(格子边长 ≥ 半径),再查自己所在格子加 {{8}} 个邻居(共 {{9}} 格),最后按{{精确距离}}后过滤,也就是 \"query-the-ring-and-post-filter\"。",
+    "why": "格子边长 ≥ 半径时,九宫格能完整盖住查询圆,环形查询解决边界漏报;后过滤解决\"在窗口内但太远\"的误报。两步合起来才是完整的邻近查询。",
+    "why_en": "When the cell side is at least the radius, the 3×3 ring fully covers the query circle, so the ring query fixes boundary misses. Post-filtering removes points that are inside the window but too far away. Together they form a complete proximity query.",
     "tags": [
       "geohash",
       "pattern",
@@ -2249,8 +2249,8 @@
     "sub": "s2",
     "q": "Google S2 是怎么解决球面问题的?",
     "q_en": "How does Google S2 solve the sphere problem?",
-    "scenario": "全球地图服务要求格子面积处处一致,还要索引跨 180 度经线的多边形。",
-    "scenario_en": "A global mapping service needs cells of roughly equal area everywhere and must index polygons that cross the 180-degree meridian.",
+    "scenario": "全球地图服务要求格子面积在全球各处大致可比(不能像经纬网格那样,到两极缩到几乎为零),还要索引跨越 180 度经线的多边形。",
+    "scenario_en": "A global map service needs cell areas that are roughly comparable everywhere (not shrinking toward zero at the poles like a lat/lon grid), and it must index polygons crossing the 180° meridian.",
     "options": [
       "只是把 geohash 的字符数加长来提高精度",
       "限定只在赤道附近区域使用",
@@ -2260,8 +2260,8 @@
     "answer": [
       3
     ],
-    "why": "立方体投影让 S2 真正理解球面:格子面积各处一致,还能处理跨越 180 度经线(antimeridian)这类平面网格会算错的情况;MongoDB 的 2dsphere 底层就是它。",
-    "why_en": "S2 wraps the globe in a cube and projects onto its six faces, giving roughly equal-area cells anywhere on earth with hierarchical sixty-four-bit IDs.",
+    "why": "S2 把地球包进立方体,投影到 6 个面再递归细分,同一层级 cell 面积大致可比(最大/最小约 2 倍以内,远好于经纬网格),还能正确处理跨 180 度经线(antimeridian)。MongoDB 的 2dsphere 底层用的就是 S2。",
+    "why_en": "S2 projects the sphere onto the six faces of a cube and subdivides recursively, so cells at the same level have roughly comparable areas (within about 2x max/min, far better than a lat/lon grid). It also handles shapes crossing the antimeridian correctly. MongoDB's 2dsphere index is built on S2.",
     "tags": [
       "s2",
       "sphere",
@@ -2366,19 +2366,19 @@
     "sub": "s2",
     "q": "在\"格子面积一致性\"这个维度上,geohash 与 S2 的区别是?",
     "q_en": "On cell-area consistency, how do geohash and S2 differ?",
-    "scenario": "全球密度热力图要按格子统计,格子面积不一致会让高纬度城市的数据被系统性高估。",
-    "scenario_en": "A global heat map aggregates counts per cell, and unequal cell areas would systematically distort high-latitude cities.",
+    "scenario": "全球密度热力图要按格子计数，再把计数当成「单位面积密度」比较；如果不同纬度的格子面积差很多，高纬度和赤道附近的城市就没法直接比。",
+    "scenario_en": "A global heat map counts points per cell and compares those counts as if they were per-area density; if cell area differs a lot by latitude, high-latitude and equatorial cities can't be compared directly.",
     "options": [
       "两者的格子面积其实在全球都一致",
-      "geohash 面积随纬度变,S2 靠立方投影恒定",
+      "geohash 面积随纬度明显缩小，S2 靠立方投影让同级格子面积大致相近",
       "反而是 S2 的格子面积随纬度变化得比 geohash 更大",
-      "两者其实都保证不了格子的形状"
+      "两者的格子面积差异都只取决于经度，与纬度无关"
     ],
     "answer": [
       1
     ],
-    "why": "单城市尺度 geohash 足够好;要做全球一致的分析/索引,面积恒定的 S2(或 H3)才是正确工具。",
-    "why_en": "Geohash cell area varies wildly with latitude while S2 keeps cells roughly the same size anywhere on earth.",
+    "why": "geohash 是把经纬度等分成矩形，同样「几度乘几度」的格子在高纬度地面面积按 cos(纬度) 缩小，靠近极地会差很多倍；S2 先把球面投影到立方体六个面再切格子，同一 level 的面积差距被压到约 2 倍以内——大致相近，不是严格恒定。所以全球一致的密度分析更适合 S2（或 H3）。",
+    "why_en": "Geohash splits latitude/longitude into equal-degree rectangles, so a cell's ground area shrinks with cos(latitude) and differs by many times near the poles; S2 projects the sphere onto a cube's six faces before subdividing, which keeps same-level cell areas within roughly a 2x range — roughly similar, not exactly constant. That makes S2 (or H3) the better fit for globally consistent density analysis.",
     "tags": [
       "geohash",
       "s2",
@@ -2386,9 +2386,9 @@
     ],
     "options_en": [
       "Both have globally consistent cell area.",
-      "Geohash area swings with latitude; S2's cube projection keeps area roughly constant.",
+      "Geohash cell area shrinks sharply with latitude; S2's cube projection keeps same-level cells roughly similar in area.",
       "It's actually S2 whose cell area swings more with latitude than geohash.",
-      "Neither one guarantees a consistent cell shape."
+      "For both, cell-area differences depend only on longitude, not latitude."
     ],
     "tradeoff": "geohash 平面网格(简单,面积随纬度变化) vs S2 球面立方体投影(面积一致,实现更复杂)",
     "termDefinitions": [
@@ -2425,15 +2425,15 @@
     },
     "optionExplanations": [
       "只有S2能做到面积大致恒定,geohash的平面网格在赤道和两极面积差异巨大,并不一致。",
-      "geohash用平面经纬网格,同一级cell在赤道是胖方块、往两极越切越窄;S2靠立方体投影,面积全球大致相等。",
+      "geohash 用平面经纬网格，同一级 cell 在赤道是胖方块、往两极越切越窄；S2 靠立方体投影，同级 cell 面积全球大致相近（约 2 倍以内），不是严格恒定。",
       "反了,正是S2的立方投影专门用来抵消纬度带来的面积失衡,geohash才是那个随纬度剧烈变化的方案。",
-      "S2虽然形状不是完美方形,但面积能保持一致;这不是\"都保证不了\",而是两者取舍不同。"
+      "面积差异主要随纬度变化，不是只看经度；而且 S2 的面积大致相近，两者在「面积」这个维度上并不一样。"
     ],
     "optionExplanations_en": [
       "Only S2 keeps area roughly consistent — geohash's flat grid varies wildly in area between the equator and the poles.",
-      "Geohash uses a flat grid, so the same-level cell is a fat square at the equator and a thin sliver near the poles; S2's cube projection keeps area roughly constant.",
+      "Geohash uses a flat lat/long grid, so the same-level cell is a fat square at the equator and a thin sliver near the poles; S2's cube projection keeps same-level cell area roughly similar (within about 2x), not strictly constant.",
       "That's backwards — S2's cube projection exists specifically to cancel out latitude-driven area imbalance; geohash swings wildly.",
-      "S2's cells aren't perfectly square, but their area does stay consistent — the two just trade off differently."
+      "Area differences mainly track latitude, not just longitude, and S2's cell area stays roughly similar — the two differ on the area dimension."
     ]
   },
   {
@@ -2509,8 +2509,8 @@
     "answer": [
       3
     ],
-    "why": "geohash/S2 的邻域=一段连续的键区间;H3 的邻域=一组算出来的确切 ID 列表(WHERE cell IN (...))。两种范式,查询写法不同但都很便宜。",
-    "why_en": "Geohash and S2 lay cells along a space-filling curve for range scans, while H3 instead computes the exact ring of neighbor cell IDs with cheap grid math.",
+    "why": "geohash/S2 的键沿空间填充曲线排列，邻域可以表示成几段键区间（geohash 九宫格最多 9 段、S2 cover 是一组 cell 区间），用若干个 BETWEEN 扫描；H3 的 ID 顺序不保留地图邻近，邻域靠网格运算直接算出一组确切 ID，用 WHERE cell IN (...) 查。两种范式写法不同，但都很便宜。",
+    "why_en": "Geohash and S2 keys lie on a space-filling curve, so a neighborhood becomes a handful of key ranges (up to 9 for a geohash 3x3 sweep, a set of cell ranges for an S2 covering) scanned with BETWEEN; H3 IDs don't preserve map proximity in sort order, so you compute the exact ring of neighbor IDs with grid math and query WHERE cell IN (...). Different query shapes, both cheap.",
     "tags": [
       "h3",
       "geohash",
@@ -2592,8 +2592,8 @@
     "sub": "h3",
     "scenario": "设计网约车调度:司机位置每几秒更新一次,量级巨大;乘客打开 App 要立刻看到附近司机;不想安装任何空间扩展。",
     "scenario_en": "You are designing ride-hailing dispatch: driver locations update every few seconds at huge scale, riders need nearby drivers immediately, and you do not want a spatial extension.",
-    "q": "标准的 H3 调度模式是什么?",
-    "q_en": "What is the standard H3 dispatch pattern?",
+    "q": "常见的 H3 调度做法是什么?",
+    "q_en": "What is the common H3 dispatch pattern?",
     "options": [
       "每一次查询都对全部司机重新算距离",
       "snap 进 H3 cell,查邻居环做 IN 查询再过滤",
@@ -2603,8 +2603,8 @@
     "answer": [
       1
     ],
-    "why": "司机移动=一次整数更新,候选生成=一次普通 IN 查询,全程无空间扩展——位置更新洪流下这正是想要的形状,可扩展到每秒百万级写。",
-    "why_en": "Snap each driver to a small H3 cell, query the rider's cell plus surrounding rings with a plain integer IN lookup, and post-filter by exact distance.",
+    "why": "司机移动 = 改一个整数列，候选生成 = 一次普通的 IN 查询，全程不需要空间扩展；最后按精确距离过滤掉圈外的人。写入吞吐取决于底层存储怎么分片、怎么配置，但每次更新本身足够轻，适合位置更新洪流。",
+    "why_en": "A driver move is a single integer-column update, candidate generation is a plain IN lookup, and no spatial extension is needed; an exact-distance post-filter removes drivers outside the radius. Actual write throughput depends on how the underlying store is sharded and configured, but each update is cheap enough for a flood of location writes.",
     "whenOtherWins": "需求若是配送区包含、路径相交这类几何问题,编码格子无能为力,要回到 PostGIS/R-tree。",
     "tags": [
       "h3",
@@ -2905,15 +2905,15 @@
     "q_en": "What is the choice and its cost?",
     "options": [
       "编码格子(落普通索引):写廉价,但基本只懂点",
-      "PostGIS 加 GiST 空间扩展",
+      "PostGIS 扩展 + GiST 空间索引",
       "每个城市各建一棵内存 k-d 树",
       "全表扫描,外面再额外套一层缓存来扛住读请求"
     ],
     "answer": [
       0
     ],
-    "why": "移动点要的是廉价写+快速候选生成,编码格子恰好只卖这两样;失去的多边形能力本来也用不上。",
-    "why_en": "Encoded cells turn each driver move into a single integer update and scale to millions of writes per second, at the price of point-only data and ring queries.",
+    "why": "移动点要的是廉价写 + 快速候选生成，编码格子恰好只卖这两样：每次移动只改一个整数列、走普通 B-tree 索引；失去的多边形能力本来也用不上。吞吐上限取决于存储和分片，但单次更新足够轻。",
+    "why_en": "Moving points need cheap writes and fast candidate generation, which is exactly what encoded cells sell: each move updates one integer column on an ordinary B-tree index, and the lost polygon support isn't needed anyway. The throughput ceiling depends on the store and sharding, but each update is cheap.",
     "whenOtherWins": "一旦需要\"配送区是否包含该地址\"这类几何判断,就必须引入空间树;两者可以并存、各管一摊。",
     "tags": [
       "encoded-keys",
@@ -2922,7 +2922,7 @@
     ],
     "options_en": [
       "Encoded cells on an ordinary index: cheap writes, but mostly limited to points.",
-      "PostGIS with the GiST spatial extension.",
+      "The PostGIS extension with a GiST spatial index.",
       "A separate in-memory k-d tree for every city.",
       "A full table scan with a cache layered on top to absorb reads."
     ],
@@ -3002,15 +3002,16 @@
     "topic": "system-design",
     "sub": "selection",
     "q": "补全邻近搜索的选型口诀:",
-    "q_en": "Complete the proximity-search selection rule:",
-    "text": "形状用{{空间树}},移动点用{{编码 cell}},并且永远、永远{{后过滤}}。",
-    "why": "这是整篇的三句话总结:索引只交付候选集,把\"查每一行\"缩小成\"查一小片地图\",最终答案由精确距离/几何计算收尾。",
-    "why_en": "Spatial trees for shapes, encoded cells for moving points, and always finish with a post-filter.",
+    "q_en": "Complete the proximity-search selection rule (answer with category names):",
+    "text": "补全邻近搜索的选型口诀（用类别名回答）：形状用{{空间树}}，移动点用{{编码 cell}}，凡是按精确距离/半径返回结果的查询，最后都要{{后过滤}}。",
+    "why": "索引只交付候选集，把「查每一行」缩小成「查一小片地图」；只要结果是按精确距离/半径定义的，最后就要用真实距离算一遍剔掉窗口里的圈外点。格子级聚合（比如热力图）本来就按格子算，不需要这一步。",
+    "why_en": "The index only delivers a candidate set, shrinking \"check every row\" to \"check a small patch of map\"; whenever the result is defined by exact distance or radius, you finish by computing real distance to drop candidates outside it. Cell-level aggregation such as a heat map is defined per cell and doesn't need this step.",
     "tags": [
       "selection",
       "mnemonic",
       "post-filter"
-    ]
+    ],
+    "text_en": "Complete the proximity-search selection rule (answer with category names): spatial trees for shapes, encoded cells for moving points, and any query that returns results by exact distance or radius must finish with a post-filter."
   },
   {
     "id": "sd-deep-dives-proximity-search-050",
@@ -3211,13 +3212,13 @@
       "两者的更新成本其实是完全相同的",
       "反而是 PostGIS 那边处理一次位置更新更便宜",
       "两者都需要做一次整体重建索引",
-      "R-tree 要重平衡矩形,H3 只改一个整数列"
+      "R-tree 可能要扩大/分裂外包矩形，H3 只改一个整数列、走普通 B-tree 索引"
     ],
     "answer": [
       3
     ],
-    "why": "写成本的差距是两条路线分野的核心:几何树为形状语义付出昂贵更新,编码键为廉价更新放弃形状语义。",
-    "why_en": "An R-tree update may rebalance bounding rectangles while an H3 update is just a single integer change on an ordinary index.",
+    "why": "两条路线都要写一条新版本的行，差别在索引：GiST/R-tree 插入新位置时可能扩大外包矩形、分裂节点，成本更高；H3 只是一个整数键的 B-tree 插入，而且司机没跨格时 cell 不变，索引甚至不用动。几何树为形状语义付出更贵的更新，编码键为廉价更新放弃形状语义。",
+    "why_en": "Both routes write a new row version; the difference is the index. A GiST/R-tree insert may enlarge bounding rectangles or split nodes, which costs more, while H3 is a plain B-tree insert on an integer key — and if the driver hasn't crossed a cell boundary, the cell is unchanged and the index needn't change at all. Geometry trees pay for shape semantics with pricier updates; encoded keys give up shape semantics for cheap ones.",
     "tags": [
       "postgis",
       "h3",
@@ -3227,7 +3228,7 @@
       "Both approaches cost the same to update.",
       "It's actually PostGIS that handles a single position update more cheaply.",
       "Both require a full index rebuild on every update.",
-      "An R-tree must rebalance rectangles; H3 just changes one integer column."
+      "An R-tree may have to enlarge or split bounding rectangles; H3 just changes one integer column on an ordinary B-tree index."
     ],
     "tradeoff": "R-tree(几何重平衡,写贵) vs H3 on B-tree(单列整数更新,写廉价)",
     "termDefinitions": [
@@ -3278,13 +3279,13 @@
       "两者的更新成本差距正是两条路线分野的核心,并不相同——一个要重排几何结构,一个只是改数字。",
       "反了,PostGIS靠R-tree重平衡矩形,更新成本明显高于H3只改一个整数列的方式。",
       "整体重建是BKD这类write-once结构的特征,普通的R-tree和H3-on-B-tree都支持增量更新,不必整体重建。",
-      "R-tree每次位置变化都可能触发矩形的重新嵌套;H3把位置snap进一个cell后,更新就是普通索引上改一个整数列。"
+      "R-tree 位置变化时可能要扩大外包矩形、分裂节点；H3 把位置 snap 进一个 cell 后，更新就是普通索引上改一个整数列，而且没跨格时索引甚至不用动。"
     ],
     "optionExplanations_en": [
       "Their update costs are exactly the divide between the two routes, not the same — one reshuffles geometry, the other just changes a number.",
       "That's backwards — PostGIS relies on R-tree rectangle rebalancing, which costs noticeably more than a single integer update.",
       "Full rebuilds are a BKD-style write-once trait; ordinary R-tree and H3-on-B-tree both support incremental updates.",
-      "Every position change can trigger R-tree to re-nest its rectangles; an H3 update is just changing one integer on an ordinary index."
+      "An R-tree location change may enlarge bounding rectangles or split nodes; with H3 the position snaps into a cell and the update is just changing one integer on an ordinary index, which needn't change at all if the cell is the same."
     ]
   },
   {
@@ -3395,19 +3396,19 @@
     "sub": "spatial-trees",
     "q": "为什么说\"四叉树 → k-d/BKD 树 → R-tree\"是一条修复链而不是三个孤立结构?",
     "q_en": "Why is \"quadtree -> k-d/BKD tree -> R-tree\" a repair chain instead of three isolated structures?",
-    "scenario": "面试里要用两分钟讲清空间树家族,不想让面试官觉得你在背三套互不相干的结构。",
-    "scenario_en": "You have two minutes in an interview to explain the spatial tree family without sounding like you memorized three unrelated structures.",
+    "scenario": "面试里要用两分钟讲清空间树家族，不想让面试官觉得你在背三套互不相干的结构；你打算按「每个结构补了哪块短板」来讲，而不是按发明年份。",
+    "scenario_en": "You have two minutes in an interview to explain the spatial tree family without sounding like you memorized three unrelated structures; you plan to organize it by which weakness each structure fixes, not by invention date.",
     "options": [
       "三棵树其实是同一个作者发明的",
-      "每代修前代的短板:均衡→磁盘→形状与更新",
+      "按短板递进：均衡 → 磁盘 → 形状与更新",
       "三棵树其实共享同一份代码",
-      "后者只是把前一代的性能又优化了一版而已"
+      "后者只是把前一个的性能又优化了一版而已"
     ],
     "answer": [
       1
     ],
-    "why": "把三棵树当成递进的修复链来记:每代补上一块短板(均衡性→磁盘→形状/更新),理解了\"为什么演进\"自然记住\"各自适合什么\"。",
-    "why_en": "Each tree fixes a problem the previous one could not, reading as a clean chain from quadtree intuition to disk-friendly BKD to the shape-aware balanced R-tree.",
+    "why": "把三者按「各补一块短板」排成学习链：四叉树直觉好但不均衡 → k-d/BKD 按中位数切、以块为单位上磁盘 → R-tree 用外包矩形装形状、支持动态增删。这是记忆顺序，不是发明年份（R-tree 1984 年就有，BKD 是 2003 年）。",
+    "why_en": "Treat them as a learning chain where each fixes one weakness: the quadtree is intuitive but unbalanced → k-d/BKD split at medians and go to disk in blocks → the R-tree wraps shapes in bounding rectangles and supports dynamic inserts and deletes. This is a memory order, not a timeline (the R-tree dates from 1984, BKD from 2003).",
     "tags": [
       "spatial-tree",
       "evolution",
@@ -3415,7 +3416,7 @@
     ],
     "options_en": [
       "All three trees were actually invented by the same author.",
-      "Each generation fixes the last one's weak point: balance, then disk, then shape and mutability.",
+      "Ordered by the weakness each fixes: balance, then disk, then shape and mutability.",
       "All three trees literally share the same codebase.",
       "Each later tree is just a performance-tuned version of the previous one."
     ],
@@ -3452,15 +3453,15 @@
     ],
     "optionExplanations": [
       "三棵树是不同时代、不同团队独立发展出来的结构,发明人是否相同和它们之间的演进逻辑没有关系。",
-      "四叉树先解决了均衡划分,k-d/BKD树接力解决磁盘友好,R-tree再补上形状语义和更新能力,每代都在修上一代的短板。",
+      "按短板递进来讲：四叉树先解决直觉上的空间划分，k-d/BKD 树补上均衡和磁盘友好，R-tree 再补上形状语义和动态更新。这是学习顺序，不是发明年份。",
       "三者是完全不同的数据结构实现,节点形状、分裂规则都不一样,不存在共享代码这回事。",
-      "它们不是同一结构的调参优化,而是从根本上换了组织方式来解决前代解决不了的新问题。"
+      "它们不是同一结构的调参优化，而是从根本上换了组织方式来解决别的结构解决不了的问题。"
     ],
     "optionExplanations_en": [
       "These three trees emerged independently across different eras and teams — whether the same person invented them says nothing about their logic.",
-      "Quadtree solves balanced partitioning first, k-d/BKD trees pick up disk-friendliness next, and R-tree adds shape semantics and mutability.",
+      "Organize by weakness: the quadtree gives the intuitive spatial split, k-d/BKD adds balance and disk friendliness, and the R-tree adds shape semantics and dynamic updates. It is a learning order, not an invention timeline.",
       "The three are fundamentally different data structures with different node shapes and split rules — there's no shared codebase.",
-      "They aren't tuning knobs on the same structure — each changes the underlying organization to solve what the last one couldn't."
+      "They are not tuned versions of one structure but fundamentally different organizations that solve problems the others can't."
     ]
   },
   {
@@ -3526,7 +3527,7 @@
     "scenario": "司机位置以 H3 的街区级 cell 存在一个整数列上;现在要出城市级司机密度热力图,不想为粗粒度另建索引或回原始经纬度重算。",
     "scenario_en": "Driver positions live in one integer column as block-level H3 cells, and now you need a city-level density heat map without building a coarse index or recomputing from raw lat/long.",
     "options": [
-      "对 64 位 cell ID 截断低位取父 cell 再上卷",
+      "用位运算从 64 位 cell ID 直接算出父 cell（如 H3 的 cellToParent），再按父 cell 上卷",
       "回到每个司机的原始经纬度,按粗分辨率把整张表重新算一遍 cell",
       "cell ID 是不透明数值,只能再单独建一套粗粒度索引",
       "先查一张细 cell 到粗 cell 的外部映射表再聚合"
@@ -3534,8 +3535,8 @@
     "answer": [
       0
     ],
-    "why": "64 位 cell ID 是层级编码,父 cell 就是它的高位前缀——截掉低位比特即得,同一列数据零重算就能上卷到粗分辨率。代价:只能落在固定的层级边界上,给不了任意半径的自定义聚合。",
-    "why_en": "A parent S2/H3 cell is the high-order prefix of the 64-bit child ID, so truncating the low bits rolls the same column up to a coarser resolution without recomputing anything.",
+    "why": "H3/S2 的 64 位 ID 是层级编码：父 cell 可以用常数时间位运算直接算出（H3 改 resolution 字段、把更细层的 digit 置成 unused；S2 清掉低位并重设末尾标记位），同一列数据零重算就能 GROUP BY 父 cell 上卷。代价：只能落在固定层级边界上；而且 H3 六边形子格不能完美铺满父格，边界处的上卷是近似的，S2 则是严格嵌套。",
+    "why_en": "H3 and S2 IDs are hierarchical 64-bit encodings: the parent is computed with constant-time bit operations (H3 rewrites the resolution field and marks finer digits as unused; S2 clears low bits and resets the trailing marker bit), so you can GROUP BY the parent over the same column with no recomputation. The cost: you only get fixed hierarchy levels, and H3's hexagonal children don't tile their parent exactly, so H3 roll-ups are approximate at edges, while S2 nests exactly.",
     "tags": [
       "h3",
       "s2",
@@ -3543,7 +3544,7 @@
       "aggregation"
     ],
     "options_en": [
-      "Truncate the 64-bit cell ID's low bits to the parent cell, then roll up.",
+      "Derive the parent cell from the 64-bit cell ID with bit operations (e.g. H3's cellToParent), then roll up.",
       "Go back to each driver's raw lat/long and recompute the whole table at the coarse resolution.",
       "Cell IDs are opaque values, so you must build a separate coarse-resolution index.",
       "Look up an external fine-cell-to-coarse-cell mapping table first."
@@ -3568,16 +3569,16 @@
       }
     ],
     "optionExplanations": [
-      "父 cell 已写在子 ID 的高位里,对整数做位移/掩码即得,GROUP BY 父 ID 直接出粗粒度密度,零重算。",
-      "重算能得到正确结果,但整表回到经纬度再算一遍纯属浪费,层级 ID 已经把父 cell 编在高位里了。",
-      "cell ID 不是随机不透明值,而是有层级结构的编码,截断即得父 cell,不需要另建粗粒度索引。",
-      "父子关系直接编码在比特里,截断就能拿到,不需要任何外部映射表来做细粗转换。"
+      "cell ID 是层级编码，父 cell 用常数时间位运算就能直接算出（H3 的 cellToParent 等），GROUP BY 父 ID 直接出粗粒度密度，零重算。",
+      "重算能得到正确结果，但整表回到经纬度再算一遍纯属浪费，层级 ID 本身就能算出父 cell。",
+      "cell ID 不是随机不透明值，而是有层级结构的编码，位运算即得父 cell，不需要另建粗粒度索引。",
+      "父子关系直接编码在比特里，位运算就能拿到，不需要任何外部映射表来做细粗转换。"
     ],
     "optionExplanations_en": [
-      "The parent lives in the child ID's high bits, so a bit-shift/mask gets it and GROUP BY parent yields coarse density with zero recompute.",
-      "Recomputing gives the right answer, but scanning the whole table back to lat/long is wasted work — the parent is already in the high bits.",
-      "Cell IDs aren't random opaque values; they're hierarchical, so truncating yields the parent cell without a separate coarse index.",
-      "The parent-child relationship is encoded right in the bits, so truncation gets it — no external mapping table needed."
+      "A cell ID is a hierarchical encoding, so the parent is derived with constant-time bit operations (e.g. H3's cellToParent), and GROUP BY parent yields coarse density with zero recompute.",
+      "Recomputing gives the right answer, but scanning the whole table back to lat/long is wasted work — the hierarchical ID already yields the parent cell.",
+      "Cell IDs aren't random opaque values; they're hierarchical encodings, so bit operations yield the parent cell without a separate coarse index.",
+      "The parent-child relationship is encoded in the bits, so bit operations get it — no external mapping table needed."
     ]
   },
   {

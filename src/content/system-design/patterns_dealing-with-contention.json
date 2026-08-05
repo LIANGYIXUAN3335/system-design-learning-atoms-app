@@ -538,19 +538,19 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "compare-and-set",
-    "scenario": "订票平台横跨 Postgres、DynamoDB、Redis 和对外 HTTP API，想用同一套并发原语守住每处写入。",
-    "q": "下面这些不同存储上的机制，哪些本质上都在做 compare-and-set？（多选）",
+    "scenario": "订票平台横跨 Postgres、DynamoDB、Redis 和对外 HTTP API，想用同一种思路守住每处写入：只有当前状态仍符合预期时才写（条件写，compare-and-set 语义）。",
+    "q": "下面哪些机制都在表达这种「条件写」语义？（多选）",
     "options": [
       "SQL 里写在 UPDATE 上的 WHERE predicate",
       "DynamoDB 的 ConditionExpression",
-      "Redis 的 SET 命令加 NX 选项",
-      "HTTP 请求头里的 If-Match"
+      "Redis 的 SET 命令加 NX 选项（期望状态 = key 不存在）",
+      "HTTP 请求头 If-Match（由服务端在执行前校验 ETag，并负责让校验与写入原子化）"
     ],
     "options_en": [
       "A WHERE predicate attached to a SQL UPDATE statement.",
       "DynamoDB's ConditionExpression on a write.",
-      "Redis's SET command with the NX option.",
-      "The If-Match header on an HTTP request."
+      "Redis's SET command with the NX option (expected state = key absent).",
+      "The If-Match header on an HTTP request (the server checks the ETag before applying the method and is responsible for making check-and-write atomic)."
     ],
     "answer": [
       0,
@@ -558,8 +558,8 @@
       2,
       3
     ],
-    "why": "它们都表达“只有当前状态仍符合预期时才写”。具体存储不同，核心动作都是把检查和写入绑定成一步。",
-    "why_en": "These mechanisms all write only if the current state still matches the expected condition, whatever store they live in.",
+    "why": "四者都把「检查当前状态」和「写入」绑定：SQL 的 WHERE 和 DynamoDB 的 ConditionExpression 在存储内部原子执行；Redis SET NX 是期望值为「不存在」的特例，要比较任意旧值需 Lua 或 WATCH/MULTI；HTTP If-Match 是协议层的前置条件，RFC 9110 要求服务端在执行前评估它，但检查与写入的原子性要靠服务端底层再落到 A/B 这类条件写上。",
+    "why_en": "All four bind \"check current state\" to \"write\": SQL WHERE and DynamoDB ConditionExpression execute atomically inside the store; Redis SET NX is the special case where the expected state is \"absent\" (comparing an arbitrary old value needs Lua or WATCH/MULTI); HTTP If-Match is a protocol-level precondition that RFC 9110 requires the server to evaluate before applying the method, but atomic check-and-write still depends on the server mapping it to a conditional write like A or B.",
     "tags": [
       "compare-and-set",
       "conditional-write",
@@ -624,20 +624,20 @@
         ]
       ]
     },
-    "q_en": "Which mechanisms across different stores are all doing compare-and-set?",
+    "q_en": "Which of these mechanisms all express this conditional-write semantics? (Select all that apply)",
     "optionExplanations": [
       "SQL 的 WHERE 谓词把检查条件写进同一条 UPDATE，只有那行还符合条件才会被改动。",
       "DynamoDB 的 ConditionExpression 在写 item 前核对属性期望值，不满足就整个写入失败。",
-      "Redis SET 加 NX 只在 key 还不存在时才成功创建，天然就是一次 compare-and-set。",
-      "HTTP 的 If-Match 带上资源当前 ETag，服务端发现版本不匹配就拒绝这次写请求。"
+      "Redis SET 加 NX 只在 key 还不存在时才成功创建，是期望状态为「不存在」的条件写特例；比较任意旧值要靠 Lua 或 WATCH/MULTI。",
+      "HTTP 的 If-Match 带上资源当前 ETag，服务端在执行前校验，不匹配就拒绝这次写请求；检查与写入的原子性由服务端实现负责。"
     ],
     "optionExplanations_en": [
       "SQL's WHERE predicate folds the check into the same UPDATE, so only a row that still matches actually gets changed.",
       "DynamoDB's ConditionExpression checks the expected attribute value before writing the item, failing the whole write if it doesn't hold.",
-      "Redis SET with NX only succeeds in creating the key if it doesn't already exist—a compare-and-set by construction.",
-      "HTTP's If-Match sends the resource's current ETag, and the server rejects the write if the version no longer matches."
+      "Redis SET with NX only succeeds in creating the key if it doesn't already exist - the conditional-write special case where the expected state is \"absent\"; comparing an arbitrary old value needs Lua or WATCH/MULTI.",
+      "HTTP's If-Match sends the resource's current ETag, and the server checks it before applying the method and rejects the write on mismatch; making check-and-write atomic is the server implementation's job."
     ],
-    "scenario_en": "A booking platform spans Postgres, DynamoDB, Redis, and a public HTTP API, and you want one concurrency primitive guarding every write.",
+    "scenario_en": "A booking platform spans Postgres, DynamoDB, Redis, and a public HTTP API, and you want one idea guarding every write: write only if the current state still matches what you expect (a conditional write, i.e. compare-and-set semantics).",
     "codeSample": "-- SQL: write only if the row is still free\nUPDATE seats SET status='sold' WHERE id='A15' AND status='free';\n-- Redis: NX = set only when the key does not exist yet\nSET lock:A15 owner123 NX EX 600\n-- DynamoDB: the same check expressed as a ConditionExpression\n--   condition-expression \"#status = :free\"\n-- HTTP: If-Match rejects the write once the ETag has moved\n--   If-Match: \"v7\"",
     "lang": "sql"
   },
@@ -840,16 +840,16 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "lock-duration",
-    "scenario": "你在座位锁事务中要调用外部 payment API，支付调用可能耗时几秒甚至更久。",
+    "scenario": "你在座位锁事务中要调用外部 payment API，支付调用可能耗时几秒甚至更久；同一座位的其他买家会在这把行锁上排队。",
     "q": "在持有数据库锁期间处理这次支付调用，更好的设计原则是什么？",
     "options": [
-      "绝不在持有数据库锁时做慢 I/O；支付调用放在拿锁前或释放锁之后",
+      "不要在持有数据库锁时做慢 I/O：先用短事务把座位标为 held（带过期时间）并提交，在锁外调用支付，再用短事务确认",
       "把这把锁一直持有 10 分钟，直到用户离开支付页面为止",
       "为了简单，直接把整张 seats 表都锁住再调用支付接口，等支付返回再放开",
       "让所有排队等待同一座位的买家都同步等待同一次支付调用返回"
     ],
     "options_en": [
-      "Never do slow I/O while holding a database lock; call the payment API before acquiring it or after releasing it.",
+      "Don't do slow I/O while holding a database lock: mark the seat held (with expiry) in a short transaction and commit, call payment outside the lock, then confirm in another short transaction.",
       "Hold that lock continuously for 10 minutes until the user leaves the payment page.",
       "For simplicity, lock the entire seats table before calling the payment endpoint, releasing it only after payment returns.",
       "Make every buyer waiting on the same seat block synchronously on that one payment call's response."
@@ -857,8 +857,8 @@
     "answer": [
       0
     ],
-    "why": "慢 I/O 会把所有等待同一资源的事务拖住。数据库锁应该覆盖最小行集和最短时间，而不是外部调用的整个耗时。",
-    "why_en": "Do not hold database locks across slow I/O, because every waiter inherits that external call's latency.",
+    "why": "持锁期间的慢 I/O 会把所有等同一行的事务一起拖住，锁时长变成外部调用的延迟。数据库锁应只覆盖最小行集和最短时间；需要跨支付「占座」时，用业务状态 held + 过期时间来表达，而不是一直握着行锁。这是设计建议而非数据库强制，但在本题等待者排队的前提下是最佳做法。",
+    "why_en": "Slow I/O inside a lock drags every transaction waiting on that row along with it, turning lock duration into the external call's latency. Database locks should cover the fewest rows for the shortest time; to \"hold\" a seat across payment, model it as a business state (held + expiry) rather than keeping the row lock. This is a design recommendation, not something the database enforces, but given queued waiters it is the best choice here.",
     "tradeoff": "把慢 I/O 挪出锁的范围 vs 图省事把支付调用塞进事务里",
     "whenOtherWins": "如果需要跨支付等待保留座位，应该用带 TTL 的 reservation/distributed lock，而不是事务锁。",
     "tags": [
@@ -885,15 +885,15 @@
       }
     ],
     "q_en": "What is the better design principle while a database lock would cover a payment call?",
-    "scenario_en": "Your seat-locking transaction would call an external payment API, and that payment call may take several seconds or longer.",
+    "scenario_en": "Your seat-locking transaction would call an external payment API that may take several seconds or longer, and other buyers of the same seat queue on that row lock.",
     "optionExplanations": [
-      "支付调用挪到拿锁前或释放锁之后，锁只覆盖真正需要原子保护的那一小步。",
+      "先用短事务把座位标为 held（带过期时间）并提交，支付调用放在锁外，再用短事务确认，锁只覆盖真正需要原子保护的那一小步。",
       "把锁攥着等用户填完支付，队列里所有人都得跟着这十分钟一起等。",
       "为了一次支付调用锁住整张表，代价远超这条规则本身需要的保护范围。",
       "让所有排队的买家一起卡在同一次支付调用上，等于把一个人的慢请求变成全场的慢请求。"
     ],
     "optionExplanations_en": [
-      "Move the payment call before acquiring the lock or after releasing it, so the lock only covers the small step that truly needs atomic protection.",
+      "Mark the seat held (with expiry) in a short transaction and commit, call payment outside the lock, then confirm in another short transaction, so the lock only covers the small step that truly needs atomic protection.",
       "Holding the lock while the user fills out payment makes every other waiter inherit that ten minutes.",
       "Locking the whole table just to make one payment call costs far more than this rule actually needs.",
       "Making every queued buyer block on one payment call turns one person's slow request into everyone's slow request."
@@ -1231,18 +1231,18 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "occ-version",
-    "scenario": "你要给订单行加 OCC 版本检查，候选是 version 列、updated_at，或直接复用某个业务字段。",
+    "scenario": "你要给一行共享记录加 OCC 版本检查（例如订单行，或拍卖的 item 行），候选是专用 version 列、updated_at，或直接复用某个业务字段。",
     "q": "哪些值可以安全地当作 OCC 的版本检查依据？（多选）",
     "options": [
       "专门维护的、只递增的 version column",
       "每次写都会真的变化、且分辨率足够精细的 updated_at 时间戳",
-      "只会单调上升、不会倒退的业务值，比如拍卖里的当前最高出价",
+      "这一行的每次写都会让它严格增加、永不回落的业务值，比如拍卖 item 行里只靠出价更新的当前最高出价",
       "可能出现 A->B->A 这种往返变化、且没有额外保护的普通业务值"
     ],
     "options_en": [
       "A dedicated, always-incrementing version column.",
       "An updated_at timestamp that genuinely changes on every write and has fine enough resolution.",
-      "A monotonically increasing business value that never moves backward, like the current high bid in an auction.",
+      "A business value that strictly increases on every write to that row and never moves back, like the current high bid on an auction item row that is only updated by bids.",
       "An ordinary business value that can go A to B and back to A, with no extra protection."
     ],
     "answer": [
@@ -1250,8 +1250,8 @@
       1,
       2
     ],
-    "why": "版本值必须能可靠反映中间写入。专用递增列最安全；普通业务值可能出现 ABA，不能随便复用。",
-    "why_en": "A version token must change reliably on every write, and a dedicated incrementing column is the safest default choice.",
+    "why": "版本值必须在这一行的每次写入时都可靠地变成一个新值。专用递增列最安全；updated_at 和单调业务值只有在「每次写都会让它变化、且不会回到旧值」时才安全；会往返变化的普通业务值有 ABA 风险，不能直接复用。",
+    "why_en": "A version token must reliably take a new value on every write to the row. A dedicated incrementing column is the safest default; updated_at or a monotonic business value is safe only if every write changes it and it never returns to an old value; an ordinary value that can round-trip suffers from ABA.",
     "tags": [
       "occ",
       "version",
@@ -1270,24 +1270,24 @@
       },
       {
         "term": "monotonic high bid",
-        "meaning": "拍卖里当前最高出价，只会单调上升，可以直接当作乐观并发的版本值使用。",
-        "meaningEn": "The high bid in an auction only moves upward, so it can double as the version value for optimistic concurrency."
+        "meaning": "拍卖里当前最高出价，若这一行的每次写都会让它严格上升，就可以直接当作乐观并发的版本值使用。",
+        "meaningEn": "The high bid in an auction can double as the version value for optimistic concurrency, provided every write to that row strictly raises it."
       }
     ],
     "q_en": "Which values are safe to use as the version check for OCC?",
     "optionExplanations": [
       "专用递增列每次写都加一，永远不会绕回旧值，是最安全的默认选择。",
       "只要分辨率够细、且每次写真的会变，updated_at 也能当版本用；分辨率太粗就会漏掉中间写。",
-      "拍卖最高价只会单调上升，本身就能当版本比较，不用额外加列。",
+      "只有当这一行的每次写都会让最高价严格上升（比如 item 行只靠出价更新）时，它才能当版本比较；若其他字段也能单独被改，就会漏掉这些写。",
       "普通业务值可能从 A 变到 B 又变回 A，只做相等比较会误以为中间什么都没发生。"
     ],
     "optionExplanations_en": [
       "A dedicated incrementing column always moves forward and never loops back to an old value—the safest default.",
       "updated_at can serve as a version too, as long as it genuinely changes on every write and its resolution is fine enough; coarse resolution can miss writes.",
-      "An auction's high bid only moves upward, so it can double as the version without adding a column.",
+      "The high bid works as a version only if every write to that row strictly raises it (e.g. the item row is updated only by bids); if other fields can be changed on their own, those writes would slip past the check.",
       "An ordinary business value can go from A to B and back to A, and an equality check alone would miss that round trip."
     ],
-    "scenario_en": "You are adding an OCC version check to an order row, choosing between a version column, updated_at, or reusing some business field."
+    "scenario_en": "You are adding an OCC version check to a shared row (for example an order row, or an auction item row), choosing between a dedicated version column, updated_at, or reusing some business field."
   },
   {
     "id": "sd-patterns-dealing-with-contention-021",
@@ -1688,25 +1688,25 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "serializable-cost",
-    "scenario": "订票库并发很高，团队想直接把所有写路径设成一个隔离级别，一劳永逸地解决竞态。",
+    "scenario": "订票库（关系数据库）并发很高，团队想直接把所有写路径设成 SERIALIZABLE，一劳永逸地解决竞态；而大部分写路径其实只需要单行的 conditional write、行锁或 OCC 就能保护。",
     "q": "为什么不应该默认把所有高并发路径都设成 SERIALIZABLE？",
     "options": [
-      "它需要数据库额外跟踪读写依赖，冲突时 abort/retry，是几种机制里成本最高的",
+      "它要求数据库额外检测事务间的冲突（依赖跟踪或加更多锁），冲突时 abort/重试，开销通常高于单行 conditional write、行锁或 OCC",
       "因为 SERIALIZABLE 提供的隔离保证实际上比 READ COMMITTED 更弱",
       "因为 SERIALIZABLE 这种隔离级别只能用在 Redis 这类内存存储上",
       "因为它天生就没有能力处理任何跨行的业务约束"
     ],
     "options_en": [
-      "It makes the database track extra read/write dependencies and abort/retry on conflict, making it the most expensive option here.",
+      "It makes the database detect extra cross-transaction conflicts (dependency tracking or more locking) and abort/retry on conflict, which usually costs more than a single-row conditional write, row lock, or OCC.",
       "Because SERIALIZABLE actually provides weaker guarantees than READ COMMITTED.",
-      "Because SERIALIZABLE as an isolation level only applies to in-memory stores like Redis.",
+      "Because SERIALIZABLE only applies to in-memory stores like Redis.",
       "Because it is inherently incapable of handling any cross-row business invariant."
     ],
     "answer": [
       0
     ],
-    "why": "SERIALIZABLE 能覆盖更复杂的冲突，但会增加开销和重试。能用 conditional write、锁或 OCC 解决时，通常这些更便宜。",
-    "why_en": "Serializable isolation is powerful but expensive because it tracks dependencies and may abort work that has to be redone.",
+    "why": "SERIALIZABLE 能覆盖跨行冲突，但数据库要额外检测冲突：PostgreSQL 用 SSI 跟踪读写依赖，MySQL InnoDB 则把普通读变成共享锁读；冲突时都会中止一笔让应用重试。只需要单行保护的路径，用 conditional write、行锁或 OCC 通常更便宜。",
+    "why_en": "SERIALIZABLE covers cross-row conflicts, but the database must detect extra conflicts: PostgreSQL tracks read/write dependencies with SSI, while MySQL InnoDB turns plain reads into shared-lock reads; either way a conflict aborts one transaction for the app to retry. Paths that only need single-row protection are usually cheaper with a conditional write, row lock, or OCC.",
     "tags": [
       "serializable",
       "cost",
@@ -1732,18 +1732,18 @@
     ],
     "q_en": "Why should you not default every high-concurrency path to SERIALIZABLE?",
     "optionExplanations": [
-      "它要多跟踪读写依赖，冲突时 abort 再重试，这几种机制里它的开销最高。",
+      "它要额外检测事务间冲突（PostgreSQL 跟踪读写依赖，MySQL 用共享锁读），冲突时中止一笔再重试，开销通常高于单行 conditional write、行锁或 OCC。",
       "SERIALIZABLE 是最强隔离级别，比 READ COMMITTED 更严格，这个说法反了。",
       "它是关系数据库的隔离级别概念，和 Redis 这种内存存储完全不是一回事。",
       "它恰恰是唯一能可靠捕获跨行约束的隔离级别，说它做不到是错的。"
     ],
     "optionExplanations_en": [
-      "It has to track extra read/write dependencies and abort/retry on conflict, making it the priciest option here.",
+      "It must detect extra cross-transaction conflicts (PostgreSQL tracks read/write dependencies, MySQL uses shared-lock reads) and abort/retry on conflict, which usually costs more than a single-row conditional write, row lock, or OCC.",
       "SERIALIZABLE is the strongest isolation level, stricter than READ COMMITTED—this claim has it backwards.",
       "It's a relational-database isolation-level concept, entirely different from an in-memory store like Redis.",
       "It's actually the one isolation level that reliably catches cross-row invariants; claiming it can't is wrong."
     ],
-    "scenario_en": "The ticketing database runs hot, and the team wants to set every write path to one isolation level and be done with races."
+    "scenario_en": "The ticketing database (a relational DB) runs hot, and the team wants to set every write path to SERIALIZABLE and be done with races, even though most of those paths only need a single-row conditional write, row lock, or OCC."
   },
   {
     "id": "sd-patterns-dealing-with-contention-027",
@@ -2301,8 +2301,8 @@
       1,
       2
     ],
-    "why": "这些都是同一并发控制思想在不同系统里的不同形态。Serializable 主要是关系数据库的能力，多数 NoSQL/分布式存储并不提供同等语义。",
-    "why_en": "The same concurrency patterns appear under different names across SQL, DynamoDB, Redis, HTTP, and etcd.",
+    "why": "前三项是同一种并发控制思想在不同系统里的形态。D 错在「大多数 NoSQL 默认完整支持」：很多 NoSQL 的单条写默认不带跨条目的 serializable 事务，需要显式使用事务 API（如 DynamoDB TransactWriteItems）或自己把冲突物化到一条记录上。",
+    "why_en": "The first three are the same concurrency ideas in different systems. D is wrong because most NoSQL stores do not give cross-item serializable transactions by default; you must use an explicit transaction API (e.g., DynamoDB TransactWriteItems) or materialize the conflict onto one item.",
     "tags": [
       "technique-map",
       "patterns",
@@ -2387,7 +2387,7 @@
         [
           "Serializable",
           "ISOLATION LEVEL",
-          "无原生支持",
+          "TransactWriteItems（事务间 serializable，有条数限制）",
           "需自行物化冲突"
         ]
       ]
@@ -2397,13 +2397,13 @@
       "同一个 conditional write 思路，在 SQL 里是 WHERE，在 DynamoDB 里是 ConditionExpression，在 Redis 里是 SET NX。",
       "OCC 的版本比较在关系库里是一列 version，在 HTTP 里是 ETag/If-Match，在 etcd 里是 revision 号。",
       "悲观锁在数据库里是 SELECT FOR UPDATE，在单进程里就是普通的 mutex，思路是同一个先占后决策。",
-      "SERIALIZABLE 主要是关系数据库提供的能力，多数 NoSQL 并不默认给出这么强的隔离保证。"
+      "D 错在「默认完整支持」：很多 NoSQL 默认不提供跨条目的 serializable 事务，需显式使用事务 API（如 DynamoDB TransactWriteItems）或自己物化冲突。"
     ],
     "optionExplanations_en": [
       "The same conditional-write idea shows up as WHERE in SQL, ConditionExpression in DynamoDB, and SET NX in Redis.",
       "OCC's version comparison shows up as a version column in a relational database, an ETag/If-Match over HTTP, and a revision number in etcd.",
       "Pessimistic locking is SELECT FOR UPDATE in a database and an ordinary mutex within one process—same lock-then-decide idea either way.",
-      "SERIALIZABLE is mostly a relational-database capability; most NoSQL stores don't offer that strong an isolation guarantee by default."
+      "D is wrong on \"fully support by default\": many NoSQL stores give no cross-item serializable transactions by default, so you need an explicit transaction API (e.g. DynamoDB TransactWriteItems) or must materialize the conflict yourself."
     ],
     "scenario_en": "Your booking architecture has a relational database and NoSQL stores side by side, and you need to know which concurrency semantics carry across."
   },
@@ -3444,8 +3444,8 @@
     "answer": [
       0
     ],
-    "why": "弱隔离级别只拦得住同一行上的并发写，而 write skew 的冲突在读集合上；只有 SERIALIZABLE 会跟踪读写依赖并中止一笔，代价是重试。",
-    "why_en": "Weaker isolation only catches conflicts on a shared row, but write skew lives in what the two transactions read, so only SERIALIZABLE spots it, at the cost of aborts and retries.",
+    "why": "REPEATABLE READ 下普通读走快照，只拦得住同一行上的并发写；write skew 的冲突在读集合上，所以两笔都能提交。要拦住它，可以升到 SERIALIZABLE（MySQL 靠共享锁读，冲突会 deadlock 中止一笔；PostgreSQL 靠 SSI 中止一笔），或者显式 SELECT ... FOR UPDATE 锁住读到的行。",
+    "why_en": "Under REPEATABLE READ, plain reads use a snapshot and only same-row write conflicts are caught; write skew lives in the read set, so both commit. To stop it, use SERIALIZABLE (MySQL turns reads into shared-lock reads, so one transaction deadlocks and aborts; PostgreSQL aborts one via SSI) or explicitly SELECT ... FOR UPDATE the rows you read.",
     "tags": [
       "isolation-levels",
       "write-skew",
@@ -3476,13 +3476,13 @@
     "q_en": "Under REPEATABLE READ, how do these two transactions end up with nobody on call?",
     "optionExplanations": [
       "Alice 看到 Bob 在岗、Bob 看到 Alice 在岗，两人写的是不同的行，数据库没有可拦的冲突点。",
-      "这是 SERIALIZABLE 才有的读写依赖跟踪，REPEATABLE READ 不做这件事。",
+      "REPEATABLE READ 不会因为两笔事务读了重叠的行集合就中止任何一笔。",
       "它保证的是同一事务内重复读结果一致，不会为此锁住整张表。",
       "两人改的是各自那一行，不存在覆盖关系，问题恰恰是两次写都成功了。"
     ],
     "optionExplanations_en": [
       "Alice sees Bob active and Bob sees Alice active, and since they write different rows the database has no conflict point to catch.",
-      "That read-write dependency tracking only exists at SERIALIZABLE; REPEATABLE READ does not do it.",
+      "REPEATABLE READ does not abort a transaction just because two transactions read overlapping row sets.",
       "It guarantees repeated reads inside one transaction agree; it does not lock the entire table to do that.",
       "Each engineer updates their own row, so nothing is overwritten, and the problem is precisely that both writes succeed."
     ],
@@ -3512,7 +3512,7 @@
         [
           "SERIALIZABLE",
           "全挡,效果=事务一个个排队",
-          "是(跟踪读写依赖,中止一笔+重试)"
+          "是（MySQL 把普通读变成共享锁读，冲突时等待或 deadlock 中止一笔；PostgreSQL 用 SSI 跟踪读写依赖）"
         ]
       ]
     }
@@ -3885,25 +3885,25 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "conditional-write",
-    "scenario": "扣库存用一条 `UPDATE concerts SET available_seats = available_seats - 1 WHERE concert_id = ? AND available_seats > 0`，Bob 是并发里输的那一方。",
+    "scenario": "PostgreSQL 上扣库存用一条 `UPDATE concerts SET available_seats = available_seats - 1 WHERE concert_id = ? AND available_seats > 0`。这场只剩最后 1 个座位，Alice 和 Bob 同时执行，Alice 先提交，Bob 是并发里输的那一方。",
     "q": "Bob 这条语句以什么形式失败，取决于什么？",
     "options": [
-      "取决于隔离级别：常见默认下静默匹配 0 行，严格级别下抛 serialization error",
+      "取决于隔离级别：默认 READ COMMITTED 下静默匹配 0 行，REPEATABLE READ / SERIALIZABLE 下抛 serialization error",
       "取决于这张表上有没有为条件列建索引：建了索引数据库就会直接报错，没有索引时才会静默地匹配 0 行",
       "取决于当前的并发连接数：连接数超过阈值以后，数据库才会把这次失败升级成显式的错误",
-      "不取决于任何东西：所有数据库的所有配置下都固定是静默匹配 0 行，永远不会抛出错误"
+      "不取决于任何东西：所有隔离级别下都固定是静默匹配 0 行，永远不会抛出错误"
     ],
     "options_en": [
-      "The isolation level decides it: at common defaults it silently matches zero rows, at strict levels it raises a serialization error instead.",
+      "The isolation level decides it: at the default READ COMMITTED it silently matches zero rows, at REPEATABLE READ or SERIALIZABLE it raises a serialization error instead.",
       "Whether the table has an index decides it: with an index the database raises an error outright, and only without one does it silently match zero rows.",
       "The current connection count decides it: only once concurrency passes a threshold does the database promote this failure into an error.",
-      "Nothing decides it: every database in every configuration silently matches zero rows here and never raises an error for this case."
+      "Nothing decides it: at every isolation level it silently matches zero rows and never raises an error for this case."
     ],
     "answer": [
       0
     ],
-    "why": "两种形状的结果都是一座一卖，变的是应用怎么接：匹配 0 行要自己查 affected rows，serialization error 要 catch 住再重试。",
-    "why_en": "Either way it is one seat and one sale; what changes is your app code, which must either check affected rows or catch a serialization error and retry.",
+    "why": "READ COMMITTED 下 Bob 等 Alice 提交后重新检查 WHERE，`available_seats > 0` 已不成立，改动 0 行；PostgreSQL 的 REPEATABLE READ / SERIALIZABLE 则直接让 Bob 的事务以 serialization failure 中止。两种形状都是一座一卖，变的是应用怎么接：匹配 0 行要自己查 affected rows，serialization error 要 catch 住再重试。（MySQL InnoDB 在 RR 下仍是 0 行，所以这条结论要绑定数据库。）",
+    "why_en": "At READ COMMITTED Bob waits for Alice's commit, re-checks the WHERE clause, finds no seat left, and changes zero rows; at PostgreSQL's REPEATABLE READ or SERIALIZABLE his transaction aborts with a serialization failure instead. Either way it is one seat and one sale; what changes is your app code, which must either check affected rows or catch a serialization error and retry. (MySQL InnoDB still returns zero rows under RR, so this conclusion is database-specific.)",
     "tags": [
       "conditional-write",
       "isolation-levels",
@@ -3933,18 +3933,18 @@
     ],
     "q_en": "What decides the shape of the failure Bob gets?",
     "optionExplanations": [
-      "常见默认下 Bob 重新检查条件、发现不成立、改动 0 行；严格级别改成让他中止并重试。",
+      "默认 READ COMMITTED 下 Bob 重新检查条件、发现不成立、改动 0 行；PostgreSQL 的更严格级别改成让他中止并重试。",
       "索引影响的是这条语句走不走全表扫描，和失败的形式无关。",
       "连接数决定的是排队多久，不会改变一条语句失败时的返回形状。",
-      "严格隔离级别下确实会抛错，所以应用不能只写一套零行分支。"
+      "严格隔离级别下 PostgreSQL 确实会抛错，所以应用不能只写一套零行分支。"
     ],
     "optionExplanations_en": [
-      "At common defaults Bob re-checks the predicate, finds it false, and changes zero rows; strict levels instead make him abort and retry.",
+      "At the default READ COMMITTED Bob re-checks the predicate, finds it false, and changes zero rows; PostgreSQL's stricter levels instead make him abort and retry.",
       "An index only affects whether the statement scans the table, not the form the failure takes.",
       "Connection count decides how long requests queue, not what a failing statement returns.",
-      "Strict isolation levels really do raise an error, so the application cannot assume only the zero-row branch exists."
+      "Under strict isolation levels PostgreSQL really does raise an error, so the application cannot assume only the zero-row branch exists."
     ],
-    "scenario_en": "The decrement runs as one conditional UPDATE with available_seats greater than zero in the WHERE clause, and Bob is the loser of the race."
+    "scenario_en": "On PostgreSQL, the decrement runs as one conditional UPDATE with available_seats greater than zero in the WHERE clause. Only one seat is left, Alice and Bob run it concurrently, Alice commits first, and Bob is the loser of the race."
   },
   {
     "id": "sd-patterns-dealing-with-contention-058",
@@ -3952,25 +3952,25 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "resource-granularity",
-    "scenario": "每个座位已拆成 seats 表里独立一行、条件写打在 A15 这一行的 status 上；concerts 表上原来的 available_seats 计数器还留着。",
+    "scenario": "每个座位已拆成 seats 表里独立一行、条件写打在 A15 这一行的 status 上；concerts 表上原来的 available_seats 计数器还留着。产品要求：详情页显示的余票数在任何时刻都必须和座位行一致，不能出现「显示还有票、点进去全卖完」的短暂错位。",
     "q": "拆行之后，这个计数器该被定位成什么？",
     "options": [
       "派生数据：要么按需从座位行算出来，要么当缓存在同一事务里一起减",
       "仍然是正确性的唯一守卫：卖票必须先通过它的大于零检查，然后才允许去改那一行座位的状态",
       "必须删掉：只要系统里还留着任何冗余计数，座位行上的那条条件写就会失去它的原子性保证",
-      "可以放到另一个事务里异步更新：它和座位行短暂对不上，并不影响座位不会被重复卖出这件事"
+      "派生数据，但放到另一个事务里异步更新：反正短暂对不上也不会让座位被重复卖出"
     ],
     "options_en": [
       "Derived data: either compute it from the seat rows on demand, or keep it as a cache and decrement it inside the same transaction.",
       "Still the only guard for correctness: a sale must pass its greater-than-zero check before it is allowed to flip that seat row status.",
       "It must be deleted: as long as any redundant counter remains, the conditional write on the seat row loses its atomicity guarantee.",
-      "It can be updated asynchronously in another transaction, since a brief mismatch with the seat rows cannot cause a seat to sell twice."
+      "Derived data, but updated asynchronously in another transaction, since a brief mismatch cannot cause a seat to sell twice anyway."
     ],
     "answer": [
       0
     ],
-    "why": "守卫已经搬到真正被争抢的座位行上，计数器不再决定正确性；但异步更新会让它长期漂移，所以要么现算要么同事务维护。",
-    "why_en": "The guard now sits on the seat row that is actually contended, so the counter no longer decides correctness; keep it derived or update it in the same transaction so it cannot drift.",
+    "why": "守卫已经搬到真正被争抢的座位行上，计数器不再决定正确性，只是派生数据。D 说的「不会重复卖座」本身没错，但题面要求余票数随时与座位行一致，异步更新必然有对不上的窗口，所以只能现算或同事务维护。",
+    "why_en": "The guard now sits on the seat row that is actually contended, so the counter is only derived data. D is right that it cannot cause a double sale, but the scenario requires the displayed count to match the seat rows at every moment, and any asynchronous update leaves a mismatch window, so the counter must be computed on demand or maintained in the same transaction.",
     "tags": [
       "resource-granularity",
       "derived-data",
@@ -3993,15 +3993,15 @@
       "正确性已由 A15 那一行的 status 条件写保证，计数器只剩「还剩几张」这个展示用途。",
       "它只能回答「还有没有票」，回答不了「A15 还在不在」，早就不是守卫了。",
       "留着它并不破坏座位行上的原子写，只是它不再承担正确性责任。",
-      "异步更新会让它和座位行长期偏差，展示出来的余票数会越飘越离谱。"
+      "D 说的「不会重复卖座」没错，但题面要求余票数任何时刻都与座位行一致，异步更新必然留下对不上的窗口。"
     ],
     "optionExplanations_en": [
       "Correctness now comes from the conditional write on row A15 status, leaving the counter only a display job.",
       "It can answer whether any ticket is left but not whether A15 specifically is left, so it stopped being the guard.",
       "Keeping it does not break the atomic write on the seat row; it simply no longer carries correctness.",
-      "Updating it asynchronously lets it drift from the seat rows, so the availability you display grows steadily wrong."
+      "D is right that it cannot cause a double sale, but the scenario requires the count to match the seat rows at every moment, and an asynchronous update always leaves a mismatch window."
     ],
-    "scenario_en": "Each seat now has its own row and the conditional write targets the status of row A15, while the old available_seats counter still sits on the concerts table."
+    "scenario_en": "Each seat now has its own row and the conditional write targets the status of row A15, while the old available_seats counter still sits on the concerts table. Product requires the remaining-seat count on the detail page to match the seat rows at every moment, with no brief window where it shows seats that are already gone."
   },
   {
     "id": "sd-patterns-dealing-with-contention-059",
@@ -4009,7 +4009,7 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "pessimistic-locking",
-    "scenario": "两条新路径：转账前要读账户余额比对当天累计限额；下单前要读多个商品的库存，再决定能不能凑成一个 bundle。",
+    "scenario": "两条新路径：转账前要读出账户行（余额和当天累计额都存在这一行），交给风控代码按用户等级、币种等规则判断能不能转；下单前要读多个商品行的库存，在应用代码里决定能不能凑成一个 bundle，再扣这几行。",
     "q": "这两条路径该归到哪一类、用什么保护？",
     "options": [
       "都是 read-decide-write，判断在应用里做，用 FOR UPDATE 锁住读到的行再写",
@@ -4026,8 +4026,8 @@
     "answer": [
       0
     ],
-    "why": "判断跑在应用代码里、写不进 WHERE，就必须把读到的行锁住扛过这段空档；代价是这些行上的其他写者要排队等你提交。",
-    "why_en": "When the decision runs in application code and cannot be a predicate, you hold the rows you read across the gap, and everyone else writing those rows waits for your commit.",
+    "why": "两条路径的判断都跑在应用代码里，写不进一条 UPDATE 的 WHERE；读到的正是之后要写的那几行（账户行、商品行），所以用 FOR UPDATE 把它们锁住扛过「读→判断→写」的空档。代价是这些行上的其他写者要排队等你提交。",
+    "why_en": "Both decisions run in application code and cannot be expressed as one UPDATE predicate, and the rows you read are exactly the rows you will write (the account row, the item rows), so lock them with FOR UPDATE across the read-decide-write gap. The cost is that other writers on those rows wait for your commit.",
     "tradeoff": "锁住读到的行换取判断期间状态不变 vs 不加锁换吞吐但要承受 lost update",
     "whenOtherWins": "如果判断能压回一条 WHERE 谓词（比如只比单笔金额上限），就撤掉锁改回条件写，别付不需要的锁。",
     "tags": [
@@ -4080,7 +4080,7 @@
       "Write skew means the written rows never overlap, but here both requests fight over the same balance and stock rows.",
       "As long as those accounts and items live in one database it is still single-database contention, so compensation flows are unnecessary."
     ],
-    "scenario_en": "Two new paths: read a balance and check it against a daily limit before moving money, and read stock across several items before claiming a bundle."
+    "scenario_en": "Two new paths: before moving money, read the account row (balance and today's running total both live on it) and let risk code decide by user tier, currency, and other rules; before claiming a bundle, read several item rows, decide in application code whether the bundle can be assembled, then decrement those rows."
   },
   {
     "id": "sd-patterns-dealing-with-contention-060",
@@ -4250,8 +4250,8 @@
     "answer": [
       0
     ],
-    "why": "整行比对能抓住任何变化，包括等值检查看不见的往返；代价是 WHERE 变得又长又脆，任何无关字段被改都会让你白重试一次。",
-    "why_en": "Matching the whole row catches any change including the round trip an equality check misses, at the cost of a long brittle WHERE clause and retries from unrelated edits.",
+    "why": "整行比对能抓住 review_count 往返时其他字段（如平均分）留下的变化；就算所有字段都恰好绕回原值，行内容与你读到的完全相同，基于它算出的新值也依然正确。代价是 WHERE 变得又长又脆，任何无关字段被改都会让你白重试一次。",
+    "why_en": "Matching the whole row catches the review_count round trip through the other fields it changed, such as the average; even if every field happened to return to its old value, the row equals what you read, so a value computed from it is still correct. The cost is a long, brittle WHERE clause and retries from unrelated edits.",
     "tradeoff": "整行比对抓住一切变化 vs 专用递增 version 列更便宜且不会误报",
     "whenOtherWins": "能加列时永远优先专用递增 version 列；有些库还直接暴露内置行版本（如 PostgreSQL 的 xmin）可以顶上。",
     "tags": [

@@ -571,15 +571,15 @@
     "q_en": "What is the main tradeoff of an LSM tree?",
     "options": [
       "牺牲所有写入能力，换取只读性能",
-      "牺牲部分读性能和写放大，换取高写入吞吐",
+      "前台写入变成顺序追加，代价是读可能要查多个 SSTable，以及 compaction 带来的后台写放大",
       "牺牲压缩能力，换取更高空间占用",
       "完全没有任何后台开销，因此性能只受磁盘限制"
     ],
     "answer": [
       1
     ],
-    "why": "读可能要查多个 SSTable，compaction 会重写数据产生写放大。它适合高写入场景，而不是所有 workload 的默认答案。",
-    "why_en": "LSM trees trade some read cost and write amplification for much higher write throughput.",
+    "why": "LSM 先写内存 + WAL，再整批顺序刷成 SSTable，前台写吞吐很高；代价是读可能要合并多个 SSTable（读放大），后台 compaction 要反复重写数据（写放大、短期空间放大）。它适合写多读少的指标流，不是所有 workload 的默认答案。",
+    "why_en": "An LSM writes to memory plus a WAL and flushes sorted SSTables sequentially, so foreground write throughput is high; the cost is reads that may merge several SSTables (read amplification) and background compaction that rewrites data repeatedly (write amplification, temporary space amplification). It suits write-heavy metric streams, not every workload.",
     "tags": [
       "tsdb",
       "lsm",
@@ -588,7 +588,7 @@
     "tradeoff": "高写入吞吐 vs 读放大与写放大",
     "options_en": [
       "It gives up all write capability in exchange for read-only performance.",
-      "It trades some read performance and write amplification for much higher write throughput.",
+      "Foreground writes become sequential appends, at the cost of reads that may touch several SSTables plus background write amplification from compaction.",
       "It gives up compression capability in exchange for higher space usage.",
       "It has zero background overhead, so performance is limited only by disk."
     ],
@@ -607,13 +607,13 @@
     ],
     "optionExplanations": [
       "LSM 依然能高速写入，只是要接受一些读放大，说它牺牲全部写入能力是把代价夸大成了否定。",
-      "对，用一部分读性能和 compaction 带来的写放大，换来远高于原地更新的写入吞吐。",
+      "对，前台写入变成顺序追加，换来远高于原地更新的写入吞吐；代价是读放大，以及 compaction 带来的后台写放大。",
       "LSM 通常反而借助压缩降低占用，这个选项把因果关系完全说反了。",
       "后台 compaction 本身就是它的核心开销，说没有任何后台开销是忽略了它最大的代价来源。"
     ],
     "optionExplanations_en": [
       "LSM trees still write fast — they just accept some read cost, so calling write capability \"sacrificed entirely\" overstates the tradeoff.",
-      "Right — reads sometimes cost more and compaction rewrites data multiple times, but in exchange writes run far faster than in-place updates allow.",
+      "Right — foreground writes become sequential appends, giving far higher write throughput than in-place updates, at the cost of read amplification and background write amplification from compaction.",
       "LSM engines typically use compression to cut space usage — this option has the causality backwards.",
       "Background compaction is itself LSM's core overhead — claiming there's none ignores its biggest cost."
     ],
@@ -815,40 +815,40 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "storage-efficiency",
-    "scenario": "监控系统每条指标点只有 timestamp 和一个 float，理论上很小，但落到普通行式表后磁盘占用远超预期。",
-    "scenario_en": "Each monitoring point only has a timestamp and one float, so the raw payload is tiny, but disk usage grows far beyond expectation in a normal row store.",
+    "scenario": "监控系统每个点的有效信息只有 timestamp 和一个 float（约 16 字节），但落进普通行式表时，每一行还要带上 host、metric_name 等标签列，结果磁盘占用远超预期。",
+    "scenario_en": "Each monitoring point's real information is just a timestamp and one float (about 16 bytes), but in a normal row-store table every row also carries label columns like host and metric_name, and disk usage grows far beyond expectation.",
     "q": "为什么一条普通指标点的原始信息很小，但行式存储仍可能很浪费？",
     "q_en": "Why can a normal metric point be tiny in raw form but still waste space in row storage?",
     "options": [
       "因为每条指标都会被数据库自动复制成一段完整的视频文件长期保存",
-      "因为数值只有十几字节，每行却反复存 host、metric_name",
+      "因为 timestamp + value 只有约 16 字节，每行却反复存 host、metric_name 和行头",
       "因为 timestamp 这个字段本身在磁盘上要占用大约 10MB 空间",
       "因为浮点数类型在关系数据库里天生完全无法进行任何压缩"
     ],
     "answer": [
       1
     ],
-    "why": "实际数值部分很小，空间膨胀多来自重复标签和行式元数据。TSDB 通过 series-oriented 存储和压缩减少这种重复。",
-    "why_en": "The raw timestamp and value are small, but row stores waste space by repeating labels and row metadata for every point.",
+    "why": "真正的数值部分只有约 16 字节，膨胀来自每行重复的标签字符串和行头（PostgreSQL 每行约 27 字节固定开销），再加索引条目。TSDB 按 series 存：标签只存一次，点只存压缩后的时间和值。",
+    "why_en": "The actual payload is about 16 bytes; the bloat comes from label strings repeated on every row plus the per-row header (roughly 27 bytes of fixed overhead in PostgreSQL), plus index entries. A TSDB stores per series: labels once, then only compressed timestamps and values.",
     "tags": [
       "tsdb",
       "storage"
     ],
     "options_en": [
       "Because the database quietly copies every metric point into a full video file and keeps it around.",
-      "Because the value itself is only a dozen-odd bytes, while every row repeats host and metric_name.",
+      "Because timestamp plus value is only about 16 bytes, while every row repeats host, metric_name, and a row header.",
       "Because the timestamp field alone takes roughly 10MB of disk space.",
       "Because float columns in a relational database inherently cannot be compressed at all."
     ],
     "optionExplanations": [
       "数据库不会把指标点变成视频文件，这个选项纯属荒谬干扰项。",
-      "对，数值本身才十几字节，真正膨胀的是每行反复重复的 host、metric_name 标签字符串。",
+      "对，数值本身约 16 字节，真正膨胀的是每行反复重复的 host、metric_name 标签字符串和行头开销。",
       "一个 timestamp 通常只占几字节，说它要占 10MB 完全不成立，是数量级错误。",
       "浮点值同样可以压缩（比如 XOR 编码），说完全无法压缩不成立。"
     ],
     "optionExplanations_en": [
       "A database does not turn metric points into video files — this is just a nonsense distractor.",
-      "Right — the value itself is a dozen-ish bytes; the real bloat comes from repeating host and metric_name strings on every row.",
+      "Right — the value itself is about 16 bytes; what bloats is the host and metric_name label strings and row-header overhead repeated on every row.",
       "A single timestamp is typically a few bytes — claiming it takes 10MB is off by many orders of magnitude.",
       "Floating-point values can absolutely be compressed too (XOR encoding, for example) — \"impossible to compress\" does not hold up."
     ]
@@ -1535,8 +1535,8 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "tags-vs-fields",
-    "q": "在 TSDB 中，tags 和 fields 最关键的区别是什么？",
-    "q_en": "In a TSDB, what is the key difference between tags and fields?",
+    "q": "在这种数据模型中，tags 和 fields 最关键的区别是什么？",
+    "q_en": "In this data model, what is the key difference between tags and fields?",
     "options": [
       "fields 才是用于过滤的索引元数据，tags 只能存浮点数值",
       "tags 是可索引的过滤元数据；fields 是实际测量值，通常不建索引",
@@ -1546,8 +1546,8 @@
     "answer": [
       1
     ],
-    "why": "把常用过滤维度放 tags 可以利用索引；把高基数或只需存储的值放 fields 可以避免 series 爆炸。建模错误会严重影响性能。",
-    "why_en": "Tags are indexed metadata for filtering, while fields are the measured values and are usually not indexed.",
+    "why": "在 InfluxDB 风格的模型里，tag 进入 series key 并建索引，适合放常用过滤维度；field 是测量值，不进 series key、不建索引，适合放高基数或只需存储的值，避免 series 爆炸。注意：Prometheus 等系统没有 field 概念，只有 labels，高基数值一般不进 label。",
+    "why_en": "In an InfluxDB-style model, tags become part of the series key and are indexed, so they suit common filter dimensions; fields hold measured values, are not part of the series key and are not indexed, so they suit high-cardinality or store-only values without exploding the series count. Note that systems like Prometheus have no fields, only labels, and high-cardinality values generally stay out of labels.",
     "tags": [
       "tsdb",
       "tags",
@@ -1603,8 +1603,8 @@
       "They're indexed differently — treating them as interchangeable means the filtering you expect from an index just won't happen.",
       "Fields can hold any measured value, not just timestamps — timestamps have their own dedicated field."
     ],
-    "scenario": "指标要按 host/region 过滤，同时还得存一个高基数的 request_id，建模决定索引大小。",
-    "scenario_en": "Metrics must be filterable by host and region while also carrying a high-cardinality request_id, and the modeling choice drives index size."
+    "scenario": "团队用 InfluxDB 风格的 TSDB（数据模型区分 tags 与 fields）。指标要按 host/region 过滤，同时还得存一个高基数的 request_id，建模决定索引大小。",
+    "scenario_en": "The team uses an InfluxDB-style TSDB whose data model distinguishes tags from fields. Metrics must be filterable by host and region while also carrying a high-cardinality request_id, and the modeling choice drives index size."
   },
   {
     "id": "sd-deep-dives-time-series-databases-029",
@@ -2196,8 +2196,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "tags-vs-fields",
-    "scenario": "你必须随指标记录 request_id，但查询很少按 request_id 过滤。",
-    "scenario_en": "You must record request_id with each metric, but queries rarely filter by request_id.",
+    "scenario": "你用的是 InfluxDB 风格的 TSDB（区分 tags 与 fields）。你必须随指标记录 request_id，但查询很少按 request_id 过滤。",
+    "scenario_en": "You are using an InfluxDB-style TSDB that distinguishes tags from fields. You must record request_id with each metric, but queries rarely filter by request_id.",
     "q": "在 TSDB 中更适合把 request_id 放在哪里？",
     "q_en": "Where should request_id go in a TSDB?",
     "options": [
@@ -2209,8 +2209,8 @@
     "answer": [
       3
     ],
-    "why": "不常作为过滤条件的高基数值应作为 field 存储。这样仍能写入，但不会把 tag index 撑爆。",
-    "why_en": "A rarely filtered high-cardinality value should be stored as a field rather than a tag.",
+    "why": "在区分 tags/fields 的模型里，不常作为过滤条件的高基数值应作为 field 存储：仍能写入和读出，但不进入 series key 和 tag index，不会把索引撑爆。若用 Prometheus 这类只有 labels 的系统，这类值一般放到日志/trace 里，而不是 label。",
+    "why_en": "In a tags/fields model, a rarely filtered high-cardinality value should be stored as a field: it is still written and readable, but stays out of the series key and tag index, so it cannot blow up the index. In a labels-only system like Prometheus, such values usually belong in logs or traces rather than labels.",
     "whenOtherWins": "如果某个维度低基数且经常用于过滤，比如 region/env/service，放 tag 才能利用索引。",
     "tags": [
       "tsdb",
@@ -2591,7 +2591,7 @@
       "A TSDB keeps the full history of points for trend queries — it does not discard everything but the latest value.",
       "Right — writes get laid out and compressed with series and time in mind, so a later read only has to touch a handful of nearby blocks."
     ],
-    "scenario": "写入要吃住 5 万点/秒，同时看板的时间范围查询必须在百毫秒内返回。",
+    "scenario": "写入要吃住 5 万点/秒，同时看板的时间范围查询必须在几百毫秒内返回。",
     "scenario_en": "The write path must absorb 50k points per second while dashboard range queries still return within a few hundred milliseconds."
   },
   {
@@ -2847,19 +2847,19 @@
       0
     ],
     "optionExplanations": [
-      "对，compaction 在后台把多个 SSTable 归并，去掉重复 key 并真正回收 tombstone 占的空间。",
+      "对，compaction 在后台把多个 SSTable 归并，去掉重复 key 和被 tombstone 遮蔽的旧数据；tombstone 本身要等到不再需要遮蔽更老版本时才能删。",
       "扫描比对能过滤已删数据，但文件数和占用都不降，读放大反而更糟——这正是 compaction 要解决的。",
       "append-only 引擎不做原地覆盖；删除本就是写 tombstone，靠事后 compaction 回收。",
-      "那是 flush（memtable 落盘），只会新增文件；归并旧 SSTable、清 tombstone 才是 compaction。"
+      "那是 flush（memtable 落盘），只会新增文件；归并旧 SSTable、丢弃被遮蔽的旧数据才是 compaction。"
     ],
     "optionExplanations_en": [
-      "Right — compaction merges SSTables in the background, drops duplicate keys, and reclaims the space tombstones held.",
+      "Right — compaction merges SSTables in the background and drops duplicate keys and data shadowed by tombstones; the tombstones themselves go only once no older version still needs masking.",
       "Comparing at read time filters deleted rows but shrinks neither file count nor space, so read amplification worsens — the very thing compaction fixes.",
       "Append-only engines never overwrite in place; a delete is a tombstone, reclaimed later by compaction.",
-      "That describes a flush (memtable to disk), which only adds files; merging old SSTables and clearing tombstones is compaction."
+      "That describes a flush (memtable to disk), which only adds files; merging old SSTables and dropping shadowed data is compaction."
     ],
-    "why": "删除只追加 tombstone，SSTable 越积、空间不释放、读要查的文件越多；compaction 后台归并去重并清掉 tombstone。代价是写放大：数据被反复重写。",
-    "why_en": "Deletes only append tombstones, so SSTables pile up and reads slow; compaction merges files and reclaims tombstones — at the cost of write amplification.",
+    "why": "删除只追加 tombstone，SSTable 越积、空间不释放、读要查的文件越多；compaction 在后台归并多个 SSTable，只保留每个 key 的最新版本，并丢弃被 tombstone 遮蔽的旧数据。tombstone 本身要等确认没有更老的版本需要遮蔽（如合并到最底层、或过了 grace period）才能删除。代价是写放大：数据被反复重写。",
+    "why_en": "Deletes only append tombstones, so SSTables pile up and reads slow; compaction merges SSTables in the background, keeps only the newest version of each key, and drops data shadowed by tombstones. The tombstone itself can be dropped only once no older version could still need masking (for example, at the bottom level or after a grace period). The cost is write amplification, since data is rewritten repeatedly.",
     "tags": [
       "tsdb",
       "lsm",
@@ -2901,18 +2901,18 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "lsm",
-    "scenario": "监控持续 5 万点/秒写入，同时 dashboard 在并发读最近一小时的数据，写入吞吐却几乎不受影响。",
-    "scenario_en": "Monitoring sustains 50k points/sec of writes while dashboards concurrently read the last hour, yet write throughput barely dips.",
+    "scenario": "监控持续 5 万点/秒写入，同时 dashboard 在并发读最近一小时的数据，后台 compaction 跟得上，写入吞吐几乎不受影响。",
+    "scenario_en": "Monitoring sustains 50k points/sec of writes while dashboards concurrently read the last hour; background compaction keeps up, and write throughput barely dips.",
     "q": "LSM 引擎靠什么让持续写入不被并发读拖慢？",
     "q_en": "What lets an LSM engine keep sustained writes from being slowed by concurrent reads?",
     "options": [
-      "写只进内存 memtable 加 WAL，后台线程整理旧 SSTable，读写走不同路径",
+      "写只追加到内存 memtable 加 WAL，不原地改旧 SSTable，也不需要等待读；后台线程整理旧 SSTable",
       "把所有读请求都排到当前这批写入全部刷盘并完成 compaction 之后再统一逐个执行",
       "每次写入前先锁住全部 SSTable，串行化读写来避免冲突",
       "写入直接原地更新对应 SSTable，省掉后台整理这一步"
     ],
     "options_en": [
-      "Writes hit only the in-memory memtable plus WAL, while background threads reorganize old SSTables — reads and writes take different paths.",
+      "Writes only append to the in-memory memtable plus WAL, never modify old SSTables in place and need not wait for reads; background threads reorganize old SSTables.",
       "Queue every read until the current batch of writes has fully flushed and compacted, then run them together.",
       "Lock all SSTables before each write, serializing reads and writes to avoid conflicts.",
       "Update the target SSTable in place on each write, skipping background reorganization."
@@ -2921,19 +2921,19 @@
       0
     ],
     "optionExplanations": [
-      "对，新写只碰内存与 WAL，磁盘上的旧数据交给后台 compaction，前后台分离所以写不等读。",
+      "对，新写只追加到内存与 WAL，旧 SSTable 不可变、交给后台 compaction，写不需要等读。",
       "把读排到写之后会直接拖垮写入吞吐，正是 LSM 靠前后台分离要避免的阻塞。",
       "加锁串行化会让写等读、读等写，吞吐塌方；LSM 用路径分离而非锁来解冲突。",
       "原地更新 SSTable 违背 append-only，还会把随机写带回写路径，不是 LSM 的做法。"
     ],
     "optionExplanations_en": [
-      "Right — new writes touch only memory and the WAL, old on-disk data is left to background compaction, so writes don't wait on reads.",
+      "Right — new writes only append to memory and the WAL, old SSTables are immutable and left to background compaction, so writes do not wait on reads.",
       "Queuing reads behind writes would cripple write throughput — exactly the blocking LSM's front/back split avoids.",
       "Locking serializes writes behind reads and vice versa, collapsing throughput; LSM resolves conflict by separate paths, not locks.",
       "Updating SSTables in place breaks append-only and drags random writes back onto the write path — not how LSM works."
     ],
-    "why": "写只落内存 memtable 与 WAL，旧 SSTable 由后台线程整理，两路分离所以写不等读。代价：读可能要查多个未合并的 SSTable（读放大）。",
-    "why_en": "New writes hit only the memtable and WAL while background threads reorganize old SSTables, so writes never block on reads — at the cost of reads scanning several SSTables.",
+    "why": "写只追加到 memtable 与 WAL，SSTable 不可变、由后台线程整理，所以写入不需要和读抢锁或等待读完成。代价：读可能要查多个未合并的 SSTable（读放大）；若 compaction 跟不上，引擎会主动降速或暂停写入（write stall）。",
+    "why_en": "Writes only append to the memtable and WAL, and immutable SSTables are reorganized by background threads, so writes do not contend with or wait for reads. The costs: reads may scan several unmerged SSTables (read amplification), and if compaction falls behind, the engine deliberately slows or stalls writes.",
     "tags": [
       "tsdb",
       "lsm",
@@ -2982,8 +2982,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "rollups",
-    "scenario": "团队打算给一年历史指标预计算 1 分钟、5 分钟、1 小时多层 rollup 让 dashboard 更快，但存储预算紧张。",
-    "scenario_en": "The team plans to pre-compute 1-minute, 5-minute and 1-hour rollups over a year of history to speed dashboards, but storage budget is tight.",
+    "scenario": "团队打算在原始点照样保留一年的前提下，额外预计算 1 分钟、5 分钟、1 小时多层 rollup 让 dashboard 更快，但存储预算紧张。",
+    "scenario_en": "The team plans to keep raw points for the full year and additionally pre-compute 1-minute, 5-minute and 1-hour rollups to speed dashboards, but storage budget is tight.",
     "q": "采用预计算 rollup 的主要代价是什么？",
     "q_en": "What is the main cost of using pre-computed rollups?",
     "options": [
@@ -3002,19 +3002,19 @@
       0
     ],
     "optionExplanations": [
-      "对，rollup 在写路径上把点多写进 1 分、5 分、1 小时等多层桶，多占存储也放大写入。",
+      "对，原始点照样保留一年，rollup 就是额外的数据层：每个点还要多聚合、多写进 1 分、5 分、1 小时等多层桶，多占存储也放大写入。",
       "精度确实降，但它同时多花存储、多做写入，说成本不变漏掉了预计算的代价。",
       "rollup 是预计算不是现算，查询反而更快；临时重算是没做 rollup 时的行为。",
       "原始点通常按保留策略单独过期，rollup 与原始点是并存的两份数据。"
     ],
     "optionExplanations_en": [
-      "Right — a rollup writes each point into several bucket layers (1m, 5m, 1h) on the write path, costing extra storage and amplifying writes.",
+      "Right — raw points are kept for the full year, so rollups are an extra data layer: each point is also aggregated and written into the 1-minute, 5-minute and 1-hour buckets, costing extra storage and write amplification.",
       "Resolution does drop, but it also spends more storage and more writes; saying cost is unchanged misses the pre-computation price.",
       "A rollup is pre-computed, not computed on the fly, so queries get faster; on-read recompute is what you do without rollups.",
       "Raw points usually roll off under their own retention policy — rollups and raw points coexist as two datasets."
     ],
-    "why": "rollup 是预计算：写路径上把原始点额外聚合进多层时间桶，多占存储也放大写入，换来历史查询扫描量骤降。",
-    "why_en": "A rollup pre-aggregates raw points into multiple time-bucket layers on the write path, spending extra storage and write amplification to collapse how much history a query scans.",
+    "why": "原始点一年全留，rollup 就是额外的数据层：无论是写入时流式聚合还是后台 downsampling 任务，每个原始点都要被多聚合、多写进若干层桶，多占存储也放大写入，换来历史查询扫描量骤降。（如果改成「原始点短保留、只长期留 rollup」，rollup 反而能省存储——那是另一道题。）",
+    "why_en": "With raw points kept for the full year, rollups are an extra data layer: whether aggregated on the write path or by a background downsampling job, each raw point is aggregated and written into several more buckets, costing extra storage and write amplification in exchange for scanning far less history at query time. (If raw points were kept only briefly and only rollups kept long-term, rollups would save storage instead — a different question.)",
     "whenOtherWins": "如果历史很少被查，或存储/写入已是瓶颈，直接查原始点、按需现算更划算，省下预计算的存储与写放大。",
     "tags": [
       "tsdb",
@@ -3025,8 +3025,8 @@
     "termDefinitions": [
       {
         "term": "rollup",
-        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换存储和查询效率。",
-        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for storage and query speed."
+        "meaning": "把细粒度历史数据预聚合成更粗时间桶，牺牲精度换查询效率；配合缩短原始点保留期时也能省存储。",
+        "meaningEn": "A rollup pre-aggregates fine-grained history into coarser time buckets, trading precision for query speed; combined with shorter raw retention it can also save storage."
       },
       {
         "term": "write amplification",
@@ -3072,8 +3072,8 @@
       "The two segments use different codecs — delta-of-delta plus varint for timestamps, XOR for values — not one shared algorithm.",
       "Splitting doesn't lift the requirement that timestamps stay ordered; out-of-order data breaks delta-of-delta and range scans."
     ],
-    "why": "时间戳规整、浮点值相近是两种不同冗余，分段后各用最优编码——文中一个 block 因此从 32 字节压到约 13 字节（≈60%）。代价：读取要分别解码两段。",
-    "why_en": "Timestamps are near-uniform and floats are near-neighbors — two different redundancies — so splitting lets each use its best codec, shrinking a block from 32 to about 13 bytes.",
+    "why": "时间戳近乎等间隔、浮点值相邻相近，是两种不同的冗余；分段后时间戳用 delta-of-delta（固定间隔下二阶差分大多为 0），值用 XOR（相近浮点数异或后大量为 0 位），各自压到最优。实际压缩比取决于采样间隔是否规整和数值波动程度。代价：读取时要分别解码两段。",
+    "why_en": "Timestamps are nearly evenly spaced and adjacent float values are close — two different kinds of redundancy. Splitting lets timestamps use delta-of-delta (mostly zero at a fixed interval) and values use XOR (similar floats XOR to mostly zero bits), each compressing best. The actual ratio depends on how regular the sampling is and how much values fluctuate. Cost: reads must decode the two segments separately.",
     "tags": [
       "tsdb",
       "compression",

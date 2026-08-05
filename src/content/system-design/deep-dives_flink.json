@@ -198,13 +198,13 @@
     "q": "自己在普通服务里用内存计数器实现 5 分钟窗口统计，会遇到哪些问题？（多选）",
     "q_en": "What problems come from implementing a five-minute in-memory counter in a plain service?",
     "options": [
-      "服务崩溃就丢掉全部状态，重读整个 Kafka topic 恢复既慢又贵",
+      "服务崩溃就丢掉内存里的计数,得自己设计回放(按时间定位 offset、保证与已提交 offset 一致)或外部持久化来重建",
       "扩容加实例时要把状态在实例间重新分配，失败场景一大堆",
       "事件乱序或迟到会影响计数准确性",
       "Kafka 会因此无法存储点击事件"
     ],
     "options_en": [
-      "A crash loses all state, and re-reading the whole Kafka topic to recover is slow and expensive.",
+      "A crash wipes the in-memory counts, so you must build your own recovery: replay from a time-located offset kept consistent with committed offsets, or persist state externally.",
       "Adding instances requires redistributing state between them, with many failure modes.",
       "Out-of-order or late events hurt the accuracy of the counts.",
       "Kafka would become unable to store click events."
@@ -214,8 +214,8 @@
       1,
       2
     ],
-    "why": "崩溃丢状态、扩缩容的状态再分配、乱序/迟到事件——这三座大山正是 Flink 这类框架帮你搬走的。",
-    "why_en": "Hand-rolled stateful consumers face state loss on crashes, painful state redistribution when scaling, and accuracy problems from late or out-of-order events.",
+    "why": "自建内存计数器有三座大山:崩溃丢状态后要自己写「回放 + offset 一致性」的恢复逻辑;扩缩容时要自己在实例间迁移状态;乱序/迟到事件没有 watermark 机制会算错。Flink 用 checkpoint(状态与 source offset 一起快照)、keyed state 重分配和 event-time watermark 把这三件事接过去。D 与自建方案无关。",
+    "why_en": "A hand-rolled in-memory counter faces three problems: after a crash you must write your own replay-plus-offset-consistency recovery; on scaling you must migrate state between instances yourself; and without watermarks, late or out-of-order events produce wrong counts. Flink takes these over with checkpoints (state snapshotted together with source offsets), keyed-state redistribution, and event-time watermarks. D is unrelated to the DIY approach.",
     "tags": [
       "flink",
       "state",
@@ -239,13 +239,13 @@
       }
     ],
     "optionExplanations": [
-      "内存计数器一崩溃就清零，靠重读整条 Kafka topic 补回状态既慢又要重新处理全部历史数据。",
+      "内存计数器一崩溃就清零,恢复要自己写回放逻辑:按时间定位 offset,还要保证与已提交 offset 一致,手写容易出错。",
       "多加实例意味着要把原本挂在单机内存里的计数在实例间重新切分，手写这层逻辑容易漏边界。",
       "事件乱序或迟到时，逐条累加的内存计数器没有等待或修正机制，统计结果会直接算错。",
       "这道题问的是自建方案本身的缺陷，跟 Kafka 能不能存数据无关，Kafka 存储能力完全不受影响。"
     ],
     "optionExplanations_en": [
-      "An in-memory counter loses everything on crash, and rebuilding it by replaying the whole Kafka topic is slow and reprocesses all history.",
+      "An in-memory counter resets to zero on crash, and recovery means writing your own replay logic: locating the offset by time and keeping it consistent with committed offsets, which is error-prone by hand.",
       "Adding instances means the counts that lived in one process's memory now need splitting across instances, and hand-rolled logic easily misses edge cases.",
       "A naive running counter has no way to wait for or fix records that show up out of turn, so the totals simply come out wrong.",
       "This question is about the DIY approach's own flaws, not Kafka's storage — Kafka's ability to store events is completely unaffected."
@@ -377,22 +377,22 @@
     "options": [
       "Kafka（消息队列）",
       "Kinesis（AWS 流数据服务）",
-      "文件系统（常用于批式输入）",
-      "Snowflake（它通常是数仓 sink，不是常见 source）"
+      "文件系统（如 S3 / HDFS 上的文件）",
+      "Snowflake（云数仓）"
     ],
     "options_en": [
       "Kafka, a message queue.",
       "Kinesis, AWS's streaming-data service.",
-      "File systems, commonly used for batch input.",
-      "Snowflake — it is usually a warehouse sink, not a common source."
+      "File systems, such as files on S3 or HDFS.",
+      "Snowflake, a cloud data warehouse."
     ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "source 把外部系统的数据读成 Flink 流：Kafka、Kinesis、文件系统、自定义集成都是常见来源；数仓一般出现在 sink 侧。",
-    "why_en": "Common sources are Kafka, Kinesis, and file systems, while data warehouses like Snowflake usually appear as sinks.",
+    "why": "source 把外部系统的数据读成 Flink 流：Kafka、Kinesis、文件系统都有官方/主流 connector，是最常见的输入端；Snowflake 这类数仓在 Flink 管道里通常是结果落地的 sink，而不是常见的数据来源。",
+    "why_en": "A source turns external data into a Flink stream: Kafka, Kinesis, and file systems all have official or mainstream connectors and are the most common inputs, while a warehouse like Snowflake usually appears as the sink where results land, not as a common source.",
     "tags": [
       "flink",
       "sources",
@@ -551,20 +551,20 @@
     "options": [
       "Flink 在设计上只支持 Kafka 这一种 source 类型，别的消息系统都接不了",
       "因为用 Kafka 部署起来的成本是所有候选方案里最便宜的一个",
-      "topic/partition 划分与 Flink 的 keyBy、并行度天然衔接",
+      "Kafka 是可按 offset 重放的持久化日志，offset 可随 checkpoint 保存用于故障恢复；partition 还能直接对应 source 并行度",
       "因为 Kafka 自带窗口聚合和状态管理功能，不用 Flink 处理"
     ],
     "options_en": [
       "Flink is designed to support only Kafka as a source type, and no other system can connect.",
       "Because deploying Kafka is the cheapest option among all the candidates here.",
-      "Topic and partition layout maps naturally onto Flink's keyBy and parallelism.",
+      "Kafka is a durable log replayable by offset, so offsets can be saved in checkpoints for recovery, and partitions map directly onto source parallelism.",
       "Because Kafka has built-in window aggregation and state management, so Flink is unneeded."
     ],
     "answer": [
       2
     ],
-    "why": "Kafka 的 topic/partition 划分和 Flink 的 key 分区、并行执行天然衔接，是面试里最顺手的组合。",
-    "why_en": "Kafka forces you to think about topics and partitions, which maps naturally onto reasoning about your Flink job.",
+    "why": "Kafka 的日志可以按 offset 重放，Flink 把 source offset 存进 checkpoint，故障后从同一位置重读，这是容错和 exactly-once 的基础；topic 的 partition 数又能直接对应 source 的并行度。注意 keyBy 仍会在 Flink 内部按 key 重新分发，和 Kafka 的分区方式无关。",
+    "why_en": "Kafka's log can be replayed by offset; Flink stores source offsets in checkpoints and rereads from the same position after a failure, which underpins fault tolerance and exactly-once. A topic's partition count also maps directly onto source parallelism. Note that keyBy still redistributes records by key inside Flink, independent of how Kafka partitioned them.",
     "tags": [
       "flink",
       "kafka",
@@ -600,13 +600,13 @@
     "optionExplanations": [
       "Flink 能接入的 source 类型很多，Kafka 只是其中最常见的一种，并不是唯一支持的类型。",
       "部署成本从来不是选它的主因，面试里也很少纠结这类基础设施报价，这个理由站不住脚。",
-      "分区结构本身就是设计并行处理逻辑的现成起点，讲 Kafka 起步的方案最容易跟面试官讲清楚。",
+      "可重放的持久化日志加上随 checkpoint 保存的 offset，是故障恢复和 exactly-once 的基础；partition 数也直接对应 source 并行度，所以从 Kafka 起步最顺手。",
       "窗口聚合和状态管理是 Flink 自己的能力，Kafka 只是消息中转，并不会替 Flink 把这些做掉。"
     ],
     "optionExplanations_en": [
       "Flink can ingest many source types; Kafka is only the most common one among them, not the sole supported type.",
       "Deployment cost is rarely the deciding factor, and interviews rarely dwell on infrastructure pricing — this reasoning doesn't hold up.",
-      "A partition layout is already a ready-made starting point for splitting up parallel work, which is the easiest story to tell an interviewer.",
+      "A replayable durable log plus offsets saved in checkpoints is the basis of recovery and exactly-once, and the partition count maps directly onto source parallelism, which is why starting from Kafka is the smoothest path.",
       "Window aggregation and state management are Flink's own capabilities; Kafka just relays messages and does none of that work for Flink."
     ]
   },
@@ -616,27 +616,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "stream-vs-batch",
-    "scenario": "题目只是离线跑一批历史数据，没有秒级实时要求。",
-    "scenario_en": "The problem only runs over historical data offline, with no second-level realtime requirement.",
-    "q": "在面试里用 Flink 做「批处理」为什么不推荐？",
-    "q_en": "Why is Flink usually not the interview choice for batch processing?",
+    "scenario": "题目只是离线跑一批历史数据，没有秒级实时要求，团队也没有现成的 Flink 集群。",
+    "scenario_en": "The problem only runs over historical data offline, with no second-level realtime requirement, and the team has no existing Flink cluster.",
+    "q": "在面试里，纯离线批处理为什么通常不首推 Flink？",
+    "q_en": "Why is Flink usually not the first pick for pure offline batch processing in an interview?",
     "options": [
       "Flink 在技术架构上根本不支持批处理这种运行模式",
-      "技术上可行，但面试官不熟、维持最优性也更难，批场景直接用批框架",
+      "技术上可行（Flink 有 BATCH 执行模式），但纯批场景下 Spark 等批框架生态更成熟、讨论更常见，面试里沟通成本更低",
       "批处理这类场景在任何情况下都必须只能用 Hadoop 来完成",
       "Flink 一旦切到做批处理模式就必然会丢失数据"
     ],
     "options_en": [
       "Flink's architecture technically cannot support the batch-processing mode at all.",
-      "It works technically, but interviewers know it less and keeping it optimal is harder — use a batch framework for batch work.",
+      "It works technically (Flink has a BATCH execution mode), but for pure batch work Spark-style batch frameworks have a more mature ecosystem and are discussed more often, so they are cheaper to explain in an interview.",
       "Batch-processing scenarios must under all circumstances only be done with Hadoop.",
       "Flink is bound to lose data the moment it switches into batch-processing mode."
     ],
     "answer": [
       1
     ],
-    "why": "Flink 能做批，但在面试里讲批处理用 Spark 这类更常规的工具，沟通成本低、也更稳。",
-    "why_en": "Flink can technically do batch work, but interviewers understand it less and keeping it optimal is harder, so use a batch framework instead.",
+    "why": "Flink 有 BATCH 执行模式，技术上能做批。题面是纯离线、没有实时需求、也没有现成 Flink 集群，此时 Spark 这类专门批框架生态更成熟、讲起来更常见，是更省沟通成本的默认选择；如果已经有 Flink 流作业需要流批统一，用 Flink 跑批也完全合理。",
+    "why_en": "Flink has a BATCH execution mode and can technically do batch work. Here the job is purely offline with no realtime need and no existing Flink cluster, so a dedicated batch framework like Spark, with a more mature ecosystem and more common discussion, is the cheaper default to explain; if you already run Flink streaming jobs and want unified batch/stream, running batch on Flink is perfectly reasonable.",
     "tradeoff": "Flink 的流批统一能力 vs Spark 批处理的低沟通成本",
     "tags": [
       "flink",
@@ -662,13 +662,13 @@
     ],
     "optionExplanations": [
       "Flink 的执行模型本来就能跑批处理，这个说法把它的能力边界搞反了。",
-      "技术上 Flink 能做批，但面试官更熟悉 Spark 这类专门的批框架，讲批处理选它沟通成本更低，这正是本题答案。",
+      "技术上 Flink 有 BATCH 执行模式能做批，但纯离线场景下 Spark 这类专门批框架生态更成熟、更常被讨论，面试里沟通成本更低，这正是本题答案。",
       "Hadoop 只是众多批处理方案之一，说批处理场景必须用它太绝对，其它批引擎同样能胜任。",
       "Flink 做批处理不会必然丢数据，它同样有完善的容错机制，这个说法没有依据。"
     ],
     "optionExplanations_en": [
       "Flink's execution model can absolutely run batch jobs; this claim gets its capability boundary backwards.",
-      "Capability isn't the blocker here — familiarity is; a dedicated batch tool is the story whoever is grading the design already knows.",
+      "Flink has a BATCH execution mode and can do batch work, but for pure offline jobs Spark-style batch frameworks have a more mature ecosystem and are discussed more often, so they are cheaper to explain in an interview, which is the answer here.",
       "Hadoop is just one of many batch options; saying batch scenarios must only use it is too absolute since other batch engines work fine too.",
       "Running batch on Flink doesn't inherently lose data — it has the same solid fault-tolerance machinery, so this claim has no basis."
     ]
@@ -682,13 +682,13 @@
     "q": "Flink 里的 stream（流）最准确的定义是？",
     "q_en": "What is the most accurate definition of a stream in Flink?",
     "options": [
-      "无界的数据元素序列，像无限长的事件数组在流动",
+      "在算子之间流动的数据元素序列，可以无界（如本题的点击流），也可以有界",
       "一张行数、列数都固定、大小提前已知的有限静态表",
       "一个持久化存储在磁盘上的日志文件",
       "一个指向数据库的长连接对象"
     ],
     "options_en": [
-      "An unbounded sequence of data elements, like an infinite array of events flowing through the system.",
+      "A sequence of data elements flowing between operators, which can be unbounded (like this click feed) or bounded.",
       "A static table with fixed, already-known row and column counts and a bounded size.",
       "A log file persisted durably on disk.",
       "A long-lived connection object pointing at a database."
@@ -696,8 +696,8 @@
     "answer": [
       0
     ],
-    "why": "流是无界序列；Flink 提供切分、变换、聚合、重组等工具来加工它。",
-    "why_en": "A stream is an unbounded sequence of data elements flowing through the system, like an infinite array of events.",
+    "why": "Flink 的 stream 是在算子之间流动的数据元素序列；本题的点击流是无界的，而有界流就是批处理的输入，Flink 用同一抽象处理两者。它不是静态表、磁盘日志文件或数据库连接。",
+    "why_en": "A Flink stream is a sequence of data elements flowing between operators; this click feed is unbounded, while a bounded stream is what batch processing consumes, and Flink handles both with the same abstraction. It is not a static table, an on-disk log file, or a database connection.",
     "tags": [
       "flink",
       "streams",
@@ -711,13 +711,13 @@
       }
     ],
     "optionExplanations": [
-      "流是无界的数据元素序列，像不断延伸的事件数组，这正是 Flink 对 stream 的定义。",
+      "流是在算子之间流动的数据元素序列，可以无界（像本题的点击流）也可以有界，这正是 Flink 对 stream 的定义。",
       "表的行列数量是固定已知的，这更接近批处理里的静态数据集，不是流的特征。",
       "日志文件是持久化在磁盘上的静态记录，流则是持续到来、边到边处理的动态数据。",
       "数据库连接对象只是访问某个存储的句柄，不携带持续到来的事件序列这层含义。"
     ],
     "optionExplanations_en": [
-      "There is no end in sight for a stream — it keeps growing like an array with no final length, which is the shape Flink assumes.",
+      "A stream is a sequence of data elements flowing between operators, either unbounded (like this click feed) or bounded, which is exactly how Flink defines a stream.",
       "A table has a fixed, known row and column count, which is closer to a static batch dataset, not a stream's defining trait.",
       "A log file is a static record persisted on disk, while a stream is dynamic data that keeps arriving and gets processed as it goes.",
       "A database connection object is just a handle to access some storage; it carries no notion of a continuously arriving event sequence."
@@ -739,19 +739,19 @@
       "Flink 流对单条消息允许的字节大小上限比 Kafka 更大一些",
       "Kafka topic 在设计上完全不具备任何持久化落盘的能力",
       "两者其实是同一套抽象，工程上可以完全互换着理解使用",
-      "Flink 流没有 offset，靠 checkpoint 保证持久性"
+      "Flink 流本身不持久化、没有 offset；故障恢复靠 checkpoint 快照状态和 source 位置，再从可重放的 source 重读"
     ],
     "options_en": [
       "A Flink stream allows a somewhat larger maximum byte size per message than Kafka.",
       "A Kafka topic is designed with absolutely no capability to persist data to disk at all.",
       "The two are really the same abstraction and can, engineering-wise, be used interchangeably.",
-      "A Flink stream has no offsets; durability instead comes from checkpoints."
+      "A Flink stream itself is not persisted and has no offsets; recovery relies on checkpoints snapshotting state and source positions, then rereading from a replayable source."
     ],
     "answer": [
       3
     ],
-    "why": "Kafka 的日志有 offset 和持久化语义；Flink 流只是计算图上的数据边，容错靠 checkpoint 机制而不是流本身。",
-    "why_en": "Unlike Kafka's append-only log with offsets, a Flink stream promises no persistence, and durability comes from periodic checkpoints instead.",
+    "why": "Kafka topic 是带 offset 的持久化 append-only 日志；Flink stream 只是计算图上的数据边，本身不落盘。Flink 的容错由两半组成：checkpoint 保存算子状态和 source 读到的位置，故障后回滚到该 checkpoint，再从可重放的 source（如 Kafka 的对应 offset）重读。",
+    "why_en": "A Kafka topic is a durable append-only log with offsets; a Flink stream is just a data edge in the job graph and is not persisted itself. Flink's fault tolerance has two halves: a checkpoint stores operator state and the source's read position, and after a failure the job rolls back to it and rereads from a replayable source such as the matching Kafka offset.",
     "tradeoff": "Kafka topic 的持久化日志 vs Flink stream 的瞬时数据边",
     "tags": [
       "flink",
@@ -808,13 +808,13 @@
       "两者在单条消息大小限制上没有本质差别，这不是它们抽象层面的关键区别。",
       "Kafka topic 恰恰以持久化落盘著称，说它完全不持久化是把它的核心卖点说反了。",
       "两者的语义并不相通：Kafka 有持久化日志和 offset，Flink 流只是计算图上的瞬时数据边。",
-      "Flink 流本身不落盘、没有 offset，靠周期性 checkpoint 提供容错，这正是两者的关键区别。"
+      "Flink 流本身不落盘、没有 offset；容错由 checkpoint 保存状态和 source 位置，加上从可重放 source 重读两半组成，这正是两者的关键区别。"
     ],
     "optionExplanations_en": [
       "There is no meaningful difference in per-message size limits between the two; that isn't their key abstraction gap.",
       "A Kafka topic is precisely known for durable, on-disk persistence — saying it has none inverts its core selling point.",
       "The two don't share semantics at all: one is a durable log you can rewind, the other is just a wire carrying values between boxes.",
-      "There's nothing to rewind on the Flink side — it counts on the framework's snapshot cycle to recover, not a saved position."
+      "A Flink stream is not persisted and has no offsets; fault tolerance has two halves, checkpoints saving state and source positions plus rereading from a replayable source, which is the key difference."
     ]
   },
   {
@@ -886,21 +886,21 @@
       "Map / FlatMap（逐元素变换）",
       "Filter（按条件过滤）",
       "Window / Join / Aggregate（窗口、双流连接、聚合）",
-      "Checkpoint（它是容错机制，不是算子）"
+      "Checkpoint（周期性状态快照）"
     ],
     "options_en": [
       "Map / FlatMap — per-element transforms.",
       "Filter — keep elements matching a condition.",
       "Window / Join / Aggregate — windowing, two-stream joins, aggregation.",
-      "Checkpoint — this is a fault-tolerance mechanism, not an operator."
+      "Checkpoint — periodic state snapshots."
     ],
     "answer": [
       0,
       1,
       2
     ],
-    "why": "Map、Filter、Reduce、Window、Join、FlatMap、Aggregate 是常见算子；checkpoint 属于状态容错机制，不是算子。",
-    "why_en": "Common operators include map, filter, reduce, window, join, flatMap, and aggregate, while checkpointing is a fault-tolerance mechanism.",
+    "why": "Map、FlatMap、Filter、Reduce、Window、Join、Aggregate 都是可以在 DataStream API 里串起来的算子；checkpoint 是对状态做周期性快照的容错机制，不对记录做变换，不能作为处理步骤串进管道。",
+    "why_en": "Map, flatMap, filter, reduce, window, join, and aggregate are operators you chain in the DataStream API; checkpointing is a fault-tolerance mechanism that periodically snapshots state, never transforms records, and cannot be chained in as a processing step.",
     "tags": [
       "flink",
       "operators",
@@ -1321,21 +1321,21 @@
     "q_en": "What is a watermark in Flink?",
     "options": [
       "一个专门用来做流量限流控制的阈值参数配置项",
-      "随数据一起流动的时间戳，宣告此时间之前的事件都已到齐",
+      "随数据一起流动的时间戳，声明事件时间已推进到该时刻、此后不再预期出现更早的事件（之后才到的算迟到）",
       "一个用于监控内存使用情况的警戒线告警配置项",
       "Kafka 消费者当前记录的、标记自己读到哪一条消息的消费位点编号"
     ],
     "options_en": [
       "A threshold parameter specifically configured to control rate limiting on traffic.",
-      "A timestamp flowing alongside the data that declares all events before it have arrived.",
+      "A timestamp flowing with the data that declares event time has advanced to that point, so no earlier events are expected anymore (any that still arrive count as late).",
       "An alert threshold configuration item for monitoring memory usage.",
       "The offset number a Kafka consumer records to mark which message it has read up to."
     ],
     "answer": [
       1
     ],
-    "why": "例如 5:01:15 才收到「5 点已过」的 watermark，就给了 4:59 产生但迟到的数据充分的到达时间——窗口据此决定何时触发计算。",
-    "why_en": "A watermark is a timestamp flowing alongside the data that declares all events before it have arrived, so windows know when to fire.",
+    "why": "watermark(t) 随数据流动，声明事件时间已推进到 t，系统据此认为时间戳 ≤ t 的事件不会再来，于是可以触发结束时间 ≤ t 的窗口；这是启发式估计，仍可能有更晚到达的事件，它们会被当作 late event 处理。",
+    "why_en": "A watermark(t) flows with the data and declares that event time has reached t, so the system assumes no more events with timestamps ≤ t will arrive and can fire windows ending at or before t; it is a heuristic, and events that still arrive later are treated as late events.",
     "tags": [
       "flink",
       "watermarks",
@@ -1361,13 +1361,13 @@
     ],
     "optionExplanations": [
       "限流控制的是请求速率，跟标记事件时间进度的 watermark 完全是两回事。",
-      "watermark 是随数据一起流动的时间戳，宣告此时间之前的事件都已到齐，这正是它的定义。",
+      "watermark 是随数据一起流动的时间戳，声明事件时间已推进到该时刻、不再预期更早的事件；它是启发式估计，之后才到的算迟到，这正是它的定义。",
       "内存告警关注的是资源用量，和事件时间的进度推进没有任何关系。",
       "消费位点记录的是读到 Kafka 哪个 offset，跟事件时间的完整性判断是两套不同的坐标。"
     ],
     "optionExplanations_en": [
       "Rate limiting controls how many requests get through per second, an entirely different job from marking a moving point in time.",
-      "It rides along with the records and announces that a certain point in time has fully passed, which is the whole idea here.",
+      "A watermark is a timestamp flowing with the data that declares event time has advanced to that point and no earlier events are expected; it is a heuristic, and anything arriving after counts as late, which is its definition.",
       "A memory alert threshold watches how much RAM is in use, nothing to do with how far event time has advanced.",
       "A consumer offset marks a position inside a Kafka log, a completely different bookkeeping axis than tracking event-time progress."
     ],
@@ -1491,16 +1491,16 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "watermarks",
-    "q": "watermark 策略在哪里配置？它表达什么参数？",
-    "q_en": "Where is a watermark strategy configured, and what parameter does it express?",
+    "q": "这个 WatermarkStrategy 通常配置在哪里？它的核心参数表达什么？",
+    "q_en": "Where is this WatermarkStrategy usually configured, and what does its key parameter express?",
     "options": [
-      "配置在流的 source 上，告诉 Flink 为迟到事件等多久",
+      "在 source 处配置（`fromSource` 时传入，或紧跟 source 调 `assignTimestampsAndWatermarks`），参数是最大乱序容忍时长，即为迟到事件等多久",
       "配置在 sink 上，用来控制数据写出的速率",
       "配置在 JobManager 上，用来控制集群的心跳间隔时长",
       "无需任何手动配置，Flink 会自动推断出来"
     ],
     "options_en": [
-      "Configured on the stream's source, telling Flink how long to wait for late events.",
+      "At the source (passed to `fromSource`, or via `assignTimestampsAndWatermarks` right after the source); the parameter is the maximum out-of-orderness, i.e. how long to wait for late events.",
       "Configured on the sink, used to control the rate data is written out.",
       "Configured on the JobManager, used to control the cluster's heartbeat interval length.",
       "No manual configuration needed at all — Flink infers it automatically."
@@ -1508,14 +1508,14 @@
     "answer": [
       0
     ],
-    "why": "watermark 策略随 source 定义（如 assignTimestampsAndWatermarks），核心参数就是「愿意等迟到事件多久」。",
-    "why_en": "Watermark strategies are configured on the source and tell Flink how long to wait for late events.",
+    "why": "WatermarkStrategy 应尽量靠近 source 定义：可以在 `env.fromSource(...)` 时传入，也可以紧跟 source 调 `assignTimestampsAndWatermarks`。`forBoundedOutOfOrderness(Duration.ofSeconds(10))` 的参数就是最大乱序容忍时长，等价于「为迟到事件最多等 10 秒」。",
+    "why_en": "A WatermarkStrategy should be defined as close to the source as possible: pass it to `env.fromSource(...)` or call `assignTimestampsAndWatermarks` right after the source. The argument of `forBoundedOutOfOrderness(Duration.ofSeconds(10))` is the maximum out-of-orderness, equivalent to waiting up to ten seconds for late events.",
     "tags": [
       "flink",
       "watermarks",
       "configuration"
     ],
-    "codeSample": "DataStream<Transaction> transactions = env\n  .addSource(new FlinkKafkaConsumer<>(\"transactions\", schema, kafkaProps))\n  .assignTimestampsAndWatermarks(\n    WatermarkStrategy.<Transaction>forBoundedOutOfOrderness(Duration.ofSeconds(10))\n      .withTimestampAssigner((event, ts) -> event.getTimestamp()));",
+    "codeSample": "KafkaSource<Transaction> source = KafkaSource.<Transaction>builder()\n  .setTopics(\"transactions\")\n  .setValueOnlyDeserializer(schema)\n  .setProperties(kafkaProps)\n  .build();\n\nDataStream<Transaction> transactions = env.fromSource(\n  source,\n  WatermarkStrategy.<Transaction>forBoundedOutOfOrderness(Duration.ofSeconds(10))\n    .withTimestampAssigner((event, ts) -> event.getTimestamp()),\n  \"transactions\");",
     "lang": "java",
     "termDefinitions": [
       {
@@ -1535,19 +1535,19 @@
       }
     ],
     "optionExplanations": [
-      "watermark 策略挂在 source 上，告诉 Flink 该为迟到事件等多久，这正是本题的答案。",
+      "WatermarkStrategy 在 source 处配置（`fromSource` 传入或紧跟 source 调 `assignTimestampsAndWatermarks`），参数是最大乱序容忍时长，这正是本题的答案。",
       "sink 负责把结果写出去，控制写出速率是背压或限流的事，不是 watermark 该管的。",
       "JobManager 的心跳间隔是集群协调层的配置，跟事件时间推进的 watermark 是两套机制。",
       "watermark 策略需要显式配置等待时长，并不会由 Flink 自动帮你推断出来。"
     ],
     "optionExplanations_en": [
-      "It sits right where records first enter the pipeline, since that's where you set the wait duration for latecomers.",
+      "The WatermarkStrategy is configured at the source (passed to `fromSource` or applied right after it via `assignTimestampsAndWatermarks`), and its parameter is the maximum out-of-orderness, which is the answer here.",
       "A sink is responsible for writing results out; controlling write-out rate is a backpressure or rate-limiting concern, not this setting's job.",
       "The JobManager's heartbeat interval is a cluster-coordination setting, a separate mechanism from tracking how far event time has moved.",
       "You have to spell that number out yourself in code; nothing here gets guessed on your behalf."
     ],
-    "scenario": "点击聚合作业决定最多容忍 10 秒乱序，现在要在代码里找到设置这个容忍度的位置。",
-    "scenario_en": "Your click job has settled on tolerating at most ten seconds of out-of-orderness, and now you need to find where in the code that tolerance is set."
+    "scenario": "点击聚合作业决定采用 bounded out-of-orderness 策略、最多容忍 10 秒乱序，现在要在代码里找到设置这个容忍度的位置。",
+    "scenario_en": "Your click job has chosen a bounded out-of-orderness strategy tolerating at most ten seconds of disorder, and now you need to find where in the code that tolerance is set."
   },
   {
     "id": "sd-deep-dives-flink-025",
@@ -1555,25 +1555,25 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "watermarks",
-    "q": "Bounded Out-Of-Orderness 与 No Watermarks 两种策略的区别是？",
-    "q_en": "How do bounded out-of-orderness and no-watermarks strategies differ?",
+    "q": "这两种策略的区别是？",
+    "q_en": "How do these two strategies differ?",
     "options": [
-      "前者完全不等迟到事件，后者会一直等",
-      "前者为迟到事件最多等一个固定时长；后者完全不等、事件一到就处理",
-      "两种策略都会无限期地等待下去",
-      "No Watermarks 策略因为完全不等迟到事件，计算精度反而更高"
+      "前者完全不容忍乱序，后者会无限期等待迟到事件",
+      "前者让 watermark 落后最大时间戳 10 秒，给迟到事件留固定等待；后者假设时间戳单调递增，watermark 紧跟最大时间戳，任何乱序事件都算迟到",
+      "两种策略都会无限期地等待下去，直到所有事件到齐",
+      "后者因为不等迟到事件，窗口结果反而更准确"
     ],
     "options_en": [
-      "The first never waits for late events, the second always waits.",
-      "The first waits a fixed maximum duration for late events; the second waits for nothing and processes events immediately.",
-      "Both strategies wait indefinitely.",
-      "The no-watermarks strategy is actually more accurate because it never waits for late events."
+      "The first tolerates no disorder at all, while the second waits indefinitely for late events.",
+      "The first keeps the watermark 10 seconds behind the max timestamp, leaving a fixed wait for late events; the second assumes monotonically increasing timestamps, so the watermark tracks the max timestamp and any out-of-order event counts as late.",
+      "Both strategies wait indefinitely until every event has arrived.",
+      "The second is more accurate because it does not wait for late events."
     ],
     "answer": [
       1
     ],
-    "why": "Bounded Out-Of-Orderness 给迟到事件一个有界等待窗口（如 10 秒）；No Watermarks 则按到达即处理，放弃对乱序的补偿。",
-    "why_en": "Bounded out-of-orderness waits a fixed duration for late events, while the no-watermarks strategy processes events immediately as they arrive.",
+    "why": "`forBoundedOutOfOrderness(10s)` 生成的 watermark = 已见最大时间戳 − 10 秒，窗口晚 10 秒触发，换来对几秒抖动的容忍；`forMonotonousTimestamps()` 相当于乱序容忍为 0，延迟最低，但本题这种常见几秒乱序的事件都会变成迟到数据、默认被窗口丢弃。注意：`noWatermarks()` 是给不需要事件时间的作业用的，用在事件时间窗口上窗口不会触发。",
+    "why_en": "`forBoundedOutOfOrderness(10s)` emits watermarks at max seen timestamp minus 10 seconds, so windows fire 10 seconds later in exchange for tolerating a few seconds of jitter; `forMonotonousTimestamps()` is effectively zero out-of-orderness tolerance, giving the lowest latency, but the routinely delayed events here become late data that windows drop by default. Note that `noWatermarks()` is for jobs that don't need event time; on event-time windows it means the windows never fire.",
     "tradeoff": "等待迟到事件换准确性 vs 立即处理换低延迟",
     "tags": [
       "flink",
@@ -1612,19 +1612,19 @@
       ]
     },
     "optionExplanations": [
-      "这把哪一方肯多等一等说反了，两种策略在耐心程度上正好是对调的。",
-      "一个愿意为姗姗来迟的数据留出固定时长，另一个则来什么处理什么，中间那道分界线正是本题要抓的差异。",
-      "把「完全不等」的那一方形容成会一直耗下去，跟它的实际脾气正好拧着。",
-      "少等意味着少修正，那些真正迟到的记录会直接被漏算，谈不上换来更高精度。"
+      "这把两者说反了：前者容忍 10 秒乱序，后者才是零容忍；而且两者都不会无限期等待。",
+      "前者 watermark 落后最大时间戳 10 秒、留出固定等待；后者假设时间戳单调递增、容忍度为 0，乱序事件都算迟到，这正是本题要抓的差异。",
+      "两种策略的等待都是有界的：一个是固定 10 秒，一个是 0，都不会无限期等到所有事件到齐。",
+      "不等意味着乱序的迟到记录默认被窗口丢弃，结果不会更准确，只是延迟更低。"
     ],
     "optionExplanations_en": [
-      "This flips who's actually the patient one — the two strategies' willingness to wait is exactly backwards here.",
-      "One leaves a fixed window open for stragglers to catch up; the other just runs with whatever has shown up so far, and that gap is the crux of it.",
-      "Calling the strategy with zero patience an indefinite waiter is the opposite of how it actually behaves.",
-      "Less waiting means fewer corrections, so records that truly show up late just get missed — hardly a path to sharper accuracy."
+      "This flips them: the first tolerates 10 seconds of disorder while the second is the zero-tolerance one, and neither waits indefinitely.",
+      "The first keeps the watermark 10 seconds behind the max timestamp, leaving a fixed wait; the second assumes monotonic timestamps with zero tolerance so any out-of-order event is late, which is the difference this question targets.",
+      "Both strategies bound their waiting, one at a fixed 10 seconds and the other at zero; neither waits indefinitely for every event.",
+      "Not waiting means out-of-order late records are dropped by default, so results are not more accurate, just lower latency."
     ],
-    "scenario": "点击聚合按事件时间开窗，网络抖动让事件常迟到几秒；要在「等一会儿」和「不等」之间选。",
-    "scenario_en": "The click aggregator windows by event time and jitter routinely delays events by a few seconds, so you must choose between waiting a bit or not waiting at all."
+    "scenario": "点击聚合按事件时间开窗，网络抖动让事件常迟到几秒；要在 `forBoundedOutOfOrderness(10s)` 和 `forMonotonousTimestamps()` 两种 WatermarkStrategy 之间选。",
+    "scenario_en": "The click aggregator windows by event time and jitter routinely delays events by a few seconds, so you must choose between `forBoundedOutOfOrderness(10s)` and `forMonotonousTimestamps()` as the WatermarkStrategy."
   },
   {
     "id": "sd-deep-dives-flink-026",
@@ -2443,27 +2443,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "windows",
-    "scenario": "风控要求：检测「30 分钟内出现 3 笔以上超过 $1000 的交易」，且每 5 分钟评估一次。",
-    "scenario_en": "Risk rules require detecting more than three transactions over $1000 within thirty minutes, evaluated every five minutes.",
+    "scenario": "风控要求：按卡号检测「30 分钟内出现至少 3 笔超过 $1000 的交易」，且规则每 5 分钟评估一次即可。",
+    "scenario_en": "Risk rules require detecting, per card, at least three transactions over $1000 within thirty minutes, and it is enough to evaluate the rule every five minutes.",
     "q": "该用什么窗口？",
     "q_en": "Which window should you use?",
     "options": [
       "一个 30 分钟长、彼此互不重叠的 TumblingWindow 滚动窗口",
       "SlidingEventTimeWindows，30 分钟长、5 分钟滑动",
       "一个活动间隔设为 5 分钟的 SessionWindow 会话窗口",
-      "完全不用任何窗口结构，逐条实时判断每一笔交易"
+      "完全不用任何窗口结构，用 KeyedProcessFunction 逐条实时判断每一笔交易"
     ],
     "options_en": [
       "A thirty-minute tumbling window whose buckets never overlap each other.",
       "SlidingEventTimeWindows, thirty minutes long with a five-minute slide.",
       "A session window whose activity gap is set to five minutes.",
-      "No window structure at all, judging each transaction one at a time in real time."
+      "No window structure at all, judging each transaction one at a time in real time with a KeyedProcessFunction."
     ],
     "answer": [
       1
     ],
-    "why": "「回看 30 分钟、每 5 分钟评估」= 30 分钟窗口以 5 分钟为步长滑动；滚动窗口会在边界漏掉跨窗口的交易速率。",
-    "why_en": "Detecting velocity over the last thirty minutes evaluated every five minutes is a thirty-minute sliding window with a five-minute slide.",
+    "why": "「回看 30 分钟、每 5 分钟评估」正好是 30 分钟窗口以 5 分钟为步长滑动；滚动窗口每 30 分钟才评估一次，还会在边界漏掉跨两个桶的交易；会话窗口按空闲间隔切分，不是固定回看长度。逐条用 KeyedProcessFunction + state 也能精确计数，但它是逐条实时触发，题面只要求每 5 分钟评估，用滑动窗口更简单。",
+    "why_en": "Looking back thirty minutes and evaluating every five minutes is exactly a thirty-minute window sliding by five minutes; a tumbling window evaluates only every thirty minutes and misses runs that straddle a bucket boundary, and a session window splits on inactivity gaps rather than a fixed lookback. A per-record KeyedProcessFunction with state could also count precisely, but it fires on every event, while the requirement only asks for evaluation every five minutes, so the sliding window is simpler.",
     "whenOtherWins": "若规则是「自然半小时桶内的统计」（对齐整点边界），滚动窗口反而正确且更便宜。",
     "tradeoff": "滑动窗口的边界连续检测 vs 滚动窗口的低成本",
     "tags": [
@@ -2516,13 +2516,13 @@
       "把评估间隔拉到跟统计范围一样长，正好会在两次评估的接缝处放过刚好卡在缝里的可疑交易。",
       "统计跨度和评估间隔这两个数字，跟需求里那两个数字严丝合缝地对上了。",
       "这个候选看的是活跃与否，而不是一个固定长度的滚动统计口径，风控这里要的是后者。",
-      "少了一个能装下一段时间窗口的容器，单看一条记录永远数不出「一段时间内出现几次」。"
+      "KeyedProcessFunction 加 keyed state 也能精确计数，但它逐条实时触发；题面只要求每 5 分钟评估一次，滑动窗口更简单，所以不选它。"
     ],
     "optionExplanations_en": [
       "Stretching the re-check gap out to match the lookback span leaves a seam between checks where a suspicious run can slip through unnoticed.",
       "The two numbers this candidate uses — how far back it looks and how often it re-checks — match the two numbers the requirement actually states.",
       "This candidate keys off whether activity keeps happening, not a fixed lookback span, which isn't the shape this risk rule calls for.",
-      "With no container to hold a stretch of time, there is nothing to count occurrences against — one record alone can never reveal a rate."
+      "A KeyedProcessFunction with keyed state can also count precisely, but it fires per record; the requirement only asks for evaluation every five minutes, so the simpler sliding window is the better fit."
     ]
   },
   {
@@ -2695,21 +2695,21 @@
     "q_en": "What is a task slot, and how is the default count chosen?",
     "options": [
       "一个 Kafka 分区在 Flink 内部使用的另一个别名",
-      "资源调度的基本单位，默认 1 个、通常按 CPU 核数配置",
+      "资源调度的基本单位，每个 TaskManager 默认 1 个，常见做法是按 CPU 核数配置",
       "磁盘存储上按容量划出的一个物理分区",
       "每次 checkpoint 触发时分配到的一个编号"
     ],
     "options_en": [
       "Just another internal alias Flink uses for a Kafka partition.",
-      "The basic unit of resource scheduling; it defaults to one per machine and is usually set to the CPU core count.",
+      "The basic unit of resource scheduling; it defaults to one per TaskManager and is commonly set to the CPU core count.",
       "A physical partition carved out of disk storage by capacity.",
       "The sequence number assigned each time a checkpoint is triggered."
     ],
     "answer": [
       1
     ],
-    "why": "slot 把 TaskManager 的资源切成原子颗粒：默认 1 slot，通常按机器核数配置；作业和算子在这些颗粒上分配。",
-    "why_en": "A task slot is Flink's basic scheduling unit; it defaults to one per TaskManager and is usually set to the machine's CPU core count.",
+    "why": "slot 把一个 TaskManager 的资源切成若干份，是调度的基本单位；taskmanager.numberOfTaskSlots 默认是 1（按 TaskManager 计），常见做法是设成该 TaskManager 可用的核数，但 slot 只划分 managed memory、不隔离 CPU，所以核数只是起点。",
+    "why_en": "A slot splits one TaskManager's resources into shares and is the basic scheduling unit; taskmanager.numberOfTaskSlots defaults to 1 per TaskManager and is commonly set to the cores available to that TaskManager, but slots only divide managed memory and do not isolate CPU, so the core count is just a starting point.",
     "tags": [
       "flink",
       "task-slots",
@@ -2741,13 +2741,13 @@
     ],
     "optionExplanations": [
       "Kafka 分区是消息队列里的概念，跟 TaskManager 上划分资源的 task slot 完全是两套东西。",
-      "task slot 是资源调度的基本单位，默认 1 个、通常按 CPU 核数配置，这正是本题的答案。",
+      "task slot 是资源调度的基本单位，每个 TaskManager 默认 1 个、常见做法是按 CPU 核数配置，这正是本题的答案。",
       "磁盘分区划的是存储空间，跟资源调度这件事完全不是一回事。",
       "checkpoint 有自己的版本号或 ID，不会拿 task slot 这个资源概念来给它编号。"
     ],
     "optionExplanations_en": [
       "A Kafka partition is a messaging-layer concept, an entirely different thing from a task slot that carves up resources on a TaskManager.",
-      "It's the smallest unit a worker process carves its resources into; it defaults to one per TaskManager and is usually set to the machine's core count.",
+      "It's the smallest unit a TaskManager carves its resources into; it defaults to one per TaskManager and is commonly set to the core count.",
       "Disk partitioning carves up storage space, an entirely different concern from scheduling compute resources.",
       "Checkpoints have their own version number or ID; they are never numbered using a resource concept like a task slot."
     ],
@@ -2777,8 +2777,8 @@
     "answer": [
       3
     ],
-    "why": "同作业的算子共享 slot：作业占用 slot 数 = 最大算子并行度（本例 8），而不是各算子并行度之和 24；共享只让利用率上升，不牺牲正确性。",
-    "why_en": "Operators of one job share slots, so the job needs as many slots as its widest operator — eight here, not the twenty-four you would get by adding all three operators up — and sharing only raises utilisation without costing correctness.",
+    "why": "默认 slot sharing group 下，同作业不同算子的 subtask 可以挤进同一个 slot：作业需要的 slot 数 = 最大算子并行度（本例 8），不是 8+8+8=24；至于要几台机器，再看每台 TaskManager 配了几个 slot。共享只提高利用率，各算子状态和 checkpoint 仍各自独立，不影响正确性。",
+    "why_en": "In the default slot sharing group, subtasks of different operators in one job can share a slot, so the job needs as many slots as its widest operator — eight here, not 8+8+8=24; how many machines that takes depends on slots per TaskManager. Sharing only raises utilisation; each operator keeps its own state and checkpoints, so correctness is unaffected.",
     "tags": [
       "flink",
       "task-slots",
@@ -2805,16 +2805,16 @@
       "一个算子独占整台机器，16 核只跑一份任务，利用率低到不可接受，slot 设计就是为了避开这种浪费。",
       "共享不是 source 的特权，keyBy 聚合和 sink 同样能和别的算子挤在一个 slot 里。",
       "共享的是 CPU 和内存份额，各算子的状态和 checkpoint 仍然各管各的，不会因此丢数据。",
-      "把三个算子叠进同一批 slot，机器数按最宽的那个算子算就够了，这正是本题的答案。"
+      "三个算子叠进同一批 slot，所需 slot 数按最宽的算子算（8 个），这正是本题的答案。"
     ],
     "optionExplanations_en": [
       "Giving one operator a whole machine means a sixteen-core box runs a single task — utilisation so low the slot design exists precisely to avoid it.",
       "Sharing is not a privilege of sources; keyed aggregations and sinks can just as well sit in a slot beside other operators.",
       "What gets shared is CPU and memory share — each operator still keeps its own state and checkpoints, so nothing is lost.",
-      "Stacking the three operators into the same set of slots means you size the cluster by the widest operator alone, and that is the answer here."
+      "Stacking the three operators into the same set of slots means you need only as many slots as the widest operator — eight — and that is the answer here."
     ],
-    "scenario": "点击聚合作业里 source、keyBy 聚合、sink 三个算子并行度都是 8，而集群 slot 数有限。",
-    "scenario_en": "In a click job, the source, keyed aggregation, and sink all run at parallelism eight, while the cluster has only a limited number of slots."
+    "scenario": "点击聚合作业里 source、keyBy 聚合、sink 三个算子并行度都是 8，使用默认的 slot sharing group，而集群 slot 数有限。",
+    "scenario_en": "In a click job, the source, keyed aggregation, and sink all run at parallelism eight in the default slot sharing group, while the cluster has only a limited number of slots."
   },
   {
     "id": "sd-deep-dives-flink-042",
@@ -2825,13 +2825,13 @@
     "q": "task slot 起到哪些作用？（多选）",
     "q_en": "What roles do task slots play?",
     "options": [
-      "隔离不同任务之间的内存",
+      "隔离不同任务之间的 managed memory",
       "控制并行任务实例的数量",
       "支持同一作业不同任务之间的资源共享",
       "决定 watermark 的推进速度"
     ],
     "options_en": [
-      "Isolate memory between different tasks.",
+      "Isolate managed memory between different tasks.",
       "Control the number of parallel task instances.",
       "Enable resource sharing between different tasks of the same job.",
       "Determine how fast watermarks advance."
@@ -2841,8 +2841,8 @@
       1,
       2
     ],
-    "why": "并行任务上限 = 单机 slot 数（默认按 CPU 核数配），slot 同时切分内存份额、允许同作业算子复用；watermark 由事件时间戳驱动，加 slot 也推不快。",
-    "why_en": "The parallel task ceiling equals the slot count per machine (usually set to the CPU core count); slots also carve up memory and let operators of one job reuse them, while watermarks move on event timestamps no matter how many slots you add.",
+    "why": "slot 把 TaskManager 的 managed memory 预先切份，任务不会去抢别人那份（但同一 JVM 的 heap 和 CPU 不隔离）；集群可用 slot 总数就是并行 subtask 的上限，单台 TaskManager 的 slot 数是这台的上限；slot sharing 让同作业的 source、聚合、sink 共用一个 slot。watermark 由事件时间戳和到达节奏决定，加 slot 推不快。",
+    "why_en": "Slots pre-divide a TaskManager's managed memory so a task doesn't take another's share (heap and CPU in the same JVM are not isolated); the cluster's total slot count caps parallel subtasks, and one TaskManager's slot count caps that machine; slot sharing lets a job's source, aggregation, and sink share one slot. Watermarks move with event timestamps and arrival pace, not slot count.",
     "tags": [
       "flink",
       "task-slots",
@@ -2861,14 +2861,14 @@
       }
     ],
     "optionExplanations": [
-      "slot 给每个任务划出独立内存份额，一个任务吃满自己那份也压不垮同机器的邻居。",
-      "一台机器能同时跑几份同一任务，卡在它有几个 slot 上，这就是并行度的资源天花板。",
+      "slot 给每个任务预先划出独立的 managed memory 份额，任务不会去抢别人那份；但同一 JVM 的 heap 和 CPU 并不隔离，所以只能说隔离 managed memory，不是容器级强隔离。",
+      "集群可用 slot 总数就是并行 subtask 的上限，单台 TaskManager 的 slot 数则是这台机器的上限，这是并行度的资源天花板。",
       "同作业的 source、聚合、sink 可以挤进同一个 slot，避免每个算子都独占一份资源。",
       "watermark 走多快取决于事件自带的时间戳和到达节奏，把它当成能靠加机器调快的旋钮是常见误解。"
     ],
     "optionExplanations_en": [
-      "Each task gets its own carved-out share of memory, so one task filling its share cannot squash its neighbours on the same box.",
-      "How many copies of a task can run side by side on one machine is capped by how many slots that machine has — that is the parallelism ceiling.",
+      "Each task gets its own pre-divided share of managed memory, so it won't take another task's share; heap and CPU within the same JVM are not isolated, so this is managed-memory isolation, not container-grade isolation.",
+      "The cluster's total slot count caps parallel subtasks, and one TaskManager's slot count caps that machine — that is the parallelism ceiling.",
       "The source, aggregation, and sink of one job can pack into the same slot instead of each operator hogging a dedicated share.",
       "Watermark speed comes from the timestamps events carry and how fast they arrive; treating it as a knob you turn by adding machines is a common misconception."
     ],
@@ -3178,26 +3178,26 @@
     "options": [
       "JobManager 逐台机器手动 SSH 上去，手动打包内存后再下载",
       "每个算子每秒各自独立拍一次快照，彼此完全互不协调",
-      "JobManager 发屏障，算子收齐后各自快照，全部完成即注册",
+      "JobManager 触发、source 注入屏障，算子收齐后各自快照并确认，全部确认即完成",
       "由 sink 逐级向上反向发送确认信号来触发整个流程运转"
     ],
     "options_en": [
       "The JobManager manually SSHes into each machine one by one to dump and download memory.",
       "Every operator independently snapshots itself once a second with zero coordination at all.",
-      "The JobManager sends a barrier; operators snapshot once it arrives, registering once all finish.",
+      "The JobManager triggers it and sources inject a barrier; operators snapshot once barriers arrive and acknowledge, and the checkpoint completes when all acknowledge.",
       "The sink triggers the whole process running by sending acknowledgements upstream, one stage at a time."
     ],
     "answer": [
       2
     ],
-    "why": "屏障像 watermark 一样随流而行，把「快照时刻」一致地传播到每个算子——状态序列化存入 backend，最终由 JobManager 登记。",
-    "why_en": "The job manager injects a barrier at the sources, each operator snapshots its state once barriers arrive from all inputs, and the checkpoint completes when every operator finishes.",
+    "why": "JobManager 的 CheckpointCoordinator 触发 checkpoint，source 在数据流里插入 barrier；barrier 随数据向下游流动，算子从所有输入收齐 barrier（aligned 模式）后把状态写进 state backend / checkpoint storage，并向 JobManager 确认；全部 task 确认后 JobManager 把这次 checkpoint 登记为完成。",
+    "why_en": "The JobManager's CheckpointCoordinator triggers a checkpoint and sources inject a barrier into the stream; the barrier flows downstream with the data, each operator snapshots its state to the checkpoint storage once barriers from all inputs arrive (aligned mode) and acknowledges to the JobManager, which marks the checkpoint complete when every task has acknowledged.",
     "tags": [
       "flink",
       "checkpoints",
       "barriers"
     ],
-    "diagram": "sequenceDiagram\n    participant S as Source\n    participant A as Operator A\n    participant B as Operator B\n    participant Store as State store\n    S->>A: records\n    S->>A: checkpoint barrier\n    A->>Store: snapshot state\n    A->>B: forward barrier\n    B->>Store: snapshot state\n    Store-->>S: checkpoint complete",
+    "diagram": "sequenceDiagram\n    participant JM as JobManager\n    participant S as Source\n    participant A as Operator A\n    participant B as Operator B\n    participant Store as State store\n    JM->>S: trigger checkpoint\n    S->>A: records\n    S->>A: checkpoint barrier\n    A->>Store: snapshot state\n    A->>B: forward barrier\n    B->>Store: snapshot state\n    A-->>JM: ack\n    B-->>JM: ack\n    JM->>JM: checkpoint complete",
     "codeSample": "env.enableCheckpointing(60000);  // 每 60 秒发一次 barrier\nenv.getCheckpointConfig().setMinPauseBetweenCheckpoints(30000);\n// barrier 随数据流过每个算子，收齐后各自快照状态",
     "lang": "java",
     "termDefinitions": [
@@ -3404,8 +3404,8 @@
     "answer": [
       2
     ],
-    "why": "恢复时 Kafka 消费者要回到 checkpoint 时的 offset 重放数据；retention 太短、数据被清理，就回不去了。",
-    "why_en": "Rewinding requires the Kafka topic to retain enough data to replay from the checkpointed offset.",
+    "why": "Flink 把每个分区读到的 offset 存进 checkpoint；恢复时 source 回到这些 offset 重放。retention 太短、那段数据已被删，就回不去了。",
+    "why_en": "Flink stores each partition's offset in the checkpoint and the source rewinds to those offsets on restore; if retention has already deleted that range, the rewind fails.",
     "tags": [
       "flink",
       "kafka",
@@ -3447,13 +3447,13 @@
       "分区数量跟能不能回退重放是两个维度，说必须只留一个分区没有依据。",
       "启用分布式事务解决的是端到端的写入一致性，不是重放窗口够不够长这件事。",
       "回退重放要求 topic 的保留期覆盖到 checkpoint 那个 offset，太短就回不去了，这正是本题的答案。",
-      "group id 是消费者组的身份标识，恢复时复用同一个 group id 才能接续读取位置，没必要重建。"
+      "Flink 从 checkpoint 恢复时用的是 checkpoint 里存的 offset，提交给 Kafka 的 group offset 只用于监控；重建 group id 既没必要，也解决不了重放问题。"
     ],
     "optionExplanations_en": [
       "Partition count and whether you can rewind and replay are separate dimensions; requiring just one partition has no basis.",
       "Enabling distributed transactions addresses end-to-end write consistency, not whether the replay window is long enough.",
       "The rewind only works if the log hasn't already thrown away the position it needs to resume from — shrink that window and there's nothing left to replay.",
-      "The group id is the consumer group's identity; reusing the same group id on recovery is what lets it resume from its position, so recreating it isn't needed."
+      "On restore Flink uses the offsets stored in its checkpoint; offsets committed to the Kafka group are only for monitoring, so recreating the group id is pointless and doesn't address replay."
     ]
   },
   {
@@ -3541,10 +3541,10 @@
     "atomType": "number",
     "topic": "system-design",
     "sub": "watermarks",
-    "scenario": "线上大盘每分钟展示「过去一分钟点击量」，用事件时间窗口计算，watermark 策略是 bounded-out-of-orderness。",
-    "scenario_en": "An online dashboard shows clicks from the last minute, computed with event-time windows and a bounded-out-of-orderness watermark strategy.",
-    "q": "示例里「5 点已过」的 watermark 在 5:01:15 才到达，这约 75 秒的间隔是干什么用的？",
-    "q_en": "In the example, a \"past 5:00\" watermark arrives at 5:01:15; what is that roughly 75-second gap for?",
+    "scenario": "线上大盘每分钟展示「过去一分钟点击量」，用事件时间窗口计算，watermark 策略是 bounded-out-of-orderness，乱序上限配置为约 75 秒，点击本身几乎无摄入延迟。结果「事件时间 5:00 已过」的 watermark 在 wall-clock 5:01:15 左右才到达。",
+    "scenario_en": "An online dashboard shows clicks from the last minute, computed with event-time windows and a bounded-out-of-orderness watermark whose bound is configured to about 75 seconds; clicks themselves arrive with almost no ingestion delay. As a result, the \"event time past 5:00\" watermark arrives at about 5:01:15 wall-clock.",
+    "q": "这个「5 点已过」的 watermark 在 5:01:15 才到达，这约 75 秒的间隔是干什么用的？",
+    "q_en": "This \"past 5:00\" watermark arrives at 5:01:15; what is that roughly 75-second gap for?",
     "options": [
       "这是系统时钟漂移带来的固有误差",
       "这段时间恰好是一次 checkpoint 花费的耗时",
@@ -3560,8 +3560,8 @@
     "answer": [
       3
     ],
-    "why": "5:01:15 - 5:00:00 ≈ 75 秒，这是 watermark 落后事件时间的等待窗口。它让 4:59 左右的迟到事件赶上，代价是大盘至少多等这段时间。",
-    "why_en": "The roughly 75-second lag is the watermark wait window: it lets late 4:59 events arrive, at the cost of delaying the dashboard.",
+    "why": "题面已说明乱序上限约 75 秒、摄入几乎无延迟，所以 5:01:15 − 5:00:00 的差基本就是 watermark 故意落后的等待窗口：让 4:59 左右发生但迟到的点击赶上 [4:59, 5:00) 窗口，代价是大盘至少晚这么久出数。若摄入本身有延迟，watermark 的 wall-clock 滞后会是「乱序上限 + 摄入延迟」。",
+    "why_en": "The stem fixes the out-of-orderness bound at about 75 seconds with negligible ingestion delay, so the 5:01:15 − 5:00:00 gap is essentially the watermark's deliberate wait window, letting late clicks from around 4:59 land in the [4:59, 5:00) window at the cost of a later dashboard. With real ingestion delay, the wall-clock lag would be bound plus ingestion delay.",
     "tags": [
       "flink",
       "watermarks",
@@ -3682,8 +3682,8 @@
     "answer": [
       1
     ],
-    "why": "exactly-once 有实打实的性能和复杂度成本，需求驱动地选择语义（at-least-once + 幂等常是更务实的组合）。",
-    "why_en": "Question whether you truly need exactly-once, since it carries performance overhead and complexity that at-least-once with idempotence often avoids.",
+    "why": "端到端 exactly-once 需要事务型 sink 和 checkpoint 对齐，有延迟和吞吐成本。本题重复只会落在「按 click_id 幂等 upsert」的存储里，重放一条只是覆盖同一行，所以 at-least-once + 幂等就能得到正确结果。注意：如果在 Flink 内部做计数聚合，重复会先进计数，sink 幂等就救不回来了。",
+    "why_en": "End-to-end exactly-once needs a transactional sink and aligned checkpoints, costing latency and throughput. Here duplicates can only land in a store that upserts by click_id, so a replay just overwrites the same row and at-least-once plus idempotence gives correct results. If Flink itself aggregated counts, duplicates would already be in the count and sink idempotence couldn't undo them.",
     "tradeoff": "exactly-once 的正确性保证 vs at-least-once + 幂等的低开销",
     "tags": [
       "flink",
@@ -3708,19 +3708,19 @@
       }
     ],
     "optionExplanations": [
-      "开着默认值不去想真实需求，会白白背上 exactly-once 本可以省下的性能和复杂度代价。",
+      "Flink 开 checkpoint 时默认确实是 exactly-once 模式，问题在于不问需求就照单全收，白白背上本可省下的性能和复杂度代价。",
       "先问是否真的需要 exactly-once，很多场景 at-least-once 加幂等就足够务实，这正是本题的答案。",
       "更强的一致性语义通常要多付出协调和状态开销，说它零性能代价不成立。",
       "exactly-once 是通用的处理语义，不是只对金融系统开放的专属能力，这个限定没有依据。"
     ],
     "optionExplanations_en": [
-      "Never questioning the default means paying for a strong guarantee even in the many cases where the business genuinely doesn't need it.",
+      "Flink's checkpointing does default to exactly-once mode; the problem is accepting it without asking about the requirement, paying for a guarantee the business may not need.",
       "Interrogate the requirement before reaching for the strongest option — a weaker guarantee plus a bit of dedup logic is often the more sensible fit.",
       "Stronger consistency semantics usually cost extra coordination and state overhead; claiming zero performance cost doesn't hold up.",
       "Exactly-once is a general-purpose processing guarantee, not something reserved exclusively for financial systems — this restriction has no basis."
     ],
-    "scenario": "设计点击聚合：下游入库已按 click_id 幂等去重，吞吐要扛到每秒百万级事件。",
-    "scenario_en": "You're designing a click aggregator whose downstream sink already dedupes by click_id, and it has to sustain a million events per second."
+    "scenario": "设计点击写入管道：Flink 只做清洗，把点击明细逐条写进下游存储，存储端按 click_id 幂等 upsert（聚合在查询层做）；吞吐要扛到每秒百万级事件。",
+    "scenario_en": "You're designing a click ingestion pipeline: Flink only cleans events and writes each raw click to a downstream store that upserts idempotently by click_id (aggregation happens at query time); it has to sustain a million events per second."
   },
   {
     "id": "sd-deep-dives-flink-054",
@@ -4011,27 +4011,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "state-enrichment",
-    "scenario": "欺诈检测里，交易流需要补上账户信息（enrichment）后再判断。账户信息本身也是一条流。",
-    "scenario_en": "In fraud detection, the transaction stream needs account information enrichment before evaluation, and account information is also a stream.",
+    "scenario": "欺诈检测里，交易流需要补上账户信息（enrichment）后再判断。账户信息本身也是一条流，账户数约 5000 万、每个账户更新频繁，每笔交易只需要自己那个账户的信息。",
+    "scenario_en": "In fraud detection, the transaction stream needs account information enrichment before evaluation. Account information is also a stream: about 50 million accounts, each updated frequently, and each transaction needs only its own account's data.",
     "q": "Flink 中最直接的做法是？",
     "q_en": "What is the most direct Flink approach here?",
     "options": [
       "每一笔交易都要逐条同步地对账户服务发起一次远程 API 网络查询调用",
       "两条流按 accountId keyBy 后 connect，状态化补全",
-      "把整张账户表直接原样广播发送给集群里的所有客户端节点",
+      "把整条账户流广播给算子的所有并行实例，每个实例存全量账户表",
       "干脆放弃补全这一步，只依赖交易自身携带的原始字段"
     ],
     "options_en": [
       "Every single transaction must synchronously make a per-record remote API query call to the account service over the network.",
       "Key both streams by account id, connect them, and enrich statefully.",
-      "Broadcast the entire account table out as-is to every single client node across the cluster.",
+      "Broadcast the whole account stream to every parallel instance of the operator, each holding the full account table.",
       "Just skip the enrichment step and rely only on the raw fields the transaction already carries."
     ],
     "answer": [
       1
     ],
-    "why": "双流按同键 connect + 状态化 process 是流内 enrichment 的标准手法，避免了对外部服务的逐条同步调用。",
-    "why_en": "Keying both streams by account id and connecting them into a stateful process function enriches transactions without per-record external calls.",
+    "why": "5000 万账户、每笔交易只要自己的账户——按 accountId 双流 keyBy + connect，每个并行实例只存自己负责那部分账户，状态随并行度分摊，也没有逐条外部调用。broadcast state 会让每个并行实例都存全量 5000 万条，内存乘以并行度，只适合小维表/规则表；同步逐条调 API 会被远程延迟拖住；不补全则丢掉关键上下文。",
+    "why_en": "With 50 million accounts and each transaction needing only its own, keying both streams by accountId and connecting them lets each parallel instance hold only its share of accounts with no per-record external calls. Broadcast state would make every instance store all 50 million rows — memory times parallelism — which suits only small dimension or rule tables; synchronous per-record API calls stall on remote latency; skipping enrichment loses key context.",
     "whenOtherWins": "账户数据极小且几乎不变时，作为静态维表加载或广播反而更简单。",
     "tradeoff": "流内 connect 补全的低延迟 vs 同步 API 调用的简单直接",
     "codeSample": "DataStream<EnrichedTransaction> enriched = transactions\n    .keyBy(t -> t.getAccountId())\n    .connect(accountInfoStream.keyBy(a -> a.getAccountId()))\n    .process(new AccountEnrichmentFunction());\n// 两条流按同一个 accountId 分区后进入同一个 process 函数",
@@ -4061,13 +4061,13 @@
     "optionExplanations": [
       "逐笔同步调用外部账户服务会让整条处理链路都被这一次远程调用的延迟拖住。",
       "两条流按 accountId 分别 keyBy 后 connect，在同一个状态化 process 函数里协同补全，这正是本题的答案。",
-      "把整张账户表广播给所有节点意味着账户信息一变，全体节点都要重新同步，代价很高。",
+      "广播账户流会让算子的每个并行实例都存一份全量账户表，内存乘以并行度；Broadcast State 只适合小维表或规则表，5000 万账户不划算。",
       "放弃补全会让下游拿到的交易记录缺失账户维度，欺诈判断少了关键的上下文信息。"
     ],
     "optionExplanations_en": [
       "Synchronously calling the account service for every single transaction lets that one remote call's latency drag down the whole pipeline.",
       "Line both streams up on the same identifier and merge them into one handler that remembers what it has seen — no outside round trip needed.",
-      "Broadcasting the entire account table to every node means any account update forces a resync across the whole cluster, a costly approach.",
+      "Broadcasting makes every parallel instance of the operator hold the full account table — memory times parallelism; Broadcast State suits only small dimension or rule tables, not 50 million accounts.",
       "Skipping enrichment leaves downstream transactions missing the account dimension, cutting fraud detection off from key context."
     ]
   },
@@ -4239,8 +4239,8 @@
     "answer": [
       1
     ],
-    "why": "同一盗刷会被两个独立 detector 各报一条；union 并流 + keyBy(alertId) 把重复项归一组 + 开窗 aggregate 塌缩成一条，就在流内去了重。代价：多一个窗口算子及其状态。",
-    "why_en": "One fraud event gets reported by two independent detectors, so you union the streams, keyBy(alertId) to group the duplicates, and window-aggregate them into a single alert right inside the pipeline.",
+    "why": "union 把两条告警流并成一条，keyBy(alertId) 让同一 alertId 进同一个 key，窗口内 aggregate 只留一条。代价是多一个窗口算子和状态，且只能去掉落在同一窗口里的重复——跨窗口边界的要靠更长窗口或改用 keyed state + TTL「首条放行、后续丢弃」。加锁不可行，因为两个 detector 是分布式的独立 subtask，没有共享锁；exactly-once 只防重放，不识别业务重复。",
+    "why_en": "Union merges the two alert streams, keyBy(alertId) routes duplicates to the same key, and a windowed aggregate keeps one per window. The cost is an extra window operator and state, and it only removes duplicates that fall in the same window — boundary-straddling ones need a longer window or keyed state with TTL (\"emit first, drop the rest\"). Locks can't work because the detectors are independent distributed subtasks with no shared lock; exactly-once prevents replay duplicates, not business duplicates.",
     "whenOtherWins": "若两个 detector 天然不会对同一 alertId 重复触发（告警空间不相交），就没必要加 union + 去重这一步，直接双写即可。",
     "tradeoff": "流内去重的额外窗口状态 vs 下游收到重复告警",
     "tags": [
@@ -4271,14 +4271,14 @@
       }
     ],
     "optionExplanations": [
-      "两个 detector 并行跑在不同 slot 上、彼此独立，根本没有共享锁可加；这条从机制上就行不通。",
-      "同一 alertId 的多份告警被并到一条流、分进同一个 key，窗口里一聚合就只剩一份，重复彻底消失。",
+      "两个 detector 是分布在集群里的独立 subtask，没有共享内存或锁可用，这条在机制上行不通。",
+      "同一 alertId 的多份告警被并到一条流、分进同一个 key，窗口里一聚合，同一窗口内的重复只剩一份。",
       "它保证的是内部状态每条处理一次，不是跨两条流做去重；对外部 sink 也不自动生效。",
       "分写两个 topic 只是把重复甩给下游，问题没解决、只是换了个地方发生。"
     ],
     "optionExplanations_en": [
-      "The two detectors run in parallel on different slots and are independent, so there is no shared lock to add; this can't work mechanically.",
-      "The several alerts sharing an alertId land on one stream under the same key, and a single windowed fold leaves just one, so duplicates vanish.",
+      "The two detectors are independent subtasks distributed across the cluster with no shared memory or lock, so this can't work mechanically.",
+      "The several alerts sharing an alertId land on one stream under the same key, and a windowed fold leaves just one copy of the duplicates within that window.",
       "It guarantees each record hits internal state once, not cross-stream dedup, and it doesn't apply to an external sink automatically.",
       "Writing to two topics just hands duplicates to downstream; the problem is unsolved, only relocated."
     ]
@@ -4289,8 +4289,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "state-types",
-    "scenario": "要算「每个用户的累计消费额」，有人用 ListState 把每笔交易都 append 进去、读时再遍历求和；流会一直跑下去、用户量很大。",
-    "scenario_en": "To compute each user's running spend, someone uses ListState to append every transaction and sums the list on read; the stream runs forever with a large user base.",
+    "scenario": "要算「每个用户的累计消费额」，有人用 ListState 把每笔交易都 append 进去、读时再遍历求和；作业用的是 heap（HashMap）state backend，流会一直跑下去、用户量很大。",
+    "scenario_en": "To compute each user's running spend, someone uses ListState to append every transaction and sums the list on read; the job uses the heap (HashMap) state backend, and the stream runs forever with a large user base.",
     "q": "随着流一直跑，这个状态会怎么坏掉？",
     "q_en": "As the stream keeps running, how does this state break down?",
     "options": [
@@ -4308,8 +4308,8 @@
     "answer": [
       1
     ],
-    "why": "根因是存全量：ListState 每笔都留，状态随事件量线性膨胀，顶到内存 backend 的 RAM 上限、拖大 checkpoint。累计求和应换 AggregatingState/ReducingState，只存一个累加值。",
-    "why_en": "The root problem is keeping everything: ListState retains every transaction, so state grows linearly, hits the memory backend's RAM ceiling and bloats checkpoints — a running sum should use AggregatingState or ReducingState, which keep just one accumulator.",
+    "why": "根因是存全量：ListState 每笔都留，状态随事件量线性膨胀；在 heap backend 上最终顶到 JVM heap 上限，checkpoint 也越来越大越慢。换 RocksDB 只是把爆点挪到磁盘和 checkpoint，根治要换 ValueState / ReducingState / AggregatingState 只存一个累加值。",
+    "why_en": "The root cause is keeping everything: ListState retains every transaction, so state grows linearly; on the heap backend it eventually hits the JVM heap ceiling and checkpoints grow ever larger and slower. Switching to RocksDB only moves the blow-up to disk and checkpoints; the real fix is ValueState, ReducingState, or AggregatingState holding a single accumulator.",
     "tags": [
       "flink",
       "state-types",

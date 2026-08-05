@@ -5,7 +5,7 @@
     "atomType": "fit",
     "topic": "databases",
     "sub": "kv-store",
-    "scenario": "电商购物车服务：每用户一个购物车，读写频繁，要求毫秒级读取，可容忍极短暂不一致，结构简单 (user_id → 商品列表)。",
+    "scenario": "电商购物车服务：每用户一个购物车，结构简单 (user_id → 商品列表)，只按 user_id 整体读写；峰值读写 QPS 很高，读延迟目标为亚毫秒；不需要和库存/订单做事务，可容忍极短暂不一致，且业务接受在极端故障下丢失最近一两秒的购物车改动（已开启 AOF + 副本）。",
     "q": "最适合做购物车主存储的是？",
     "options": [
       "PostgreSQL（关系型）",
@@ -16,8 +16,8 @@
     "answer": [
       1
     ],
-    "why": "购物车是高频读写、按 key 存取、结构简单、可容忍短暂不一致的典型场景，内存 KV 的毫秒延迟正好匹配。",
-    "why_en": "A shopping cart has simple key-based access, high read-write throughput, and tolerates brief inconsistency, so an in-memory key-value store like Redis fits best.",
+    "why": "题面给了四个决定性条件：只按 key 整体存取、亚毫秒读延迟 + 高 QPS、不需要跨实体事务、能接受极端故障下丢失最近一两秒改动。内存 KV 正好吃满这四条；PostgreSQL 能做但延迟和写扩展成本更高，且题面明确不需要它的事务优势；Neo4j 和 Elasticsearch 不匹配这种访问模式。若购物车要求零丢失或要和库存强一致，就应换成持久化数据库作主存储。",
+    "why_en": "The stem gives four deciding conditions: whole-object access by key, sub-millisecond reads at high QPS, no cross-entity transactions, and tolerance for losing the last second or two of edits in an extreme failure. An in-memory KV store fits all four; PostgreSQL could work but costs more latency and write-scaling effort while its transactional strength is explicitly not needed; Neo4j and Elasticsearch don't match this access pattern. If the cart must never lose data or must be strongly consistent with inventory, a durable database should be the primary store.",
     "whenOtherWins": "若购物车必须和库存/订单强一致（下单即扣减、不能超卖），关系型数据库反而更合适——决定因素是一致性要求。",
     "tags": [
       "databases",
@@ -794,6 +794,7 @@
     "atomType": "number",
     "topic": "databases",
     "sub": "capacity",
+    "scenario": "假设：简单 GET/SET、value 只有几十到几百字节、不使用 pipelining、同机房网络、普通服务器。",
     "q": "经验数量级：单个 Redis 实例大致能处理多少 ops/秒？",
     "options": [
       "~1 千",
@@ -804,8 +805,8 @@
     "answer": [
       1
     ],
-    "why": "面试常用锚点：单 Redis 实例约 10 万 ops/秒量级（简单命令可更高，接近百万）。用来快速估算要不要分片。",
-    "why_en": "A common interview anchor is that a single Redis instance handles on the order of a hundred thousand operations per second.",
+    "why": "在题面这些前提下，单 Redis 实例约 10 万 ops/秒量级，是估算要不要分片的常用锚点。它不是固定上限：开 pipelining 可接近百万，大 value、慢命令或跨地域网络会显著更低；真实容量要用 redis-benchmark 按自己的 workload 测。",
+    "why_en": "Under these assumptions, a single Redis instance handles on the order of 100k ops/sec—a common anchor for deciding whether to shard. It is not a fixed ceiling: pipelining can push it toward a million, while large values, slow commands, or cross-region networks drop it sharply; real capacity should be measured with redis-benchmark on your own workload.",
     "tags": [
       "databases",
       "capacity"
@@ -1249,7 +1250,7 @@
     "atomType": "fit",
     "topic": "databases",
     "sub": "caching",
-    "scenario": "要求缓存和数据库在每次写入后尽量保持一致，可以接受写入稍慢一点。",
+    "scenario": "读多写少的商品详情：要求每次写入成功后，缓存里立即就是新值，紧接着的读请求直接命中新值、不要因为缓存被删而回源数据库；可以接受写请求同步多写一次缓存、稍慢一点；不能接受写入只落缓存、稍后才落库。",
     "q": "应选哪种缓存写策略？",
     "options": [
       "Cache-aside（旁路）",
@@ -1260,8 +1261,8 @@
     "answer": [
       1
     ],
-    "why": "Write-through 在写数据库的同时写缓存，一致性最好，代价是写路径多一步、稍慢。",
-    "why_en": "Write-through updates the cache and database together, giving the best consistency at the cost of slightly slower writes.",
+    "why": "Write-through 在写路径上同步更新数据库和缓存，写成功后缓存里就是新值，下一次读直接命中，代价是写多一步、稍慢。Cache-aside 写时通常删 key，下一次读会 miss 回源；write-back 先写缓存、异步落库，违反「不能只落缓存」；不用缓存则放弃读性能。注意 write-through 两步不是原子的，失败或并发下仍需重试/失效兜底。",
+    "why_en": "Write-through updates the database and cache synchronously on the write path, so the cache holds the new value right after the write and the next read hits it, at the cost of a slightly slower write. Cache-aside usually deletes the key on write, so the next read misses and reloads; write-back writes the cache first and persists later, violating the \"not cache-only\" constraint; no cache gives up read performance. The two writes in write-through are not atomic, so failures or races still need retry/invalidation as a backstop.",
     "whenOtherWins": "若更在意写吞吐、能容忍少量丢失，write-back 更快；若读多写少，cache-aside 最简单常用。",
     "diagram": "sequenceDiagram\n    participant App as 应用\n    participant Cache as 缓存\n    participant DB as 数据库\n    App->>Cache: 写入 x\n    Cache->>DB: 同步写入 x\n    DB-->>Cache: OK\n    Cache-->>App: OK\n    Note over Cache,DB: 两边始终一致，代价是写路径多一步",
     "tags": [
@@ -1731,9 +1732,9 @@
     "topic": "databases",
     "sub": "taxonomy",
     "q": "补全 SQL vs NoSQL 的取向：",
-    "text": "SQL 数据库偏向 {{强一致}} 和丰富查询；典型 NoSQL 偏向 {{水平扩展}} 和灵活 schema。",
-    "why": "这是选型的第一层直觉：要事务和复杂查询偏 SQL，要海量规模和弹性结构偏 NoSQL——再用具体需求收敛。",
-    "why_en": "SQL databases favor strong consistency and rich queries, while typical NoSQL favors horizontal scalability and flexible schemas.",
+    "text": "传统单机 SQL 数据库偏向 {{ACID}} 事务和丰富查询（join）；典型分布式 NoSQL（如 Cassandra、DynamoDB）偏向 {{水平扩展}} 和灵活 schema——这只是第一层直觉，NewSQL 和部分 NoSQL 已经模糊了这条边界。",
+    "why": "「ACID 事务」这个空由后面的「事务和丰富查询」锁定；「水平扩展」由「分布式 NoSQL」锁定。选型时先按这条直觉分流，再看具体需求：要强一致又要写扩展时看 NewSQL，DynamoDB/MongoDB 也提供事务和强一致读选项。",
+    "why_en": "\"ACID\" is anchored by \"transactions and rich queries\"; \"horizontal scaling\" is anchored by \"distributed NoSQL.\" Use this as a first split, then refine by requirements: NewSQL covers strong consistency plus write scaling, and DynamoDB/MongoDB also offer transactions and strongly consistent reads.",
     "tags": [
       "databases",
       "taxonomy"
@@ -1966,8 +1967,8 @@
     "answer": [
       0
     ],
-    "why": "面试锚点：单机关系库读约 50k+ QPS，简单写约 10k-20k TPS，实际取决于硬件和事务。读能靠缓存/副本分摊；写必须过 primary、WAL 刷盘、索引和锁，所以更早卡住。",
-    "why_en": "Use 50k+ reads/s and 10-20k simple writes/s as rough anchors; writes bottleneck first because one primary must log, index, and commit them.",
+    "why": "读可以靠缓存和加副本水平分摊，写却必须全部经过同一个 primary 的 WAL 刷盘、索引维护和锁，无法靠加副本分摊，所以流量增长时写吞吐最先到顶。具体能扛多少 TPS 取决于硬件、fsync/同步复制配置、行大小、索引数和事务复杂度，要靠压测得出，不是固定数字。",
+    "why_en": "Reads can be spread across caches and more replicas, but every write must go through the single primary's WAL flush, index maintenance, and locking, which replicas cannot share—so write throughput hits its ceiling first as traffic grows. The actual TPS depends on hardware, fsync/synchronous-replication settings, row size, index count, and transaction complexity, and must be measured by load testing rather than assumed as a fixed number.",
     "whenOtherWins": "如果写入很少、查询很复杂，读侧 CPU/IO 或缓存命中率可能先成为瓶颈。",
     "tradeoff": "单主强一致写入 vs 水平写扩展",
     "table": {
@@ -2071,6 +2072,7 @@
     "atomType": "number",
     "topic": "databases",
     "sub": "capacity",
+    "scenario": "应用服务通过同机房网络访问关系型数据库，按主键点查（有索引，数据不一定全在内存），从应用侧观测。",
     "q": "经验数量级：关系型数据库按主键点查（有索引）大致多快返回？",
     "options": [
       "~1 微秒",
@@ -2081,8 +2083,8 @@
     "answer": [
       1
     ],
-    "why": "命中索引的主键点查通常个位数毫秒返回。用它估算「要不要加缓存」——缓存能把它压到亚毫秒。",
-    "why_en": "An indexed primary-key lookup in a relational database typically returns in single-digit milliseconds.",
+    "why": "从应用侧看，同机房网络往返 + 驱动/连接池开销 + 偶尔的 SSD 读，主键点查通常落在约 1 到几毫秒。数据库服务端如果命中 buffer cache，执行本身可以是亚毫秒，所以加缓存的收益主要来自省掉 DB 负载和偶发磁盘读，而不是「DB 本身慢」。",
+    "why_en": "From the application's view, a same-datacenter network round trip, driver/pool overhead, and occasional SSD reads put a primary-key lookup at roughly one to a few milliseconds. On the server side, a buffer-cache hit can execute in under a millisecond, so a cache mainly helps by offloading the database and avoiding occasional disk reads, not because the database itself is slow.",
     "tags": [
       "databases",
       "capacity"
@@ -2101,18 +2103,19 @@
     "atomType": "fact",
     "topic": "databases",
     "sub": "wide-column",
-    "q": "「宽列 (wide-column)」存储（如 Cassandra）最准确的理解是？",
+    "q": "「宽列 (wide-column)」存储（如 Cassandra、HBase）的数据组织方式，最准确的描述是？",
+    "q_en": "Which statement most accurately describes how a wide-column store (e.g., Cassandra, HBase) organizes data?",
     "options": [
       "像关系型一样固定表结构 + 跨表 join",
-      "按 row key 定位，每行可有大量、可不同的列，按 (分区键, 聚簇键) 组织",
+      "先按分区键（row key）定位一个分区，分区内按聚簇键有序存放大量行/列；列是稀疏的，没写的列不占空间",
       "把整张表当一个 JSON 文档来存",
       "纯内存 key→单值 的缓存"
     ],
     "answer": [
       1
     ],
-    "why": "宽列 = 每行由 row key 定位、行内可有成千上万且各行不必相同的列；数据按分区键分片、分区内按聚簇键排序。它不是「列很多的关系表」，而是「每行一个可扩展的有序列集合」。",
-    "why_en": "A wide-column store addresses rows by a row key, where each row can hold many and possibly different columns, partitioned by a partition key and sorted by a clustering key.",
+    "why": "宽列存储按分区键（早期叫 row key）把数据分片，一个分区内可以按聚簇键有序存放大量条目，所以一个分区可以很「宽」。列是稀疏的：没写入的列不占存储。在 Cassandra CQL 里表仍要声明 schema，「宽」体现在单个 partition 可以有海量按 clustering key 排序的行，而不是每行随意长出不同的列。它不支持 join，也不是文档库或纯内存缓存。",
+    "why_en": "A wide-column store shards data by a partition key (historically the row key), and a single partition can hold a very large number of entries sorted by a clustering key — that is what makes it \"wide.\" Columns are sparse: unwritten columns take no space. In Cassandra CQL the table still has a declared schema; the \"width\" comes from a partition holding many clustering-ordered rows, not from each row growing arbitrary columns. It does not do joins and is neither a document store nor a pure in-memory cache.",
     "tags": [
       "databases",
       "wide-column"
@@ -2120,13 +2123,13 @@
     "origin": "seed",
     "options_en": [
       "Fixed relational-style schema plus cross-table joins",
-      "Locate by row key; rows can have many different columns, organized by partition key and clustering key",
+      "A partition key (row key) locates a partition; inside it, many rows/columns are stored sorted by a clustering key, and columns are sparse — unwritten columns take no space",
       "Store the whole table as one JSON document",
       "Pure in-memory key-to-single-value cache"
     ],
     "optionMeanings": [
       "选项主张：像关系型一样固定表结构 + 跨表 join。",
-      "选项主张：按 row key 定位，每行可有大量、可不同的列，按 (分区键, 聚簇键) 组织。",
+      "选项主张：先按分区键（row key）定位一个分区，分区内按聚簇键有序存放大量行/列；列是稀疏的，没写的列不占空间。",
       "选项主张：把整张表当一个 JSON 文档来存。",
       "选项主张：纯内存 key→单值 的缓存。"
     ],
@@ -2138,25 +2141,25 @@
     ],
     "optionScenarioImpacts": [
       "会让系统依赖「像关系型一样固定表结构 + 跨表 join」这个前提。",
-      "会让方案围绕「按 row key 定位，每行可有大量、可不同的列，按 (分区键, 聚簇键) 组织」展开。",
+      "会让方案围绕「先按分区键（row key）定位一个分区，分区内按聚簇键有序存放大量行/列；列是稀疏的，没写的列不占空间」展开。",
       "会让系统依赖「把整张表当一个 JSON 文档来存」这个前提。",
       "会让系统依赖「纯内存 key→单值 的缓存」这个前提。"
     ],
     "optionMeanings_en": [
       "Fixed relational-style schema plus cross-table joins.",
-      "Locate by row key; rows can have many different columns, organized by partition key and clustering key.",
+      "A partition key (row key) locates a partition; inside it, many rows/columns are stored sorted by a clustering key, and columns are sparse — unwritten columns take no space.",
       "Store the whole table as one JSON document.",
       "Pure in-memory key-to-single-value cache."
     ],
     "optionDirectness_en": [
       "Only fits when this statement is true: fixed relational-style schema plus cross-table joins.",
-      "Use when a wide-column store addresses rows by a row key, where each row can hold many and possibly different columns, partitioned by a partition key and sorted by a clustering key.",
+      "Use when you want to describe how a wide-column store organizes data: a partition key locates a partition, rows inside are sorted by a clustering key, and columns are sparse.",
       "Only fits when the goal is to store the whole table as one JSON document.",
       "Only fits when this statement is true: pure in-memory key-to-single-value cache."
     ],
     "optionScenarioImpacts_en": [
       "It commits the design to this assumption: Fixed relational-style schema plus cross-table joins.",
-      "It commits the design to this path: Locate by row key; rows can have many different columns, organized by partition key and clustering key.",
+      "It commits the design to this path: A partition key (row key) locates a partition; inside it, many rows/columns are stored sorted by a clustering key, and columns are sparse — unwritten columns take no space.",
       "It commits the design to this assumption: Store the whole table as one JSON document.",
       "It commits the design to this assumption: Pure in-memory key-to-single-value cache."
     ]

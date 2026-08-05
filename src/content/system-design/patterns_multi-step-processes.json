@@ -748,29 +748,29 @@
     "atomType": "fact",
     "topic": "system-design",
     "sub": "choreography-benefits",
-    "scenario": "订单流程用 32 分区的 Kafka 主题做编舞、消费者可扩容，要评估这种做法的收益。",
-    "scenario_en": "The order flow is choreographed over a 32-partition Kafka topic with scalable consumers; you're weighing what you gain.",
+    "scenario": "订单流程用 32 分区的 Kafka 主题做编舞、消费者可扩容，主题配置为永久保留（retention 不过期），所有状态变化都以事件发出。要评估这种做法的收益。",
+    "scenario_en": "The order flow uses a 32-partition Kafka topic for choreography with scalable consumers; the topic is configured for unlimited retention, and every state change is emitted as an event. Evaluate the benefits of this approach.",
     "q": "Event-driven choreography 的收益包括哪些？（多选）",
     "q_en": "Which benefits does event-driven choreography provide? (Select all)",
     "options": [
       "worker 崩溃后可以从最后提交的 offset 继续处理",
       "在事件链中间插入新步骤，永远不需要修改任何 event contract",
-      "可以通过增加 consumer 数量扩展，直到 partition 数量上限",
-      "event log 本身提供完整的 audit trail"
+      "在同一个 consumer group 内，可以通过增加 consumer 数量扩展，直到 partition 数量上限",
+      "永久保留的 event log 可以作为完整的 audit trail"
     ],
     "options_en": [
       "After a worker crashes, it can resume from the last committed offset.",
       "Inserting a new step in the middle of the chain never requires changing any event contract.",
-      "You can scale out by adding more consumers, up to the partition count.",
-      "The event log itself provides a complete audit trail."
+      "Within one consumer group, you can scale by adding consumers up to the partition count.",
+      "The permanently retained event log can serve as a complete audit trail."
     ],
     "answer": [
       0,
       2,
       3
     ],
-    "why": "事件日志给 fault tolerance、scaling 和 audit 带来好处。但流程是隐式的，中间插步骤常要改上下游事件契约。",
-    "why_en": "Choreography gains fault tolerance, scalability, and auditability from the event log, but flow changes can require contract changes.",
+    "why": "事件日志给 fault tolerance（offset 续读）、scaling（同组 consumer 最多等于 partition 数）和 audit（永久保留的有序事件记录）带来好处。审计完整的前提是 retention 不过期、状态变化都发事件。缺点是流程隐式，中间插步骤常要改上下游事件契约，所以 B 不成立。",
+    "why_en": "The event log gives fault tolerance (resume from offset), scaling (consumers in a group up to the partition count), and audit (an ordered, permanently retained event record). The audit trail is complete only because retention never expires and every state change is emitted. The flow is implicit, though, and inserting a step usually changes upstream/downstream contracts, so B is false.",
     "termDefinitions": [
       {
         "term": "offset",
@@ -807,13 +807,13 @@
       "offset 记录消费到哪，worker 崩溃重启后接着读，不用从头重新处理一遍。",
       "在链路中间插步骤通常还是要新增订阅或改字段，契约不变只是运气好，不是常态。",
       "consumer 数量能加到 partition 数为止，超过这个数再加也分不到新分片。",
-      "事件日志本身就是一份按时间顺序写入的记录，天然能当审计追溯的依据。"
+      "在永久保留且所有状态变化都发事件的前提下，事件日志就是一份按时间顺序写入的完整记录，能当审计追溯的依据。"
     ],
     "optionExplanations_en": [
       "The offset marks how far a worker has read, so after a crash it resumes there instead of starting over.",
       "Inserting a step midway usually still needs a new subscription or field — an unchanged contract is luck.",
       "You can add consumers up to the partition count; beyond that extras get no new shard to read.",
-      "The event log is itself a time-ordered record of everything, which naturally doubles as an audit trail."
+      "With unlimited retention and every state change emitted, the event log is a complete time-ordered record that doubles as an audit trail."
     ]
   },
   {
@@ -2261,21 +2261,21 @@
     "q_en": "What is Temporal Continue-as-New?",
     "options": [
       "从 step 1 完全重新开始执行，并且忘记之前的所有状态",
-      "捕获当前状态，启动一个 history 为空的新 run，从当前位置继续执行",
+      "关闭当前 run，用同一 Workflow ID 启动一个 history 为空的新 run，把当前状态作为输入传入，由代码据此接着往下做",
       "彻底删除这个 workflow 的所有执行记录",
       "把这个 workflow 里的每一个 Activity 都转换成一条独立的 Kafka event"
     ],
     "options_en": [
       "Restart completely from step 1 and forget all prior state.",
-      "Capture the current state and start a new run with empty history, continuing from the current point.",
+      "Close the current run and start a new run under the same Workflow ID with empty history, passing the current state in as input so the code picks up where it left off.",
       "Completely delete every execution record for this workflow.",
       "Turn every activity in this workflow into its own separate Kafka event."
     ],
     "answer": [
       1
     ],
-    "why": "Continue-as-New 适合长期运行或循环的 workflow，避免一个 execution 的 history 无限增长。",
-    "why_en": "Continue-as-new starts a fresh workflow run seeded with current state to avoid unbounded history growth.",
+    "why": "Continue-as-New 关闭当前 run，以同一 Workflow ID 开新 run，history 从空开始；当前状态通过输入参数带过去，新 run 的函数从头执行但逻辑上接着做。适合长期运行或循环的 workflow，避免单个 run 的 history 无限增长。旧 run 的 history 仍按 retention 保留，并没有被删除。",
+    "why_en": "Continue-as-New closes the current run and starts a new run under the same Workflow ID with empty history; the current state is carried over as input, so the new run executes the function from the top but logically continues. It suits long-running or looping workflows and prevents unbounded history growth in a single run. The old run's history is still retained per the retention policy, not deleted.",
     "termDefinitions": [
       {
         "term": "Continue-as-New",
@@ -2300,13 +2300,13 @@
     ],
     "optionExplanations": [
       "容易和从头重跑搞混，其实这个机制恰恰是为了不丢状态、不用整个流程重新来一遍。",
-      "把当前状态当种子，开一个 history 清零的新 run，从当前进度继续往下走。",
+      "把当前状态当输入参数，开一个 history 清零的新 run；函数从头执行，靠传入的状态逻辑上接着做。",
       "把控制历史大小理解成删记录会丢失可审计性，实际状态是保留的，只是历史归零。",
       "这是执行引擎内部的机制，跟把 activity 转成 Kafka 事件的消息系统是两个不同的东西。"
     ],
     "optionExplanations_en": [
       "Easy to confuse with a full restart, but this exists precisely to avoid losing state and starting over.",
-      "It seeds a new run with current state and an empty history, then continues from that current point.",
+      "It starts a new run with an empty history and the current state passed in as input; the function runs from the top and logically continues from that state.",
       "Reading it as deleting records loses auditability; state is preserved — only the history log resets.",
       "This is an execution-engine mechanism, not a messaging concept — turning activities into Kafka events differs."
     ]
@@ -2842,8 +2842,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "saga",
-    "scenario": "订单用 Kafka 编舞：payment worker 消费 OrderPlaced 扣款后发出 PaymentCharged，inventory worker 缺货发出 InventoryFailed。全流程没有协调者。",
-    "scenario_en": "Order flow runs as Kafka choreography: the payment worker charges on OrderPlaced and emits PaymentCharged; the inventory worker is out of stock and emits InventoryFailed. There is no coordinator.",
+    "scenario": "订单用 Kafka 编舞：payment worker 消费 OrderPlaced 扣款后发出 PaymentCharged，inventory worker 缺货发出 InventoryFailed。全流程没有协调者，团队约定服务之间只通过 Kafka 事件交互、不做跨服务同步调用。",
+    "scenario_en": "Order flow runs as Kafka choreography: the payment worker charges on OrderPlaced and emits PaymentCharged; the inventory worker is out of stock and emits InventoryFailed. There is no coordinator, and the team rule is that services interact only through Kafka events, with no cross-service synchronous calls.",
     "q": "这笔已扣款订单的退款补偿由谁发起？",
     "q_en": "In this choreographed order saga, who fires the refund compensation?",
     "options": [
@@ -2861,8 +2861,8 @@
     "answer": [
       0
     ],
-    "why": "编舞里补偿就是反向订阅：正向 worker 额外订阅下游失败事件，自己发起逆操作。代价是每个 worker 都要维护正反两套 handler。",
-    "why_en": "In choreography, compensation is just a reverse subscription: the forward worker also listens for the downstream failure event and undoes its own step.",
+    "why": "题面约定只走事件、不做同步调用，所以 B 被排除；Kafka broker 不理解业务语义，不会撤销事件（C 错）；编舞同样能自动补偿（D 错）。编舞里补偿就是反向订阅：正向 worker 额外订阅下游失败事件，自己发起逆操作。代价是每个 worker 都要维护正反两套 handler。",
+    "why_en": "The team rule allows only events, no synchronous calls, so B is out; a Kafka broker has no business semantics and never undoes events (C is wrong); choreography can still compensate automatically (D is wrong). In choreography, compensation is a reverse subscription: the forward worker also listens for the downstream failure event and undoes its own step. The cost is that every worker maintains both forward and reverse handlers.",
     "termDefinitions": [
       {
         "term": "choreography",
@@ -2887,13 +2887,13 @@
     ],
     "optionExplanations": [
       "补偿链和正向链同构，只是方向相反：订阅失败事件→退款→发出 PaymentRefunded。",
-      "同步互调会把独立服务重新耦合起来，编舞的解耦收益就没了。",
+      "团队约定只走事件、不做跨服务同步调用；同步互调还会把独立服务重新耦合起来，编舞的解耦收益就没了。",
       "Kafka 只保证日志追加与投递，业务语义的撤销它一无所知。",
       "人工兜底只留给补偿本身重试失败的少数单子，不是常规路径。"
     ],
     "optionExplanations_en": [
       "The compensation chain mirrors the forward chain, just backwards: subscribe to the failure, refund, emit PaymentRefunded.",
-      "Direct synchronous calls re-couple services that choreography deliberately kept independent.",
+      "The team rule forbids cross-service synchronous calls, and direct calls would also re-couple services that choreography deliberately kept independent.",
       "Kafka only guarantees append and delivery; it knows nothing about undoing business effects.",
       "Manual reconciliation is the escape hatch for refunds that keep failing, not the normal path."
     ]
@@ -3763,8 +3763,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "versioning",
-    "scenario": "监管下周生效，一万个已跑数周的贷款审批 workflow 必须立刻加上新的合规检查，不能等它们跑完。",
-    "scenario_en": "A regulation lands next week: 10,000 loan-approval workflows already running for weeks must pick up a new compliance check immediately, not after they finish.",
+    "scenario": "监管下周生效，一万个已跑数周的贷款审批 workflow 必须立刻加上新的合规检查，不能等它们跑完。这里的 workflow versioning 指：发新版本后，新启动的执行跑新代码，在途执行继续跑旧版本直到结束（不在旧代码里加 patch 分支）。",
+    "scenario_en": "A regulation lands next week: 10,000 loan-approval workflows already running for weeks must pick up a new compliance check immediately, not after they finish. Here, workflow versioning means: after a new version ships, newly started executions run the new code while in-flight executions keep running the old version until they finish (no patch branches added to the old code).",
     "q": "为什么单靠 workflow versioning 解决不了？",
     "q_en": "Why can't plain workflow versioning solve this?",
     "options": [
@@ -3783,8 +3783,8 @@
     "answer": [
       1
     ],
-    "why": "versioning 的前提是可以等：老执行自然跑完就退场。时效性打破这个前提，就得改用 patch 这类在原地判定路径的迁移手段。",
-    "why_en": "Versioning assumes you can wait for old executions to drain; when the change must land now, you need in-place migration such as a patch instead.",
+    "why": "按题面定义，versioning 的前提是可以等：在途执行跑旧版本直到自然结束。要在途执行立刻生效，就得改用 patch 这类原地判定新/旧路径的迁移手段。",
+    "why_en": "By the definition in the scenario, versioning assumes you can wait for in-flight executions to finish on the old version. When the change must apply to running executions now, you need in-place migration such as a patch that deterministically picks the new or legacy path.",
     "whenOtherWins": "若变更只是新增可选步骤、老流程继续跑也合规，等它们自然结束的 versioning 风险最低、代码也最干净。",
     "termDefinitions": [
       {

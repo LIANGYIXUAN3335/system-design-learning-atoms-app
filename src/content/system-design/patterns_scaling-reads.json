@@ -626,8 +626,8 @@
     "sub": "denormalization",
     "q": "反范式化之后，用户改名会发生什么？",
     "q_en": "What happens after denormalization when a user changes their name?",
-    "scenario": "订单摘要页把用户名冗余进 orders 表以省掉 join；用户改名大约一年一次。",
-    "scenario_en": "The order summary page denormalizes the username into the orders table to skip a join, and users rename maybe once a year.",
+    "scenario": "订单摘要页把用户名冗余进 orders 表以省掉 join；产品要求订单页始终显示用户当前的名字；用户改名大约一年一次。",
+    "scenario_en": "The order summary page denormalizes the username into the orders table to skip a join; product requires order pages to always show the user's current name, and users rename maybe once a year.",
     "options": [
       "什么都不用做",
       "必须更新所有冗余副本，写路径变复杂",
@@ -637,8 +637,8 @@
     "answer": [
       1
     ],
-    "why": "冗余数据意味着写时多处更新；好在「改名」远比「看订单」少发生，读多写少时这笔账划算。",
-    "why_en": "With denormalized data a name change must update every redundant copy, which is acceptable because such writes are rare compared to reads.",
+    "why": "既然要显示当前名字，冗余数据意味着改名时要更新所有副本；改名远比看订单少，读多写少时划算。（若只需保留下单时名字快照，就不用回写。）",
+    "why_en": "Since pages must show the current name, a rename must update every redundant copy, which is acceptable because renames are rare compared to reads. (If orders only need a snapshot of the name at purchase time, no back-fill is needed.)",
     "tags": [
       "denormalization",
       "write-complexity"
@@ -1518,7 +1518,7 @@
     "q_en": "Which invalidation strategy fits best?",
     "options": [
       "分布式锁串行化更新",
-      "写时同步失效 (write-through)",
+      "写时同步失效（写数据库后立即删除缓存条目）",
       "只靠 TTL 定时过期",
       "版本化 key"
     ],
@@ -1534,20 +1534,20 @@
     ],
     "options_en": [
       "Serialize updates with a distributed lock.",
-      "Synchronous write-through invalidation.",
+      "Synchronous invalidation on write (delete the cache entry right after the DB write).",
       "Rely solely on TTL expiration.",
       "Versioned cache keys."
     ],
     "tradeoff": "实现简单 vs 陈旧容忍度",
     "optionExplanations": [
       "分布式锁是为了防止并发写冲突，对\"次要数据、能忍陈旧\"这种简单场景是过度设计。",
-      "写时同步失效能保证新鲜，但要多改一处代码路径，对推荐分数这种数据不值得。",
+      "写时同步失效能保证新鲜，但要多改一处写路径代码，对推荐分数这种数据不值得。",
       "对，推荐分数更新可预测、能忍到期前陈旧，直接靠 TTL 到期最简单。",
       "版本化 key 要维护版本号和多查一跳，对这种非关键数据是不必要的复杂度。"
     ],
     "optionExplanations_en": [
       "A distributed lock guards against concurrent write conflicts — overkill for secondary data that can simply tolerate staleness.",
-      "Write-through invalidation keeps things fresh but adds a write-path code path — not worth it for a recommendation score.",
+      "Synchronous invalidation on write keeps things fresh but adds a write-path code path, not worth it for a recommendation score.",
       "Right — recommendation scores update predictably and can tolerate staleness before expiry, so plain TTL is simplest.",
       "Versioned keys need version bookkeeping and an extra lookup — unnecessary complexity for non-critical data."
     ]
@@ -1566,7 +1566,7 @@
       "前者异步、后者同步",
       "同步失效保一致但拖慢写；异步失效写快但有陈旧窗口",
       "两者都不影响写延迟",
-      "write-behind 这种写回策略的一致性反而更强"
+      "异步失效的陈旧窗口为零，因为队列保证消息必达"
     ],
     "answer": [
       1
@@ -1600,20 +1600,20 @@
       "The former is asynchronous, the latter synchronous.",
       "Synchronous invalidation updates or deletes cache during the write for consistency but slows writes; asynchronous invalidation queues the event, writing fast but risking a stale window.",
       "Neither affects write latency.",
-      "Write-behind, the write-back strategy, actually has stronger consistency."
+      "Asynchronous invalidation has zero stale window because the queue guarantees delivery."
     ],
     "tradeoff": "写延迟 vs 陈旧窗口",
     "optionExplanations": [
       "这个说法把两者的同步/异步关系直接说反了。",
       "对，同步失效在写路径里立即更新或删除缓存，保一致但拖慢写；异步排队处理，写快但留陈旧窗口。",
       "写路径要不要等失效完成，直接决定写延迟，说两者都不受影响不准确。",
-      "write-behind 恰恰是异步排队处理失效，牺牲的正是一致性来换取写速度。"
+      "必达只保证「最终会删」，不保证「立刻删」；从写库到 worker 处理完之间就是陈旧窗口。"
     ],
     "optionExplanations_en": [
       "This statement swaps which one is synchronous and which is asynchronous.",
       "Right — synchronous invalidation updates or deletes cache entries inline for consistency but slows writes; asynchronous queues the event, faster but leaving a stale window.",
       "Whether the write path waits for invalidation to finish directly affects write latency — saying neither is affected isn't accurate.",
-      "Write-behind is exactly the asynchronous, queued approach, trading consistency for write speed, not gaining it."
+      "Guaranteed delivery means the delete eventually happens, not immediately; the gap until the worker processes it is exactly the stale window."
     ]
   },
   {
@@ -2732,8 +2732,8 @@
     "answer": [
       0
     ],
-    "why": "越热门的条目雪崩越大、重建越贵（10 表 join、外部 API）伤害越大——等于自己对自己发起 DDOS，10 万并发同一瞬间涌向数据库。",
-    "why_en": "Cache expiration is binary, so the instant a hot entry expires every concurrent request misses at once and floods the database like a self-inflicted DDoS.",
+    "why": "缓存条目要么在要么不在，过期那一刻 10 万并发请求同时未命中，一起去跑 10 表 join 重建，等于自己对自己发起 DDoS。条目越热、重建越贵，击穿越严重（这是单个热点 key 的击穿，不是大量 key 同时失效的雪崩）。",
+    "why_en": "Cache expiration is binary, so the instant this hot entry expires all 100k concurrent requests miss at once and each tries to run the ten-table join, a self-inflicted DDoS. The hotter the entry and the costlier the rebuild, the worse the stampede. (This is a single hot-key stampede, not an avalanche of many keys expiring together.)",
     "tags": [
       "stampede",
       "ttl"
@@ -2874,8 +2874,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "stampede",
-    "scenario": "最关键的首页缓存：不能冒任何击穿风险，也不接受概率化方案的不确定性。",
-    "scenario_en": "This is the most critical homepage cache: no stampede risk is acceptable, and probabilistic behavior is not acceptable.",
+    "scenario": "最关键的首页缓存：不能冒任何击穿风险，不接受概率化方案的不确定性，而且用户请求不能因为等待重建而变慢或超时。",
+    "scenario_en": "This is the most critical homepage cache: no stampede risk is acceptable, probabilistic behavior is not acceptable, and user requests must never be slowed or timed out by waiting for a rebuild.",
     "q": "该用什么方案？",
     "q_en": "Which approach should you use?",
     "options": [
@@ -2887,8 +2887,8 @@
     "answer": [
       0
     ],
-    "why": "后台持续刷新是最强保险：用户请求永远命中新鲜缓存。代价是基础设施复杂度和「刷新了没人读的数据」的浪费，只留给最关键内容。",
-    "why_en": "A background process continuously refreshes critical entries before expiry so users never trigger rebuilds, at the cost of extra infrastructure and wasted refreshes.",
+    "why": "分布式锁防住了 DB，但过期瞬间用户仍会 miss 并排队等重建，违反「不能等待」；长 TTL 只是推迟击穿。后台在过期前主动刷新，正常情况下用户只读缓存。代价：额外基础设施、刷新没人读的数据的浪费，以及要监控刷新任务本身，所以只留给最关键内容。",
+    "why_en": "A lock protects the database, but at expiry users still miss and queue behind the rebuild, which violates the no-waiting constraint; a longer TTL only postpones the stampede. A background refresher renews the entry before it lapses, so in normal operation user requests only read the cache. The costs are extra infrastructure, wasted refreshes of unread data, and the need to monitor the refresher itself, so reserve it for the most critical content.",
     "whenOtherWins": "普通热度的数据用概率化提前刷新就够了，专职后台刷新的成本不值得。",
     "tags": [
       "stampede",
@@ -2926,7 +2926,7 @@
     "options": [
       "该删哪些缓存说不清：应用缓存、CDN、浏览器缓存都可能存着旧值",
       "失效请求本身可能失败",
-      "删除之后、新值写入之前，另一个请求可能读到旧数据并把它重新缓存回去（竞态条件）",
+      "竞态：一个读请求 miss 后先从库读到旧值，此时写请求更新库并删掉缓存，读请求随后把旧值回填进缓存",
       "删除操作会锁住整张表"
     ],
     "answer": [
@@ -2934,8 +2934,8 @@
       1,
       2
     ],
-    "why": "多层缓存、失效失败、删后重缓存竞态——这三个坑让「直接删」在需要立即可见的场景不可靠，于是才有版本化方案。",
-    "why_en": "Naive delete-on-write fails because caches live in many layers, invalidations can fail, and a racing read can re-cache stale data right after the delete.",
+    "why": "多层缓存（应用/CDN/浏览器）不知道删哪些、失效请求可能失败、读到旧值后被回填的竞态，这三个坑让「写完就删」在要求立即可见的场景不可靠，于是才有版本化方案。删一个缓存 key 不会锁表。",
+    "why_en": "Naive delete-after-write is unreliable here because caches live in several layers (app, CDN, browser), invalidations can fail, and a reader that fetched the old value before the write can put it back into the cache right after the delete. Deleting a cache key never locks a database table.",
     "tags": [
       "invalidation",
       "race-condition"
@@ -2943,19 +2943,19 @@
     "options_en": [
       "It's unclear which caches to clear — app cache, CDN, and browser cache may all hold stale values.",
       "The invalidation request itself can fail.",
-      "Between the delete and the new write, another request can re-cache the stale value — a race condition.",
+      "Race: a reader misses and reads the old value from the DB, the writer then updates the DB and deletes the cache, and the reader finally writes the stale value back into the cache.",
       "The delete operation locks the entire table."
     ],
     "optionExplanations": [
       "对，应用缓存、CDN、浏览器缓存可能各自都存了一份旧值，光删一处根本不够。",
       "对，失效请求本身可能因为网络或服务故障失败，旧值就这样留下来了。",
-      "对，删除和新值写入之间有个窗口，另一个请求正好可能在这个窗口把旧值重新缓存回去。",
+      "对，读请求先读到旧值、写请求随后更新库并删缓存，读请求再把旧值回填进缓存，旧值就这样留了下来。",
       "删除一行缓存数据是极快的键值操作，不会去锁住整张数据库表。"
     ],
     "optionExplanations_en": [
       "Right — the app cache, CDN, and browser cache may each hold their own stale copy, so deleting just one isn't enough.",
       "Right — the invalidation request itself can fail from a network hiccup or service outage, leaving the stale value in place.",
-      "Right — there's a window between the delete and the new write where another request can re-cache the stale value.",
+      "Right — a reader fetches the old value, the writer then updates the DB and deletes the cache, and the reader writes the stale value back, so the old value survives.",
       "Deleting one cache entry is a fast key-value operation; it has no reason to lock an entire database table."
     ]
   },
@@ -2972,14 +2972,14 @@
     "options": [
       "每一次读取都直接绕开缓存去查数据库",
       "写入时主动向所有缓存层都逐个广播一条失效消息通知",
-      "版本号存放在缓存里，由缓存自己负责自增",
-      "版本号存数据库，随更新递增；读时用版本拼 key"
+      "版本号只在缓存里维护，与数据库更新不在同一事务，缓存被驱逐后版本号就丢了",
+      "版本号存数据库、与数据在同一事务递增；读时用版本拼 key"
     ],
     "answer": [
       3
     ],
-    "why": "核心是「不删除、改路由」：旧缓存条目从不被删，只是版本一变就没人再读它；CDN 和浏览器缓存也随 key/URL 变化自然过期。",
-    "why_en": "Each record's version lives in the database and increments in the same transaction, so reads build a versioned cache key and old entries simply become unreachable.",
+    "why": "核心是「不删除、改路由」：版本号和数据在同一事务里递增，读时先取版本再拼 key（版本本身也可以有一层缓存）；旧条目从不被删，只是没人再读，最终靠 TTL 清掉。",
+    "why_en": "The idea is to reroute rather than delete: the version increments in the same transaction as the data, and reads fetch the version (which may itself be cached) to build the key. Old entries are never deleted, just unreachable until their TTL expires.",
     "diagram": "flowchart LR\n    R[\"读请求\"] --> V[\"取版本号<br/>(版本 key 或 DB)\"]\n    V --> K[\"拼 key: event:123:v42\"]\n    K --> C{\"缓存命中?\"}\n    C -->|是| Out[\"返回\"]\n    C -->|否| DB[(数据库)] --> F[\"回填 v42\"] --> Out",
     "tags": [
       "cache-versioning",
@@ -2988,8 +2988,8 @@
     "options_en": [
       "Every single read bypasses the cache and hits the database directly.",
       "On write, actively broadcast an invalidation message to every cache layer one by one.",
-      "The version number lives in the cache itself and increments on its own.",
-      "The version lives in the database and increments in the same transaction; reads use it to build the cache key."
+      "The version lives only in the cache, is not updated in the same transaction as the database write, and is lost if the cache evicts it.",
+      "The version lives in the database and increments in the same transaction as the data; reads use it to build the cache key."
     ],
     "termDefinitions": [
       {
@@ -3001,13 +3001,13 @@
     "optionExplanations": [
       "如果每次读都直接查库，缓存版本化这一整套机制就没有存在的意义了。",
       "广播失效消息到所有缓存层正是版本化想避开的做法，它靠 key 自然不可达而不是主动通知。",
-      "版本号若由缓存自己维护，写入数据库的变更就没法可靠触发它递增。",
+      "版本号只在缓存里、跟数据库更新不在同一事务，写失败会漂移，缓存驱逐后版本号还会丢。",
       "对，版本号存在数据库、跟数据同一事务递增，读时用这个版本号拼出缓存 key。"
     ],
     "optionExplanations_en": [
       "If every read hit the database directly, the whole point of cache versioning would disappear.",
       "Broadcasting invalidation to every cache layer is exactly what versioning avoids — it relies on keys becoming unreachable, not active notification.",
-      "If the cache itself owned the version number, a database write couldn't reliably trigger it to increment.",
+      "A version kept only in the cache and not in the same transaction as the DB write can drift on a failed write and is lost when the cache evicts it.",
       "Right — the version lives in the database and increments in the same transaction as the data, and reads use it to build the cache key."
     ]
   },
@@ -3066,7 +3066,7 @@
     "scenario": "已上线版本化缓存的商品服务，现在还想用它失效「推荐列表」这类计算型结果。",
     "scenario_en": "A product service already running versioned caches now wants to use the same trick for computed results like recommendation lists.",
     "options": [
-      "多一次查找、旧版本堆积，只适合单实体缓存",
+      "每次读多一次版本号查找、旧版本条目堆积，主要适合单实体缓存",
       "读性能会因此直接下降整整十倍",
       "数据库的写入吞吐量会因此直接减半",
       "版本号一旦发生溢出就会直接导致整个系统故障"
@@ -3074,26 +3074,26 @@
     "answer": [
       0
     ],
-    "why": "版本化的三笔账：多一跳查版本、旧条目靠 TTL 清、只覆盖单实体缓存——计算型数据的失效要另想办法（如删除项缓存）。",
-    "why_en": "Versioning costs an extra lookup per read, lets old versions accumulate until TTLs clean them, and only really fits single-entity caches.",
+    "why": "版本化的三笔账：读时多一跳查版本号（查 DB 或版本缓存）、旧条目只能靠 TTL 清、主要覆盖单实体缓存；推荐列表这类计算型结果依赖很多实体，没有单一版本号可用，要另想办法（如删除项缓存）。",
+    "why_en": "Versioning costs an extra version lookup per read (from the DB or a version cache), leaves old entries until their TTLs expire, and mainly fits single-entity caches; computed results like recommendation lists depend on many entities and have no single version to key on.",
     "tags": [
       "cache-versioning",
       "tradeoff"
     ],
     "options_en": [
-      "Every read needs two cache lookups, old versions accumulate, and it only fits single-entity caches.",
+      "Every read needs an extra version lookup, old versions accumulate, and it mainly fits single-entity caches.",
       "Read performance ends up dropping by a full factor of ten.",
       "Database write throughput ends up getting cut in half.",
       "A version-number overflow would directly crash the entire system."
     ],
     "optionExplanations": [
-      "对，每次读要多查一次版本号，旧版本条目靠 TTL 慢慢清，而且这套机制主要适合单实体缓存。",
+      "对，每次读多查一次版本号（DB 或版本缓存），旧版本条目靠 TTL 慢慢清，而且主要适合单实体缓存。",
       "多出的只是一次额外查找，不至于把读性能拖慢十倍这么夸张。",
       "版本化发生在读路径和 key 构造上，跟数据库的写吞吐没有直接关系。",
       "版本号一般是整数或时间戳，正常场景下不会轻易溢出到让系统故障的地步。"
     ],
     "optionExplanations_en": [
-      "Right — each read needs one extra version lookup, old versions linger until TTL cleans them, and this mainly suits single-entity caches.",
+      "Right — each read needs one extra version lookup (from the DB or a version cache), old versions linger until TTL cleans them, and this mainly suits single-entity caches.",
       "The added cost is one extra lookup — nowhere near enough to make reads ten times slower.",
       "Versioning affects the read path and key construction, not the database's write throughput directly.",
       "Version numbers are typically integers or timestamps and don't realistically overflow into a system failure."
@@ -3539,8 +3539,8 @@
     "answer": [
       0
     ],
-    "why": "物化视图是落地存储的预计算结果，不随底表实时变；它靠后台作业周期重算，两次重算之间读到的都是旧聚合，所以刷新周期就是陈旧上限。要更新，就得刷得更勤——代价是每次全表聚合的计算开销。",
-    "why_en": "A materialized view stores precomputed results that don't update with the base tables; a background job recomputes it periodically, so the refresh interval is the staleness ceiling.",
+    "why": "本题的物化视图由后台作业周期性全量重算（类似 PostgreSQL 的 REFRESH MATERIALIZED VIEW），两次重算之间读到的都是旧聚合，陈旧上限约等于刷新间隔加单次重算耗时。想更新鲜就得刷得更勤，代价是每次全表聚合的开销。（有些数据库支持增量或提交时刷新的物化视图，那是另一种设计。）",
+    "why_en": "Here the view is fully recomputed by a background job on a schedule (like PostgreSQL's REFRESH MATERIALIZED VIEW), so reads between refreshes see the old aggregate and staleness is bounded by roughly the refresh interval plus one rebuild's duration. Fresher data means more frequent full recomputes. (Some databases offer incremental or on-commit materialized views; that is a different design.)",
     "tags": [
       "materialized-view",
       "staleness",

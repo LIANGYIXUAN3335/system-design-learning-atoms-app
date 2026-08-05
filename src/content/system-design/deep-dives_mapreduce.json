@@ -114,7 +114,7 @@
     "q_en": "How should split size, M, and R be chosen? What's the paper's rule of thumb?",
     "options": [
       "M 固定等于 worker 数，让每台机器分到一个 map 任务，调度和资源分配都最省心",
-      "split 接近 GFS chunk（16–64MB），M、R 都远大于 worker 数",
+      "每个 split 约 16–64MB（与 GFS 64MB chunk 同量级），M 远大于 worker 数，R 取 worker 数的小倍数",
       "R 固定设成 1，所有 key 汇总进同一个输出文件，方便下游一次性读取全部结果",
       "split 越大越好，理想情况下整个作业只需要切成个位数的几个 split 就够高效"
     ],
@@ -123,12 +123,12 @@
     ],
     "options_en": [
       "Fix M to equal the worker count, so each machine gets one map task and scheduling stays maximally simple.",
-      "Split size tracks the GFS chunk (16–64MB), with M and R both set far larger than the worker count.",
+      "Each split is about 16–64MB (the same scale as GFS's 64MB chunk), M is far larger than the worker count, and R is a small multiple of it.",
       "Fix R at 1, so every key's results land in one output file downstream can read in a single pass.",
       "Bigger splits are always better; ideally a job only needs to be cut into a handful of splits."
     ],
-    "why": "split 接近 GFS chunk（16–64MB）；M、R 远大于 worker 数——论文 sort 基准约 1800 台机器配 M=15000、R=4000，粒度细则单点故障只丢一小块任务。",
-    "why_en": "Split size tracks GFS's chunk (16–64MB), and M, R are set far larger than the worker count so one failure only costs a small task.",
+    "why": "论文 §3.5：每个 map 任务约 16–64MB 输入（和 GFS 64MB chunk 同量级，利于就近读本地副本），M 远大于 worker 数，这样能动态负载均衡，某台机器挂了只需重跑一小份任务；R 只取 worker 数的小倍数，因为每个 reduce 任务产出一个独立输出文件。论文典型配置：2,000 台 worker、M=200,000、R=5,000。",
+    "why_en": "Paper §3.5: each map task gets about 16–64MB of input (the same scale as GFS's 64MB chunk, which helps local reads), and M is far larger than the worker count for dynamic load balancing and cheap recovery when a machine dies; R is only a small multiple of the worker count because each reduce task produces a separate output file. Typical setup in the paper: 2,000 workers, M=200,000, R=5,000.",
     "termDefinitions": [
       {
         "term": "M",
@@ -153,13 +153,13 @@
     ],
     "optionExplanations": [
       "M 固定等于 worker 数会让粒度太粗：一台机器故障就丢一大块任务，也没法用空闲 worker 动态抢活。",
-      "这正是论文经验法则本身：细粒度切分换来动态负载均衡，某台机器挂了只需重跑一小份任务。",
+      "这正是论文经验法则：split 约 16–64MB，M 远大于 worker 数换来动态负载均衡，某台机器挂了只需重跑一小份任务；R 只取 worker 数的小倍数，因为每个 reduce 产出一个输出文件。",
       "R=1 意味着只有一个 reduce worker 处理全部输出，reduce 阶段的并行度直接归零。",
       "split 太大等于任务粒度太粗，单个任务失败代价高，也发挥不出成百上千台机器的并行能力。"
     ],
     "optionExplanations_en": [
       "Fixing M to the worker count makes tasks too coarse: one machine failing loses a big chunk of work, and idle workers can't grab extra tasks.",
-      "This is the paper's rule of thumb itself: fine-grained pieces buy dynamic load balancing, so losing one machine only costs a small rerun.",
+      "This is the paper's rule of thumb: splits of about 16–64MB and M far above the worker count give dynamic load balancing and cheap recovery; R is only a small multiple of the worker count because each reduce produces one output file.",
       "R=1 means a single reduce worker handles all output, so reduce-side parallelism drops to zero.",
       "Oversized splits mean coarse-grained tasks — one failure costs more, and hundreds of machines can't be used in parallel."
     ]
@@ -175,9 +175,9 @@
     "q": "MapReduce master 维护的核心状态是什么？",
     "q_en": "What core state does the MapReduce master maintain?",
     "options": [
-      "所有中间 KV 对的完整副本，方便随时把它们重新分发给任意一个 reduce worker",
-      "只记录哪些 worker 机器在线，具体任务分配靠 worker 之间自己去中心化协商",
-      "只在作业启动时分配一次任务，之后不再跟踪状态，全靠 worker 主动上报完成",
+      "所有中间 KV 对的完整副本，方便随时重新分发给任意一个 reduce worker",
+      "只记录哪些 worker 在线，任务分配靠 worker 之间去中心化协商",
+      "只在作业启动时分配一次任务，之后不再跟踪状态",
       "每个任务的状态 + worker 身份，及已完成 map 任务的中间文件位置"
     ],
     "answer": [
@@ -185,12 +185,12 @@
     ],
     "options_en": [
       "A full copy of every intermediate key-value pair, so it can redistribute them to any reduce worker at any time.",
-      "Just which worker machines are online, with task assignment left to decentralized negotiation among workers.",
-      "Tasks are assigned once at job start and never tracked again, with workers self-reporting completion.",
+      "Just which workers are online, with task assignment left to decentralized negotiation among workers.",
+      "Tasks are assigned once at job start and never tracked again.",
       "Each task's state plus worker identity, and finished map tasks' file locations."
     ],
-    "why": "master 类似 GFS master：只管控制流（任务状态+位置），不碰数据本身；记住已完成 map 任务的输出位置，reduce worker 才知道去哪台机器拉数据。",
-    "why_en": "The master tracks only control-flow metadata — task state and, for finished map tasks, where their output lives — never the data itself.",
+    "why": "论文 §3.2：master 为每个 map/reduce 任务记录状态（idle / in-progress / completed）和非 idle 任务所在 worker 的身份；对每个已完成的 map 任务，还记录它产出的 R 个中间文件区域的位置和大小，并增量推给有 in-progress reduce 任务的 worker。它只管控制面元数据，不碰中间数据本身。",
+    "why_en": "Paper §3.2: for each map and reduce task the master stores its state (idle / in-progress / completed) and the identity of the worker for non-idle tasks; for each completed map task it also stores the locations and sizes of its R intermediate file regions and pushes them incrementally to workers with in-progress reduce tasks. It keeps only control-plane metadata, never the intermediate data itself.",
     "termDefinitions": [
       {
         "term": "GFS",
@@ -200,13 +200,13 @@
       }
     ],
     "optionExplanations": [
-      "中间数据可到 TB 级，master 只有几十到几百 MB 内存预算，存完整副本会直接把它压垮。",
+      "中间数据总量可达 TB 级，远超一台机器的内存；master 存它还会让自己落进数据面，被字节流量压垮。",
       "去中心化协商没有全局视角，容易两个 worker 抢同一任务或某个 split 没人做；集中调度才能避免。",
       "worker 会掉线、任务会失败，master 必须持续跟踪状态才能重新调度失败任务，不跟踪等于放弃容错。",
       "论文 §3.2：状态具体分 idle/in-progress/completed 三种，完成的 map 任务还额外存下 R 个分区文件的位置。"
     ],
     "optionExplanations_en": [
-      "Intermediate data can reach terabytes, but the master only budgets tens to hundreds of MB, so a full copy would crush it.",
+      "Intermediate data can reach terabytes, far beyond one machine's memory, and storing it would put the master on the data path where byte traffic overwhelms it.",
       "Decentralized negotiation has no global view, so two workers can grab the same task or a split goes unclaimed; central scheduling avoids that.",
       "Workers drop out and tasks fail, so the master must keep tracking state to reschedule failures — not tracking means giving up on fault tolerance.",
       "Per §3.2: state is one of idle/in-progress/completed, and for finished map tasks it also stores the R partition files' locations."
@@ -225,25 +225,25 @@
     "sub": "sort-shuffle",
     "scenario": "reduce task 从各 map worker 拉回的数据是很多个不同 key 混在一起的一大堆记录，总量可能到 TB 级，远超 reduce worker 的内存。",
     "scenario_en": "A reduce task pulls back a mix of many different keys, potentially terabytes of data, far more than a reduce worker's memory can hold.",
-    "q": "reduce worker 为什么必须先对拉回的数据排序，而不是直接用哈希表按 key 聚合？",
-    "q_en": "Why must a reduce worker sort the data it pulls before grouping, instead of hashing straight into a table by key?",
+    "q": "MapReduce 论文里，reduce worker 为什么选择先对拉回的数据按 key 排序再分组，而不是在内存里建一张哈希表按 key 聚合？",
+    "q_en": "In the MapReduce paper, why does the reduce worker sort the pulled data by key before grouping, instead of building an in-memory hash table keyed by key?",
     "options": [
-      "全内存哈希聚合放不下 TB 级数据；排序后同 key 物理相邻，顺序扫描即可分组",
-      "哈希表在分布式系统里天然不安全，只有排序算法才能在多台机器间给出正确结果",
-      "排序的目的是让 reduce 按字母顺序处理 key，纯粹是为了方便打印日志和线上调试",
-      "不排序的话 reduce 函数在语法层面无法编译，框架强制要求输入必须是有序迭代器类型"
+      "整个 key 空间的哈希表放不进内存；排序（放不下就外排序）后同 key 物理相邻，顺序扫描就能逐组交给 reduce",
+      "哈希表在分布式系统里天然不安全，只有排序才能在多台机器间给出正确结果",
+      "排序只是为了按字母顺序处理 key，方便打印日志和调试",
+      "不排序的话 reduce 函数无法编译，框架强制要求有序迭代器类型"
     ],
     "answer": [
       0
     ],
     "options_en": [
-      "Full in-memory hash aggregation can't hold TB-scale data; sorting makes same-key records adjacent, so a sequential scan groups them.",
-      "Hash tables are inherently unsafe in distributed systems; only sorting algorithms can produce correct results across many machines.",
-      "Sorting exists purely so reduce processes keys in alphabetical order, which makes logs and debugging easier.",
-      "Without sorting, the reduce function fails to compile at the language level; the framework mandates an ordered iterator input type."
+      "A hash table over the whole key space can't fit in memory; after sorting (externally if needed) same-key records are adjacent, so a sequential scan hands groups to reduce one by one.",
+      "Hash tables are inherently unsafe in distributed systems; only sorting gives correct results across machines.",
+      "Sorting exists only to process keys alphabetically, for logging and debugging.",
+      "Without sorting the reduce function fails to compile; the framework mandates an ordered iterator type."
     ],
-    "why": "许多不同 key 落到同一个 reduce task；哈希聚合要全内存摊开所有桶，排序把同 key 数据挪成物理相邻，只需当前一组的 O(1) 内存，放不下就走外排序。",
-    "why_en": "Sorting makes same-key records physically adjacent, so grouping needs only O(1) memory per key instead of hashing every key into RAM at once.",
+    "why": "论文 §3.1：很多不同 key 会落到同一个 reduce 任务，所以 reduce worker 读完中间数据后按 key 排序，让同 key 记录挨在一起；数据放不进内存就用外排序。之后顺序扫描，一组一组流式交给 reduce 函数，不需要把整个 key 空间同时放进内存，还顺带得到按 key 有序的输出（§4.2）。这是论文的设计选择；别的系统也可以用「哈希 + 按分区溢写磁盘」做同样的分组。",
+    "why_en": "Paper §3.1: many different keys map to the same reduce task, so after reading the intermediate data the reduce worker sorts it by key so that same-key records sit together, using an external sort if it doesn't fit in memory. A sequential scan then streams one group at a time to the reduce function, without holding the whole key space in memory, and yields key-ordered output as a bonus (§4.2). This is the paper's design choice; other systems achieve the same grouping with hashing plus partitioned spill to disk.",
     "termDefinitions": [
       {
         "term": "外排序",
@@ -253,13 +253,13 @@
       }
     ],
     "optionExplanations": [
-      "论文 §3.1 的原因：sort 把'按 key 分组'变成一次顺序扫描 + 当前 key 的 O(1) 内存，放不下就外排序，全程顺序 I/O。",
+      "论文 §3.1 的做法：sort 把「按 key 分组」变成一次顺序扫描，一组一组流式处理，不必把整个 key 空间同时放进内存；放不下就外排序，全程顺序 I/O。",
       "哈希表本身没有分布式限制，问题是它要整个 key 空间的桶同时驻留内存，TB 级中间数据下放不下。",
       "排序的目的是分组不是排版；顺带产出按 key 有序的输出文件是额外收获，不是排序存在的理由。",
       "Reduce 函数是普通用户代码，不依赖迭代器类型系统；排序是框架为分组可行做的运行时决策，跟编译无关。"
     ],
     "optionExplanations_en": [
-      "Per §3.1: sorting turns grouping into one sequential scan plus O(1) memory per key, falling back to sequential-I/O external sort when it doesn't fit.",
+      "The paper's §3.1 approach: sorting turns grouping by key into one sequential scan processed group by group, without holding the whole key space in memory; if it doesn't fit, use an external sort, all with sequential I/O.",
       "Hash tables have no distributed restriction; the real problem is needing every key's bucket resident at once, which TB-scale data won't fit.",
       "Sorting exists for grouping, not formatting; the ordered output file is a bonus, not the reason sorting happens.",
       "Reduce is ordinary user code with no iterator type dependency; sorting is a runtime decision the framework makes to make grouping feasible, unrelated to compilation."
@@ -391,15 +391,15 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "partitioner",
-    "scenario": "一个日志分析作业按 host 做 key，reduce 阶段统计每个域名的访问量；默认的 hash(key) mod R 分区函数把同一域名的所有 URL 结果打散到不同 reduce 输出文件里，下游还得再合并一次。",
-    "scenario_en": "A log-analysis job keys by host; the default hash(key) mod R partition function scatters one domain's URLs across different reduce outputs, forcing downstream to re-merge them.",
-    "q": "该怎么解决默认分区函数把同一网站数据打散这个问题？",
-    "q_en": "What fixes the default partition function scattering one site's data across reduce outputs?",
+    "scenario": "一个日志分析作业以 URL 作为中间 key，reduce 统计每个 URL 的访问量。下游希望同一个 host（域名）下的所有 URL 结果落在同一个 reduce 输出文件里；但默认的 hash(key) mod R 按整条 URL 取哈希，把同一 host 的 URL 打散到了不同的输出文件，下游还得再合并一次。",
+    "scenario_en": "A log-analysis job uses the URL as the intermediate key, and reduce counts hits per URL. Downstream wants all URLs of the same host (domain) in one reduce output file, but the default hash(key) mod R hashes the whole URL and scatters one host's URLs across different output files, forcing downstream to merge them again.",
+    "q": "怎么解决默认分区函数把同一 host 的数据打散这个问题？",
+    "q_en": "What fixes the default partition function scattering one host's data?",
     "options": [
       "把 R 直接设成 1，这样只剩一个 reduce 输出文件，自然不会再有打散的问题",
       "在 map 阶段额外加一次全局排序，让所有 map worker 输出统一有序，打散问题随之消失",
       "换成用 combiner 处理，让每个 map worker 先按域名分组，partition 这一步就可以省略",
-      "自定义 partition function：按 host 域名写路由规则，同域名固定送到同一个 reduce"
+      "自定义 partition function，例如 hash(Hostname(url)) mod R，让同一 host 的 URL 固定送到同一个 reduce"
     ],
     "answer": [
       3
@@ -408,10 +408,10 @@
       "Set R directly to 1, so there's only one reduce output file and nothing gets scattered anymore.",
       "Add an extra global sort at the map stage so every map worker's output is uniformly ordered, and scattering disappears.",
       "Switch to a combiner so each map worker groups by domain locally, letting the partition step be skipped.",
-      "Write a custom partition function that routes by host's domain, keeping one domain on the same reduce."
+      "Write a custom partition function such as hash(Hostname(url)) mod R, so one host's URLs always go to the same reduce."
     ],
-    "why": "论文允许用户提供自定义 partition function 替换默认 hash(key) mod R，把有业务含义的相关 key（如同一域名）强制路由到同一个 reduce。",
-    "why_en": "MapReduce lets users supply a custom partition function instead of the default hash(key) mod R, to force related keys like one host's URLs into the same reduce.",
+    "why": "论文 §4.1：默认分区是 hash(key) mod R；当 key 是 URL 而你想按 host 聚集时，用户可以提供自定义分区函数 hash(Hostname(urlkey)) mod R，同一 host 的所有 URL 就进同一个输出文件。R=1 丢掉全部并行度；排序只管文件内顺序，不决定去哪个 reduce；combiner 只做 map 端本地合并，不负责路由，partition 仍然存在。代价：大 host 可能让某个 reduce 变成热点。",
+    "why_en": "Paper §4.1: the default partitioning is hash(key) mod R; when keys are URLs but you want grouping by host, you can supply a custom partition function hash(Hostname(urlkey)) mod R, so all URLs of one host land in the same output file. R=1 throws away all parallelism; sorting only orders data within a file and does not choose the reducer; a combiner only merges locally on the map side and does not route, so partitioning still happens. Trade-off: a very large host can make one reducer a hotspot.",
     "termDefinitions": [
       {
         "term": "partition function",
@@ -423,13 +423,13 @@
       "R=1 确实不会打散，但代价是失去全部并行度，一个 reduce worker 要扛全部数据，牺牲太大。",
       "全局排序解决的是文件内部的顺序，不解决数据被分到哪个 reduce 这个路由问题，两者是不同机制。",
       "combiner 只做本地数值合并（比如求和），不负责决定记录发去哪个 reduce 分区，partition 依然需要。",
-      "论文明确提到这个用例：默认 hash 会打散相关 key，这时用户可以按自己的业务规则改写路由逻辑。"
+      "论文 §4.1 明确提到这个用例：key 是 URL 时默认 hash 会把同一 host 的 URL 打散，用户可以提供 hash(Hostname(urlkey)) mod R 这样的自定义分区函数。"
     ],
     "optionExplanations_en": [
       "R=1 does stop scattering, but it costs all parallelism — one reduce worker carries the entire dataset, too big a sacrifice.",
       "A global sort fixes ordering within a file, not which reduce a record routes to — that's a different mechanism entirely.",
       "A combiner only does local numeric aggregation (like sum); it doesn't decide which reduce partition a record goes to, so partitioning is still needed.",
-      "The paper explicitly covers this case: when default hashing scatters related keys, users can rewrite the routing logic by business rule."
+      "Paper §4.1 describes exactly this use case: when keys are URLs the default hash scatters a host's URLs, and users can supply a custom partition function such as hash(Hostname(urlkey)) mod R."
     ],
     "whenOtherWins": "如果 key 之间没有业务相关性，只想让 R 个 reduce 负载均匀，默认 hash(key) mod R 反而更省心，不用额外写路由规则。",
     "tradeoff": "默认 hash 分区图省事、负载均匀 vs 自定义 partition function 保业务相关性但要自己写规则",
@@ -464,27 +464,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "disk-io-physics",
-    "scenario": "GFS 论文写于 2003 年的 7200 转机械盘时代：一次随机寻道（寻道 4-9ms + 半圈旋转延迟约 4ms）≈10ms，只能做到约 100 IOPS；顺序读带宽却有 100-200MB/s。团队要靠这两个数字决定文件系统默认的访问单元该多大。",
-    "scenario_en": "GFS was written in 2003, the era of 7200rpm mechanical disks: one random seek (4-9ms seek plus ~4ms rotational latency) costs about 10ms, capping throughput near 100 IOPS, while sequential read bandwidth reaches 100-200MB/s. The team had to size the filesystem's default access unit around these two numbers.",
-    "q": "已知一次随机寻道的时间和顺序读 1-2MB 数据的时间相当，这个关系该如何决定 GFS 默认访问单元的大小？",
-    "q_en": "Given that a random seek costs about as much time as reading 1-2MB sequentially, how should that relationship shape GFS's default access unit size?",
+    "scenario": "2003 年前后的 7200 转机械盘：一次随机寻道（寻道 4–9ms + 半圈旋转约 4ms）约 10ms，只能做到约 100 IOPS；顺序读带宽约 100–200MB/s。用这两个数字推一推：一次连续读的数据量该多大，寻道开销才不会主导？",
+    "scenario_en": "Around 2003, a 7200rpm disk paid about 10ms per random seek (4–9ms seek plus ~4ms rotational latency), capping it near 100 IOPS, while sequential reads ran at about 100–200MB/s. Use these two numbers to reason: how large must one contiguous read be so that seek cost doesn't dominate?",
+    "q": "已知一次随机寻道的时间约等于顺序读 1–2MB 的时间，这个关系对「大块存储（如 GFS 的 64MB chunk）」意味着什么？",
+    "q_en": "Given that one random seek costs about as much time as reading 1–2MB sequentially, what does that imply for large-block storage like GFS's 64MB chunks?",
     "options": [
       "块只要做到几百 KB 级别就足够摊平寻道成本，64MB 只是历史上沿用下来的参数，没有物理依据支撑",
       "这个关系只决定单机读吞吐的物理上限，与分布式文件系统怎么定块大小没有关系，块大小该由副本数量来决定",
-      "访问单元要远大于这个量级（如 64MB），顺序读完整块才能持续摊薄寻道成本，这是块设计得大的物理依据",
-      "这说明 GFS 留了 3 到 6 倍的安全冗余，块其实可以再切小一半，也不影响摊薄寻道成本的效果"
+      "连续读的数据量要远大于 1–2MB（如几十 MB），寻道开销占比才小——这是大块设计常被引用的一条物理依据",
+      "这说明块可以再切小一半，也不影响摊薄寻道"
     ],
     "options_en": [
       "Blocks only need to reach a few hundred KB to amortize seek cost, so 64MB is just a legacy number with no physical basis behind it.",
       "That relationship only caps single-disk read throughput and has nothing to do with a distributed filesystem's block size, which should be set by replica count instead.",
-      "The access unit needs to be far bigger than that gap (like 64MB); only then does one sequential read keep amortizing seek cost, which is the physical reason blocks are big.",
-      "It shows GFS left 3-6x slack; the block could safely be cut in half without hurting how well seek cost gets amortized."
+      "A contiguous read must be far larger than 1–2MB (tens of MB) for seek overhead to be small — a commonly cited physical argument for large blocks.",
+      "It shows the block could be cut in half without hurting seek amortization."
     ],
     "answer": [
       2
     ],
-    "why": "块远大于一次寻道能顺序读的量（1-2MB）时，摊薄寻道成本才持续有效——这是 GFS 把默认单元定在 64MB 量级的物理原因，代价是小文件独占一块容易变热点。",
-    "why_en": "A random seek costs about as much as a 1-2MB sequential read, so GFS sizes blocks far above that gap — hence 64MB, at the cost of small-file hotspots.",
+    "why": "一次寻道 ≈ 读 1–2MB 的时间，所以连续读 64MB 时寻道只占几个百分点；几百 KB 时寻道开销与传输时间同量级。这是大块设计常被引用的一条物理依据（HDFS 资料里常用这个算法）。GFS 论文 §2.5 自己列的理由是另外三条：减少 client 问 master 的次数、复用长连接、压缩 master 元数据（见 mapreduce-012）；寻道摊薄与它们方向一致，但不是论文给出的理由。",
+    "why_en": "One seek ≈ the time to read 1–2MB, so on a 64MB contiguous read the seek is only a few percent, while at a few hundred KB seek time is comparable to transfer time. This is a commonly cited physical argument for large blocks (HDFS material uses this arithmetic). The GFS paper §2.5 itself lists three other reasons: fewer client–master lookups, reusable long-lived connections, and smaller master metadata (see mapreduce-012); seek amortization points the same way but is not the paper's stated rationale.",
     "tags": [
       "gfs",
       "disk-io",
@@ -501,14 +501,14 @@
     "optionExplanations": [
       "几百 KB 级的块仍要频繁寻道，寻道成本占比依然明显，达不到摊薄到可忽略的效果。",
       "单机吞吐上限正是决定块该多大的那个物理量，分布式只是把它乘以很多台机器，物理账没变。",
-      "块远大于 1-2MB 时，一次顺序读的收益持续存在——这正是 64MB 这个量级被选中的原因。",
-      "64MB 不是安全冗余，是在摊薄寻道成本与元数据/小文件热点风险之间选的一个具体点。"
+      "块（连续读）远大于 1–2MB 时，寻道开销占比才会小——这是大块设计常被引用的物理依据，64MB 量级正符合；GFS 论文自己列的理由是问询次数、长连接和元数据量。",
+      "块切小一半（32MB）虽然寻道占比仍低，但这个推算只给出「块要远大于 1–2MB」的下限，并没有说明 64MB 是留了冗余；64MB 是综合问询次数、元数据与小文件热点风险选的具体点。"
     ],
     "optionExplanations_en": [
       "A few-hundred-KB block still seeks often, so seek cost still eats a real share instead of becoming negligible.",
       "The single-disk throughput ceiling is the physical quantity that decides block size; distributed just multiplies it across machines.",
-      "Once a block is far bigger than 1-2MB, one sequential read keeps paying off — that's exactly why 64MB was chosen.",
-      "64MB isn't slack margin — it's a specific point chosen between amortizing seek cost and metadata/hotspot risk."
+      "Only when a contiguous read is far larger than 1–2MB does seek overhead become a small fraction — a commonly cited physical argument for large blocks that the 64MB scale fits; the GFS paper's own stated reasons are lookup count, long-lived connections, and metadata size.",
+      "Halving to 32MB would still keep seek share low, but this arithmetic only sets a lower bound (far above 1–2MB) and says nothing about 64MB being padded with slack; 64MB was a specific point chosen against lookup count, metadata, and small-file hotspot risk."
     ]
   },
   {
@@ -617,13 +617,13 @@
     "q": "GFS 最终把 chunk 定成 64MB，主要为了换哪些收益？这个选择又带来了什么代价？",
     "q_en": "GFS settled on 64MB chunks — what benefits was that trading for, and what cost did it introduce?",
     "options": [
-      "收益是减少问 master 次数、复用长连接、元数据≈chunk数×64字节全放内存；代价是小文件热点",
+      "收益是减少问 master 次数、复用长连接、元数据（每个 chunk 不到 64 字节）全放内存；代价是小文件热点",
       "收益纯粹是省 master 内存，跟减少问询次数或保持长连接都无关；代价是大文件顺序读因块太大变慢",
       "收益是让每次读写都能拆成更多并行 RPC 来提升并发度；代价是元数据因块数变少而变大",
       "选 64MB 主要是为了对齐当时机械盘的物理扇区大小，跟问询频率、元数据总量都没有直接关系"
     ],
     "options_en": [
-      "Benefits: fewer master lookups, reusable long connections, metadata ≈ chunk count × 64 bytes fits memory; cost: small files become hotspots.",
+      "Benefits: fewer master lookups, reusable long connections, metadata (under 64 bytes per chunk) fits in memory; cost: small files become hotspots.",
       "The benefit is purely saving master memory, unrelated to lookup frequency or long connections; the cost is large-file reads slowing from oversized blocks.",
       "The benefit is splitting every read/write into more parallel RPCs for higher concurrency; the cost is metadata growing from fewer blocks.",
       "64MB mainly aligns with the mechanical disk's physical sector size of that era, unrelated to lookup frequency or metadata size."
@@ -631,8 +631,8 @@
     "answer": [
       0
     ],
-    "why": "chunk 越大，client 单次问询覆盖的数据越多、能维持的长连接越久、master 元数据总量越小；GFS 用这三条收益换来了 64MB，代价是小文件被迫挤在一两个 chunk 里，容易被同时访问打成热点。",
-    "why_en": "A bigger chunk means fewer master lookups per byte, longer-lived connections, and smaller total metadata — GFS traded those three wins for 64MB, at the cost of small files becoming hotspots.",
+    "why": "论文 §2.5：大 chunk 减少 client 问 master 的次数、让 client 对同一 chunk 维持长 TCP 连接、缩小 master 元数据（§2.6.1：每个 64MB chunk 元数据不到 64 字节），从而能全放内存。代价是小文件只有一两个 chunk，被大量 client 同时读时成为热点；论文的缓解办法是调高这类文件的副本数并错开启动时间。",
+    "why_en": "Paper §2.5: large chunks cut client–master lookups, let clients keep a persistent TCP connection to a chunkserver, and shrink master metadata (§2.6.1: under 64 bytes per 64MB chunk) so it fits in memory. The cost is that a small file has only one or two chunks and becomes a hotspot when many clients read it at once; the paper mitigates this with a higher replication factor and staggered start times.",
     "whenOtherWins": "如果工作负载里小文件占多数、访问模式是大量随机点查而不是大块顺序扫描，小 chunk 反而更合适——这也是后来 BigTable 要在 GFS 之上另建 64KB block 索引层的原因之一。",
     "tradeoff": "大 chunk vs 小 chunk：大 chunk 省问询次数和元数据，代价是小文件热点风险。",
     "tags": [
@@ -644,13 +644,13 @@
       "对应论文§2.5三条好处：减少问 master 次数、复用长连接、压缩元数据到能全放内存；代价靠调高副本数+错峰启动缓解。",
       "省内存只是三条收益之一，漏掉问询次数和长连接两条；顺序读速度由带宽决定，不会因块变大而变慢。",
       "块越大，单次操作覆盖越多数据、拆出的 RPC 反而越少；元数据也是块越少越小，不是越大。",
-      "64MB 远超机械盘扇区（几百字节到几 KB）量级，这个数字是围着摊薄寻道成本选的，不是对齐硬件扇区。"
+      "扇区只有几百字节到几 KB，64MB 跟它不是一个量级；论文给出的理由是问询次数、长连接和元数据量。"
     ],
     "optionExplanations_en": [
       "Matches §2.5's three benefits: fewer lookups, reusable long connections, metadata compact enough for memory; the cost is mitigated by higher replication and staggered startup.",
       "Saving memory is only one of three benefits and misses the lookup-frequency and long-connection wins; sequential speed is set by bandwidth, not block size.",
       "Bigger blocks mean each op covers more data and needs fewer RPCs, not more; metadata shrinks with fewer blocks, not grows.",
-      "64MB is far beyond a mechanical disk's sector size — chosen around amortizing seek cost, not hardware sector alignment."
+      "Sectors are hundreds of bytes to a few KB, nowhere near 64MB; the paper's reasons are lookup count, long-lived connections, and metadata size."
     ]
   },
   {
@@ -704,8 +704,8 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "record-append-consistency",
-    "scenario": "多个 client 并发对同一个 GFS 文件做 record append（只给数据不给 offset，offset 由 GFS 挑）。某次 primary 因为网络抖动重试了一次同一条记录的复制，导致这条记录在部分副本上出现了两份；还有的副本因为一次写没填满 chunk 剩余空间而被补了 padding。",
-    "scenario_en": "Multiple clients concurrently record-append to the same GFS file (clients hand over only data, GFS picks the offset). One record got replicated twice on some replicas because the primary retried after a network blip; other replicas got padding because a write didn't fill the remaining chunk space.",
+    "scenario": "多个 client 并发对同一个 GFS 文件做 record append（只给数据不给 offset，offset 由 GFS 挑）。某次追加在一个副本上失败，client 按协议重试了整条 record append，导致这条记录在部分副本上出现了两份；另一次追加时记录放不下当前 chunk 的剩余空间，primary 把这个 chunk 补满 padding，让 client 去下一个 chunk 重试。",
+    "scenario_en": "Multiple clients concurrently record-append to the same GFS file (clients hand over only data, GFS picks the offset). One append failed on a replica, so the client retried the whole record append, leaving that record duplicated on some replicas. Another record didn't fit in the chunk's remaining space, so the primary padded the chunk to its full size and told the client to retry on the next chunk.",
     "q": "面对重复记录和 padding，GFS 让谁来负责清理，用什么机制？",
     "q_en": "Who is responsible for cleaning up duplicate records and padding, and how?",
     "options": [
@@ -723,8 +723,8 @@
     "answer": [
       1
     ],
-    "why": "record append 只保证 at-least-once，不是恰好一次；GFS 把去重和丢 padding 都推给应用层——靠自带 checksum、唯一 ID，换来存储层不用为强一致买单。",
-    "why_en": "Record append only guarantees at-least-once, so GFS pushes dedup and padding cleanup onto the application via per-record checksums and IDs, not the storage layer.",
+    "why": "record append 的保证是「原子地至少写入一次」：任一副本失败，client 就重试整条追加，所以会留下重复；记录放不下时 primary 会 pad 满当前 chunk。GFS 不在存储层去重，而是让应用自己处理——记录自带 checksum 让读者跳过 padding 和碎片，记录自带唯一 ID 让读者去重，换来存储层不用为恰好一次买单。",
+    "why_en": "Record append guarantees the data is written atomically at least once: if any replica fails, the client retries the whole append, which can leave duplicates; if a record doesn't fit, the primary pads the chunk. GFS doesn't dedup at the storage layer — records carry checksums so readers skip padding and fragments, and unique IDs so readers drop duplicates.",
     "whenOtherWins": "如果应用需要恰好一次且不能自己做去重，record append 这套'至少一次+应用兜底'的模型就不适用，得换成需要分布式锁/两阶段提交的强一致写路径——但那正是 GFS 想躲开的代价。",
     "tradeoff": "存储层强一致 vs 应用层兜底：GFS 只给 at-least-once + 应用自己去重/丢弃碎片，换取避免分布式锁/两阶段提交的代价。",
     "tags": [
@@ -856,16 +856,16 @@
     "sub": "data-locality-scheduling",
     "scenario": "MapReduce 要把一个大文件切成很多份（split）分给 map worker。GFS 已经把这个文件按 64MB 一块存了 3 份副本，master 知道每份副本具体在哪几台机器上。调度器要决定：每个 split 该切多大、任务该派到哪台机器。",
     "scenario_en": "MapReduce splits a large file into pieces for map workers. GFS already stores that file in 64MB chunks with 3 replicas each, and the GFS master knows exactly which machines hold which replica. The scheduler must decide how big each split should be and which machine to send each task to.",
-    "q": "MapReduce 的调度器为什么优先把 map 任务派到已经持有那份数据副本的机器上，而且要求 split 大小不能超过 GFS 的 chunk 大小？",
-    "q_en": "Why does MapReduce's scheduler prefer to place a map task on a machine that already holds a replica of that data, and why must the split size stay at or below the GFS chunk size?",
+    "q": "MapReduce 的调度器为什么优先把 map task 派到已经持有那份数据副本的机器上？split 为什么通常按 chunk 大小切、不超过一个 chunk？",
+    "q_en": "Why does MapReduce's scheduler prefer to place a map task on a machine that already holds a replica of that data, and why are splits usually sized to fit within one GFS chunk?",
     "options": [
-      "让计算去找数据：master 知道副本位置，调度器优先选本地机器；split 比 chunk 大就可能跨机器，红利作废",
+      "让计算去找数据：master 知道副本位置，调度器优先选本地机器；split 跨出一个 chunk 就可能要从别的机器读，红利打折",
       "纯粹是为了负载均衡：优先派到持有数据的机器只为让工作量更平均，跟省带宽无关；限制大小是为让运行时间接近",
       "因为 GFS 的 client 只能读本机数据，跨机器读取在协议层面完全不被支持，调度只能就地取材没有优化空间",
       "因为 reduce 阶段需要严格机器亲和性，把 map 和 reduce 任务预先绑定到同一批机器上，split 大小只为让绑定更整齐"
     ],
     "options_en": [
-      "Moving computation to data: the master knows each replica's location, so the scheduler picks a local machine; a split bigger than the chunk can span machines and kill the benefit.",
+      "Moving computation to data: the master knows replica locations, so the scheduler prefers a local machine; a split that spans past one chunk may need reads from other machines, eroding the benefit.",
       "Purely load balancing: preferring data-holding machines is just about evening out workload, unrelated to bandwidth; the size limit keeps runtimes similar.",
       "Because a GFS client can only read data on its own machine — cross-machine reads aren't supported at all at the protocol level, leaving no room to optimize.",
       "Because the reduce stage needs strict machine affinity, pre-binding map and reduce tasks to the same machines; split size just keeps that binding tidy."
@@ -873,8 +873,8 @@
     "answer": [
       0
     ],
-    "why": "GFS 暴露 chunk 位置，调度器就能'搬计算不搬数据'；split 大小卡在 chunk 大小之内，才能保证一个 split 完整落在一台机器上，切得比 chunk 大就跨机器，局部性直接失效。",
-    "why_en": "GFS exposes chunk locations, so the scheduler moves computation to data; splits must stay within one chunk or they span machines and lose locality.",
+    "why": "GFS 暴露 chunk 位置，调度器就能「搬计算不搬数据」，论文 §3.4 说大部分输入因此是本地读、不占网络带宽。split 按 chunk 大小切并对齐边界是为了让一个 split 整份落在同一个 chunk、同一台机器上——这是为局部性做的设计选择，不是论文写死的硬规定；跨 chunk 的 split 有一部分数据大概率要走网络。",
+    "why_en": "Because GFS exposes chunk locations, the scheduler can move compute to data; §3.4 reports most input is then read locally. Sizing and aligning splits to chunks keeps a split on one chunk and one machine — a design choice for locality, not a hard rule in the paper; a split spanning chunks will likely read part of its data over the network.",
     "whenOtherWins": "如果数据本来就不是按'副本位置可查询'的方式存放（比如没有位置元数据的对象存储），局部性调度就没有信息可用，退化成随机调度——这时候只能靠堆带宽硬扛。",
     "tradeoff": "本地读 vs 跨网络读：split 不超过 chunk 大小换取'计算就地跑'的红利，代价是切分粒度被 GFS 块大小锁死。",
     "tags": [
@@ -883,13 +883,13 @@
       "scheduling"
     ],
     "optionExplanations": [
-      "对应论文§3.4：大规模作业里大部分输入是本地读，前提正是 split 不超过 chunk 大小，否则读的时候还是要走网络。",
+      "论文 §3.4：大规模作业里大部分输入是本地读。split 按 chunk 大小切并对齐边界，能让一个 split 整份落在同一台机器上；跨 chunk 的 split 就有一部分数据要走网络，红利打折。",
       "负载均衡是另一个独立目标（用 idle worker 抢任务），不是局部性调度的动机；两者可以同时存在但原因不同。",
       "GFS 的 client 本来就能跨机器读任意 chunkserver；'就地取材'是省网络的优化选择，不是协议限制。",
       "reduce worker 是通过网络 RPC 去 map worker 本地盘拉数据的，不要求提前绑定到同一批机器，与论文机制不符。"
     ],
     "optionExplanations_en": [
-      "Matches §3.4: for large jobs, most input is read locally — but only if splits don't exceed chunk size, otherwise it still needs the network.",
+      "Paper §3.4: in large jobs most input is read locally. Sizing and aligning splits to chunks keeps a split wholly on one machine; a split spanning chunks reads part of its data over the network, eroding the benefit.",
       "Load balancing is a separate goal (idle workers grabbing tasks), not the motive for locality scheduling; the two coexist for different reasons.",
       "GFS clients can already read any chunkserver across the network; 'staying local' is a bandwidth optimization, not a protocol limit.",
       "Reduce workers pull data from map workers' local disks over network RPC; they aren't pre-bound to the same machines, contradicting this option."
@@ -901,8 +901,8 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "worker-failure",
-    "scenario": "一个 map worker 已经完成任务、把中间结果写进本地盘的私有临时文件后，这台机器突然宕机。",
-    "scenario_en": "A map worker has already finished its task and written intermediate output to private temp files on local disk, then the machine crashes.",
+    "scenario": "按 MapReduce 论文的实现：一个 map worker 已经完成任务、把中间结果写进本地盘的私有临时文件后，这台机器突然宕机。此时部分 reduce task 已经拉过这份数据，部分还没拉，而且已拉过的 reduce task 之后也可能因故障被重新执行。",
+    "scenario_en": "Per the MapReduce paper's implementation: a map worker has finished its task and written intermediate output to private temp files on local disk, then the machine crashes. Some reduce tasks have already fetched that data, others haven't, and any reduce task that already fetched it might itself be re-executed later after a failure.",
     "q": "master 该怎么处理这个已完成的 map 任务？",
     "q_en": "How should the master handle this already-completed map task?",
     "options": [
@@ -920,8 +920,8 @@
       "Only reschedule it if the downstream reduce task hasn't read that data yet.",
       "Keep it marked completed and have reduce read the intermediate output straight from GFS."
     ],
-    "why": "map 中间输出只写在执行它那台机器的本地盘，机器不可达输出就跟着丢，所以完成的 map 任务也要重置成 idle 重跑；reduce 输出已经进了 GFS，不受单机故障影响。",
-    "why_en": "Map output lives only on the worker's local disk, so a dead machine makes it unreachable and even a completed map task must be rescheduled — reduce output is already durable in GFS.",
+    "why": "论文规定：worker 宕机后，它上面已完成的 map task 也要重置为 idle 重跑，因为中间输出只在这台机器的本地盘上，机器不可达就等于输出丢了。C 不成立：已经拉过数据的 reduce task 之后也可能失败重跑，那时还要再读这份 map 输出；论文的做法是重跑 map，并通知还没读的 reducer 改去新机器读。reduce 的最终输出已经在 GFS 里，所以已完成的 reduce task 不用重跑。",
+    "why_en": "The paper resets completed map tasks on a failed worker back to idle, because their output lives only on that machine's local disk. Option C fails because a reducer that already fetched the data may itself be re-executed later and need it again; the paper re-runs the map task and tells reducers that haven't read yet to fetch from the new machine. Completed reduce tasks don't re-run, since their output is already in GFS.",
     "tags": [
       "mapreduce",
       "fault-tolerance",
@@ -949,13 +949,13 @@
     "optionExplanations": [
       "论文原文：map 中间输出在本地盘，机器不可达就等于输出丢了，所以必须重置成 idle 重跑。",
       "completed 只是执行时的记录状态，不代表数据依然可读；机器一挂这个前提就不成立了。",
-      "论文按机器是否可达判断要不要重跑，不看下游有没有读过——机器已经死了，这条件不成立。",
+      "只看「下游读过没有」不够：已经拉过数据的 reduce task 之后也可能失败重跑，还要再读这份 map 输出；论文的做法是重跑 map，并通知还没读的 reducer 改去新机器读。",
       "map 中间输出从没进过 GFS，只有 reduce 最终输出才写进 GFS，这里把两者搞反了。"
     ],
     "optionExplanations_en": [
       "The paper's actual rule: map output lives on local disk, so an unreachable machine means lost output — the task resets to idle and reruns.",
       "Completed only records a past state, not that the data is still readable; the machine dying breaks that assumption.",
-      "The paper's test is machine reachability, not downstream read progress — the machine is dead, so this condition doesn't hold.",
+      "Looking only at whether downstream has read it isn't enough: a reduce task that already fetched the data may itself be re-executed and need it again; the paper re-runs the map task and tells reducers that haven't read yet to fetch from the new machine.",
       "Map's intermediate output never goes to GFS; only reduce's final output does — this option swaps the two."
     ]
   },
@@ -1404,27 +1404,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "lineage-sstable",
-    "scenario": "MapReduce 论文保证同一 partition 内中间 key 按递增顺序处理，并说这个有序输出方便日后按 key 高效随机查找。",
-    "scenario_en": "The MapReduce paper guarantees intermediate keys within one partition are processed in increasing order, and adds that this ordering makes efficient random-access lookups by key possible later.",
-    "q": "这句“顺带”的话在预告哪个后来的系统？",
-    "q_en": "What later system does this \"throwaway\" line actually foreshadow?",
+    "scenario": "MapReduce 论文保证同一 partition 内中间 key 按递增顺序处理，并顺带提到：这让每个 partition 的输出天然有序，方便输出格式支持按 key 高效随机查找。",
+    "scenario_en": "The MapReduce paper guarantees intermediate keys within a partition are processed in increasing order, and notes in passing that this makes each partition's output sorted, which helps when the output format must support efficient random-access lookups by key.",
+    "q": "这种「有序、能按 key 随机查找的输出文件」，和后来哪个存储结构的思路最一致？",
+    "q_en": "Which later storage structure best matches this idea of a sorted output file that supports random lookups by key?",
     "options": [
       "combiner——map 端先局部聚合，省网络流量",
-      "SSTable——两年后 BigTable 定义的有序不可变索引文件",
+      "SSTable——2006 年 BigTable 论文描述的有序、不可变、带块索引的文件",
       "backup task——给慢任务起副本治长尾",
       "hash 索引——按 partition function 把 key 打散"
     ],
     "options_en": [
       "combiner — a local pre-aggregation on the map side that saves network traffic.",
-      "SSTable — the ordered, immutable, indexed file BigTable defined two years later.",
+      "SSTable — the sorted, immutable, block-indexed file described in the 2006 Bigtable paper.",
       "backup task — spinning up a duplicate for a slow task to beat stragglers.",
       "hash index — scattering keys across R buckets via the partition function."
     ],
     "answer": [
       1
     ],
-    "why": "排序制造的同 key 相邻落盘后就是一份有序文件——这正是 SSTable 的定义。2004 年论文已埋下 2006 年 BigTable 的种子。",
-    "why_en": "The key adjacency sorting creates, once written to disk, is already a key-ordered file — the definition of an SSTable, so the 2004 paper already contains BigTable's seed.",
+    "why": "排序让同一 partition 的输出按 key 有序，再配上索引就能按 key 随机查找——这和 BigTable 论文里 SSTable（有序、不可变、带块索引）的思路一致。这是两篇论文的思路呼应，不是论文明说的「预告」。",
+    "why_en": "Sorting makes each partition's output ordered by key; add an index and you can look up by key — the same idea as Bigtable's SSTable (sorted, immutable, block-indexed). It's a conceptual echo between the papers, not an explicit prediction.",
     "tags": [
       "mapreduce",
       "sstable",
@@ -1455,13 +1455,13 @@
     ],
     "optionExplanations": [
       "combiner 省的是网络流量，跟“输出文件格式”无关，不是这句话在说的事。",
-      "论文原句直接点名“支持按 key 高效随机查找”，这正是它日后成为存储引擎标准件的起点。",
+      "论文提到有序输出方便按 key 高效随机查找，这和 SSTable 的思路一致；这是两篇论文的思路呼应，不是论文明说的预告。",
       "backup task 处理掉队任务，跟排序保证、输出格式是两回事。",
       "hash 索引靠散列查找而非有序扫描，方向和这句话强调的有序性相反。"
     ],
     "optionExplanations_en": [
       "A combiner saves network bandwidth; it has nothing to do with the output file's shape, which is what this line is actually about.",
-      "The paper names \"efficient random-access lookups by key\" directly — that line is the starting point of a whole storage-engine standard.",
+      "The paper notes sorted output helps efficient lookups by key, which matches the SSTable idea; it is a conceptual echo between the papers, not an explicit prediction.",
       "Backup tasks handle stragglers; that's unrelated to the ordering guarantee or output file format.",
       "Hash indexes rely on scattering, not ordered scanning — the opposite of the ordering this line emphasizes."
     ]
@@ -1537,27 +1537,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "lineage-sstable",
-    "scenario": "同事说“SSTable 不可变只是为了读的时候不用加锁，方便并发”，你觉得这只说对了一半。",
-    "scenario_en": "A teammate says \"SSTable is immutable purely so reads don't need locks\" — you think that's only half right.",
-    "q": "SSTable 不可变性更根本的原因是什么？",
-    "q_en": "What is the more fundamental reason SSTable is immutable?",
+    "scenario": "同事说「SSTable 不可变只是为了读的时候不用加锁，方便并发」。你翻 Bigtable 论文 §6 发现，论文列了不止一条不可变带来的好处。",
+    "scenario_en": "A teammate says \"SSTable is immutable purely so reads don't need locks.\" Checking Bigtable paper §6, you find it lists more than one benefit of immutability.",
+    "q": "除了读时免同步，Bigtable 论文还点名了不可变 SSTable 的哪些好处？",
+    "q_en": "Besides lock-free reads, which other benefits of immutable SSTables does the Bigtable paper name?",
     "options": [
-      "为了让压缩比更高，不用为原地改写预留额外空间",
+      "压缩比更高，不用为原地改写预留额外空间",
       "为了兼容 MapReduce 论文里定义的中间输出文件格式",
-      "免锁只是副产品，根本原因是要落在只保证追加写的 GFS 上",
+      "删除变成回收过期 SSTable 的垃圾回收；tablet 分裂时子 tablet 可直接共享父 tablet 的 SSTable",
       "纯粹是历史遗留说法，RocksDB 早就不再要求不可变了"
     ],
     "options_en": [
-      "For a better compression ratio, so no space needs reserving for in-place edits.",
+      "Better compression, since no space needs reserving for in-place edits.",
       "To stay compatible with the intermediate output format defined by the MapReduce paper.",
-      "Lock-free reads are just a side effect; the real reason is fitting a GFS that only guarantees appends.",
+      "Deleting data becomes garbage-collecting obsolete SSTables, and split tablets can share the parent's SSTables directly.",
       "Purely a legacy claim — RocksDB has long since dropped the immutability requirement."
     ],
     "answer": [
       2
     ],
-    "why": "GFS 对并发覆盖写只保证 consistent but undefined；BigTable 从不覆盖写正好绕开这块雷区，免锁只是顺带的好处。",
-    "why_en": "GFS only promises 'consistent but undefined' for concurrent overwrites, so BigTable's never-overwrite design sidesteps that entirely — lock-free reads are just a side benefit.",
+    "why": "Bigtable 论文 §6：SSTable 一旦生成就不再修改，所以读 SSTable 不需要同步；「永久删除数据」变成对过期 SSTable 做垃圾回收（mark-and-sweep）；tablet 分裂时子 tablet 直接共享父 tablet 的 SSTable，分裂很快。A 论文没提；B 两个系统没有格式兼容要求；D 错，LevelDB/RocksDB 的 SSTable 至今不可变。",
+    "why_en": "Bigtable §6: since SSTables are never modified after creation, reads need no synchronization; permanently removing deleted data becomes garbage-collecting obsolete SSTables; and split tablets share the parent's SSTables, so splits are fast. The paper doesn't cite compression (A); there's no format-compatibility requirement (B); LevelDB/RocksDB SSTables are still immutable (D).",
     "tags": [
       "sstable",
       "gfs",
@@ -1572,8 +1572,8 @@
       {
         "term": "GFS",
         "fullName": "Google File System",
-        "meaning": "Google 的分布式文件系统，只给追加写强保证。",
-        "meaningEn": "GFS is Google's distributed file system, which only gives strong guarantees for append writes."
+        "meaning": "Google 的分布式文件系统，针对大文件追加和顺序读优化，也支持随机写。",
+        "meaningEn": "Google's distributed file system, optimized for large appends and sequential reads, though it also supports random writes."
       },
       {
         "term": "SSTable",
@@ -1588,16 +1588,16 @@
       }
     ],
     "optionExplanations": [
-      "压缩比是不可变性的次要收益，不是驱动这个设计的约束。",
-      "MapReduce 和 BigTable 是两个独立系统，不存在格式兼容的强制要求。",
-      "GFS 一致性模型对并发覆盖写只给松保证，不可变写正好避开它。",
+      "论文 §6 没有把压缩比列为不可变的收益。",
+      "MapReduce 和 Bigtable 是两个独立系统，不存在格式兼容的强制要求。",
+      "这两条正是论文 §6 点名的不可变收益：删除变成回收过期 SSTable，tablet 分裂时子 tablet 直接共享父 tablet 的 SSTable。",
       "LevelDB/RocksDB 至今仍是不可变 SSTable，这个前提本身错了。"
     ],
     "optionExplanations_en": [
-      "Compression ratio is a secondary benefit of immutability, not the constraint driving the design.",
-      "MapReduce and BigTable are independent systems; there's no forced format-compatibility requirement.",
-      "GFS's consistency model only gives a loose guarantee for concurrent overwrites, and never-overwrite avoids it.",
-      "LevelDB and RocksDB are still immutable SSTables today, so this premise is simply wrong."
+      "The paper's §6 does not list compression ratio as a benefit of immutability.",
+      "MapReduce and Bigtable are independent systems; there is no format-compatibility requirement.",
+      "These are exactly the benefits §6 names: deletion becomes garbage collection of obsolete SSTables, and split tablets share the parent's SSTables directly.",
+      "LevelDB and RocksDB SSTables are still immutable today, so the premise is wrong."
     ]
   },
   {
@@ -1762,19 +1762,19 @@
     "atomType": "contrast",
     "topic": "system-design",
     "sub": "lsm-tradeoff",
-    "scenario": "面试官追问：“都用 NVMe SSD 了，4KB 随机读只要 100 微秒，你这套避免随机 I/O 的逻辑过时了吗？”",
-    "scenario_en": "The interviewer pushes back: \"Everyone uses NVMe SSD now — a 4KB random read only takes about 100 microseconds. Isn't your whole avoid-random-I/O logic outdated?\"",
+    "scenario": "面试官追问：「都用 NVMe SSD 了，4KB 随机读大概 100 微秒，你这套避免随机 I/O 的逻辑过时了吗？」你的系统跑在云上，数据盘是网络挂载的块存储。",
+    "scenario_en": "The interviewer pushes back: \"Everyone uses NVMe SSD now — a 4KB random read takes about 100 microseconds. Isn't your whole avoid-random-I/O logic outdated?\" Your system runs in the cloud on network-attached block storage.",
     "q": "该怎么回应“SSD 时代顺序化还重要吗”？",
     "q_en": "How should you respond to \"does sequential I/O still matter in the SSD era\"?",
     "options": [
       "承认已经过时：SSD 没有磁头，随机读和顺序读速度已经完全一样",
-      "结论不变，理由换三条：读放大、固定开销、云上更贵",
+      "结论不变，理由换成：小随机写在 SSD 内部也有写放大、每次 I/O 有固定开销、网络盘上一次 I/O 是一次网络往返",
       "只承认一半：本地 SSD 上确实不重要了，但这和分布式存储完全无关",
       "回避理由，直接说：工业界现在都还在用 LSM，所以肯定有用"
     ],
     "options_en": [
       "Admit it's outdated — SSDs have no seek head, so random and sequential reads now cost exactly the same.",
-      "Keep the conclusion, swap in three reasons: read amplification, fixed cost, pricier cloud I/O.",
+      "Keep the conclusion, with new reasons: small random writes still cause write amplification inside the SSD, every I/O has fixed overhead, and on network-attached disks each I/O is a network round trip.",
       "Half-concede: it stopped mattering on local SSDs, but that's unrelated to distributed storage.",
       "Dodge the reasoning and just say the industry still runs LSM everywhere, so it must still matter."
     ],
@@ -1782,9 +1782,9 @@
       1
     ],
     "whenOtherWins": "若负载读多、要范围扫描和可预测 p99，写的也不是随机 key，即使在 SSD 上 B-tree 依然更合适。",
-    "tradeoff": "LSM 用后台写放大换随机写 vs B-tree 用随机写换更低写放大；SSD 只改变随机写代价，不消除这权衡",
-    "why": "SSD 无磁头但最小 I/O 单位仍是 4KB page，零散小记录照样读放大；每次 I/O 有固定开销；云上一次 I/O 是网络 RPC，延迟更高，顺序化反而更重要。",
-    "why_en": "SSDs have no seek head, but the minimum I/O unit is still a 4KB page so scattered small records still cause read amplification, every I/O carries a fixed cost, and on cloud storage one I/O is a network RPC — so locality matters even more.",
+    "tradeoff": "B-tree 原地更新、读路径短，但小更新要改写整页；LSM 把写顺序化、靠后台 compaction 付写放大和读放大。SSD 降低了随机读代价，但没有消掉这个权衡。",
+    "why": "SSD 没有寻道，但 NAND 只能按 page 写、按 erase block 擦，小随机写会触发 FTL 垃圾回收，设备内写放大更大、磨损更快；每次 I/O 还有固定的命令和中断开销，零散小 I/O 摊不薄；题面说数据盘是网络挂载块存储，一次 I/O 是一次网络往返，延迟和按 IOPS 计费都让「攒成大块顺序写」更划算。结论不变，只是理由从「磁头寻道」换成了这三条。",
+    "why_en": "SSDs have no seek, but NAND writes by page and erases by block, so small random writes trigger FTL garbage collection, adding device-level write amplification and wear; every I/O also carries fixed command overhead; and on the network-attached block storage given in the scenario, each I/O is a network round trip with IOPS-based limits and pricing. The conclusion holds — only the reasons change from disk seeks to these three.",
     "tags": [
       "lsm",
       "ssd",
@@ -1816,14 +1816,14 @@
     ],
     "optionExplanations": [
       "随机读延迟从 10ms 降到约 100µs，但“完全一样”和 page 粒度读放大的事实不符。",
-      "把结论和支撑理由拆开——结论没变，但三条理由全部换成了 SSD 时代版本。",
-      "本地 SSD 上仍有 page 级读放大和固定 I/O 开销，这两条和分布式无关，不能只认一半。",
+      "把结论和支撑理由拆开——结论没变，但理由换成了 SSD 与网络盘时代的版本：写放大、固定 I/O 开销、网络往返。",
+      "本地 SSD 上小随机写仍有写放大，每次 I/O 也有固定开销，这两条和分布式无关，不能只认一半。",
       "不给理由的回答最先在追问环节垮——面试官下一句就是“为什么”。"
     ],
     "optionExplanations_en": [
       "Random-read latency dropped from 10ms to ~100µs, but \"identical\" ignores page-level read amplification.",
-      "Separate the conclusion from its support — the conclusion holds, but all three reasons are now SSD-era ones.",
-      "Local SSDs still have page-level read amplification and fixed I/O overhead; those two are unrelated to distribution.",
+      "Separate the conclusion from its support — the conclusion holds, but the reasons are now the SSD and network-disk versions: write amplification, fixed I/O overhead, network round trips.",
+      "Even on local SSDs, small random writes cause write amplification and every I/O has fixed overhead; those two are unrelated to distribution, so you can't concede only half.",
       "An answer with no reasoning collapses at the first follow-up, which is always \"why.\""
     ]
   },
@@ -1840,20 +1840,20 @@
     "options": [
       "抛弃了按 key 分组这件事，换成纯内存哈希表，从此不再排序数据",
       "抛弃了失败就重跑的容错思路，换成同步复制好几份副本",
-      "抛弃逐步落盘 HDFS，换内存流水线；shuffle 排序原样保留",
+      "抛弃每步都把结果落 HDFS，stage 内走内存流水线；按 key 聚合仍要 shuffle 重分布（常伴随排序或溢写排序）",
       "抛弃了把计算搬到数据旁边调度的思路，从此不再关心本地性"
     ],
     "options_en": [
       "Dropped key-based grouping entirely for a pure in-memory hash table, so data is no longer sorted at all.",
       "Dropped re-run-on-failure fault tolerance for synchronously copying several replicas instead.",
-      "Dropped materializing every step to HDFS for an in-memory pipeline; shuffle-sort survives unchanged.",
+      "Dropped writing every step's output to HDFS for in-memory pipelining within a stage; key-based aggregation still needs a shuffle (often with sorting or sort-on-spill).",
       "Dropped scheduling compute next to data, and no longer cares about locality at all."
     ],
     "answer": [
       2
     ],
-    "why": "DAG 流水线省掉了不必要的落盘，失败靠血缘重算；但只要涉及按 key 聚合，shuffle 阶段的排序动作还在——这正是“排序制造相邻性”的现代延续。",
-    "why_en": "DAG pipelining skips unnecessary disk materialization and recovers via lineage, but whenever the job needs key-based aggregation the shuffle-sort step survives unchanged — the same 'sorting creates adjacency' idea from MapReduce.",
+    "why": "Spark/Flink 用 DAG 把多步串成流水线，不再每步都写 HDFS 三副本；但只要按 key 聚合，就仍要 shuffle 把数据按 key 重分布，Spark 的 sort-based shuffle 和溢写都会排序——这是「分组靠重分布+排序」的现代延续，不是原样照搬。容错上 Spark 靠 lineage 重算丢失分区，Flink 靠 checkpoint 快照恢复，都不是同步多副本；本地性调度两者都保留。",
+    "why_en": "Spark/Flink pipeline steps as a DAG instead of writing every step to triple-replicated HDFS, but key-based aggregation still needs a shuffle to redistribute data by key, and Spark's sort-based shuffle and spills still sort — a modern continuation, not an unchanged copy. For fault tolerance Spark recomputes lost partitions from lineage and Flink restores from checkpoints; neither uses synchronous replicas. Both keep locality-aware scheduling.",
     "tags": [
       "mapreduce",
       "spark",
@@ -1886,14 +1886,14 @@
     ],
     "optionExplanations": [
       "内存放不下时，哈希聚合一样要溢出成排序，“不再排序”这个说法不成立。",
-      "Spark/Flink 靠血缘重算容错，不是同步复制多副本，选项把方向说反了。",
-      "DAG 流水线不强制每步写 HDFS 三副本，但按 key 聚合时 shuffle 排序依然发生。",
+      "Spark 靠 lineage 重算、Flink 靠 checkpoint 恢复，都不是同步复制多副本，选项把方向说反了。",
+      "DAG 流水线不强制每步写 HDFS 三副本，但按 key 聚合时仍要 shuffle 重分布，常伴随排序或溢写排序。",
       "本地性调度在 Spark/Flink 里依然存在，不是被抛弃的部分。"
     ],
     "optionExplanations_en": [
       "When memory runs out, hash aggregation spills and becomes a sort anyway, so \"no longer needed\" doesn't hold.",
-      "Spark/Flink recover via lineage recomputation, not synchronous multi-replica copying — this reverses the direction.",
-      "DAG pipelining doesn't force every step through triple-replicated HDFS, but shuffle-sort still fires for key aggregation.",
+      "Spark recomputes from lineage and Flink restores from checkpoints; neither uses synchronous multi-replica copying, so the option has the direction backwards.",
+      "A DAG pipeline doesn't force every step to write triple-replicated HDFS, but key-based aggregation still needs a shuffle, often with sorting or sort-on-spill.",
       "Locality-aware scheduling is still present in Spark/Flink; it was never dropped."
     ]
   },

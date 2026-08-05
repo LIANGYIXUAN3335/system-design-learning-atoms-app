@@ -75,14 +75,14 @@
       0,
       1
     ],
-    "why": "第一跳是 client-server 协议选型；第二跳是更新如何从产生处传播到持有连接的 server；两跳取舍相互独立。",
-    "why_en": "Real-time design has two hops: client-server delivery and source-to-server update propagation.",
+    "why": "第一跳是 client 与持有连接的 server 之间的协议选型（polling / SSE / WebSocket）；第二跳是更新如何从产生处（A）传播到持有连接的 server（B）；两跳取舍相互独立。",
+    "why_en": "Hop one is the protocol between the client and the server holding its connection (polling / SSE / WebSocket); hop two is how the update travels from where it is produced (A) to the server holding the connection (B). The two choices are independent.",
     "tags": [
       "two-hops",
       "protocols",
       "propagation"
     ],
-    "diagram": "flowchart LR\n    A[\"事件源\"] -->|hop 1| B[\"连接服务器\"]\n    B -->|hop 2| C[\"客户端\"]\n    D[\"协议选择\"] -.-> B\n    E[\"传播方式\"] -.-> A",
+    "diagram": "flowchart LR\n    A[\"事件源\"] -->|hop 1| B[\"连接服务器\"]\n    B -->|hop 1: client 协议| C[\"客户端\"]\n    D[\"协议选择\"] -.-> B\n    E[\"传播方式\"] -.-> A",
     "options_en": [
       "The connection protocol between server and client.",
       "How updates propagate from their source to the server holding the connection.",
@@ -152,24 +152,24 @@
     "options": [
       "HTTP 流量必须绕开 load balancer，否则请求会被丢弃",
       "HTTP 请求体只能是纯文本，无法携带 JSON 这类结构化数据",
-      "客户端请求后服务器响应并关闭连接，服务器没有自然渠道主动发后续事件",
+      "服务器只能回应客户端发来的请求；一次响应结束后，即使 TCP 连接还开着，没有新请求服务器也无法主动发送后续事件",
       "HTTP 协议本身只定义了图片传输，不支持其他数据类型"
     ],
     "answer": [
       2
     ],
-    "why": "传统 HTTP 是一次性拉取模型，响应后连接关闭；要推送后续事件就得反复拉取，或建立持久连接换服务器主动权。",
-    "why_en": "Traditional HTTP is request-response, so servers need polling or persistent connections to deliver later events.",
+    "why": "请求-响应由客户端驱动：每个响应都对应一个请求。keep-alive 只复用 TCP 连接，不给服务器主动发送的权利；要推后续事件，只能反复拉取，或用 SSE、WebSocket 这类持久通道。",
+    "why_en": "Request-response is client-driven: every response answers a request. Keep-alive only reuses the TCP connection; it does not let the server send unsolicited messages. To deliver later events you need repeated pulls (polling / long polling) or a persistent channel such as a streaming response (SSE) or WebSocket.",
     "tags": [
       "http",
       "request-response",
       "limits"
     ],
-    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: HTTP request\n    S-->>C: response\n    Note over C,S: 连接结束\n    S--xC: 后续事件无法自然推送",
+    "diagram": "sequenceDiagram\n    participant C as Client\n    participant S as Server\n    C->>S: HTTP request\n    S-->>C: response\n    Note over C,S: 响应已完成（无未完成的请求）\n    S--xC: 后续事件无法自然推送",
     "options_en": [
       "HTTP traffic must avoid load balancers or requests get dropped.",
       "HTTP request bodies are plain text only and cannot carry structured data like JSON.",
-      "The server responds once and closes the connection, leaving no natural channel to push later events.",
+      "The server can only answer requests the client sends; once a response completes, even if the TCP connection stays open, the server has no way to send later events until a new request arrives.",
       "HTTP as a protocol only defines image transfer, not other data types."
     ],
     "tradeoff": "一次性请求响应 vs 持续开放的推送通道",
@@ -195,13 +195,13 @@
     "optionExplanations": [
       "不成立：HTTP 流量本来就要经过 load balancer，不存在必须绕开的限制。",
       "站不住脚：HTTP body 能传输 JSON 等任意结构化数据，不限于纯文本。",
-      "抓住了根因：响应后连接关闭，服务器没有天然的后续推送渠道，只能反复拉取或换成持久连接。",
+      "抓住了根因：请求-响应由客户端驱动，keep-alive 只复用连接，没有新请求服务器就没有可回的响应，只能反复拉取或换成持久通道。",
       "说错了：HTTP 是通用协议，图片只是它能传输的众多数据类型之一。"
     ],
     "optionExplanations_en": [
       "Not true: HTTP traffic normally does go through a load balancer; there's no rule requiring it to bypass one.",
       "Doesn't hold up: an HTTP body can carry JSON or any structured payload, not just plain text.",
-      "Nails the root cause: once the response returns the connection closes, leaving the server no natural channel to push later events.",
+      "Nails the root cause: request-response is client-driven. Keep-alive only reuses the connection; with no new request the server has nothing to respond to, so you must poll repeatedly or switch to a persistent channel.",
       "Wrong: HTTP is a general-purpose protocol; images are just one of many data types it can carry."
     ],
     "scenario": "股票行情页现在用普通 HTTP GET 拉价格，产品要求价格一变就 200ms 内推到页面。",
@@ -312,8 +312,8 @@
     "answer": [
       0
     ],
-    "why": "L4 更贴近“直连同一台后端”的心智模型，适合 WebSocket 等持久连接；L7 能按内容路由，但可能拆断重建后端连接。",
-    "why_en": "L4 load balancers are closer to persistent TCP connections, while L7 load balancers provide application routing but can complicate connection semantics.",
+    "why": "L4 不解析应用层内容，更贴近“一条连接对一台后端”；L7 懂 HTTP、能按 path/header 路由，通常终止客户端连接再另建后端连接。主流 L7 也支持 WebSocket，要留意 idle timeout。",
+    "why_en": "An L4 balancer doesn't parse application content, so it stays closer to a one-connection-to-one-backend model. An L7 balancer understands HTTP and can route by path or header, usually terminating the client connection and opening a separate backend connection. Mainstream L7 balancers do support WebSocket; you just need to account for idle timeouts and the split connection.",
     "tags": [
       "load-balancer",
       "l4",
@@ -340,14 +340,14 @@
         [
           "L4 LB",
           "TCP/UDP 层",
-          "同一连接直通后端",
-          "WebSocket 等长连接"
+          "通常不解析内容，常见为直通或简单转发",
+          "任意 TCP 长连接（含 WebSocket）"
         ],
         [
           "L7 LB",
           "HTTP 应用层",
-          "可能终止并重建连接",
-          "HTTP/long polling"
+          "终止 client 连接、另建后端连接",
+          "HTTP、long polling、WebSocket（经 Upgrade）"
         ]
       ]
     },
@@ -507,7 +507,7 @@
     "q_en": "What are the pros and cons of simple polling? (Select all that apply.)",
     "options": [
       "实现简单、stateless、兼容所有 HTTP 基础设施",
-      "延迟最高，最多延迟一个 polling interval 加请求处理时间",
+      "相比 long polling、SSE、WebSocket 延迟更高：最坏要等一个 polling interval 加请求处理时间",
       "更新不频繁但客户端很多时会造成大量空读",
       "天然支持全双工低延迟通信"
     ],
@@ -516,8 +516,8 @@
       1,
       2
     ],
-    "why": "轮询的简单性很有价值，但代价是延迟和无效请求。它不是 full-duplex 实时通道。",
-    "why_en": "Simple polling is easy and stateless but adds latency and wasted reads when updates are infrequent.",
+    "why": "轮询的简单性很有价值，代价是延迟（相比 push 类方案，最坏多等一个 interval）和大量空读；它是单向拉取，不是 full-duplex 通道。",
+    "why_en": "Polling's simplicity is valuable, but it costs latency (up to one extra interval versus push-based options) and many empty reads; it is one-way pull, not a full-duplex channel.",
     "tags": [
       "simple-polling",
       "tradeoffs",
@@ -525,7 +525,7 @@
     ],
     "options_en": [
       "Simple to implement, stateless, and compatible with any standard HTTP infrastructure.",
-      "Latency is the highest, up to one polling interval plus request handling time.",
+      "Higher latency than long polling, SSE, or WebSocket: in the worst case an update waits one polling interval plus request handling time.",
       "Infrequent updates with many clients create a lot of wasted empty reads.",
       "It naturally supports full-duplex low-latency communication."
     ],
@@ -544,13 +544,13 @@
     ],
     "optionExplanations": [
       "实现代价最低：无状态、走标准 HTTP，任何网关和负载均衡都能直接支持。",
-      "代价：更新最多要等一个 polling interval 加处理时间才被看到，是几种方案里延迟最高的。",
+      "代价：更新最多要等一个 polling interval 加处理时间才被看到，延迟高于 long polling、SSE、WebSocket 这类 push 方案。",
       "代价：客户端多、更新稀疏时，大部分轮询请求都是白跑一趟，浪费资源。",
       "不成立：轮询是单向拉取，不具备全双工能力，这条描述的是 WebSocket。"
     ],
     "optionExplanations_en": [
       "Cheapest to build: stateless and rides on standard HTTP, so any gateway or load balancer already supports it.",
-      "The cost: an update can wait up to one polling interval plus processing time before it's seen — the highest latency option here.",
+      "The cost: an update can wait up to one polling interval plus processing time before it's seen, which is higher latency than push-style options such as long polling, SSE, or WebSocket.",
       "The cost: with many clients and infrequent updates, most polls come back empty and waste resources.",
       "Not true: polling is one-way pull, not full-duplex — that description fits WebSocket, not polling."
     ],
@@ -627,8 +627,8 @@
     "answer": [
       3
     ],
-    "why": "如果 keep-alive 比 polling interval 长，多次请求能复用同一条 TCP 连接，省掉重复握手和 teardown 的开销。",
-    "why_en": "HTTP keep-alive lets polling reuse TCP connections and avoid repeated setup costs.",
+    "why": "HTTP/1.1 默认复用连接；只要服务器（及中间代理）的空闲超时长于 polling interval，连续轮询就共用一条 TCP 连接，省掉重复握手和 teardown。超时由服务器决定，客户端无法单方面指定。",
+    "why_en": "HTTP/1.1 reuses connections by default; as long as the server's (and any proxy's) idle timeout exceeds the polling interval, consecutive polls share one TCP connection and skip repeated handshakes and teardowns. The idle timeout is set by the server, not by the client.",
     "tags": [
       "keep-alive",
       "simple-polling",
@@ -642,7 +642,7 @@
       "Automatically shrink the polling interval to zero to make it realtime.",
       "Keep-alive lets repeated polls reuse the same TCP connection instead of repeating the handshake and teardown."
     ],
-    "codeSample": "GET /api/updates HTTP/1.1\nHost: api.example.com\nConnection: keep-alive\nKeep-Alive: timeout=30\n# timeout=30 表示连接空闲 30s 内可复用\n# polling interval 需小于 30s 才能真正省掉握手",
+    "codeSample": "GET /api/updates HTTP/1.1\nHost: api.example.com\n# HTTP/1.1 默认 persistent connection\n\nHTTP/1.1 200 OK\nKeep-Alive: timeout=30\n# 服务器告知：空闲 30s 后可能关闭；polling interval < 30s 才能复用同一连接",
     "lang": "http",
     "termDefinitions": [
       {
@@ -761,7 +761,7 @@
     "topic": "system-design",
     "sub": "long-polling",
     "scenario": "支付处理完成时间不确定，用户在 success 页面前只需尽快知道 payment status 改变，更新不频繁。",
-    "scenario_en": "Payment completion time is uncertain, and before the success page the user only needs to know promptly when payment status changes.",
+    "scenario_en": "Payment completion time is uncertain, and before the success page the user only needs to know promptly when payment status changes; status updates are infrequent.",
     "q": "哪种方案简单合适？",
     "q_en": "Which option is simple and appropriate?",
     "options": [
@@ -820,7 +820,7 @@
     "options": [
       "高频更新时每条消息后需要新请求，可能增加额外延迟",
       "许多 hanging requests 让监控和资源管理更麻烦",
-      "浏览器每域并发连接数限制可能影响多个 long-poll 连接",
+      "在 HTTP/1.1 下浏览器每域并发连接数有限，可能挤占多个 long-poll 连接",
       "无法在标准 HTTP 基础设施上工作"
     ],
     "answer": [
@@ -828,8 +828,8 @@
       1,
       2
     ],
-    "why": "Long polling 兼容性好，但高频场景和大量客户端会放大 HTTP overhead 和长连接管理问题。",
-    "why_en": "Long polling is simple but incurs request overhead, hanging-request monitoring issues, and browser connection limits.",
+    "why": "Long polling 兼容性好，但高频更新放大请求开销和延迟，大量挂起请求让监控变难；HTTP/1.1 下浏览器通常每 host 约 6 条并发连接，5 个标签页各挂一条就吃掉大半（HTTP/2 多路复用可缓解）。",
+    "why_en": "Long polling is compatible, but high update rates amplify request overhead and latency, and many hanging requests complicate monitoring. Under HTTP/1.1, browsers typically allow about 6 concurrent connections per host, so five tabs each holding a long poll eat most of that budget (HTTP/2 multiplexing mitigates this).",
     "tags": [
       "long-polling",
       "tradeoffs",
@@ -838,24 +838,24 @@
     "options_en": [
       "At high update frequency, each message needs a new request, which adds extra latency.",
       "Many hanging requests make monitoring and resource management harder.",
-      "Browsers cap concurrent connections per domain, which can limit multiple long-poll connections.",
+      "Under HTTP/1.1, browsers cap concurrent connections per domain, which can squeeze multiple long-poll connections.",
       "It cannot work on standard HTTP infrastructure."
     ],
     "tradeoff": "标准 HTTP 兼容性 vs 高频场景下的连接和监控开销",
     "optionExplanations": [
       "代价：更新频繁时，每收到一条消息就要重开一次请求，累积出额外延迟。",
       "代价：大量长期挂起的请求让监控指标和资源统计都变得难判断。",
-      "代价：浏览器对同域并发连接上限约 6 条，5 个标签页 × 1 条 long-poll = 已吃掉大半额度。",
+      "代价：HTTP/1.1 下浏览器对同域并发连接上限约 6 条，5 个标签页 × 1 条 long-poll 已吃掉大半额度（HTTP/2 多路复用下不成问题）。",
       "不成立：long polling 恰恰是构建在标准 HTTP 之上的技巧，兼容性正是它的优势。"
     ],
     "optionExplanations_en": [
       "The cost: at high update frequency, each message forces a fresh request, and that adds up to extra latency.",
       "The cost: lots of long-hanging requests make monitoring and resource accounting harder to reason about.",
-      "The cost: browsers cap a domain at roughly 6 concurrent connections, so 5 tabs times 1 long poll each already eats most of that budget.",
+      "The cost: under HTTP/1.1 browsers cap a domain at roughly 6 concurrent connections, so 5 tabs times 1 long poll each already eats most of that budget (HTTP/2 multiplexing largely removes the problem).",
       "Not true: long polling is a technique built entirely on standard HTTP — that compatibility is actually its selling point."
     ],
-    "scenario": "交易看板用 long polling，行情每秒变几次，用户还常同时开 5 个标签页盯不同标的。",
-    "scenario_en": "A trading dashboard uses long polling, quotes change several times a second, and users often keep five tabs open on different tickers."
+    "scenario": "交易看板用 long polling，行情每秒变几次，用户还常同时开 5 个标签页盯不同标的；前端到 API 域名走的是 HTTP/1.1。",
+    "scenario_en": "A trading dashboard uses long polling, quotes change several times a second, users often keep five tabs open on different tickers, and the frontend talks to the API domain over HTTP/1.1."
   },
   {
     "id": "sd-patterns-realtime-updates-015",
@@ -2388,8 +2388,8 @@
     "answer": [
       2
     ],
-    "why": "Pub/Sub 把主要状态放在 pub/sub 层，endpoint server 更轻量，客户端可连任意 endpoint。",
-    "why_en": "Pub/sub sends updates to topics, and endpoint servers subscribe and forward them to connected clients.",
+    "why": "Pub/Sub 把路由关系放在 pub/sub 层：更新源只管发布到 topic，持有该用户连接的 endpoint server 订阅并转发。endpoint 只持有连接、可互换，客户端可连任意一台。",
+    "why_en": "Pub/sub moves routing into the pub/sub layer: the source just publishes to a topic, and whichever endpoint server holds the user's connection subscribes and forwards. Endpoints hold only connections and are interchangeable, so clients can connect to any of them.",
     "tags": [
       "pubsub",
       "endpoint-server",
@@ -2434,8 +2434,8 @@
       "The actual model: once an update publishes to a topic, whichever server holds that user's connection subscribes and forwards it to its own connected clients.",
       "Not true: pub/sub delivery is asynchronous — it doesn't funnel every message through one synchronous handler."
     ],
-    "scenario": "聊天 endpoint server 无状态、客户端随机连一台，发布者根本不知道对方连在哪台上。",
-    "scenario_en": "Chat endpoint servers are stateless and clients connect to a random one, so a publisher has no idea which server the recipient is on."
+    "scenario": "聊天 endpoint server 只持有连接、不保存业务状态，客户端随机连一台，发布者根本不知道对方连在哪台上。",
+    "scenario_en": "Chat endpoint servers only hold connections and keep no business state; clients connect to a random one, so a publisher has no idea which server the recipient is on."
   },
   {
     "id": "sd-patterns-realtime-updates-040",
@@ -2573,7 +2573,7 @@
       1,
       2
     ],
-    "why": "Pub/Sub 简化 endpoint 层，但把状态和压力集中到 pub/sub 层。Redis cluster、Kafka 等需要按 topic/key 扩展。",
+    "why": "Pub/Sub 简化 endpoint 层，但把路由状态和压力集中到 pub/sub 层；Redis Cluster、Kafka 等需要按 topic/key 扩展。",
     "why_en": "Pub/sub simplifies endpoint servers but can make the pub/sub service a bottleneck or critical dependency.",
     "tags": [
       "pubsub",
@@ -2596,13 +2596,13 @@
       }
     ],
     "optionExplanations": [
-      "优势：endpoint server 本身无状态可互换，用 least-connections 均衡起来很直接。",
+      "优势：endpoint server 只持有连接、不承担路由归属，彼此可互换，用 least-connections 均衡起来很直接。",
       "优势：一次发布就能高效广播给同一 topic 下的所有订阅者。",
       "代价：状态和压力都集中到了 pub/sub 层，它本身可能成瓶颈或单点，得靠集群/分片扛住。",
       "不成立：多一层间接转发必然带来一点延迟和一个新的依赖，不可能完全为零。"
     ],
     "optionExplanations_en": [
-      "A plus: endpoint servers are stateless and interchangeable, so least-connections load balancing works cleanly.",
+      "A plus: endpoint servers only hold connections and own no routing state, so they're interchangeable and least-connections balancing works cleanly.",
       "A plus: one publish efficiently broadcasts to every subscriber on that topic.",
       "The cost: state and pressure both concentrate in the pub/sub layer, which can itself become a bottleneck or single point of failure without clustering or sharding.",
       "Not true: adding an indirection layer always adds some latency and a new dependency — it can't be exactly zero."
@@ -2837,13 +2837,13 @@
       "让客户端在成功重连之后自己凭空猜测断线期间究竟收到过什么样的消息",
       "直接放弃处理，明确告诉用户断线期间产生的所有消息都已经永久丢失了",
       "只依赖 TCP 协议本身在传输层自动帮你保存断线期间产生的全部消息内容",
-      "用消息队列或 Redis Streams，按序号补发错过的消息"
+      "把消息写进可按位置回读的日志（如 Redis Streams、Kafka 或带序号的消息表），重连时按 last-seen 序号补发"
     ],
     "answer": [
       3
     ],
-    "why": "WebSocket 本身不替你保存断线消息。需要可查询的消息日志和 last_seen cursor。",
-    "why_en": "WebSocket reconnection needs a durable message log or queue plus a last-seen cursor to replay missed messages.",
+    "why": "WebSocket 本身不替你保存断线消息。服务端需要保留期覆盖断线窗口、可按位置回读的消息日志，加上客户端的 last_seen cursor，重连后从断点补发。",
+    "why_en": "WebSocket does not store messages for you across a disconnect. The server needs a message log, retained long enough to cover the gap and readable from a position, plus the client's last-seen cursor, so it can replay from where the client left off.",
     "whenOtherWins": "如果业务允许丢失临时 presence/typing indicator，可以不补发这些 ephemeral events。",
     "tags": [
       "missed-messages",
@@ -2854,7 +2854,7 @@
       "Let the client, after successfully reconnecting, guess out of thin air what messages it might have missed.",
       "Simply give up and tell the user that every message sent during the disconnect is permanently lost.",
       "Rely solely on the TCP transport layer to automatically save every message sent during a disconnect.",
-      "Use a message queue or Redis Streams and replay missed messages by sequence number."
+      "Write messages to a log that can be read from a position (e.g., Redis Streams, Kafka, or a sequenced message table) and replay from the last-seen sequence number on reconnect."
     ],
     "tradeoff": "多维护一份可查询的消息日志 vs 断线期间完全无补发能力",
     "codeSample": "XADD user:42:events * type message text \"hi\"\nXREAD COUNT 50 STREAMS user:42:events 1699999999-0\n# XADD 把事件追加进该用户的 stream\n# 重连时带上 last_seen id，XREAD 从那之后读取补发",
@@ -2881,13 +2881,13 @@
       "不成立：猜测既不可靠也不是工程方案，客户端没有任何依据知道自己错过了什么。",
       "不成立：直接放弃会让用户体验很差，而且并不是唯一能做的选择。",
       "不成立：TCP 只管一条连接内字节的顺序，断线后这条连接本身就没了，它不会替你持久化消息。",
-      "抓住做法：维护 per-user 的消息队列或 Redis Streams，重连后按 sequence number 从断点补发。"
+      "抓住做法：用 Redis Streams、Kafka 这类可按位置回读的日志（或带序号的消息表），重连后按 last-seen 序号从断点补发；普通消费即删的队列做不到。"
     ],
     "optionExplanations_en": [
       "Not true: guessing is neither reliable nor an engineering solution — the client has no basis for knowing what it missed.",
       "Not true: giving up wrecks the user experience, and it isn't the only option available anyway.",
       "Not true: TCP only orders bytes within one connection; once that connection is gone after a disconnect, it saves nothing for you.",
-      "The actual approach: keep a per-user message queue or Redis Streams, and replay from the last sequence number after reconnecting."
+      "The actual approach: use a log that can be read from a position (Redis Streams, Kafka, or a sequenced message table) and replay from the last-seen sequence number after reconnecting; a delete-on-consume work queue can't do this."
     ]
   },
   {
@@ -3571,9 +3571,9 @@
     "sub": "summary",
     "q": "补全实时更新的一句话总结：",
     "q_en": "Complete the one-sentence summary of realtime updates.",
-    "text": "实时更新要同时解决{{client-server protocol}}和{{source-to-server propagation}}；协议从 polling 到 {{SSE}} / {{WebSocket}} 逐步升级，传播常用{{Pub/Sub}}或{{consistent hashing}}。",
-    "why": "只选 WebSocket 不够，必须说明更新如何到达持有连接的服务端。",
-    "why_en": "Realtime design must solve both the client protocol and how updates reach the server holding the connection.",
+    "text": "实时更新要同时解决两跳：客户端到服务器的{{client-server protocol}}，以及更新从来源到持有连接那台服务器的{{source-to-server propagation}}；协议从 polling 逐步升级到单向推送的 {{SSE}} 和双向通信的 {{WebSocket}}，传播常用广播给订阅者的 {{Pub/Sub}}，或把用户固定路由到某台服务器的 {{consistent hashing}}。",
+    "why": "只选 WebSocket 不够，还要说明更新如何到达持有连接的服务端。SSE 单向推送、WebSocket 双向；Pub/Sub 靠订阅广播，consistent hashing 把用户固定到某台服务器再定向发送。",
+    "why_en": "Picking WebSocket alone is not enough; you must also explain how updates reach the server holding the connection. SSE is one-way server push, WebSocket is bidirectional; Pub/Sub broadcasts via subscriptions, while consistent hashing pins each user to one server so updates can be routed there.",
     "tags": [
       "summary",
       "cloze",
@@ -4019,8 +4019,8 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "short-update-window",
-    "scenario": "在线判题（Leetcode 式）：用户提交代码后，只在结果出来前的几十秒里需要更新，之后页面就静止；同时在线的提交量不大。",
-    "scenario_en": "On an online judge, a submission needs updates only for the few dozen seconds until the verdict lands, after which the page goes static, and concurrent submissions are modest.",
+    "scenario": "在线判题（Leetcode 式）：用户提交代码后，只在结果出来前的几十秒里需要更新，之后页面就静止；同时在线的提交量不大，结果晚 1 秒显示完全可以接受。团队目前没有任何长连接基础设施，希望用最简单、无状态的方案。",
+    "scenario_en": "On an online judge, a submission needs updates only for the few dozen seconds until the verdict lands, after which the page goes static. Concurrent submissions are modest, and showing the verdict up to a second late is fine. The team has no persistent-connection infrastructure today and wants the simplest stateless approach.",
     "q": "结果推送该用哪种方案？",
     "q_en": "Which approach should push the verdict to the user?",
     "options": [
@@ -4038,8 +4038,8 @@
     "answer": [
       1
     ],
-    "why": "更新窗口只有几十秒，持久连接的建连与状态成本摊不回来；轮询不需要任何特殊设施。代价：结果最多晚一个轮询间隔才显示。",
-    "why_en": "The update window is only tens of seconds, so a persistent connection never amortises its setup and state cost — the price is up to one interval of extra delay.",
+    "why": "延迟容忍 1 秒、没有长连接设施、要求最简单：simple polling 用普通无状态 HTTP 就够，无需连接网关、粘性路由和重连处理，判完客户端自己停。代价：结果最多晚一个轮询间隔，且有几十次空请求。",
+    "why_en": "With a one-second latency tolerance, no persistent-connection infrastructure, and a mandate for simplicity, simple polling works over plain stateless HTTP with no connection gateway, sticky routing, or reconnect handling, and the client simply stops once the verdict lands. The cost is up to one interval of delay and a few dozen empty requests.",
     "whenOtherWins": "如果窗口从几十秒拉长到整场会话、更新持续不断，SSE 省下的重复建连才开始盖过轮询的浪费。",
     "tradeoff": "短窗口下轮询的零基础设施 vs 持久连接的低延迟但要付建连与状态成本",
     "tags": [
@@ -4048,13 +4048,13 @@
       "update-window"
     ],
     "optionExplanations": [
-      "为一次判题拉一条有状态连接，建连开销比它要传的那条结果还大。",
+      "能用，但要为几十秒的需求新建一套有状态连接设施（网关、路由、重连），违背「最简单、无状态」的约束。",
       "窗口短且明确结束时最省事：无特殊设施，判完客户端自己停。",
       "会话大部分时间没有任何事件，连接白挂着还要处理超时重连。",
       "点对点是为绕开服务器设计的，判题结果本来就产自服务端。"
     ],
     "optionExplanations_en": [
-      "Standing up a stateful connection for one verdict costs more than the single message it carries.",
+      "It works, but it stands up stateful connection infrastructure (gateway, routing, reconnects) for a need lasting seconds, violating the simplest-stateless constraint.",
       "Best when the window is short and ends on its own: no special infrastructure, and the client just stops.",
       "Most of the session has no events at all, so the connection idles while you still handle timeouts and reconnects.",
       "Peer-to-peer exists to bypass the server, yet the verdict originates on the server."
@@ -4230,13 +4230,13 @@
     "q": "signaling server 本身该怎么实现？",
     "q_en": "How should the signaling server itself be built?",
     "options": [
-      "它自己就是个实时更新系统，得用 WebSocket 或 SSE 推送",
+      "它自己就是个实时更新系统，需要服务端推送通道（常用 WebSocket，也可以 SSE 或 long polling 配合 HTTP 上行）",
       "用一次性 HTTP GET 拉一次对端连接信息就够，之后不需要再更新",
       "让 peer 之间用 WebRTC 直接交换信令，去掉中心服务",
       "把信令写进数据库，由 TURN 中继服务器定期同步给双方"
     ],
     "options_en": [
-      "It is itself a realtime update system, so it needs WebSocket or SSE push.",
+      "It is itself a realtime update system and needs a server push channel (commonly WebSocket; SSE or long polling plus HTTP uploads also work).",
       "One HTTP GET for the peer's connection info is enough and never needs refreshing.",
       "Let peers exchange signaling over WebRTC directly and drop the central service.",
       "Store signaling in a database and have the TURN relay sync it to both sides periodically."
@@ -4244,8 +4244,8 @@
     "answer": [
       0
     ],
-    "why": "对端的可用性和连接信息随时变，客户端必须被推送这些变化——这就是实时更新问题本身套在里面。代价：号称省服务器的方案仍要维护一层连接基础设施。",
-    "why_en": "Peer availability and connection details keep changing, so clients must be pushed those updates — signaling is itself a realtime update problem nested inside WebRTC.",
+    "why": "对端的可用性和连接信息随时变，客户端必须被推送这些变化，signaling 就是嵌在 WebRTC 里的实时更新问题。WebRTC 不规定信令传输方式，常用 WebSocket（双向）。代价：仍要维护一层连接基础设施。",
+    "why_en": "Peer availability and connection details keep changing, so clients must be pushed those updates: signaling is itself a realtime update problem nested inside WebRTC. WebRTC does not mandate a signaling transport; WebSocket is the common choice because it is bidirectional.",
     "whenOtherWins": "如果 peer 集合是静态的、地址永不变化，比如固定机房里的设备，一次性 HTTP 拉取确实够用。",
     "tradeoff": "信令走长连接换来对端变化的即时可见 vs 又要多维护一套实时连接层",
     "tags": [
@@ -4432,27 +4432,27 @@
     "atomType": "fit",
     "topic": "system-design",
     "sub": "pubsub-topic-granularity",
-    "scenario": "聊天系统用 pub/sub 传播消息，endpoint server 只负责持有连接；用户可能被负载均衡到任意一台 endpoint server，且同时在几十个房间里。",
-    "scenario_en": "A chat system propagates messages through pub/sub while endpoint servers just hold connections; a user can land on any endpoint server and sits in dozens of rooms at once.",
+    "scenario": "聊天系统用 pub/sub 传播消息，endpoint server 只负责持有连接；用户可能被负载均衡到任意一台 endpoint server。会话全部是 1:1 私聊和 ≤10 人的小群，此外还有已读回执、好友上线、系统通知等大量直接发给某个用户的事件；希望每个在线连接只对应一个订阅。",
+    "scenario_en": "A chat system propagates messages through pub/sub while endpoint servers just hold connections; a user can land on any endpoint server. All conversations are 1:1 chats or small groups of at most 10 people, and there are also many events addressed to a single user (read receipts, friend-online, system notices). Each online connection should map to exactly one subscription.",
     "q": "topic 该按什么粒度来建？",
     "q_en": "At what granularity should topics be created?",
     "options": [
-      "给每个用户建一个 topic，连接时订阅该用户的 topic",
-      "给每个房间建一个 topic，用户连上后订阅全部房间",
+      "给每个用户建一个 topic，持有其连接的 endpoint server 订阅它",
+      "给每个房间建一个 topic，用户连上后订阅他所在的全部房间",
       "全系统共用一个 topic，由 endpoint server 自己过滤掉无关消息",
-      "给每台 endpoint server 建一个 topic，按服务器来分区"
+      "给每台 endpoint server 建一个 topic，发送方先查用户在哪台服务器再投递"
     ],
     "options_en": [
       "One topic per user, subscribed by whichever endpoint server holds that connection.",
-      "One topic per room, with the user subscribing to every room on connect.",
+      "One topic per room, with the user subscribing to every room they belong to on connect.",
       "A single global topic, with each endpoint server filtering out what it does not need.",
-      "One topic per endpoint server, partitioning by server instead of by user."
+      "One topic per endpoint server; senders first look up which server holds the user, then publish there."
     ],
     "answer": [
       0
     ],
-    "why": "用户可能落在任意 endpoint server 上，按用户建 topic 才能让发送方只 publish 到收件人这一个 topic，服务器保持可互换。代价：topic 数量与用户数同量级。",
-    "why_en": "Since a user can land on any endpoint server, a per-user topic lets the sender publish to exactly one place and keeps the servers interchangeable.",
+    "why": "房间都很小（≤10 人），按用户建 topic 时一条消息最多 publish 10 次，代价可控；个人事件也走同一通道，每个连接正好一个订阅，发送方不必知道收件人在哪台机器。若是百万观众的直播间，则该按房间建。",
+    "why_en": "Rooms are small (at most 10), so a per-user topic costs at most 10 publishes per message, and personal events ride the same channel with exactly one subscription per connection, so senders never need to know which machine holds the recipient. For a million-viewer live room, per-room topics win instead.",
     "whenOtherWins": "如果是一个房间广播给百万观众，比如直播评论，按房间建 topic 才能一次扇出，按用户建会把发布次数放大百万倍。",
     "tradeoff": "按用户建 topic 的定向投递 vs 按房间建 topic 的一次广播扇出",
     "tags": [
@@ -4462,15 +4462,15 @@
     ],
     "optionExplanations": [
       "对准收件人：发消息时不必知道对方连在哪台机器上。",
-      "换个前提会赢：广播场景一次发布触达全场，这里却要订阅几十份。",
+      "换个前提会赢：大房间广播一次发布触达全场；这里每个连接要订阅所在的全部房间，个人事件还得另建通道，违背「一个连接一个订阅」。",
       "等于把过滤成本乘以服务器数量，每台都要收下全站流量。",
-      "订阅关系会随用户重连失效，用户换机器后消息投到旧服务器。"
+      "发送方得先查「用户在哪台服务器」的 registry，用户重连换机器时这份映射一旦过期就投错。"
     ],
     "optionExplanations_en": [
       "Addresses the recipient: the sender never needs to know which machine holds that connection.",
-      "Wins under a different premise — great for broadcast, but here one user subscribes dozens of times.",
+      "Wins under a different premise, such as broadcast to huge rooms; here each connection must subscribe to all its rooms and personal events need a separate channel, breaking one subscription per connection.",
       "This multiplies filtering cost by the server count, since every server ingests all site traffic.",
-      "Subscriptions break on reconnect: after the user moves, messages go to the old server."
+      "Senders must first consult a user-to-server registry, and a stale entry after a reconnect sends messages to the wrong server."
     ],
     "termDefinitions": [
       {
@@ -4508,7 +4508,7 @@
           "每房间一个",
           "房间数",
           "1 次/房间",
-          "用户要订阅几十个"
+          "每个连接要订阅所在全部房间"
         ],
         [
           "全局一个",
@@ -4594,27 +4594,27 @@
     "atomType": "consequence",
     "topic": "system-design",
     "sub": "pubsub-cluster-fanout",
-    "scenario": "为了扩容，把单机 pub/sub 换成按 key 分片的 Redis cluster（6 个分片），前面是 200 台持有用户连接的 endpoint server。",
-    "scenario_en": "To scale, a single-node pub/sub is replaced by a Redis cluster sharded by key across six shards, fronted by 200 endpoint servers holding user connections.",
+    "scenario": "为了扩容，把单机 pub/sub 换成 Redis 7 cluster 的 sharded pub/sub（SSUBSCRIBE / SPUBLISH，每个 channel 按 hash slot 只落在一个分片上，共 6 个分片），前面是 200 台 endpoint server，每台持有几千个用户连接、每个用户一个 channel。",
+    "scenario_en": "To scale, a single-node pub/sub is replaced by Redis 7 cluster sharded pub/sub (SSUBSCRIBE / SPUBLISH, where each channel lives on exactly one of six shards by hash slot), fronted by 200 endpoint servers that each hold thousands of user connections with one channel per user.",
     "q": "连接管理上会多出什么问题？",
     "q_en": "What new connection-management problem appears?",
     "options": [
       "每台 endpoint server 都得连上全部分片，形成多对多连接",
       "endpoint server 只需连一个分片，由它代为转发到其他分片",
       "分片数一变，所有 WebSocket 客户端连接都必须重建",
-      "订阅吞吐会随分片增加而线性下降，因为每条消息要广播给全部分片"
+      "订阅吞吐会随分片增加而线性下降，因为每条 SPUBLISH 都要广播给全部分片"
     ],
     "options_en": [
       "Every endpoint server must connect to every shard, creating a many-to-many mesh.",
       "An endpoint server connects to one shard, which forwards to the others on its behalf.",
       "Changing the shard count forces every WebSocket client connection to be rebuilt.",
-      "Subscription throughput drops linearly with shard count because each message hits all shards."
+      "Subscription throughput drops linearly with shard count because every SPUBLISH is broadcast to all shards."
     ],
     "answer": [
       0
     ],
-    "why": "订阅按 key 散落在不同分片，endpoint server 无法预知用户命中哪片，只能各连所有分片：200×6 = 1200 条内部连接。缓解：按 topic 划分分片，或让集群保持很小。",
-    "why_en": "Subscriptions are scattered by key across shards and an endpoint server cannot predict which one it needs, so each connects to all of them — 200 times 6 is 1200 internal connections.",
+    "why": "sharded pub/sub 下每个 channel 只住一个分片。slot 可算出来，但一台 endpoint server 的几千个用户，其 channel 会散落到全部 6 个分片，所以每台都得连所有分片：最多 200×6 = 1200 条内部连接。缓解：让集群保持很小，或把用户 channel 聚到少数分片。",
+    "why_en": "With sharded pub/sub each channel lives on one shard. Slots are computable, but one endpoint server holds thousands of users whose channels spread across all six shards, so every server connects to every shard: up to 200 x 6 = 1200 internal connections. Mitigate by keeping the cluster small or grouping users' channels onto fewer shards.",
     "tags": [
       "pubsub",
       "scaling",
@@ -4622,15 +4622,15 @@
     ],
     "optionExplanations": [
       "这就是引入集群后要管的新账：内部连接数是两边规模的乘积。",
-      "Redis cluster 不做代理转发，调用方要自己找到持有该 key 的分片。",
+      "sharded pub/sub 不替你转发，调用方要自己连到拥有该 slot 的分片。",
       "分片变化只影响服务端到集群的连线，用户的长连接不受牵连。",
-      "分片的目的正是分摊订阅量，消息只发给持有该 topic 的那一片。"
+      "SPUBLISH 只发往拥有该 slot 的分片；全集群广播是经典 PUBLISH 的行为，也正是 sharded 版要解决的问题。"
     ],
     "optionExplanations_en": [
       "This is the new bookkeeping a cluster brings: internal connections are the product of both fleet sizes.",
-      "Redis cluster does not proxy; the caller itself must reach the shard that owns the key.",
+      "Sharded pub/sub does not proxy; the caller itself must reach the shard that owns the slot.",
       "A shard change only touches server-to-cluster links, not the users' persistent connections.",
-      "Sharding exists to split subscription load — a message goes only to the shard owning that topic."
+      "SPUBLISH goes only to the shard owning the slot; cluster-wide broadcast is classic PUBLISH behaviour, which sharded pub/sub exists to fix."
     ],
     "termDefinitions": [
       {
