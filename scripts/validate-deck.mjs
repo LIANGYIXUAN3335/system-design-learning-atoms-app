@@ -15,7 +15,9 @@ import { glob } from 'node:fs/promises';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
-const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code']);
+const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code', 'produce']);
+// 可交付设计产物（docs/DESIGN_deliverable-cards_2026-10-16.md）：problem-breakdowns 每张卡必标
+const DELIVERABLES = new Set(['entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'scaling', 'tech']);
 const ATOM_TYPES = new Set(['fact', 'fit', 'contrast', 'consequence', 'number']);
 const LEGACY = ['en', 'other', 'opts', 'prompt', 'answerIndex'];
 const OPTION_STRING_ARRAY_KEYS = [
@@ -163,6 +165,23 @@ for (const rel of files) {
     }
     if (c.atomType === 'fit' && (c.format === 'mcq' || c.format === 'code') && !c.scenario)
       err(base, id, 'fit choice card should lead with a scenario');
+    if (c.deliverable !== undefined && !DELIVERABLES.has(c.deliverable))
+      err(base, id, `bad deliverable: ${c.deliverable}`);
+    if (base.startsWith('problem-breakdowns_') && !c.deliverable && c.format === 'produce')
+      err(base, id, 'produce card needs a deliverable');
+    if (c.format === 'produce') {
+      // 先写后揭晓：清单 3–6 条可当场判真假；参考答案必须有（codeSample / diagram / table 至少一个）
+      const list = c.checklist;
+      if (!Array.isArray(list) || list.length < 3 || list.length > 6) err(base, id, 'produce needs checklist of 3-6 items');
+      else for (const [i, item] of list.entries()) if (typeof item !== 'string' || !item.trim()) err(base, id, `checklist[${i}] must be a non-empty string`);
+      if (c.checklist_en !== undefined) {
+        if (!Array.isArray(c.checklist_en) || c.checklist_en.length !== (list?.length ?? -1))
+          err(base, id, 'checklist_en length must match checklist');
+      }
+      if (!c.codeSample && !c.diagram && !c.table) err(base, id, 'produce needs a reference answer (codeSample / diagram / table)');
+      if (!c.scenario) err(base, id, 'produce card should lead with a scenario');
+      if (c.options) err(base, id, 'produce card must not have options');
+    }
   }
 }
 

@@ -13,13 +13,14 @@ import { NumberAnchors } from './NumberAnchors';
 import { TableView } from './TableView';
 import { TermGlossary } from './TermGlossary';
 
-export type Verdict = 'correct' | 'wrong' | 'idk' | 'shown';
+export type Verdict = 'correct' | 'wrong' | 'idk' | 'shown' | 'produced';
 
 const VERDICT_TEXT: Record<Verdict, string> = {
   correct: '✓ 正确',
   wrong: '✗ 再看解释',
   idk: '🤔 不确定 — 已记下',
   shown: '答案已揭示',
+  produced: '✍️ 对着参考答案打勾，再自评',
 };
 
 export interface RevealBlockProps {
@@ -78,7 +79,10 @@ export function RevealBlock(props: RevealBlockProps) {
       ) : null}
 
       {card.codeSample ? (
-        <CodeBlock code={card.codeSample} label={`实现参考${card.lang ? ' · ' + card.lang : ''}`} />
+        <CodeBlock
+          code={card.codeSample}
+          label={card.format === 'produce' ? '参考答案' : `实现参考${card.lang ? ' · ' + card.lang : ''}`}
+        />
       ) : null}
 
       {!card.diagram ? <AutoArchitectureVisual card={card} /> : null}

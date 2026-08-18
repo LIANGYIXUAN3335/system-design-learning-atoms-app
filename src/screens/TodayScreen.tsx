@@ -86,6 +86,8 @@ export interface TodayScreenProps {
   onRecite: () => void;
   /** 🗺 领地图：按模块三色格子，攒下来的看得见 */
   onTerritory: () => void;
+  /** ✍️ 白纸：选一道题，把它的 produce 卡（先写后揭晓）按合同顺序过一遍 */
+  onProduce: () => void;
 }
 
 export function TodayScreen({
@@ -105,6 +107,7 @@ export function TodayScreen({
   onSettings,
   onRecite,
   onTerritory,
+  onProduce,
 }: TodayScreenProps) {
   const { colors } = useTheme();
   const isAboveRecommendation =
@@ -151,6 +154,15 @@ export function TodayScreen({
             style={styles.gear}
           >
             <Text style={{ fontSize: 18 }}>🗺</Text>
+          </Pressable>
+          <Pressable
+            onPress={onProduce}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="白纸"
+            style={styles.gear}
+          >
+            <Text style={{ fontSize: 18 }}>✍️</Text>
           </Pressable>
           <Pressable onPress={onSettings} hitSlop={10} style={styles.gear}>
             <Text style={{ fontSize: 20 }}>⚙️</Text>

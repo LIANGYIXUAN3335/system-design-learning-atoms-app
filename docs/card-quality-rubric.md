@@ -147,6 +147,20 @@ version: 2026-07-08.2
 写新 track / 新 deck 时的用法：生成 prompt 里把本表原样带上；写完先过 `audit-card-quality` 机检，再按 `RIGOR_AUDIT_SPEC.md`「独立审核流程」抽 20% 做遮答案独立作答，MAJOR 率 > 10% 整批打回。
 存量审计与修订的流水线见 `scripts/rigor-audit/`（make-batches → 审计员 → plan-patch → 改卡员）。
 
+## Gate 4 — 可交付设计产物（2026-10-16 加，problem-breakdowns 必过）
+
+她的验收问题：**合上选项以后，能不能从白纸写出这个系统的 schema、API、组件和核心流程？** 不能 = deck 只训练了识别，没完成面试训练。
+
+**4.1 每张卡标 `deliverable`**（十类：entities / schema / api / components / flow / state / concurrency / recovery / scaling / tech）。标不出来的卡（达标线、方法论、需求句式、"更普遍的教训"）就是 Gate 0 该删的卡；每 deck 最多留 1 张合并版「这题 E4 / E5 看什么」，meta 卡总量 ≤ 5%。
+
+**4.2 选项是候选设计，不是原则**：schema 卡给四种真实的表 / 主键 / 索引 / 状态字段布局；API 卡给四个真实 contract；架构卡用 `optionDiagrams`；状态机 / 流程卡给四种顺序；选型卡必须答得出「放哪个组件后、存什么、按什么 key 查、坏了怎么办、什么条件下换」。禁止「schema 重要吗」「API 该 RESTful 吗」「哪个更 scalable」。
+
+**4.3 覆盖合同**（教材给了信息的前提下，每 deck）：① 一组核心 entities ② 一个具体 schema 决策 ③ 一个 API contract 决策 ④ 一张高层组件图 ⑤ 一条端到端主流程 ⑥ 一条核心状态转换 ⑦ 一个并发或幂等问题 ⑧ 一个故障恢复闭环 ⑨ 一个 scaling bottleneck ⑩ 教材里每个主要技术选型及 trade-off。缺一项标 `MISSING`，不得用通用原则卡顶替。
+
+**4.4 识别 + 产出成对**：①–⑧ 每类至少 1 张 recognition（mcq / multi / cloze / code / chain）+ 1 张 `produce`（先写后揭晓）。produce 的 `checklist` 每条当场能判真假（「三个 entity 都写了主键」「Ride.status ≥ 4 个状态且含 REQUESTED→ACCEPTED」），不写感觉词；参考答案在 `codeSample` / `diagram`。
+
+机检：`node scripts/audit-deliverables.mjs --strict <deck>`（MISSING / NO_PRODUCTION / UNTAGGED 退出码 1；META_HEAVY 只警告）。设计稿：`docs/DESIGN_deliverable-cards_2026-10-16.md`。
+
 ## 3. 讲解十二律（写 scenario/why/解析时的风格约束，源自 Hello Interview 逆向）
 
 1. 先痛点后术语（"DB 在 10k QPS 顶不住了"→ 再说 cache）；2. 数字锚定成对给（"内存 1ms vs 磁盘 50ms"）；3. 有 naive 方案先摆后破；4. 点名取舍轴 + 每选项一条 "use this when…"；5. 推荐方案同口气说代价；6. 术语首现即释；7. 一个具名例子扛抽象（Taylor Swift 热 key）；8. 收尾给可带走的一句（经验法则/自检问句）；9. 取舍压成 yes/no 自检（"每次读都必须读到最新写吗？"）；10. 第二人称短句；11. 陌生机制先类比（"hash slot 像电话簿"）；12. 结构匹配内容（流程用步骤、并列用词条、代码只放可跑命令）。

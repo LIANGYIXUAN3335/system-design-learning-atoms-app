@@ -22,6 +22,7 @@ import { useTheme } from '../theme';
 import type { Card, FeedbackRow, FlagKey, SelfGrade } from '../types';
 import { ChainView } from '../components/ChainView';
 import { ClozeView } from '../components/ClozeView';
+import { ProduceView } from '../components/ProduceView';
 import { OptionList } from '../components/OptionList';
 import { RevealBlock, type Verdict } from '../components/RevealBlock';
 import type { AnswerOptionDetail } from '../components/AnswerDetailPad';
@@ -54,6 +55,8 @@ interface Ephemeral {
   pickedDisplay: Set<number>;
   /** chain picks in ORIGINAL indexes, in pick order */
   chainPicked: number[];
+  /** produce：翻面后打了勾的验收项下标（只在这一屏，不落库） */
+  checked: Set<number>;
   wasCorrect: boolean | null;
   usedIdk: boolean;
   /** A1：出题 → 作答（翻面）的毫秒数；还没作答时为 null */
@@ -225,6 +228,7 @@ export function SessionScreen({
       multiSel: new Set(),
       pickedDisplay: new Set(),
       chainPicked: [],
+      checked: new Set(),
       wasCorrect: null,
       usedIdk: false,
       answerMs: null,
@@ -356,6 +360,21 @@ export function SessionScreen({
     reveal('shown', null, false);
   };
 
+  /** produce：她写好了 → 翻面看参考答案 + 清单；没有客观对错，成绩走下面的自评（和填空一样）。 */
+  const revealProduce = () => {
+    if (eph.phase !== 'question') return;
+    reveal('produced', null, false);
+  };
+
+  const toggleChecked = (i: number) => {
+    setEph((e) => {
+      const checked = new Set(e.checked);
+      if (checked.has(i)) checked.delete(i);
+      else checked.add(i);
+      return { ...e, checked };
+    });
+  };
+
   /** 读题环到点只翻答案，不写入评分；用户仍需自己选忘了/模糊/记得。 */
   // ---- grading ---------------------------------------------------------
 
@@ -463,7 +482,7 @@ export function SessionScreen({
       : [];
   const sideReveal = eph.phase === 'revealed' && width >= 920;
   const typicalMs = typicalTimes[card.atomType]?.ms ?? 15_000;
-  const timerMs = readingTimerMs();
+  const timerMs = readingTimerMs(card.format);
   // 读题秒数：先倒数到 0，再「+N 秒」正计时继续走；颜色不变、不弹窗、不替她翻面。
   const readingSec = useReadingSeconds(eph.startTs, eph.phase === 'question');
   const remainingSec = Math.round(timerMs / 1000) - readingSec;
@@ -572,6 +591,17 @@ export function SessionScreen({
                   </View>
                 ) : null}
               </>
+            ) : null}
+
+            {card.format === 'produce' && card.checklist ? (
+              <ProduceView
+                checklist={card.checklist}
+                checklistEn={card.checklist_en}
+                checked={eph.checked}
+                revealed={eph.phase === 'revealed'}
+                onReveal={revealProduce}
+                onToggle={toggleChecked}
+              />
             ) : null}
 
             {card.format === 'chain' && eph.shuffledSteps && card.answerOrder ? (

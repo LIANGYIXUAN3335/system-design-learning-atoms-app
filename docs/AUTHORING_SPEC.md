@@ -35,7 +35,10 @@ After writing, VALIDATE (see bottom). Do not finish until your files pass.
 ```ts
 interface Card {
   id: string;            // see id scheme
-  format: 'mcq' | 'multi' | 'cloze' | 'chain' | 'code';
+  format: 'mcq' | 'multi' | 'cloze' | 'chain' | 'code' | 'produce';
+  deliverable?: 'entities' | 'schema' | 'api' | 'components' | 'flow' | 'state' | 'concurrency' | 'recovery' | 'scaling' | 'tech'; // problem-breakdowns 每张必标（Gate 4）
+  checklist?: string[];  // produce: 3–6 条翻面后逐条打勾的验收项，每条当场能判真假
+  checklist_en?: string[];
   atomType: 'fact' | 'fit' | 'contrast' | 'consequence' | 'number';
   topic: string;         // the <topic> above
   sub: string;           // short kebab sub-topic, e.g. "eviction", "sharding-strategy"
@@ -91,6 +94,16 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 - **cloze**: fact recall (`text: "ACID = {{Atomicity}}, {{Consistency}}, {{Isolation}}, {{Durability}}."`) and reasoning-cloze for fit/consequence (`"We chose Cassandra because the workload is {{write}}-heavy, needs {{horizontal}} scaling, tolerates {{eventual}} consistency."`).
 - **chain**: the decision chain. `steps` authored already-shuffled; `answerOrder` is the correct permutation; add `acceptAltOrders` if more than one order is valid (grade dependencies, e.g. requirement before choice, choice before its cost).
 - **code**: component-level fit where reading real code is the point (Redis command, SQL DDL, ES query). Put the snippet in `codeSample` + `lang`.
+- **produce**（先写后揭晓，2026-10-16 加）: the learner writes the artifact on paper FIRST (3 entities + keys / 3 endpoints + body / 5 components + arrows / 4 states + legal transitions / one conditional UPDATE / normal→timeout→retry→recovery), taps「我写好了」, then ticks a `checklist` (3–6 items, each checkable on the spot: names, counts, keys — never "写得清楚"). Reference answer goes in `codeSample` (schema / endpoints / state list as plain text, `lang: "text"`) or `diagram` (Mermaid). `q` must be a task verb (写出 / 画出 / 列出). No `options`. `scenario` required. These cards only appear in ✍️ 白纸 mode, so one card may take 3–5 minutes.
+
+### Deliverable-first options（2026-10-16，她拍板「少感悟、多产物」）
+System design interviews grade what the candidate PRODUCES. For problem-breakdowns, ABCD should be concrete candidate designs, not principles:
+- **schema options**: four real table / key / index / status-field layouts under a stated access + write + consistency pattern. Never "schema 很重要吗".
+- **API options**: four real contracts (`POST /rides` body `{fareId}` vs `GET /rides/{id}` vs …) compared on method, naming, idempotency key, pagination, async job status, error semantics, authz. Never "API 应该 RESTful 吗".
+- **architecture options**: component splits / data flows — use `optionDiagrams` (small Mermaid per option), ask who owns which state, read vs write path, sync vs async boundary, where cache / queue / worker sit, which box is the hotspot.
+- **sequence / state-machine options**: different orders (SEARCHING → DRIVER_RESERVED → ACCEPTED …) or request flows; test races, timeouts, retries, compensation, source of truth.
+- **real tech choices** (DB / Redis / Kafka / WebSocket / SSE / CDN) must sit inside the design: which component it is behind, what it stores, queried by what key, normal path, failure path, why the alternative loses under THESE constraints, when to switch. Never "哪个更 scalable".
+Forbidden as the whole card: 达标线 / E4-E5 期望、推进策略、需求句式、"这个深挖的更普遍教训". One merged "这题 E4 / E5 看什么" card per deck at most.
 
 ## Hard rules
 
@@ -168,6 +181,8 @@ node scripts/validate-deck.mjs src/content/<topic>/<your-file>.json
 # 2. rubric 机检门：error 必须为 0；warning 逐条处理或在报告里给一句不改的理由
 node scripts/audit-card-quality.mjs src/content/<topic>/<your-file>.json --limit=0
 # 3. bundle + 逻辑 + Mermaid 三道门
+# 4. 可交付产物合同门（problem-breakdowns 必过；docs/card-quality-rubric.md Gate 4）
+node scripts/audit-deliverables.mjs --strict src/content/system-design/problem-breakdowns_<x>.json
 npm run build:deck && npm run verify
 ```
 

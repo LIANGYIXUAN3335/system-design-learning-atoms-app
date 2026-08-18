@@ -1,7 +1,37 @@
 // Canonical card schema — see atoms-m1-review.md §2.1 for how the three
 // divergent doc/prototype schemas were reconciled into this one.
 
-export type CardFormat = 'mcq' | 'multi' | 'cloze' | 'chain' | 'code';
+export type CardFormat = 'mcq' | 'multi' | 'cloze' | 'chain' | 'code' | 'produce';
+/**
+ * 可交付的设计产物（2026-10-16 她拍板「少感悟、多产物」）：problem-breakdowns 的每张卡标一个，
+ * 覆盖合同（docs/DESIGN_deliverable-cards_2026-10-16.md §2-B）靠它机检。
+ */
+export type Deliverable =
+  | 'entities'
+  | 'schema'
+  | 'api'
+  | 'components'
+  | 'flow'
+  | 'state'
+  | 'concurrency'
+  | 'recovery'
+  | 'scaling'
+  | 'tech';
+export const DELIVERABLES: Deliverable[] = [
+  'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'scaling', 'tech',
+];
+export const DELIVERABLE_LABEL: Record<Deliverable, string> = {
+  entities: '核心实体',
+  schema: 'Schema',
+  api: 'API',
+  components: '组件图',
+  flow: '主流程',
+  state: '状态机',
+  concurrency: '并发 / 幂等',
+  recovery: '故障恢复',
+  scaling: '扩展瓶颈',
+  tech: '技术选型',
+};
 export type AtomType = 'fact' | 'fit' | 'contrast' | 'consequence' | 'number';
 
 export interface Card {
@@ -44,6 +74,14 @@ export interface Card {
   text?: string;
   /** English cloze text with {{blank}} markers aligned with text when present */
   text_en?: string;
+  /**
+   * produce（先写后揭晓）：她先在纸上写，翻面后逐条打勾的验收清单，3–6 条，每条当场能判真假。
+   * 参考答案放 codeSample / diagram / table。
+   */
+  checklist?: string[];
+  checklist_en?: string[];
+  /** 这张卡交付的是哪种设计产物（problem-breakdowns 必标；其它 deck 可选） */
+  deliverable?: Deliverable;
   /** chain: steps as authored (already shuffled), reshuffled again per render */
   steps?: string[];
   answerOrder?: number[];

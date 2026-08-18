@@ -32,6 +32,7 @@ import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from './src/logic/sett
 import { setRequestRetention, State } from './src/logic/srs';
 import { buildTerritory, type TerritoryCell } from './src/logic/territory';
 import { TerritoryScreen } from './src/screens/TerritoryScreen';
+import { buildProduceTopics, ProducePickerScreen, type ProduceTopic } from './src/screens/ProducePickerScreen';
 import { computeStreak, dailyGoal } from './src/logic/streak';
 import {
   defaultTypicalTimes,
@@ -74,7 +75,7 @@ const reciteItems = reciteBundleJson as unknown as ReciteItem[];
 // 各自派生成一条单段 thread —— 336 条一条不丢（src/recite/threads.ts）。
 const reciteThreads = buildThreads(reciteItems, reciteThreadsJson as unknown as ReciteThread[]);
 
-type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item' | 'territory';
+type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item' | 'territory' | 'produce';
 type SessionMode = 'all' | 'review' | 'new';
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
@@ -139,8 +140,10 @@ export default function App() {
       : trackDeck;
   }, [pickerTracks]);
 
+  // produce 卡（先写后揭晓，一张 3–5 分钟）不进普通刷题流，只走 ✍️ 白纸模式（2026-10-16 试点，她看过再定混不混排）
   const activeDeck = useCallback(
-    (): Card[] => filterByCategory(activeTrackDeck(), settingsRef.current.activeCategory),
+    (): Card[] =>
+      filterByCategory(activeTrackDeck(), settingsRef.current.activeCategory).filter((c) => c.format !== 'produce'),
     [activeTrackDeck],
   );
 
@@ -438,6 +441,20 @@ export default function App() {
     return true;
   };
 
+  /** ✍️ 白纸：一道题的 produce 卡按合同顺序全部过一遍——不看到期、不限新卡数，这是演练不是复习队列。 */
+  const startProduceSession = (topic: ProduceTopic): boolean => {
+    const store = storeRef.current;
+    if (!store || !topic.cards.length) return false;
+    const ids = topic.cards.map((c) => c.id);
+    setSessionDeck(topic.cards);
+    setSessionQueue(ids);
+    setSessionReviewedToday(new Set(todayDoneIdsRef.current));
+    setSessionScope(new Set(ids));
+    setSessionKey((k) => k + 1);
+    setScreen('session');
+    return true;
+  };
+
   const pickTerritoryCell = (cell: TerritoryCell): boolean => {
     const ids = new Set(cell.cardIds);
     return startSession('all', cardsRef.current.filter((c) => ids.has(c.id)));
@@ -526,6 +543,15 @@ export default function App() {
           onSettings={() => setScreen('settings')}
           onRecite={() => setScreen('recite')}
           onTerritory={() => setScreen('territory')}
+          onProduce={() => setScreen('produce')}
+        />
+      ) : null}
+
+      {screen === 'produce' && storeRef.current ? (
+        <ProducePickerScreen
+          topics={buildProduceTopics(cardsRef.current, storeRef.current.srs)}
+          onPick={startProduceSession}
+          onBack={() => setScreen('today')}
         />
       ) : null}
 

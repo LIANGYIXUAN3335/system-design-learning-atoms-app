@@ -20,6 +20,8 @@ export const TIMER_FALLBACK_SEC = 15;
  * 的时间，再乘 3 是双重放宽。环走完**不翻面、不扣分**，数字改成正计时继续走。
  */
 export const READING_TIMER_SEC = 60;
+/** produce（白纸写产物）一张要写 3–5 分钟，读题环按 4 分钟走；走完同样不翻面不扣分 */
+export const PRODUCE_TIMER_SEC = 240;
 /** A5：一组最多这么多张。队列再长，首页也只报这一组，剩下的不提。 */
 export const PLAN_CHUNK = 60;
 /** B4 / A3「今天坚持了几分钟」：单张卡最多算这么久，防止把手机放一边的时间也算进去。 */
@@ -78,8 +80,8 @@ export function defaultTypicalTimes(): TypicalTimes {
 }
 
 /** 读题环的时长：固定 60 秒，跟卡型、历史用时无关；它不改变排期、得分或作答记录。 */
-export function readingTimerMs(): number {
-  return READING_TIMER_SEC * 1000;
+export function readingTimerMs(format?: Card['format']): number {
+  return (format === 'produce' ? PRODUCE_TIMER_SEC : READING_TIMER_SEC) * 1000;
 }
 
 /** A5「约 M 分钟」：这组每张卡按她该卡型的历史中位数加起来，向上取整，至少 1 分钟。 */

@@ -114,6 +114,7 @@ for (const c of cards) {
   }
   if (c.format === 'multi') t(`${c.id} multi answers`, (c.answer?.length ?? 0) >= 1);
   if (c.format === 'cloze') t(`${c.id} has blanks`, parseCloze(c.text ?? '').some((s) => s.type === 'blank'));
+  if (c.format === 'produce') t(`${c.id} produce checklist`, (c.checklist?.length ?? 0) >= 3 && Boolean(c.codeSample || c.diagram || c.table));
   if (c.format === 'chain') {
     const sorted = [...(c.answerOrder ?? [])].sort((a, b) => a - b);
     t(`${c.id} answerOrder is permutation`, sorted.every((v, i) => v === i) && sorted.length === c.steps?.length);
@@ -392,7 +393,7 @@ console.log('feedback');
 // ---- M2a: bundle -------------------------------------------------------
 console.log('bundle');
 {
-  const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code']);
+  const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code', 'produce']);
   t('bundle is bigger than the seed deck', bundle.length > cards.length);
   t('bundle ids unique', new Set(bundle.map((c) => c.id)).size === bundle.length);
   t('bundle formats all known', bundle.every((c) => FORMATS.has(c.format)));
