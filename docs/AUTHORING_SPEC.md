@@ -36,7 +36,7 @@ After writing, VALIDATE (see bottom). Do not finish until your files pass.
 interface Card {
   id: string;            // see id scheme
   format: 'mcq' | 'multi' | 'cloze' | 'chain' | 'code' | 'produce';
-  deliverable?: 'entities' | 'schema' | 'api' | 'components' | 'flow' | 'state' | 'concurrency' | 'recovery' | 'scaling' | 'tech'; // problem-breakdowns 每张必标（Gate 4）
+  deliverable?: 'entities' | 'schema' | 'api' | 'components' | 'flow' | 'state' | 'concurrency' | 'recovery' | 'capacity' | 'scaling' | 'tech'; // problem-breakdowns 每张必标（Gate 4）
   checklist?: string[];  // produce: 3–6 条翻面后逐条打勾的验收项，每条当场能判真假
   checklist_en?: string[];
   atomType: 'fact' | 'fit' | 'contrast' | 'consequence' | 'number';
@@ -94,7 +94,7 @@ For 1-2 marquee decisions per article, also build a **decision chain** (`chain` 
 - **cloze**: fact recall (`text: "ACID = {{Atomicity}}, {{Consistency}}, {{Isolation}}, {{Durability}}."`) and reasoning-cloze for fit/consequence (`"We chose Cassandra because the workload is {{write}}-heavy, needs {{horizontal}} scaling, tolerates {{eventual}} consistency."`).
 - **chain**: the decision chain. `steps` authored already-shuffled; `answerOrder` is the correct permutation; add `acceptAltOrders` if more than one order is valid (grade dependencies, e.g. requirement before choice, choice before its cost).
 - **code**: component-level fit where reading real code is the point (Redis command, SQL DDL, ES query). Put the snippet in `codeSample` + `lang`.
-- **produce**（先写后揭晓，2026-10-16 加）: the learner writes the artifact on paper FIRST (3 entities + keys / 3 endpoints + body / 5 components + arrows / 4 states + legal transitions / one conditional UPDATE / normal→timeout→retry→recovery), taps「我写好了」, then ticks a `checklist` (3–6 items, each checkable on the spot: names, counts, keys — never "写得清楚"). Reference answer goes in `codeSample` (schema / endpoints / state list as plain text, `lang: "text"`) or `diagram` (Mermaid). `q` must be a task verb (写出 / 画出 / 列出). No `options`. `scenario` required. These cards only appear in ✍️ 白纸 mode, so one card may take 3–5 minutes.
+- **produce**（先写后揭晓，2026-10-16 加）: the learner writes the artifact on paper FIRST (3 entities + keys / 3 endpoints each with method + header + body + response + status codes / 5 components + arrows / 4 states + legal transitions / one conditional UPDATE / normal→timeout→retry→recovery / 3-line capacity estimate → first component to break → short + long fix), taps「我写好了」, then ticks a `checklist` (3–6 items, each checkable on the spot: names, counts, keys — never "写得清楚"). Reference answer goes in `codeSample` (schema / endpoints / state list as plain text, `lang: "text"`) or `diagram` (Mermaid). `q` must be a task verb (写出 / 画出 / 列出). No `options`. `scenario` required. These cards only appear in ✍️ 白纸 mode, so one card may take 3–5 minutes.
 
 ### Deliverable-first options（2026-10-16，她拍板「少感悟、多产物」）
 System design interviews grade what the candidate PRODUCES. For problem-breakdowns, ABCD should be concrete candidate designs, not principles:

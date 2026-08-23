@@ -151,13 +151,17 @@ version: 2026-07-08.2
 
 她的验收问题：**合上选项以后，能不能从白纸写出这个系统的 schema、API、组件和核心流程？** 不能 = deck 只训练了识别，没完成面试训练。
 
-**4.1 每张卡标 `deliverable`**（十类：entities / schema / api / components / flow / state / concurrency / recovery / scaling / tech）。标不出来的卡（达标线、方法论、需求句式、"更普遍的教训"）就是 Gate 0 该删的卡；每 deck 最多留 1 张合并版「这题 E4 / E5 看什么」，meta 卡总量 ≤ 5%。
+**4.1 每张卡标 `deliverable`**（十一类：entities / schema / api / components / flow / state / concurrency / recovery / capacity / scaling / tech）。标不出来的卡（达标线、方法论、需求句式、"更普遍的教训"）就是 Gate 0 该删的卡；每 deck 最多留 1 张合并版「这题 E4 / E5 看什么」，meta 卡总量 ≤ 5%。
 
 **4.2 选项是候选设计，不是原则**：schema 卡给四种真实的表 / 主键 / 索引 / 状态字段布局；API 卡给四个真实 contract；架构卡用 `optionDiagrams`；状态机 / 流程卡给四种顺序；选型卡必须答得出「放哪个组件后、存什么、按什么 key 查、坏了怎么办、什么条件下换」。禁止「schema 重要吗」「API 该 RESTful 吗」「哪个更 scalable」。
 
 **4.3 覆盖合同**（教材给了信息的前提下，每 deck）：① 一组核心 entities ② 一个具体 schema 决策 ③ 一个 API contract 决策 ④ 一张高层组件图 ⑤ 一条端到端主流程 ⑥ 一条核心状态转换 ⑦ 一个并发或幂等问题 ⑧ 一个故障恢复闭环 ⑨ 一个 scaling bottleneck ⑩ 教材里每个主要技术选型及 trade-off。缺一项标 `MISSING`，不得用通用原则卡顶替。
 
-**4.4 识别 + 产出成对**：①–⑧ 每类至少 1 张 recognition（mcq / multi / cloze / code / chain）+ 1 张 `produce`（先写后揭晓）。produce 的 `checklist` 每条当场能判真假（「三个 entity 都写了主键」「Ride.status ≥ 4 个状态且含 REQUESTED→ACCEPTED」），不写感觉词；参考答案在 `codeSample` / `diagram`。
+**4.4 识别 + 产出成对**：①–⑨ 每类至少 1 张 recognition（mcq / multi / cloze / code / chain）+ 1 张 `produce`（先写后揭晓）。produce 的 `checklist` 每条当场能判真假（「三个 entity 都写了主键」「Ride.status ≥ 4 个状态且含 REQUESTED→ACCEPTED」），不写感觉词；参考答案在 `codeSample` / `diagram`。
+
+**4.5 API 五件套**（Apple 9/24 原话「每个端点一次给全五件套」）：`api` 的 produce 卡清单必须覆盖 **方法、header（鉴权怎么带）、body、响应形状、状态码（含非 happy path：401 / 403 / 404 / 409 / 429）**；有分页的要写 cursor 由哪些字段组成。机检 `API_INCOMPLETE`。
+
+**4.6 capacity 先给数再指瓶颈**：`capacity` 的 produce 卡 = 写 3 行估算（QPS / 存储 / 带宽，公式 + 数量级）→ 指出第一个爆的组件 → 短期一招 + 长期一招。清单里必须有数字和「瓶颈 / 第一个爆」。机检 `CAPACITY_INCOMPLETE`。
 
 机检：`node scripts/audit-deliverables.mjs --strict <deck>`（MISSING / NO_PRODUCTION / UNTAGGED 退出码 1；META_HEAVY 只警告）。设计稿：`docs/DESIGN_deliverable-cards_2026-10-16.md`。
 

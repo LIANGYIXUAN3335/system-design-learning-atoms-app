@@ -15,10 +15,11 @@ export type Deliverable =
   | 'state'
   | 'concurrency'
   | 'recovery'
+  | 'capacity'
   | 'scaling'
   | 'tech';
 export const DELIVERABLES: Deliverable[] = [
-  'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'scaling', 'tech',
+  'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech',
 ];
 export const DELIVERABLE_LABEL: Record<Deliverable, string> = {
   entities: '核心实体',
@@ -29,6 +30,7 @@ export const DELIVERABLE_LABEL: Record<Deliverable, string> = {
   state: '状态机',
   concurrency: '并发 / 幂等',
   recovery: '故障恢复',
+  capacity: '估算 / 瓶颈',
   scaling: '扩展瓶颈',
   tech: '技术选型',
 };

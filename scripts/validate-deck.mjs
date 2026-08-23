@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '..');
 
 const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code', 'produce']);
 // 可交付设计产物（docs/DESIGN_deliverable-cards_2026-10-16.md）：problem-breakdowns 每张卡必标
-const DELIVERABLES = new Set(['entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'scaling', 'tech']);
+const DELIVERABLES = new Set(['entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech']);
 const ATOM_TYPES = new Set(['fact', 'fit', 'contrast', 'consequence', 'number']);
 const LEGACY = ['en', 'other', 'opts', 'prompt', 'answerIndex'];
 const OPTION_STRING_ARRAY_KEYS = [
