@@ -408,14 +408,15 @@ console.log('tracks');
     'seed tracks: 8, ids stable',
     seedTracks.length === 8 &&
       seedTracks.map((x) => x.id).join(',') ===
-        'ai-coding,classic-sd,llm-sd,low-level-design,interview-review,interview-english,cli,pmle',
+        'ai-coding,classic-sd,llm-sd,low-level-design,interview-review,coding-fundamentals,pmle,power-scheming',
   );
   t('bundle covers ai-coding seed track', filterDeck(bundle, seedTracks[0]).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedTracks[1]).length >= 600);
   t('bundle covers llm-sd seed track', filterDeck(bundle, seedTracks[2]).length >= 300);
   t('bundle covers low-level-design seed track', filterDeck(bundle, seedTracks[3]).length >= 700);
   t('bundle covers interview-review seed track', filterDeck(bundle, seedTracks[4]).length >= 250);
-  t('bundle covers interview-english seed track', filterDeck(bundle, seedTracks[5]).length >= 200);
+  // 编码基本功 = cli + 4 lbld-* content dirs (merged 2026-08-21)
+  t('bundle covers coding-fundamentals seed track', filterDeck(bundle, seedTracks[5]).length >= 260);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
   const classicDeck = filterDeck(bundle, seedTracks[1]);
   const categories = buildCategoryStats(classicDeck, new Map());

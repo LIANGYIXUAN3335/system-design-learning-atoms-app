@@ -288,6 +288,80 @@ export async function seedTracksOnce(db: Db, seeds: Track[]): Promise<void> {
       "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '5') ON CONFLICT(key) DO UPDATE SET value = '5'",
     );
   }
+
+  // v6: labuladong 四板块 tracks added 2026-08-21 (编程语言基础 / 算法教程 /
+  // Agent 开发 / 全栈开发) — same INSERT OR IGNORE pattern as v4 so existing
+  // installs pick them up.
+  if (currentVersion < 6) {
+    for (const id of ['lbld-lang', 'lbld-algo', 'lbld-agent', 'lbld-fullstack']) {
+      const t = seeds.find((s) => s.id === id);
+      if (!t) continue;
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        t.id,
+        t.name,
+        JSON.stringify(t.include),
+        JSON.stringify(t.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '6') ON CONFLICT(key) DO UPDATE SET value = '6'",
+    );
+  }
+
+  // v7: user decision 2026-08-21 — regroup by 用途 into two big tracks:
+  // interview-review absorbs interview-english and is renamed 面试实战;
+  // new coding-fundamentals absorbs cli + the four lbld-* tracks.
+  // UPDATE (not upsert) keeps a user's deletion of interview-review sticky,
+  // mirroring the v5 merge.
+  if (currentVersion < 7) {
+    const review = seeds.find((s) => s.id === 'interview-review');
+    if (review) {
+      await db.runAsync(
+        'UPDATE tracks SET name = ?, include = ? WHERE id = ?',
+        review.name,
+        JSON.stringify(review.include),
+        review.id,
+      );
+    }
+    const fundamentals = seeds.find((s) => s.id === 'coding-fundamentals');
+    if (fundamentals) {
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        fundamentals.id,
+        fundamentals.name,
+        JSON.stringify(fundamentals.include),
+        JSON.stringify(fundamentals.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "DELETE FROM tracks WHERE id IN ('interview-english', 'cli', 'lbld-lang', 'lbld-algo', 'lbld-agent', 'lbld-fullstack')",
+    );
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '7') ON CONFLICT(key) DO UPDATE SET value = '7'",
+    );
+  }
+
+  // v8: 做局思维 (power-scheming) track added 2026-08-22 — same INSERT OR IGNORE
+  // pattern as v4/v6 so existing installs (tracksSeeded already '1') pick it up.
+  if (currentVersion < 8) {
+    const t = seeds.find((s) => s.id === 'power-scheming');
+    if (t) {
+      await db.runAsync(
+        'INSERT OR IGNORE INTO tracks (id, name, include, exclude, createdAt) VALUES (?, ?, ?, ?, ?)',
+        t.id,
+        t.name,
+        JSON.stringify(t.include),
+        JSON.stringify(t.exclude ?? []),
+        new Date().toISOString(),
+      );
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '8') ON CONFLICT(key) DO UPDATE SET value = '8'",
+    );
+  }
 }
 
 export async function loadTracks(db: Db): Promise<Track[]> {

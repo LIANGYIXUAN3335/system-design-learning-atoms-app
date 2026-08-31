@@ -37,6 +37,11 @@ const DIR_TRACK_TAG = {
   'interview-english': 'track:interview-english',
   'cli': 'track:cli',
   'pmle': 'track:pmle',
+  'lbld-lang': 'track:lbld-lang',
+  'lbld-algo': 'track:lbld-algo',
+  'lbld-agent': 'track:lbld-agent',
+  'lbld-fullstack': 'track:lbld-fullstack',
+  'power-scheming': 'track:power-scheming',
 };
 const DIR_TRACK_ID = {
   'system-design': 'classic-sd',
@@ -48,6 +53,11 @@ const DIR_TRACK_ID = {
   'interview-english': 'interview-english',
   'cli': 'cli',
   'pmle': 'pmle',
+  'lbld-lang': 'lbld-lang',
+  'lbld-algo': 'lbld-algo',
+  'lbld-agent': 'lbld-agent',
+  'lbld-fullstack': 'lbld-fullstack',
+  'power-scheming': 'power-scheming',
 };
 
 const CATEGORY_PREFIXES = [
@@ -186,7 +196,38 @@ const CATEGORY_OVERRIDES = {
   'interview-review/system-design-drills.json': '系统设计复盘',
   'interview-review/coding-reflexes.json': '编码反射',
   'interview-review/knowledge-gaps.json': '知识短板',
+  // 2026-08-29: coach-* = 系统设计带练录音（Otter 21 场）提炼的未覆盖知识点补卡。
+  // 「带练·」前缀让这批卡在分类选择器里一眼可辨来源。
+  'system-design/coach-chat-realtime.json': '带练·聊天与实时',
+  'system-design/coach-video-topk.json': '带练·视频与TopK',
+  'system-design/coach-contention-booking.json': '带练·抢锁与订票',
+  'system-design/coach-trading.json': '带练·股票交易',
+  'system-design/coach-social-feed.json': '带练·社交Feed',
+  'system-design/coach-storage-fundamentals.json': '带练·存储基本功',
+  'system-design/coach-api-design.json': '带练·API设计',
+  'system-design/coach-collab-judge.json': '带练·协作与判题',
+  'system-design/coach-rideshare.json': '带练·网约车',
 };
+
+// user decision 2026-08-21: inside the merged 编码基本功 track, each former
+// track collapses to ONE category (子专题) so the category picker stays small.
+const TOPIC_CATEGORY = {
+  'cli': '命令行',
+  'lbld-lang': '编程语言基础',
+  'lbld-algo': '算法教程',
+  'lbld-agent': 'Agent 开发',
+  'lbld-fullstack': '全栈开发',
+};
+
+// Same decision for 面试英语 inside 面试实战: its 37 per-file auto-titles
+// collapse into 5 prefixed families.
+const ENGLISH_PREFIX_CATEGORY = [
+  ['koutiao-', '面试英语·口条'],
+  ['struct-', '面试英语·回答结构'],
+  ['think-', '面试英语·临场思维'],
+  ['vern-', '面试英语·技术词汇'],
+];
+const ENGLISH_FALLBACK_CATEGORY = '面试英语·开场与收尾';
 
 // These are one study module even though their source files belong to two
 // tracks. The card-level override keeps the source files intact while making
@@ -209,6 +250,13 @@ const CARD_OVERRIDES = {
 function categoryFromFile(file, topic) {
   const override = CATEGORY_OVERRIDES[`${topic}/${file}`];
   if (override) return override;
+  if (TOPIC_CATEGORY[topic]) return TOPIC_CATEGORY[topic];
+  if (topic === 'interview-english') {
+    for (const [prefix, cat] of ENGLISH_PREFIX_CATEGORY) {
+      if (file.startsWith(prefix)) return cat;
+    }
+    return ENGLISH_FALLBACK_CATEGORY;
+  }
   let stem = file.replace(/\.json$/, '');
   for (const prefix of CATEGORY_PREFIXES) {
     if (stem.startsWith(prefix)) {

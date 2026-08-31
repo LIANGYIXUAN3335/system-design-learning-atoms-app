@@ -1,0 +1,2110 @@
+[
+  {
+    "id": "sd-deep-dives-mapreduce-001",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "programming-model",
+    "scenario": "面试官让你说清楚 MapReduce 里用户到底要写什么代码，而不是框架内部做了什么。",
+    "scenario_en": "The interviewer wants you to state exactly what code the user writes in MapReduce, not what the framework does internally.",
+    "q": "MapReduce 里 map 和 reduce 两个用户函数的输入输出签名是什么？",
+    "q_en": "What are the input/output signatures of the user-written map and reduce functions?",
+    "options": [
+      "map: (k1,v1)→(k2,v2) 只产出一个输出；reduce: (k2,v2)→list(v2) 只吃一个输入",
+      "map 和 reduce 签名相同，都是 (k,v)→(k,v)，靠函数名区分所处阶段",
+      "map: (k1,v1)→list(k2,v2)；reduce: (k2,list(v2))→list(k3,v3)",
+      "map: list(k1,v1)→(k2,v2)，一次性吃下整批输入；reduce: (k2,v2)→list(v2)"
+    ],
+    "answer": [
+      2
+    ],
+    "options_en": [
+      "map: (k1,v1)→(k2,v2), a single output; reduce: (k2,v2)→list(v2), a single input.",
+      "map and reduce share one signature, (k,v)→(k,v), distinguished only by function name.",
+      "map: (k1,v1)→list(k2,v2); reduce: (k2,list(v2))→list(k3,v3).",
+      "map: list(k1,v1)→(k2,v2), consuming a whole batch at once; reduce: (k2,v2)→list(v2)."
+    ],
+    "why": "map 对每条记录产出零到多个中间 KV；框架按 k2 分组后，reduce 一次拿到某个 key 的完整 value 列表，再产出零到多个最终 KV。论文常把输出 key 省略写成 list(v3)，完整类型是 list(k3,v3)。",
+    "why_en": "Map turns each record into zero or more intermediate pairs. After the framework groups by k2, reduce receives all values for one key and emits zero or more final key-value pairs. The paper often omits the output key and writes list(v3); the complete type is list(k3,v3).",
+    "termDefinitions": [
+      {
+        "term": "KV",
+        "fullName": "Key-Value",
+        "meaning": "键值对，MapReduce 里数据的基本单位。",
+        "meaningEn": "A key-value pair, the basic unit of data MapReduce operates on."
+      }
+    ],
+    "optionExplanations": [
+      "reduce 的关键是一次拿到某个 key 的全部 value，不是逐条处理；这个签名漏掉了框架的分组这一步。",
+      "map/reduce 的 key 类型可以不同（k1/v1 vs k2/v2），输入结构也完全不同：一条记录 vs 分组列表。",
+      "正确答案。map 产出中间 KV 列表；框架按 key 分组；reduce 拿到一个 key 的 value 列表，并产出最终 KV 列表。完整写法是 list(k3,v3)，论文常省略输出 key 写成 list(v3)。",
+      "map 是逐条记录调用的，不是一次吃下整批输入；把它写成批处理入口混淆了调用方式。"
+    ],
+    "optionExplanations_en": [
+      "Reduce's whole point is receiving all values for one key at once, not record by record; this signature skips the framework's grouping step.",
+      "Map and reduce use different key types (k1/v1 vs k2/v2) and different input shapes: one record versus a grouped list.",
+      "Correct. Map emits a list of intermediate pairs; the framework groups by key; reduce receives one key's value list and emits a list of final key-value pairs. The complete form is list(k3,v3); the paper often omits the output key and writes list(v3).",
+      "Map is invoked once per record, not fed a whole batch at once; framing it as a batch entry point confuses how it's actually called."
+    ],
+    "tags": [
+      "mapreduce",
+      "programming-model",
+      "api"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-002",
+    "format": "chain",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "execution-flow",
+    "scenario": "面试官要求按论文 OSDI'04 §3.1 的原始编号，逐步讲出一次 MapReduce 作业从提交到结束经历的阶段。",
+    "scenario_en": "The interviewer wants the OSDI'04 §3.1 execution steps walked through in their original paper order, from submission to completion.",
+    "q": "MapReduce 作业执行的七个步骤，正确顺序是？",
+    "q_en": "What is the correct order of the seven MapReduce execution steps?",
+    "steps": [
+      "reduce worker 顺序扫描排好序的数据，按 key 分组调用用户 Reduce",
+      "库把输入切成 M 份 split（每份约 16–64MB）",
+      "全部任务完成，master 唤醒用户程序，作业返回",
+      "map worker 读取 split，产出中间 KV 并缓冲在内存",
+      "reduce worker 通过 RPC 从各 map worker 拉取自己分区的数据，并按 key 排序",
+      "一个副本当 master，其余当 worker，等待被分配任务",
+      "缓冲周期性刷盘，按 partition function 分成 R 个区，位置上报 master"
+    ],
+    "answerOrder": [
+      1,
+      5,
+      3,
+      6,
+      4,
+      0,
+      2
+    ],
+    "why": "顺序不是任意的：reduce worker 必须先拉完自己分区的全部数据再排序分组，否则某个 key 的 value 列表不完整，没法调用 Reduce。",
+    "why_en": "The order isn't arbitrary: a reduce worker must finish pulling its whole partition before sorting and grouping, or a key's value list would be incomplete.",
+    "termDefinitions": [
+      {
+        "term": "RPC",
+        "fullName": "Remote Procedure Call",
+        "meaning": "远程过程调用，reduce worker 靠它去 map worker 本地盘拉数据。",
+        "meaningEn": "A Remote Procedure Call, used here by reduce workers to pull data from a map worker's local disk."
+      },
+      {
+        "term": "partition function",
+        "meaning": "决定中间 KV 落到哪个 reduce 分区的函数，默认是 hash(key) mod R。",
+        "meaningEn": "The function that decides which reduce partition an intermediate key-value pair goes to, defaulting to hash(key) mod R."
+      }
+    ],
+    "diagram": "flowchart LR\n  A[\"Split 输入: M 份\"] --> B[\"Map worker: 产出中间KV, 内存缓冲\"]\n  B --> C[\"刷盘, 按 partition 分 R 区\"]\n  C --> D[\"Reduce worker: RPC 拉取 + 排序\"]\n  D --> E[\"按 key 分组调用 Reduce\"]\n  E --> F[\"Master 唤醒用户程序\"]",
+    "tags": [
+      "mapreduce",
+      "execution-flow",
+      "osdi04"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-003",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "task-sizing",
+    "scenario": "你要给一个约 1800–2000 台机器的集群设计一次 MapReduce 作业，需要决定 split 大小、M（map 任务数）和 R（reduce 任务数）怎么取。",
+    "scenario_en": "You're sizing a MapReduce job for a roughly 1800–2000 machine cluster and must decide the split size and how many map (M) and reduce (R) tasks to create.",
+    "q": "split 大小和 M、R 该怎么取？论文给出的经验法则是什么？",
+    "q_en": "How should split size, M, and R be chosen? What's the paper's rule of thumb?",
+    "options": [
+      "M 固定等于 worker 数，让每台机器分到一个 map 任务，调度和资源分配都最省心",
+      "split 接近 GFS chunk（16–64MB），M、R 都远大于 worker 数",
+      "R 固定设成 1，所有 key 汇总进同一个输出文件，方便下游一次性读取全部结果",
+      "split 越大越好，理想情况下整个作业只需要切成个位数的几个 split 就够高效"
+    ],
+    "answer": [
+      1
+    ],
+    "options_en": [
+      "Fix M to equal the worker count, so each machine gets one map task and scheduling stays maximally simple.",
+      "Split size tracks the GFS chunk (16–64MB), with M and R both set far larger than the worker count.",
+      "Fix R at 1, so every key's results land in one output file downstream can read in a single pass.",
+      "Bigger splits are always better; ideally a job only needs to be cut into a handful of splits."
+    ],
+    "why": "split 接近 GFS chunk（16–64MB）；M、R 远大于 worker 数——论文 sort 基准约 1800 台机器配 M=15000、R=4000，粒度细则单点故障只丢一小块任务。",
+    "why_en": "Split size tracks GFS's chunk (16–64MB), and M, R are set far larger than the worker count so one failure only costs a small task.",
+    "termDefinitions": [
+      {
+        "term": "M",
+        "meaning": "MapReduce 作业里 map 任务（split）的数量。",
+        "meaningEn": "M is the number of map tasks (splits) in a MapReduce job."
+      },
+      {
+        "term": "R",
+        "meaning": "reduce 任务/输出分区的数量，由 partition function 决定数据落哪个 R。",
+        "meaningEn": "R is the number of reduce tasks/output partitions; the partition function decides which R a record goes to."
+      },
+      {
+        "term": "split",
+        "meaning": "map 阶段输入切分的最小单位，典型 16–64MB。",
+        "meaningEn": "A split is the smallest unit of input the map phase reads, typically 16–64MB."
+      }
+    ],
+    "tags": [
+      "mapreduce",
+      "task-sizing",
+      "fault-tolerance"
+    ],
+    "optionExplanations": [
+      "M 固定等于 worker 数会让粒度太粗：一台机器故障就丢一大块任务，也没法用空闲 worker 动态抢活。",
+      "这正是论文经验法则本身：细粒度切分换来动态负载均衡，某台机器挂了只需重跑一小份任务。",
+      "R=1 意味着只有一个 reduce worker 处理全部输出，reduce 阶段的并行度直接归零。",
+      "split 太大等于任务粒度太粗，单个任务失败代价高，也发挥不出成百上千台机器的并行能力。"
+    ],
+    "optionExplanations_en": [
+      "Fixing M to the worker count makes tasks too coarse: one machine failing loses a big chunk of work, and idle workers can't grab extra tasks.",
+      "This is the paper's rule of thumb itself: fine-grained pieces buy dynamic load balancing, so losing one machine only costs a small rerun.",
+      "R=1 means a single reduce worker handles all output, so reduce-side parallelism drops to zero.",
+      "Oversized splits mean coarse-grained tasks — one failure costs more, and hundreds of machines can't be used in parallel."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-004",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "master-state",
+    "scenario": "你要跟面试官说清楚 MapReduce 的 master 到底在内存里维护什么状态，才能协调成千上万个 map/reduce 任务，同时自己不被数据流量压垮。",
+    "scenario_en": "You need to explain exactly what state the MapReduce master keeps in memory to coordinate thousands of map/reduce tasks without being overwhelmed by data traffic.",
+    "q": "MapReduce master 维护的核心状态是什么？",
+    "q_en": "What core state does the MapReduce master maintain?",
+    "options": [
+      "所有中间 KV 对的完整副本，方便随时把它们重新分发给任意一个 reduce worker",
+      "只记录哪些 worker 机器在线，具体任务分配靠 worker 之间自己去中心化协商",
+      "只在作业启动时分配一次任务，之后不再跟踪状态，全靠 worker 主动上报完成",
+      "每个任务的状态 + worker 身份，及已完成 map 任务的中间文件位置"
+    ],
+    "answer": [
+      3
+    ],
+    "options_en": [
+      "A full copy of every intermediate key-value pair, so it can redistribute them to any reduce worker at any time.",
+      "Just which worker machines are online, with task assignment left to decentralized negotiation among workers.",
+      "Tasks are assigned once at job start and never tracked again, with workers self-reporting completion.",
+      "Each task's state plus worker identity, and finished map tasks' file locations."
+    ],
+    "why": "master 类似 GFS master：只管控制流（任务状态+位置），不碰数据本身；记住已完成 map 任务的输出位置，reduce worker 才知道去哪台机器拉数据。",
+    "why_en": "The master tracks only control-flow metadata — task state and, for finished map tasks, where their output lives — never the data itself.",
+    "termDefinitions": [
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "MapReduce 依赖的底层分布式文件系统，reduce 输出写在这里。",
+        "meaningEn": "The Google File System, the distributed storage layer MapReduce writes reduce output to."
+      }
+    ],
+    "optionExplanations": [
+      "中间数据可到 TB 级，master 只有几十到几百 MB 内存预算，存完整副本会直接把它压垮。",
+      "去中心化协商没有全局视角，容易两个 worker 抢同一任务或某个 split 没人做；集中调度才能避免。",
+      "worker 会掉线、任务会失败，master 必须持续跟踪状态才能重新调度失败任务，不跟踪等于放弃容错。",
+      "论文 §3.2：状态具体分 idle/in-progress/completed 三种，完成的 map 任务还额外存下 R 个分区文件的位置。"
+    ],
+    "optionExplanations_en": [
+      "Intermediate data can reach terabytes, but the master only budgets tens to hundreds of MB, so a full copy would crush it.",
+      "Decentralized negotiation has no global view, so two workers can grab the same task or a split goes unclaimed; central scheduling avoids that.",
+      "Workers drop out and tasks fail, so the master must keep tracking state to reschedule failures — not tracking means giving up on fault tolerance.",
+      "Per §3.2: state is one of idle/in-progress/completed, and for finished map tasks it also stores the R partition files' locations."
+    ],
+    "tags": [
+      "mapreduce",
+      "master",
+      "scheduling"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-005",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "sort-shuffle",
+    "scenario": "reduce task 从各 map worker 拉回的数据是很多个不同 key 混在一起的一大堆记录，总量可能到 TB 级，远超 reduce worker 的内存。",
+    "scenario_en": "A reduce task pulls back a mix of many different keys, potentially terabytes of data, far more than a reduce worker's memory can hold.",
+    "q": "reduce worker 为什么必须先对拉回的数据排序，而不是直接用哈希表按 key 聚合？",
+    "q_en": "Why must a reduce worker sort the data it pulls before grouping, instead of hashing straight into a table by key?",
+    "options": [
+      "全内存哈希聚合放不下 TB 级数据；排序后同 key 物理相邻，顺序扫描即可分组",
+      "哈希表在分布式系统里天然不安全，只有排序算法才能在多台机器间给出正确结果",
+      "排序的目的是让 reduce 按字母顺序处理 key，纯粹是为了方便打印日志和线上调试",
+      "不排序的话 reduce 函数在语法层面无法编译，框架强制要求输入必须是有序迭代器类型"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Full in-memory hash aggregation can't hold TB-scale data; sorting makes same-key records adjacent, so a sequential scan groups them.",
+      "Hash tables are inherently unsafe in distributed systems; only sorting algorithms can produce correct results across many machines.",
+      "Sorting exists purely so reduce processes keys in alphabetical order, which makes logs and debugging easier.",
+      "Without sorting, the reduce function fails to compile at the language level; the framework mandates an ordered iterator input type."
+    ],
+    "why": "许多不同 key 落到同一个 reduce task；哈希聚合要全内存摊开所有桶，排序把同 key 数据挪成物理相邻，只需当前一组的 O(1) 内存，放不下就走外排序。",
+    "why_en": "Sorting makes same-key records physically adjacent, so grouping needs only O(1) memory per key instead of hashing every key into RAM at once.",
+    "termDefinitions": [
+      {
+        "term": "外排序",
+        "fullName": "External Sort",
+        "meaning": "数据大于内存时，靠磁盘分批排序再归并的算法，全程顺序 I/O。",
+        "meaningEn": "External sort handles data larger than memory by sorting chunks on disk and merging them, using only sequential I/O."
+      }
+    ],
+    "optionExplanations": [
+      "论文 §3.1 的原因：sort 把'按 key 分组'变成一次顺序扫描 + 当前 key 的 O(1) 内存，放不下就外排序，全程顺序 I/O。",
+      "哈希表本身没有分布式限制，问题是它要整个 key 空间的桶同时驻留内存，TB 级中间数据下放不下。",
+      "排序的目的是分组不是排版；顺带产出按 key 有序的输出文件是额外收获，不是排序存在的理由。",
+      "Reduce 函数是普通用户代码，不依赖迭代器类型系统；排序是框架为分组可行做的运行时决策，跟编译无关。"
+    ],
+    "optionExplanations_en": [
+      "Per §3.1: sorting turns grouping into one sequential scan plus O(1) memory per key, falling back to sequential-I/O external sort when it doesn't fit.",
+      "Hash tables have no distributed restriction; the real problem is needing every key's bucket resident at once, which TB-scale data won't fit.",
+      "Sorting exists for grouping, not formatting; the ordered output file is a bonus, not the reason sorting happens.",
+      "Reduce is ordinary user code with no iterator type dependency; sorting is a runtime decision the framework makes to make grouping feasible, unrelated to compilation."
+    ],
+    "diagram": "flowchart LR\n  A[\"map worker 本地磁盘: R 个分区文件\"] -->|RPC pull| B[\"reduce worker 内存缓冲\"]\n  B --> C[\"排序: 同 key 物理相邻\"]\n  C --> D[\"顺序扫描, O(1)内存分组\"]\n  D -->|内存不够| E[\"外排序(顺序I/O)\"]",
+    "tags": [
+      "mapreduce",
+      "sort-shuffle",
+      "memory"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-006",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "sort-shuffle",
+    "scenario": "团队考虑在 MapReduce 之外，另造一个专门的批处理步骤，把 reduce 输出整理成按 key 排好序的文件，供下游按 key 随机查找。",
+    "scenario_en": "A team considers building a separate batch step outside MapReduce just to produce a key-sorted output file for downstream random lookups.",
+    "q": "为什么这个额外的排序步骤其实不需要单独造？",
+    "q_en": "Why doesn't this extra sorting step need to be built separately?",
+    "options": [
+      "MapReduce 框架内置了一套专门的排序引擎，和分组用的排序其实是两套彼此独立的机制",
+      "不需要额外排序，因为 GFS 存储层本身就会自动帮所有文件按 key 排好顺序",
+      "reduce 本就要排序分组，论文保证 partition 内 key 递增，排序输出顺带就有序",
+      "额外排序确实需要单独造出来，论文写的是 reduce 输出本身无序，排序这件事只发生在输入侧那一步"
+    ],
+    "answer": [
+      2
+    ],
+    "options_en": [
+      "MapReduce has a dedicated built-in sort engine, a separate mechanism from the grouping sort.",
+      "No extra sorting is needed, because GFS's storage layer automatically sorts every file by key on its own.",
+      "Reduce already sorts to group; the paper's per-partition ascending order makes the output ordered for free.",
+      "Extra sorting genuinely needs to be built separately; the paper states reduce output is unordered and sorting only happens on the input side."
+    ],
+    "whenOtherWins": "如果 reduce 逻辑本身会打乱顺序（输出 key 不在同一套排序域），这个'免费有序输出'的保证就不成立，仍要额外排序。",
+    "tradeoff": "复用 reduce 侧本来就要付的排序成本 vs 单独起一个排序作业",
+    "why": "论文 §4.2：partition 内部本来就按 key 递增处理（为了分组），framework 顺手保证输出文件也有序——这是 2004 年论文里已经埋下的 SSTable 雏形。",
+    "why_en": "Because grouping already forces a per-partition sort, the framework gets an ordered output file as a free side effect, no extra job needed.",
+    "termDefinitions": [
+      {
+        "term": "ordering guarantee",
+        "meaning": "论文保证 reduce 在一个 partition 内按 key 递增顺序处理数据。",
+        "meaningEn": "The paper's guarantee that a reduce task processes data within one partition in increasing key order."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "按 key 排好序的不可变文件，支持二分查找定位；2006 年 BigTable 论文正式提出。",
+        "meaningEn": "An immutable, key-sorted file that supports binary-search lookups, formalized in the 2006 BigTable paper."
+      }
+    ],
+    "optionExplanations": [
+      "分组用的排序和输出有序性是同一次排序的两个结果，不是两套机制；拆成独立系统会漏掉论文这个设计经济性的关键点。",
+      "GFS 只管字节的顺序追加存储，不理解 key 的语义，排序发生在 MapReduce 应用层不是存储层。",
+      "论文原句：ordering guarantee 让生成一个按 partition 排序的输出文件变得容易——'免费'是因为这次排序本来就为分组付过一次代价。",
+      "这跟论文结论正相反：正确答案里那条 guarantee 恰恰保证了输出天生按顺序排列，不需要另起一个作业。"
+    ],
+    "optionExplanations_en": [
+      "The grouping sort and output ordering are two outcomes of the same sort pass, not separate mechanisms; splitting them apart misses the paper's design economy point.",
+      "GFS only handles sequential byte-append storage and knows nothing about key semantics; sorting happens in the MapReduce application layer, not storage.",
+      "Per the paper: the ordering guarantee makes it easy to produce a per-partition sorted output file — it's 'free' because that sort was already paid for by grouping.",
+      "This inverts the paper's actual claim: the correct answer's guarantee is exactly what makes the output naturally ordered, no separate job required."
+    ],
+    "tags": [
+      "mapreduce",
+      "sort-shuffle",
+      "design-economy"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-007",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "combiner",
+    "scenario": "word count 作业里，一个 map worker 本地已经数出 'the' 出现了 12000 次；如果不做任何本地合并，直接把 12000 条 (the,1) 通过网络发给 reduce worker，会造成大量不必要的网络流量。",
+    "scenario_en": "In a word-count job, one map worker has already counted 'the' 12000 times locally; sending all 12000 raw (the,1) pairs over the network wastes bandwidth.",
+    "q": "该用什么机制在 map 端先做局部合并，减少这类网络传输？",
+    "q_en": "What mechanism does local pre-aggregation on the map side to cut this kind of network traffic?",
+    "options": [
+      "增大 R（reduce 任务数），让每个 reduce 分到的数据变少，从而降低网络传输总量",
+      "combiner：在 map 端本地跑一遍类似 reduce 的函数，前提是函数满足交换律+结合律",
+      "把 map 输出直接压缩成二进制格式，不改变记录条数，只是减少每条记录占用的字节数",
+      "让所有 map worker 先互相同步一轮，把重复出现的 key 提前去重后再各自发送剩余数据"
+    ],
+    "answer": [
+      1
+    ],
+    "options_en": [
+      "Increase R (the reduce count) so each reducer gets less data, lowering total network traffic that way.",
+      "A combiner: run a reduce-like function locally on the map side, as long as that function is commutative and associative.",
+      "Compress the map output into binary format directly, shrinking bytes per record without changing record count.",
+      "Have all map workers synchronize with each other first, dedupe repeated keys, then each sends the remainder."
+    ],
+    "why": "combiner 在 map 端对本地中间结果先做一次局部 reduce，减少要传的记录数；只有满足交换律+结合律的函数才能用（sum 可以，求平均不行）。",
+    "why_en": "A combiner runs a local reduce-like pass on the map side before sending data, but it only works for commutative, associative functions like sum, not average.",
+    "termDefinitions": [
+      {
+        "term": "combiner",
+        "meaning": "map 端本地预聚合，通常复用 reduce 的逻辑，减少要传输的中间记录数。",
+        "meaningEn": "A local map-side pre-aggregation step, usually reusing reduce's logic, that shrinks the number of intermediate records sent over the network."
+      }
+    ],
+    "optionExplanations": [
+      "调大 R 改变的是数据往哪几个分区送，不改变每个 key 要传输的原始记录总条数，帮不上这题。",
+      "论文 §4.3：combiner 通常和 reducer 代码相同，区别只是写去处不同，前提是函数满足交换律+结合律。",
+      "压缩减少的是字节数不是记录条数，12000 条记录依旧要处理 12000 次，没解决这题的冗余传输问题。",
+      "map worker 之间没有互相通信机制，各自独立处理 split，这个方案在架构里不成立。"
+    ],
+    "optionExplanations_en": [
+      "A bigger R changes which partition data goes to, not the raw record count per key that must travel — it doesn't solve this problem.",
+      "Per §4.3: a combiner is usually the same code as the reducer, differing only in where it writes, provided the function is commutative and associative.",
+      "Compression shrinks bytes, not record count; 12000 records are still 12000 records to process, so this misses the redundant-transfer issue.",
+      "Map workers have no mechanism to communicate with each other; each processes its split independently, so this doesn't fit the architecture."
+    ],
+    "whenOtherWins": "如果 reduce 函数不满足交换律+结合律（比如取中位数），combiner 会算出错误结果，只能把全部原始记录传给 reduce。",
+    "tradeoff": "combiner 省网络带宽 vs 它对 reduce 函数的数学性质有硬约束",
+    "tags": [
+      "mapreduce",
+      "combiner",
+      "network-optimization"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-008",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "partitioner",
+    "scenario": "一个日志分析作业按 host 做 key，reduce 阶段统计每个域名的访问量；默认的 hash(key) mod R 分区函数把同一域名的所有 URL 结果打散到不同 reduce 输出文件里，下游还得再合并一次。",
+    "scenario_en": "A log-analysis job keys by host; the default hash(key) mod R partition function scatters one domain's URLs across different reduce outputs, forcing downstream to re-merge them.",
+    "q": "该怎么解决默认分区函数把同一网站数据打散这个问题？",
+    "q_en": "What fixes the default partition function scattering one site's data across reduce outputs?",
+    "options": [
+      "把 R 直接设成 1，这样只剩一个 reduce 输出文件，自然不会再有打散的问题",
+      "在 map 阶段额外加一次全局排序，让所有 map worker 输出统一有序，打散问题随之消失",
+      "换成用 combiner 处理，让每个 map worker 先按域名分组，partition 这一步就可以省略",
+      "自定义 partition function：按 host 域名写路由规则，同域名固定送到同一个 reduce"
+    ],
+    "answer": [
+      3
+    ],
+    "options_en": [
+      "Set R directly to 1, so there's only one reduce output file and nothing gets scattered anymore.",
+      "Add an extra global sort at the map stage so every map worker's output is uniformly ordered, and scattering disappears.",
+      "Switch to a combiner so each map worker groups by domain locally, letting the partition step be skipped.",
+      "Write a custom partition function that routes by host's domain, keeping one domain on the same reduce."
+    ],
+    "why": "论文允许用户提供自定义 partition function 替换默认 hash(key) mod R，把有业务含义的相关 key（如同一域名）强制路由到同一个 reduce。",
+    "why_en": "MapReduce lets users supply a custom partition function instead of the default hash(key) mod R, to force related keys like one host's URLs into the same reduce.",
+    "termDefinitions": [
+      {
+        "term": "partition function",
+        "meaning": "决定每条中间 KV 落到哪个 reduce 分区的函数。",
+        "meaningEn": "The function that decides which reduce partition an intermediate key-value pair is routed to."
+      }
+    ],
+    "optionExplanations": [
+      "R=1 确实不会打散，但代价是失去全部并行度，一个 reduce worker 要扛全部数据，牺牲太大。",
+      "全局排序解决的是文件内部的顺序，不解决数据被分到哪个 reduce 这个路由问题，两者是不同机制。",
+      "combiner 只做本地数值合并（比如求和），不负责决定记录发去哪个 reduce 分区，partition 依然需要。",
+      "论文明确提到这个用例：默认 hash 会打散相关 key，这时用户可以按自己的业务规则改写路由逻辑。"
+    ],
+    "optionExplanations_en": [
+      "R=1 does stop scattering, but it costs all parallelism — one reduce worker carries the entire dataset, too big a sacrifice.",
+      "A global sort fixes ordering within a file, not which reduce a record routes to — that's a different mechanism entirely.",
+      "A combiner only does local numeric aggregation (like sum); it doesn't decide which reduce partition a record goes to, so partitioning is still needed.",
+      "The paper explicitly covers this case: when default hashing scatters related keys, users can rewrite the routing logic by business rule."
+    ],
+    "whenOtherWins": "如果 key 之间没有业务相关性，只想让 R 个 reduce 负载均匀，默认 hash(key) mod R 反而更省心，不用额外写路由规则。",
+    "tradeoff": "默认 hash 分区图省事、负载均匀 vs 自定义 partition function 保业务相关性但要自己写规则",
+    "table": {
+      "headers": [
+        "分区方式",
+        "路由依据",
+        "何时选它"
+      ],
+      "rows": [
+        [
+          "默认 hash(key) mod R",
+          "key 的哈希值",
+          "key 之间无业务关联，只求负载均匀"
+        ],
+        [
+          "自定义 partition function",
+          "用户写的业务规则",
+          "相关 key 必须落进同一个 reduce"
+        ]
+      ]
+    },
+    "tags": [
+      "mapreduce",
+      "partitioner",
+      "routing"
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-009",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "disk-io-physics",
+    "scenario": "GFS 论文写于 2003 年的 7200 转机械盘时代：一次随机寻道（寻道 4-9ms + 半圈旋转延迟约 4ms）≈10ms，只能做到约 100 IOPS；顺序读带宽却有 100-200MB/s。团队要靠这两个数字决定文件系统默认的访问单元该多大。",
+    "scenario_en": "GFS was written in 2003, the era of 7200rpm mechanical disks: one random seek (4-9ms seek plus ~4ms rotational latency) costs about 10ms, capping throughput near 100 IOPS, while sequential read bandwidth reaches 100-200MB/s. The team had to size the filesystem's default access unit around these two numbers.",
+    "q": "已知一次随机寻道的时间和顺序读 1-2MB 数据的时间相当，这个关系该如何决定 GFS 默认访问单元的大小？",
+    "q_en": "Given that a random seek costs about as much time as reading 1-2MB sequentially, how should that relationship shape GFS's default access unit size?",
+    "options": [
+      "块只要做到几百 KB 级别就足够摊平寻道成本，64MB 只是历史上沿用下来的参数，没有物理依据支撑",
+      "这个关系只决定单机读吞吐的物理上限，与分布式文件系统怎么定块大小没有关系，块大小该由副本数量来决定",
+      "访问单元要远大于这个量级（如 64MB），顺序读完整块才能持续摊薄寻道成本，这是块设计得大的物理依据",
+      "这说明 GFS 留了 3 到 6 倍的安全冗余，块其实可以再切小一半，也不影响摊薄寻道成本的效果"
+    ],
+    "options_en": [
+      "Blocks only need to reach a few hundred KB to amortize seek cost, so 64MB is just a legacy number with no physical basis behind it.",
+      "That relationship only caps single-disk read throughput and has nothing to do with a distributed filesystem's block size, which should be set by replica count instead.",
+      "The access unit needs to be far bigger than that gap (like 64MB); only then does one sequential read keep amortizing seek cost, which is the physical reason blocks are big.",
+      "It shows GFS left 3-6x slack; the block could safely be cut in half without hurting how well seek cost gets amortized."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "块远大于一次寻道能顺序读的量（1-2MB）时，摊薄寻道成本才持续有效——这是 GFS 把默认单元定在 64MB 量级的物理原因，代价是小文件独占一块容易变热点。",
+    "why_en": "A random seek costs about as much as a 1-2MB sequential read, so GFS sizes blocks far above that gap — hence 64MB, at the cost of small-file hotspots.",
+    "tags": [
+      "gfs",
+      "disk-io",
+      "physical-limits"
+    ],
+    "termDefinitions": [
+      {
+        "term": "IOPS",
+        "fullName": "Input/Output Operations Per Second",
+        "meaning": "每秒能完成的输入输出操作次数，衡量随机访问能力的单位。",
+        "meaningEn": "IOPS is Input/Output Operations Per Second, a unit measuring random-access capacity."
+      }
+    ],
+    "optionExplanations": [
+      "几百 KB 级的块仍要频繁寻道，寻道成本占比依然明显，达不到摊薄到可忽略的效果。",
+      "单机吞吐上限正是决定块该多大的那个物理量，分布式只是把它乘以很多台机器，物理账没变。",
+      "块远大于 1-2MB 时，一次顺序读的收益持续存在——这正是 64MB 这个量级被选中的原因。",
+      "64MB 不是安全冗余，是在摊薄寻道成本与元数据/小文件热点风险之间选的一个具体点。"
+    ],
+    "optionExplanations_en": [
+      "A few-hundred-KB block still seeks often, so seek cost still eats a real share instead of becoming negligible.",
+      "The single-disk throughput ceiling is the physical quantity that decides block size; distributed just multiplies it across machines.",
+      "Once a block is far bigger than 1-2MB, one sequential read keeps paying off — that's exactly why 64MB was chosen.",
+      "64MB isn't slack margin — it's a specific point chosen between amortizing seek cost and metadata/hotspot risk."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-010",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "gfs-assumptions",
+    "scenario": "要给 GFS 定一条运行在几百到几千台廉价商用机器上的目标：文件几百 MB 到几个 GB 是常态，读写几乎都是大块顺序访问 + 追加写，机器每天都在坏；跑在它上面的典型作业是 MapReduce 这种批处理分析。",
+    "scenario_en": "GFS runs on hundreds to thousands of cheap commodity machines: files are typically hundreds of MB to multiple GB, reads and writes are almost all large sequential or append access, and machines fail routinely. The typical workload on top is batch analytics like MapReduce.",
+    "q": "面对这组前提，GFS 该把系统目标定成'高吞吐优先'还是'低延迟优先'？为什么？",
+    "q_en": "Given these premises, should GFS optimize for high throughput or low latency — and why?",
+    "options": [
+      "低延迟优先：机器天天坏，返回结果越快，下次故障来临前能挤出的有效工作时间就越多",
+      "高吞吐优先：负载是大块顺序读写，把带宽用满收益最大，单次请求慢一点能被并发吃掉",
+      "吞吐和延迟同权重，工程精力应该各分一半去优化，不该为了吞吐牺牲任何一点延迟",
+      "高吞吐优先，但理由是机器采购便宜、省钱最重要，跟工作负载的读写形态完全无关"
+    ],
+    "options_en": [
+      "Low latency: machines fail daily, so the faster results come back, the more useful work fits in before the next failure.",
+      "High throughput: the workload is large sequential I/O, so maxing bandwidth pays off most, and per-request slowness gets absorbed by concurrency.",
+      "Equal weight on both: split engineering effort evenly and never trade away latency for throughput.",
+      "High throughput, but only because machines are cheap to buy — cost savings matter most, unrelated to the read/write shape."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "工作负载决定目标：大块顺序 + 追加为主，意味着把带宽用满收益最大，单次请求慢一点能被并发吃掉——所以 GFS 明确选高吞吐、牺牲单次操作延迟。",
+    "why_en": "The workload dictates the goal: mostly large sequential/append access means maximizing throughput pays off more than any single request's latency, so GFS explicitly trades latency for throughput.",
+    "whenOtherWins": "如果典型访问变成大量小对象的低延迟随机读写（比如在线 KV 服务），低延迟优先就该反超——这正是后来的系统要在 GFS 之上另做一层的原因之一。",
+    "tradeoff": "吞吐 vs 延迟：GFS 为大块顺序/追加负载选吞吐，牺牲单次操作的响应时间。",
+    "tags": [
+      "gfs",
+      "design-goals",
+      "throughput-vs-latency"
+    ],
+    "optionExplanations": [
+      "'越快能做更多事'是通用直觉，没对上这组前提——GFS 的容错靠副本和重跑，不靠'快'，低延迟不是它买单的东西。",
+      "workload 决定 objective：顺序+追加的负载下，把带宽用满是收益最大的旋钮，牺牲延迟换吞吐是理性选择。",
+      "'各分一半精力'是回避判断，不是工程判断；两个目标常互斥（激进批处理会牺牲尾延迟），必须选边。",
+      "机器便宜是背景约束不是目标本身；就算机器贵，只要负载是大块顺序读写，高吞吐依然是对的选择。"
+    ],
+    "optionExplanations_en": [
+      "'Faster means more gets done' is generic intuition that misses the premise — GFS leans on replicas and reruns for fault tolerance, not speed.",
+      "Under sequential/append-heavy load, maxing bandwidth is the highest-payoff knob, so trading latency for throughput is the rational call.",
+      "Splitting effort evenly avoids the decision instead of making it; the two goals often conflict, so you must pick a side.",
+      "Cheap machines are background context, not the goal itself; even with pricier machines, sequential-heavy workloads still favor throughput."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-011",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "master-chunkserver-flow",
+    "scenario": "GFS 集群里，一个 client 要读某个文件某段字节。它先问 master 要 chunk 位置，再去实际读数据。系统设计上要决定：那几百 KB 到 MB 的字节内容，走不走 master 这一条线。",
+    "scenario_en": "In a GFS cluster, a client wants to read a byte range of some file. It first asks the master for chunk locations, then reads the data. The design question: does the actual hundreds-of-KB-to-MB byte payload flow through the master?",
+    "q": "GFS 的数据面（实际字节）该不该经过 master？为什么这个选择能让单 master 架构不成为瓶颈？",
+    "q_en": "Should GFS's data plane (the actual bytes) flow through the master? Why does that choice keep a single-master design from becoming a bottleneck?",
+    "options": [
+      "该经过一部分：小文件走 master 转发，大文件直连 chunkserver，按大小分流控制压力",
+      "该经过：master 掌握全局视图，数据经它中转能顺便做调度，代价是要加更多内存和网卡",
+      "不该经过，但原因是 master 磁盘太慢不是为分担吞吐，换 SSD 让它转发数据也没问题",
+      "不该经过：client 只问位置并缓存，数据直连 chunkserver；master 只做控制面"
+    ],
+    "options_en": [
+      "Should, partially: small files route through the master, large files connect directly, splitting the load by file size.",
+      "Should: the master has the global view, so routing data through it enables scheduling, at the cost of more memory and NICs.",
+      "Should not, but only because the master's disk is too slow, not to offload throughput — an SSD would make forwarding fine.",
+      "Should not: the client only asks for locations and caches them; data goes straight to the chunkserver, master handles only control lookups."
+    ],
+    "answer": [
+      3
+    ],
+    "why": "client 缓存 chunk 位置、数据直连 chunkserver，master 只处理控制面问询——master 的负载只跟'文件/chunk 数量'挂钩，不跟'字节吞吐量'挂钩，才不会被数据量压垮。",
+    "why_en": "Clients cache chunk locations and read data directly from chunkservers, so the master's load scales with the number of files/chunks, not with byte throughput — which is why it never becomes the bottleneck.",
+    "whenOtherWins": "如果集群规模很小、chunk 数很少，master 中转数据也扛得住，'控制面/数据面分离'的收益就不明显——但 GFS 面对的是几十万到百万级 chunk，分离是硬需求。",
+    "tradeoff": "控制面 vs 数据面：master 只做控制面问询，数据面直连 chunkserver，代价是 client 要多一次往返先问位置。",
+    "tags": [
+      "gfs",
+      "master-chunkserver",
+      "control-plane"
+    ],
+    "diagram": "sequenceDiagram\n  participant C as Client\n  participant M as Master\n  participant CS as Chunkserver\n  C->>M: 1. 文件名 + chunk index\n  M-->>C: 2. chunk handle + 副本位置\n  C->>CS: 3. chunk handle + byte range\n  CS-->>C: 4. chunk 数据",
+    "optionExplanations": [
+      "按大小分流仍让 master 处理一部分数据面流量，吞吐依然跟文件大小分布挂钩，不是稳定方案。",
+      "master 中转数据看似能顺便调度，但负载会直接跟字节吞吐挂钩，单机 CPU/网卡迟早顶不住集群总吞吐。",
+      "master 的瓶颈不是磁盘慢，是'一台机器扛全集群吞吐'这个架构本身；换 SSD 治标不治本。",
+      "对应论文§2.4三层保险：数据不经过 master、client 缓存位置、64MB 让问询稀疏，三条合力让负载和吞吐脱钩。"
+    ],
+    "optionExplanations_en": [
+      "Splitting by file size still leaves the master handling some data traffic, tracking the file-size distribution — not a stable decoupling.",
+      "Routing data through the master sounds convenient, but its load then scales with byte throughput, and one machine's NIC will eventually cap the cluster.",
+      "The bottleneck isn't a slow disk, it's one machine carrying the whole cluster's throughput; an SSD doesn't fix that architectural coupling.",
+      "Matches §2.4's three-layer insurance: data never touches the master, clients cache locations, 64MB keeps lookups sparse — together decoupling load from throughput."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-012",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "chunk-size-tradeoff",
+    "scenario": "GFS 要选一个固定的 chunk 大小，候选是几 KB（普通文件系统 block 量级）、64MB、还是 1GB 以上。团队还观察到一个真实事故：某个可执行文件因为只有一两个 chunk，几百台机器同时启动读它时把对应 chunkserver 打爆了。",
+    "scenario_en": "GFS needs to pick a fixed chunk size — candidates range from a few KB (typical filesystem block size) to 64MB to 1GB+. The team also hit a real incident: an executable with only one or two chunks got hammered when hundreds of machines started up and read it at once.",
+    "q": "GFS 最终把 chunk 定成 64MB，主要为了换哪些收益？这个选择又带来了什么代价？",
+    "q_en": "GFS settled on 64MB chunks — what benefits was that trading for, and what cost did it introduce?",
+    "options": [
+      "收益是减少问 master 次数、复用长连接、元数据≈chunk数×64字节全放内存；代价是小文件热点",
+      "收益纯粹是省 master 内存，跟减少问询次数或保持长连接都无关；代价是大文件顺序读因块太大变慢",
+      "收益是让每次读写都能拆成更多并行 RPC 来提升并发度；代价是元数据因块数变少而变大",
+      "选 64MB 主要是为了对齐当时机械盘的物理扇区大小，跟问询频率、元数据总量都没有直接关系"
+    ],
+    "options_en": [
+      "Benefits: fewer master lookups, reusable long connections, metadata ≈ chunk count × 64 bytes fits memory; cost: small files become hotspots.",
+      "The benefit is purely saving master memory, unrelated to lookup frequency or long connections; the cost is large-file reads slowing from oversized blocks.",
+      "The benefit is splitting every read/write into more parallel RPCs for higher concurrency; the cost is metadata growing from fewer blocks.",
+      "64MB mainly aligns with the mechanical disk's physical sector size of that era, unrelated to lookup frequency or metadata size."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "chunk 越大，client 单次问询覆盖的数据越多、能维持的长连接越久、master 元数据总量越小；GFS 用这三条收益换来了 64MB，代价是小文件被迫挤在一两个 chunk 里，容易被同时访问打成热点。",
+    "why_en": "A bigger chunk means fewer master lookups per byte, longer-lived connections, and smaller total metadata — GFS traded those three wins for 64MB, at the cost of small files becoming hotspots.",
+    "whenOtherWins": "如果工作负载里小文件占多数、访问模式是大量随机点查而不是大块顺序扫描，小 chunk 反而更合适——这也是后来 BigTable 要在 GFS 之上另建 64KB block 索引层的原因之一。",
+    "tradeoff": "大 chunk vs 小 chunk：大 chunk 省问询次数和元数据，代价是小文件热点风险。",
+    "tags": [
+      "gfs",
+      "chunk-size",
+      "metadata"
+    ],
+    "optionExplanations": [
+      "对应论文§2.5三条好处：减少问 master 次数、复用长连接、压缩元数据到能全放内存；代价靠调高副本数+错峰启动缓解。",
+      "省内存只是三条收益之一，漏掉问询次数和长连接两条；顺序读速度由带宽决定，不会因块变大而变慢。",
+      "块越大，单次操作覆盖越多数据、拆出的 RPC 反而越少；元数据也是块越少越小，不是越大。",
+      "64MB 远超机械盘扇区（几百字节到几 KB）量级，这个数字是围着摊薄寻道成本选的，不是对齐硬件扇区。"
+    ],
+    "optionExplanations_en": [
+      "Matches §2.5's three benefits: fewer lookups, reusable long connections, metadata compact enough for memory; the cost is mitigated by higher replication and staggered startup.",
+      "Saving memory is only one of three benefits and misses the lookup-frequency and long-connection wins; sequential speed is set by bandwidth, not block size.",
+      "Bigger blocks mean each op covers more data and needs fewer RPCs, not more; metadata shrinks with fewer blocks, not grows.",
+      "64MB is far beyond a mechanical disk's sector size — chosen around amortizing seek cost, not hardware sector alignment."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-013",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "chunk-location-metadata",
+    "scenario": "master 靠 operation log + checkpoint 持久化 namespace 和'文件→chunk'映射；但'某个 chunk 具体在哪几台 chunkserver 上'，master 启动时问一遍所有 chunkserver 拿到，之后靠心跳维护，故意不写盘。",
+    "scenario_en": "The master persists the namespace and file-to-chunk mapping via an operation log plus checkpoints. But which chunkservers actually hold a given chunk, the master deliberately does NOT persist — it asks every chunkserver at startup and then keeps it fresh via heartbeats.",
+    "q": "为什么 GFS 故意不持久化 chunk 的具体存放位置，而是每次靠问 chunkserver 重新拿？",
+    "q_en": "Why does GFS deliberately avoid persisting chunk locations, instead re-deriving them by asking chunkservers every time?",
+    "options": [
+      "因为 GFS 假设 chunkserver 几乎永不宕机、位置长期不变，持久化这份数据收益太小、不值得实现",
+      "因为位置信息更新太频繁，写盘开销会拖慢 master 其他操作，纯粹是性能优化，跟一致性无关",
+      "因为 chunkserver 对自己盘上有什么才有最终发言权，机器改名/盘坏会让 master 记录变成谎言",
+      "因为位置信息属于敏感数据，写进磁盘会带来额外的安全风险，GFS 只保留在内存里以减少暴露面"
+    ],
+    "options_en": [
+      "Because GFS assumes chunkservers almost never go down and locations barely change, so persisting this data isn't worth the effort.",
+      "Because location info changes too often and persisting it would slow the master's other work — pure performance optimization, unrelated to consistency.",
+      "Because chunkservers have final say on their own disks — renamed machines or dead disks make any persisted record a lie.",
+      "Because location info is sensitive, and writing it to disk creates extra security exposure, so GFS keeps it in memory only."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "chunkserver 对自己盘上有什么才有最终发言权，机器改名/盘坏都会让 master 持久化的记录变成谎言。能从权威源重新问出来的状态就不该持久化——这是 chunk 位置只靠心跳维护、不写操作日志的原因。",
+    "why_en": "Chunkservers are the final authority on their own disks, so state you can re-derive from them — like chunk locations — shouldn't be persisted at the master.",
+    "tags": [
+      "gfs",
+      "metadata",
+      "source-of-truth"
+    ],
+    "optionExplanations": [
+      "论文前提恰恰相反——机器故障是常态，chunkserver 随时可能下线/换盘，'位置几乎不变'的假设不成立。",
+      "写盘开销确实存在，但这不是 GFS 给的理由；它强调的是'谁的记录才算数'这个正确性问题，不是纯性能优化。",
+      "论文原句的逻辑：持久化一份可能过期的记录，不如每次问权威源；这也是可以搬到别的设计题里的通用原则。",
+      "论文完全没有把这归为安全考量；chunk 位置对 client 本来就要暴露（client 要问 master 拿位置去读数据）。"
+    ],
+    "optionExplanations_en": [
+      "The paper's premise is the opposite — machine failure is routine, chunkservers can go down or swap disks anytime, so 'locations barely change' doesn't hold.",
+      "Disk-write overhead is real, but that's not GFS's stated reason; the point is a correctness question of 'whose record counts', not raw performance.",
+      "Matches the paper's own logic: persisting a record that can go stale is worse than always asking the authoritative source — a principle transferable to other design questions.",
+      "The paper never frames this as security; chunk locations are already exposed to clients, since a client must ask the master for them to read data."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-014",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "record-append-consistency",
+    "scenario": "多个 client 并发对同一个 GFS 文件做 record append（只给数据不给 offset，offset 由 GFS 挑）。某次 primary 因为网络抖动重试了一次同一条记录的复制，导致这条记录在部分副本上出现了两份；还有的副本因为一次写没填满 chunk 剩余空间而被补了 padding。",
+    "scenario_en": "Multiple clients concurrently record-append to the same GFS file (clients hand over only data, GFS picks the offset). One record got replicated twice on some replicas because the primary retried after a network blip; other replicas got padding because a write didn't fill the remaining chunk space.",
+    "q": "面对重复记录和 padding，GFS 让谁来负责清理，用什么机制？",
+    "q_en": "Who is responsible for cleaning up duplicate records and padding, and how?",
+    "options": [
+      "GFS 内部负责：primary 对每条记录做全局去重，padding 在 compaction 时被自动清理",
+      "应用层负责：GFS 只保证 at-least-once；靠 checksum 丢 padding、靠 ID 去重",
+      "client 负责：写入前先加锁，用两阶段提交保证一条记录只成功一次，GFS 不提供去重保证",
+      "chunkserver 负责：每个副本各自比较收到的数据是否重复，发现重复就拒绝写入并报错给 primary"
+    ],
+    "options_en": [
+      "GFS internally: the primary globally dedups every record, and padding is auto-cleaned during compaction.",
+      "The application: GFS only guarantees at-least-once; readers use checksums to drop padding and unique IDs to dedup.",
+      "The client: it locks before writing and uses two-phase commit so a record succeeds exactly once, with no dedup from GFS.",
+      "The chunkserver: each replica compares incoming data for duplicates itself and rejects the write, returning failure to the primary."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "record append 只保证 at-least-once，不是恰好一次；GFS 把去重和丢 padding 都推给应用层——靠自带 checksum、唯一 ID，换来存储层不用为强一致买单。",
+    "why_en": "Record append only guarantees at-least-once, so GFS pushes dedup and padding cleanup onto the application via per-record checksums and IDs, not the storage layer.",
+    "whenOtherWins": "如果应用需要恰好一次且不能自己做去重，record append 这套'至少一次+应用兜底'的模型就不适用，得换成需要分布式锁/两阶段提交的强一致写路径——但那正是 GFS 想躲开的代价。",
+    "tradeoff": "存储层强一致 vs 应用层兜底：GFS 只给 at-least-once + 应用自己去重/丢弃碎片，换取避免分布式锁/两阶段提交的代价。",
+    "tags": [
+      "gfs",
+      "record-append",
+      "consistency-model"
+    ],
+    "termDefinitions": [
+      {
+        "term": "record append",
+        "meaning": "client 只提供数据、不指定 offset，由 GFS 自己选定写入位置并告知 client 的一种追加写接口。",
+        "meaningEn": "Record append is a GFS write API where the client supplies only data, not an offset; GFS picks the write position and reports it back."
+      },
+      {
+        "term": "atomically at least once",
+        "meaning": "GFS 对 record append 的保证：数据一定会被完整写入且不会被截断，但可能因为重试而写入不止一次。",
+        "meaningEn": "GFS's record-append guarantee: data is written atomically without being split, but a retry can cause it to be written more than once."
+      }
+    ],
+    "table": {
+      "headers": [
+        "模式",
+        "顺序写",
+        "并发写",
+        "去重/清理责任方"
+      ],
+      "rows": [
+        [
+          "Write（指定 offset）",
+          "defined",
+          "一致但undefined",
+          "应用层（GFS 不涉及）"
+        ],
+        [
+          "Record Append",
+          "defined+可能 padding",
+          "同左",
+          "应用层（checksum+唯一ID）"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "GFS 没有全局去重能力，primary 只按序复制数据，不检查语义重复；compaction 也不是 GFS 概念。",
+      "论文§2.7.2写了应用怎么配合：只追加不覆盖、记录带 checksum、记录带唯一 ID——这三条就是答案。",
+      "两阶段提交/加锁正是 GFS 想避开的代价，是它把一致性成本让给别人承担的原因，不是内部实现方式。",
+      "chunkserver 不做跨写入语义比较，只按 primary 指令落盘；重复与否是应用层靠 ID 判断的。"
+    ],
+    "optionExplanations_en": [
+      "GFS has no global dedup; the primary just replicates in order without checking semantic duplication; compaction isn't a GFS concept.",
+      "Matches §2.7.2's guidance: append-only, per-record checksums, per-record unique IDs — these three are the answer.",
+      "Two-phase commit/locking is exactly the cost GFS avoids — it pushes consistency cost elsewhere, not implements it internally.",
+      "Chunkservers don't do cross-write semantic comparison; they persist what the primary says. Duplication is judged by the app via IDs."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-015",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "mapreduce-intermediate-storage",
+    "scenario": "设计一个跑在 GFS 之上的 MapReduce：数据经过三段——用户原始输入、map 阶段产出的中间 KV、reduce 阶段的最终输出。三段要不要都统一存进 GFS？",
+    "scenario_en": "Designing a MapReduce that runs on top of GFS: data passes through three stages — the original input, the intermediate KV pairs produced by map, and the final reduce output. Should all three stages go into GFS uniformly?",
+    "q": "MapReduce 的输入放进了 GFS，最终输出也写回 GFS，但 map 阶段产出的中间文件为什么反而放在 worker 的本地磁盘，而不是同样写进 GFS？",
+    "q_en": "MapReduce's input and final output both live in GFS — so why does it deliberately keep the intermediate map output on each worker's local disk instead of also writing it to GFS?",
+    "options": [
+      "本地磁盘是为了跳过网络，实际上所有 reduce worker 都和对应 map worker 部署在同一台机器上",
+      "GFS 不支持小文件的高频写入，中间 KV 数据太小写不进去，只能退回本地磁盘作为唯一方案",
+      "中间数据必须保证强一致，而 GFS 的 record append 是松一致性模型，达不到正确性要求，只能绕开",
+      "中间数据只需同作业内的 reduce worker 通过 RPC 读一次；写本地盘省三副本开销，map 失败可直接重跑"
+    ],
+    "options_en": [
+      "Local disk exists to skip the network, because every reduce worker is co-located on the same machine as its map worker.",
+      "GFS doesn't support high-frequency small-file writes, and intermediate KV data is too small to write in, so local disk is the only fallback.",
+      "Intermediate data needs strong consistency, and GFS's record append is too loose to meet that bar, so it has to bypass GFS.",
+      "Intermediate data is only read once, by this job's own reduce workers over RPC; local disk skips GFS's replication cost, and a lost map task just reruns."
+    ],
+    "answer": [
+      3
+    ],
+    "why": "中间数据只服务同一个作业内的一次 RPC 读取，不需要跨作业持久化；写本地盘省掉三副本网络开销，map 任务丢了直接重跑，比为中间态在 GFS 上买持久性划算。",
+    "why_en": "Intermediate data is read once by this job's reduce workers, so it skips GFS's replication cost by living on local disk — a lost map task just gets rerun instead.",
+    "whenOtherWins": "如果中间结果需要跨作业复用、或者需要在 map worker 故障后不重跑就能恢复，就该像最终输出一样写进 GFS 换持久性——但 MapReduce 认定'重跑'更便宜，选择不这么做。",
+    "tradeoff": "持久性 vs 写入成本：中间态选本地盘换掉三副本开销，用'失败就重跑'兜底而不是用复制兜底。",
+    "tags": [
+      "mapreduce",
+      "gfs",
+      "intermediate-data"
+    ],
+    "table": {
+      "headers": [
+        "存储位置",
+        "持久性",
+        "写路径开销",
+        "故障恢复"
+      ],
+      "rows": [
+        [
+          "GFS（输入/输出）",
+          "3 副本持久",
+          "经副本网络写",
+          "无需重跑，读旧数据"
+        ],
+        [
+          "worker 本地盘（中间态）",
+          "单副本，可能丢",
+          "本地写，无网络开销",
+          "丢了就重跑 map 任务"
+        ]
+      ]
+    },
+    "optionExplanations": [
+      "reduce worker 是通过网络 RPC 去 map worker 本地盘拉数据的，两者不保证同机部署，与论文机制不符。",
+      "GFS 对文件数量/大小没有这类硬限制，中间 KV 文件通常按分区聚合；这不是 GFS 写不进去的问题。",
+      "中间数据只有一次顺序读（批量拉取+排序），不涉及并发写，用不上 record append 的松一致性场景。",
+      "中间态生命周期短、读者单一、可通过重跑恢复，这三条让本地盘+重跑比 GFS 三副本更省成本，是真正的答案。"
+    ],
+    "optionExplanations_en": [
+      "Reduce workers pull data from map workers' local disks over network RPC; the two aren't co-located, contradicting this option.",
+      "GFS has no such hard limit; intermediate KV files are usually aggregated by partition. Not about GFS refusing the writes.",
+      "Intermediate data is read once sequentially, with no concurrent writes, so record append's loose-consistency scenario never applies here.",
+      "Short lifespan, a single reader, recoverable via rerun — these three make local disk plus rerun cheaper than GFS triple replication."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-016",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "data-locality-scheduling",
+    "scenario": "MapReduce 要把一个大文件切成很多份（split）分给 map worker。GFS 已经把这个文件按 64MB 一块存了 3 份副本，master 知道每份副本具体在哪几台机器上。调度器要决定：每个 split 该切多大、任务该派到哪台机器。",
+    "scenario_en": "MapReduce splits a large file into pieces for map workers. GFS already stores that file in 64MB chunks with 3 replicas each, and the GFS master knows exactly which machines hold which replica. The scheduler must decide how big each split should be and which machine to send each task to.",
+    "q": "MapReduce 的调度器为什么优先把 map 任务派到已经持有那份数据副本的机器上，而且要求 split 大小不能超过 GFS 的 chunk 大小？",
+    "q_en": "Why does MapReduce's scheduler prefer to place a map task on a machine that already holds a replica of that data, and why must the split size stay at or below the GFS chunk size?",
+    "options": [
+      "让计算去找数据：master 知道副本位置，调度器优先选本地机器；split 比 chunk 大就可能跨机器，红利作废",
+      "纯粹是为了负载均衡：优先派到持有数据的机器只为让工作量更平均，跟省带宽无关；限制大小是为让运行时间接近",
+      "因为 GFS 的 client 只能读本机数据，跨机器读取在协议层面完全不被支持，调度只能就地取材没有优化空间",
+      "因为 reduce 阶段需要严格机器亲和性，把 map 和 reduce 任务预先绑定到同一批机器上，split 大小只为让绑定更整齐"
+    ],
+    "options_en": [
+      "Moving computation to data: the master knows each replica's location, so the scheduler picks a local machine; a split bigger than the chunk can span machines and kill the benefit.",
+      "Purely load balancing: preferring data-holding machines is just about evening out workload, unrelated to bandwidth; the size limit keeps runtimes similar.",
+      "Because a GFS client can only read data on its own machine — cross-machine reads aren't supported at all at the protocol level, leaving no room to optimize.",
+      "Because the reduce stage needs strict machine affinity, pre-binding map and reduce tasks to the same machines; split size just keeps that binding tidy."
+    ],
+    "answer": [
+      0
+    ],
+    "why": "GFS 暴露 chunk 位置，调度器就能'搬计算不搬数据'；split 大小卡在 chunk 大小之内，才能保证一个 split 完整落在一台机器上，切得比 chunk 大就跨机器，局部性直接失效。",
+    "why_en": "GFS exposes chunk locations, so the scheduler moves computation to data; splits must stay within one chunk or they span machines and lose locality.",
+    "whenOtherWins": "如果数据本来就不是按'副本位置可查询'的方式存放（比如没有位置元数据的对象存储），局部性调度就没有信息可用，退化成随机调度——这时候只能靠堆带宽硬扛。",
+    "tradeoff": "本地读 vs 跨网络读：split 不超过 chunk 大小换取'计算就地跑'的红利，代价是切分粒度被 GFS 块大小锁死。",
+    "tags": [
+      "mapreduce",
+      "data-locality",
+      "scheduling"
+    ],
+    "optionExplanations": [
+      "对应论文§3.4：大规模作业里大部分输入是本地读，前提正是 split 不超过 chunk 大小，否则读的时候还是要走网络。",
+      "负载均衡是另一个独立目标（用 idle worker 抢任务），不是局部性调度的动机；两者可以同时存在但原因不同。",
+      "GFS 的 client 本来就能跨机器读任意 chunkserver；'就地取材'是省网络的优化选择，不是协议限制。",
+      "reduce worker 是通过网络 RPC 去 map worker 本地盘拉数据的，不要求提前绑定到同一批机器，与论文机制不符。"
+    ],
+    "optionExplanations_en": [
+      "Matches §3.4: for large jobs, most input is read locally — but only if splits don't exceed chunk size, otherwise it still needs the network.",
+      "Load balancing is a separate goal (idle workers grabbing tasks), not the motive for locality scheduling; the two coexist for different reasons.",
+      "GFS clients can already read any chunkserver across the network; 'staying local' is a bandwidth optimization, not a protocol limit.",
+      "Reduce workers pull data from map workers' local disks over network RPC; they aren't pre-bound to the same machines, contradicting this option."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-017",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "worker-failure",
+    "scenario": "一个 map worker 已经完成任务、把中间结果写进本地盘的私有临时文件后，这台机器突然宕机。",
+    "scenario_en": "A map worker has already finished its task and written intermediate output to private temp files on local disk, then the machine crashes.",
+    "q": "master 该怎么处理这个已完成的 map 任务？",
+    "q_en": "How should the master handle this already-completed map task?",
+    "options": [
+      "重新调度到别的机器重跑：中间输出只在这台机器本地盘上，机器不可达数据就没了",
+      "什么都不做：任务状态已经是 completed，不会因为机器宕机而改变",
+      "只有当对应的 reduce 任务还没来得及读取这份数据时，才需要重新调度",
+      "标记为 completed，让 reduce 直接去 GFS 读它的中间输出文件"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "Reschedule it on another machine — the intermediate output sits only on that machine's local disk, so it's gone once the machine is unreachable.",
+      "Do nothing — the task is already marked completed, and machine failure doesn't change that state.",
+      "Only reschedule it if the downstream reduce task hasn't read that data yet.",
+      "Keep it marked completed and have reduce read the intermediate output straight from GFS."
+    ],
+    "why": "map 中间输出只写在执行它那台机器的本地盘，机器不可达输出就跟着丢，所以完成的 map 任务也要重置成 idle 重跑；reduce 输出已经进了 GFS，不受单机故障影响。",
+    "why_en": "Map output lives only on the worker's local disk, so a dead machine makes it unreachable and even a completed map task must be rescheduled — reduce output is already durable in GFS.",
+    "tags": [
+      "mapreduce",
+      "fault-tolerance",
+      "worker-failure"
+    ],
+    "diagram": "stateDiagram-v2\n  [*] --> idle\n  idle --> in_progress: master 分配\n  in_progress --> completed: worker 上报完成\n  completed --> idle: worker 宕机（仅 map 需要）\n  idle --> [*]",
+    "termDefinitions": [
+      {
+        "term": "master",
+        "meaning": "MapReduce 集群里负责调度任务、跟踪每个 worker 和任务状态的协调节点。",
+        "meaningEn": "The master is the coordinator process that schedules tasks and tracks worker and task state."
+      },
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "MapReduce 依赖的底层分布式文件系统，reduce 的最终输出写在这里，具备跨机器持久性。",
+        "meaningEn": "GFS, the Google File System, is the durable distributed storage layer where reduce output is written."
+      },
+      {
+        "term": "idle",
+        "meaning": "任务调度状态之一：还没被分配给任何 worker，可以被重新指派。",
+        "meaningEn": "Idle is a task scheduling state meaning the task isn't assigned to any worker and can be scheduled again."
+      }
+    ],
+    "optionExplanations": [
+      "论文原文：map 中间输出在本地盘，机器不可达就等于输出丢了，所以必须重置成 idle 重跑。",
+      "completed 只是执行时的记录状态，不代表数据依然可读；机器一挂这个前提就不成立了。",
+      "论文按机器是否可达判断要不要重跑，不看下游有没有读过——机器已经死了，这条件不成立。",
+      "map 中间输出从没进过 GFS，只有 reduce 最终输出才写进 GFS，这里把两者搞反了。"
+    ],
+    "optionExplanations_en": [
+      "The paper's actual rule: map output lives on local disk, so an unreachable machine means lost output — the task resets to idle and reruns.",
+      "Completed only records a past state, not that the data is still readable; the machine dying breaks that assumption.",
+      "The paper's test is machine reachability, not downstream read progress — the machine is dead, so this condition doesn't hold.",
+      "Map's intermediate output never goes to GFS; only reduce's final output does — this option swaps the two."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-018",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "master-failure",
+    "scenario": "MapReduce 论文里 master 是单点：全局只有一个进程持有任务调度状态和中间文件位置这些数据结构。",
+    "scenario_en": "In the MapReduce paper the master is a single point of coordination holding task state and intermediate-file locations.",
+    "q": "master 进程本身挂了，论文的实现实际怎么处理？",
+    "q_en": "When the master process itself dies, what does the paper's implementation actually do?",
+    "options": [
+      "从最近一次 checkpoint 恢复一个新的 master 进程，自动接着跑",
+      "由存活的 worker 们投票选出新 master，继续原来的调度状态",
+      "直接 abort 整个作业，交给 client 决定要不要重新发起",
+      "把 master 状态复制到每个 worker，任何一个 worker 都能顶上"
+    ],
+    "answer": [
+      2
+    ],
+    "options_en": [
+      "Restore a new master process from the most recent checkpoint and resume automatically.",
+      "Have the surviving workers vote to elect a new master that continues the same scheduling state.",
+      "Abort the whole MapReduce job and let the client decide whether to resubmit.",
+      "Replicate master state to every worker so any one of them can take over."
+    ],
+    "why": "论文说 checkpoint 恢复技术上容易做，但因为只有一个 master、挂的概率低，当前实现直接 abort 整个作业，让 client 自行重试。",
+    "why_en": "The paper notes checkpoint recovery would be easy to build, but with only one master and a low failure rate, the shipped implementation just aborts the job and leaves retry to the client.",
+    "tradeoff": "工程实现代价 vs 单点故障恢复：省掉 checkpoint/选主的复杂度，赌的是 master 故障概率够低。",
+    "whenOtherWins": "如果作业运行时间以小时/天计、或集群规模大到 master 故障不再是小概率事件，checkpoint 恢复省下的重跑成本就值得。",
+    "tags": [
+      "mapreduce",
+      "fault-tolerance",
+      "master-failure"
+    ],
+    "termDefinitions": [
+      {
+        "term": "master",
+        "meaning": "MapReduce 里唯一的协调节点，持有任务调度状态；论文里它是单点，没有备份。",
+        "meaningEn": "The master is MapReduce's single coordinating process holding scheduling state; the paper leaves it as an unreplicated single point."
+      },
+      {
+        "term": "checkpoint",
+        "meaning": "把进程内存状态定期落盘的快照，用于故障后从快照恢复而不是从头重来。",
+        "meaningEn": "A checkpoint is a periodic on-disk snapshot of process state used to resume after a failure instead of starting over."
+      }
+    ],
+    "optionExplanations": [
+      "论文承认这条路'容易实现'，但当前实现没有采用，只是提到了可行性。",
+      "论文的容错模型只处理 worker 故障，master 从设计上是单点，没有选主协议这条路径。",
+      "论文实际选择：master 死了就当作作业失败，交给 client 自行决定是否重新提交。",
+      "master 状态是调度用的中心状态，全量复制到每个 worker 既不现实也不在论文设计内。"
+    ],
+    "optionExplanations_en": [
+      "The paper admits this path is 'easy to implement' but the shipped implementation never built it — only noted as a possibility.",
+      "The paper's fault-tolerance model only covers worker failures; the master is deliberately a single point with no leader-election protocol.",
+      "The paper's actual choice: master death means job failure, and the client decides on its own whether to resubmit.",
+      "Master state is centralized scheduling state; replicating it to every worker is neither practical nor part of the paper's design."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-019",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "atomic-commit",
+    "scenario": "同一个 reduce 任务因为 straggler 或故障被 backup/重执行机制在两台机器上各跑了一遍，两边都完整跑完并各自尝试提交输出。",
+    "scenario_en": "The same reduce task ends up run to completion on two different machines at once (backup task or re-execution), and both try to commit their output.",
+    "q": "论文靠什么机制保证最终输出文件不会被两份执行结果污染？",
+    "q_en": "What mechanism guarantees the final output file reflects only one of the two executions, not a mix?",
+    "options": [
+      "master 给两个执行加分布式锁，串行化它们对最终文件的写入",
+      "每个 worker 先写私有临时文件，完成后靠文件系统的原子 rename 落到最终文件名",
+      "两个 worker 各自算出的输出内容做二进制 diff，取更晚完成的那份",
+      "reduce 任务开始前先向 master 申请一个全局递增的提交编号，编号大的覆盖编号小的"
+    ],
+    "answer": [
+      1
+    ],
+    "options_en": [
+      "The master puts a distributed lock on both executions, serializing their writes to the final file.",
+      "Each worker writes to a private temp file first, then commits via the filesystem's atomic rename to the final name.",
+      "Diff the two workers' output content in binary and keep whichever finished later.",
+      "Before running, reduce requests a globally increasing submission number from the master, and the higher number overwrites the lower."
+    ],
+    "why": "map/reduce 任务都先把结果写到私有临时文件，完成时原子 rename 到最终文件名；两次执行各自 rename，文件系统只让其中一次生效。",
+    "why_en": "Both map and reduce write to private temp files and atomically rename to the final name on completion, so if two executions both try to commit, only one rename takes effect.",
+    "tags": [
+      "mapreduce",
+      "fault-tolerance",
+      "atomic-commit"
+    ],
+    "termDefinitions": [
+      {
+        "term": "rename",
+        "meaning": "文件系统提供的原子改名操作：临时文件改名为最终文件名这一步不可分割，不会出现改了一半的中间状态。",
+        "meaningEn": "Rename is an atomic filesystem operation — renaming a temp file to its final name cannot be observed half-done."
+      },
+      {
+        "term": "private temp file",
+        "meaning": "任务执行期间写往的、只属于这次执行自己的临时输出文件，完成前外部不可见。",
+        "meaningEn": "A private temp file is an in-progress task's own scratch output file, invisible to anyone else until it commits."
+      }
+    ],
+    "optionExplanations": [
+      "分布式锁需要额外协调服务和往返延迟，论文没有引入这一层机制。",
+      "论文原文机制：private temp file + atomic rename，靠底层文件系统原子性，不需要额外协调。",
+      "diff 两份输出既昂贵又没意义——确定性函数下两次执行内容理论上应该完全一致。",
+      "论文没有提交编号机制，重复执行的胜负完全交给文件系统的原子操作，不靠应用层判断。"
+    ],
+    "optionExplanations_en": [
+      "Distributed locking needs a coordination service and round trips the paper never introduces.",
+      "The paper's actual mechanism: private temp file plus atomic rename, relying on filesystem atomicity with no extra coordination.",
+      "Diffing two outputs is expensive and pointless — under deterministic functions the two executions should match anyway.",
+      "The paper has no submission-numbering scheme; which execution wins is left entirely to the filesystem's atomic rename."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-020",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "determinism-semantics",
+    "scenario": "一个 reduce 任务依赖的某个 map 任务被重跑过（比如 map worker 中途失败），reduce 最终读到的是重跑后那份 map 输出。",
+    "scenario_en": "A reduce task ends up reading the output of a map task that got re-executed after a worker failure.",
+    "q": "只要 map/reduce 函数是确定性的，这会让结果偏离无故障顺序执行吗？",
+    "q_en": "If the map/reduce functions are deterministic, does reading the re-executed map output cause the result to diverge from a fault-free sequential run?",
+    "options": [
+      "会偏离——两次执行处理的是同一个输入切片，但机器不同，处理顺序会变",
+      "会偏离——除非两次 map 执行都被同一台机器完成，等价性才成立",
+      "不确定——还要看 reduce 有没有对重复的中间数据做去重",
+      "不会偏离——函数确定性 + 原子提交，结果等价于无故障顺序执行整个程序"
+    ],
+    "answer": [
+      3
+    ],
+    "options_en": [
+      "Yes it diverges — the two executions process the same input split but on different machines, so processing order changes.",
+      "Yes it diverges — unless both map executions happen to run on the same machine, equivalence doesn't hold.",
+      "It depends — on whether reduce deduplicates the repeated intermediate data.",
+      "No divergence — as long as the function is deterministic and output goes through atomic commit, the result equals a fault-free sequential run."
+    ],
+    "why": "确定性函数下，无论 map 被重跑几次，只要有且只有一次原子提交生效，reduce 读到的内容和顺序执行时完全一样，输出天然等价。",
+    "why_en": "With deterministic functions, no matter how many reruns happen, only one atomic commit ever takes effect, so what reduce reads matches exactly what a fault-free sequential run would produce.",
+    "tags": [
+      "mapreduce",
+      "fault-tolerance",
+      "semantics"
+    ],
+    "termDefinitions": [
+      {
+        "term": "确定性函数",
+        "meaning": "给定相同输入，任何时候、任何机器执行都产生完全相同输出的函数。",
+        "meaningEn": "A deterministic function always produces exactly the same output for the same input, regardless of when or where it runs."
+      }
+    ],
+    "optionExplanations": [
+      "确定性函数的输出只依赖输入内容，不依赖执行它的机器，换机器不会改变结果。",
+      "论文强调的是'恰好一次提交生效'而不是'恰好一台机器'，这里把等价性错误地绑定到了机器同一性。",
+      "去重解决的是重复计数这类副作用问题，属于另一层关注点，不是这条等价性成立的前提。",
+      "论文原话：确定性函数 + 分布式实现 = 输出等价于整个程序的一次无故障顺序执行。"
+    ],
+    "optionExplanations_en": [
+      "A deterministic function's output depends only on input content, not on which machine ran it, so switching machines changes nothing.",
+      "The paper's guarantee rests on exactly-one-commit-takes-effect, not same-machine — this wrongly ties equivalence to machine identity.",
+      "Deduping addresses double-counted side effects, a separate concern, not a precondition for this equivalence.",
+      "The paper's actual claim: deterministic functions plus the distributed implementation equal one fault-free sequential run of the whole program."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-021",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "nondeterministic-semantics",
+    "scenario": "map 任务 M 因故障被非确定性地重跑过一次，两次执行产出的中间结果不完全一样；reduce 任务 R1 提交时读到第一次执行的输出，R2 提交时读到第二次执行的输出。",
+    "scenario_en": "Map task M is re-executed non-deterministically after a failure, so its two runs produce slightly different intermediate output. Reduce task R1 commits having read the first run's output, while R2 commits having read the second run's output.",
+    "q": "这种情况下，论文承诺的语义保证到什么程度？",
+    "q_en": "In this situation, how strong is the semantic guarantee the paper actually makes?",
+    "options": [
+      "R1、R2 各自等价于某次顺序执行的结果，但不保证是同一次",
+      "整个作业的输出仍然等价于某一次完整的顺序执行，只是这次顺序执行是随机选的",
+      "语义保证完全失效，非确定性函数下的输出被论文当作未定义行为处理",
+      "只要两次 map 执行都提交成功，R1 和 R2 最终会被强制同步成读同一份 M 的输出"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "R1's output matches some sequential execution and R2's output matches another sequential execution — but not necessarily the same one.",
+      "The whole job's output still equals one complete sequential execution, just a randomly chosen one.",
+      "The semantic guarantee collapses entirely; the paper treats non-deterministic output as undefined behavior.",
+      "As long as both map executions commit successfully, R1 and R2 are eventually forced to synchronize on reading the same run of M."
+    ],
+    "why": "非确定性下语义变弱：e(R1) 可能读到 M 的第一次执行，e(R2) 可能读到 M 的另一次执行，两个 reduce 各自等价于某次顺序执行，但整体不再对应同一次全局顺序执行。",
+    "why_en": "Under non-determinism the guarantee weakens: e(R1) may have read one run of M while e(R2) read a different run, so the job no longer corresponds to one single global sequential execution.",
+    "tags": [
+      "mapreduce",
+      "fault-tolerance",
+      "semantics"
+    ],
+    "termDefinitions": [
+      {
+        "term": "e(Ri)",
+        "meaning": "论文记号：reduce 任务 Ri 最终被提交（committed）的那一次执行——保证恰好存在一次。",
+        "meaningEn": "The paper's notation for the one execution of reduce task Ri that ends up committed — exactly one such execution exists."
+      }
+    ],
+    "optionExplanations": [
+      "论文原话给的正是这条'弱语义'：每个 reduce 任务各自等价于某次顺序执行，但彼此不保证一致。",
+      "这是确定性场景才有的更强保证——非确定性下不存在唯一一次'代表全局'的顺序执行。",
+      "论文明确说是'weaker but still reasonable'，不是撒手不管的未定义行为。",
+      "论文没有为非确定性函数做跨 reduce 任务的强制同步，那需要额外协调机制，论文里没有。"
+    ],
+    "optionExplanations_en": [
+      "This is exactly the paper's stated weaker semantics: each reduce task individually matches some sequential execution, but they aren't guaranteed to agree.",
+      "That stronger guarantee only holds for deterministic functions — under non-determinism there's no single sequential execution representing the job.",
+      "The paper explicitly calls this 'weaker but still reasonable,' not undefined behavior.",
+      "The paper builds no cross-task synchronization for non-deterministic functions — that would need extra coordination it never adds."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-022",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "stragglers",
+    "scenario": "一个大型 MapReduce 作业接近尾声，绝大多数 map/reduce 任务都完成了，只剩几个任务迟迟不结束，把整个作业的完成时间往后拖。",
+    "scenario_en": "A large MapReduce job is almost done — nearly all map/reduce tasks have finished, but a handful of tasks keep dragging on, delaying the whole job.",
+    "q": "论文把这种拖慢整体完成时间的少数任务叫什么，典型成因是什么？",
+    "q_en": "What does the paper call this handful of tasks that delay overall completion, and what typically causes it?",
+    "options": [
+      "hot partition；成因是 hash 分区不均，某个 reduce task 分到的 key 比别人多几个数量级",
+      "zombie task；成因是任务提交了但 master 没收到完成消息，一直占着调度槽位",
+      "straggler；成因五花八门，比如坏盘让读速从 30MB/s 掉到 1MB/s",
+      "split skew；成因是 map 阶段输入切片大小不均，某个 split 天生比别人大"
+    ],
+    "answer": [
+      2
+    ],
+    "options_en": [
+      "Hot partition — caused by uneven hashing, where one reduce task gets orders of magnitude more keys than others.",
+      "Zombie task — caused by a completion message the master never received, so the task keeps occupying a scheduling slot.",
+      "Straggler — caused by all kinds of things, like a bad disk dropping read speed from 30MB/s to 1MB/s.",
+      "Split skew — caused by uneven input split sizes in the map phase, where one split is inherently larger than others."
+    ],
+    "why": "论文把这类'个别任务异常慢、拖长整体时间'的现象叫 straggler：坏盘让读取从 30MB/s 掉到 1MB/s，或初始化 bug 关掉 CPU cache 让计算慢了一百多倍。",
+    "why_en": "The paper calls this a straggler — a machine unusually slow to finish, from causes like a bad disk (30MB/s dropping to 1MB/s) to a cache-disabling init bug that slowed computation over 100x.",
+    "tags": [
+      "mapreduce",
+      "stragglers",
+      "performance"
+    ],
+    "termDefinitions": [
+      {
+        "term": "straggler",
+        "meaning": "接近作业尾声时，个别任务异常地比其他任务慢很多，拖长整体完成时间。",
+        "meaningEn": "A straggler is a task that takes unusually long near the end of a job, dragging out the overall completion time."
+      }
+    ],
+    "optionExplanations": [
+      "hot partition 是分区倾斜问题，属于数据分布层面，和个别机器变慢是两个不同现象。",
+      "论文没有 zombie task 这个概念；完成消息丢失走的是 master 超时重调度这条路，不是这个说法。",
+      "论文 §3.6 原词：straggler 指个别机器在运行时异常变慢，不是设计上注定的不均衡。",
+      "split 偏大导致的慢是可预期的，通过增大 M 能提前缓解，论文用 straggler 特指运行时才出现的异常慢。"
+    ],
+    "optionExplanations_en": [
+      "Hot partition is a data-skew problem, a different phenomenon from one machine slowing down at runtime.",
+      "The paper has no 'zombie task' concept; a lost completion message is handled by the master's ping-timeout reschedule, a separate path.",
+      "The paper's own §3.6 term: a straggler is a machine that turns out abnormally slow at runtime, not a design-time imbalance.",
+      "Slowness from an oversized split is predictable and can be pre-mitigated by increasing M; straggler is reserved for runtime, unpredictable slowness."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-023",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "backup-tasks",
+    "scenario": "针对 straggler，master 在作业接近完成时给还在跑的少数任务再派一份备份执行，谁先完成算谁的；论文测过关掉这个机制的效果。",
+    "scenario_en": "As a straggler mitigation, the master launches a backup execution of each remaining task once the job is nearly done, and whichever finishes first counts; the paper measured what happens when this mechanism is disabled.",
+    "q": "关掉 backup task 机制后，sort benchmark 的完成时间发生了什么变化？",
+    "q_en": "When the backup task mechanism was disabled, what happened to the sort benchmark's completion time?",
+    "options": [
+      "慢了 44%，但只影响 map 阶段，reduce 阶段完成时间不受影响",
+      "慢了 44%（891 秒→约 1283 秒），少数 straggler 拖慢了收尾",
+      "只慢了不到 5%，backup task 更多是理论上的优化，实际收益相当有限",
+      "反而更快，因为省下了 backup task 占用的额外计算资源"
+    ],
+    "answer": [
+      1
+    ],
+    "options_en": [
+      "44% slower, but only in the map phase — reduce-phase completion time is unaffected.",
+      "44% slower (891 seconds becomes roughly 1283) — a handful of stragglers drag out the tail.",
+      "Under 5% slower — backup tasks are more of a theoretical optimization with limited real payoff.",
+      "Actually faster, because disabling backup tasks frees up the extra compute they were using."
+    ],
+    "why": "论文用 sort benchmark 做对照：关掉 backup task，891 秒变成约 1283 秒（慢 44%）；backup task 平时只多花几个百分点资源，收尾阶段的少数慢任务才是长尾的真正代价。",
+    "why_en": "The paper's sort-benchmark control shows disabling backup tasks makes it about 44% slower — 891 seconds becomes roughly 1283 — while backup tasks themselves normally cost only a few percent more resources.",
+    "tags": [
+      "mapreduce",
+      "stragglers",
+      "backup-tasks"
+    ],
+    "diagram": "flowchart LR\n  A[作业接近完成] --> B{还有任务在跑?}\n  B -- 是 --> C[master 派 backup 执行]\n  C --> D{primary 还是 backup 先完成?}\n  D --> E[先完成的算数，另一份丢弃]",
+    "termDefinitions": [
+      {
+        "term": "backup task",
+        "meaning": "作业接近完成时，master 给仍在跑的任务再派一份备份执行，谁先完成算谁的，用来治 straggler。",
+        "meaningEn": "A backup task is a duplicate execution the master launches for a still-running task near job completion, to counter stragglers — whichever copy finishes first wins."
+      }
+    ],
+    "optionExplanations": [
+      "论文给的是端到端完成时间，没有按阶段拆开这个百分比，这里过度解读了。",
+      "论文 §3.6 原文数据：sort 禁用 backup task 后完成时间变长 44%（891s → 约 1283s）。",
+      "论文实测是 44%，不是个位数百分比，backup task 在长尾场景下收益相当显著。",
+      "backup task 调过参数后只多占几个百分点资源，省下这点资源换不来收尾变快，论文实测正相反。"
+    ],
+    "optionExplanations_en": [
+      "The paper reports end-to-end completion time with no phase breakdown — this over-reads the data.",
+      "The paper's own §3.6 number: disabling backup tasks on sort makes completion 44% slower (891s to roughly 1283s).",
+      "The measured effect is 44%, not single digits — backup tasks pay off substantially in the long-tail case.",
+      "Once tuned, backup tasks cost only a few percent more resources; skipping that saving doesn't buy a faster finish — the paper's measurement says the opposite."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-024",
+    "format": "mcq",
+    "atomType": "number",
+    "topic": "system-design",
+    "sub": "scale-numbers",
+    "scenario": "论文用两个跑在约 1800 台机器集群上的基准程序衡量 MapReduce 的规模能力：grep 在 10^10 条 100 字节记录（约 1TB）里找一个罕见的 3 字符模式；sort 把同样约 1TB 数据排序，用户代码不到 50 行。",
+    "scenario_en": "The paper benchmarks MapReduce's scale on a ~1800-machine cluster with two programs: grep searches a rare 3-character pattern across 10^10 100-byte records (~1TB); sort sorts the same ~1TB using fewer than 50 lines of user code.",
+    "q": "这两个基准分别用多大的 M 和大致多快跑完？",
+    "q_en": "At what M (split count) and roughly how fast do these two benchmarks actually run?",
+    "options": [
+      "grep：M=1500，约 15 秒；sort：M=1500，89 秒——量级比论文实际数字小了一个数量级",
+      "grep：M=15000，约 1500 秒；sort：M=15000，8910 秒——处理 1TB 都要跑上数小时",
+      "grep：M=150，约 150 秒；sort：M=150，891 秒——切片数只看机器数，跟数据量无关",
+      "grep：M=15000，约 150 秒；sort：M=15000，891 秒——上万 split 并行处理 1TB"
+    ],
+    "answer": [
+      3
+    ],
+    "options_en": [
+      "grep: M=1500, ~15s; sort: M=1500, 89s — an order of magnitude smaller than the paper's real numbers.",
+      "grep: M=15000, ~1500s; sort: M=15000, 8910s — processing ~1TB takes hours either way.",
+      "grep: M=150, ~150s; sort: M=150, 891s — split count depends only on machine count, not data size.",
+      "grep: M=15000, ~150s; sort: M=15000, 891s — tens of thousands of splits process 1TB in parallel."
+    ],
+    "why": "grep 和 sort 都把约 1TB 数据切成 M=15000 份，在约 1800 台机器上并行跑；grep 约 150 秒（含约 1 分钟启动开销），sort 891 秒、代码不到 50 行。",
+    "why_en": "Grep and sort both split ~1TB into M=15000 pieces on ~1800 machines — grep finishes in ~150s (incl. ~1 min startup), sort in 891s with under 50 lines of code.",
+    "tags": [
+      "mapreduce",
+      "scale",
+      "benchmark"
+    ],
+    "termDefinitions": [
+      {
+        "term": "split",
+        "meaning": "MapReduce 把输入文件切成的处理单元，通常 16-64MB 一片，对应一个 map 任务。",
+        "meaningEn": "A split is the input chunk, typically 16-64MB, that one map task processes."
+      },
+      {
+        "term": "M",
+        "meaning": "论文记号：map 任务的总数量，即输入被切成多少个 split。",
+        "meaningEn": "M is the paper's notation for the total number of map tasks, i.e. how many splits the input is cut into."
+      }
+    ],
+    "optionExplanations": [
+      "把真实数字缩小十倍会低估 MapReduce 的规模能力，记错这个锚点会在面试里报错数量级。",
+      "把耗时夸大十倍会让人误以为大规模批处理天然要跑数小时，掩盖了框架把 1TB 压到几分钟的价值。",
+      "split 数量由数据量和 16-64MB 的切片大小共同决定，不是只看机器数，这条因果关系搞反了。",
+      "真实量级：M=15000（约 1TB / 64MB），150-900 秒级完成——这是评估批处理框架吞吐的锚点数字。"
+    ],
+    "optionExplanations_en": [
+      "Shrinking the real numbers by 10x underrates MapReduce's actual scale, and misremembering this anchor mis-states the order of magnitude in an interview.",
+      "Inflating the time by 10x wrongly implies large batch jobs inherently take hours, hiding the framework's real value of compressing 1TB into minutes.",
+      "Split count is driven jointly by data size and the 16-64MB piece size, not machine count alone — this option inverts that causality.",
+      "The real scale: M=15000 (~1TB / 64MB), completing in the 150-900 second range — the anchor number for judging a batch framework's throughput."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-025",
+    "format": "mcq",
+    "atomType": "fact",
+    "topic": "system-design",
+    "sub": "counters",
+    "scenario": "用户想在一次大规模 MapReduce 作业跑完后，确认输出的 key/value 对数量、处理过的德语文档比例这类统计信息，而不是去翻日志人工数。",
+    "scenario_en": "A user wants to confirm stats like how many output key/value pairs there are, or what fraction of documents were German, after a large MapReduce job, without manually digging through logs.",
+    "q": "论文的 counter 机制怎么统计这些数字，又怎么避免重复计数？",
+    "q_en": "How does the paper's counter facility gather these numbers, and how does it avoid double-counting?",
+    "options": [
+      "counter 让用户代码在 map/reduce 里计数，随心跳上报给 master 聚合并去重",
+      "counter 是每个 worker 本地的调试日志开关，跟统计业务指标无关，也不会被 master 汇总",
+      "counter 由用户在作业开始前预先声明数值上限，作业运行中不能动态累加",
+      "counter 只统计 master 自己的调度事件（比如任务重试次数），不能被用户代码自定义"
+    ],
+    "answer": [
+      0
+    ],
+    "options_en": [
+      "User code increments named counters inside map/reduce, reported to the master via the ping heartbeat and aggregated there with duplicates removed.",
+      "A counter is a local debug-log switch on each worker, unrelated to business metrics and never aggregated by the master.",
+      "A counter's numeric ceiling must be declared before the job starts, and it can't be incremented dynamically at runtime.",
+      "Counters only track the master's own scheduling events, like retry counts, and can't be defined by user code."
+    ],
+    "why": "counter 由用户代码在 map/reduce 里累加，随心跳周期性上报给 master 聚合；master 会剔除 backup task 和重执行造成的重复计数，常用来校验输入输出条数是否对得上。",
+    "why_en": "Counters are user tallies incremented inside map/reduce and periodically reported to the master, which dedupes counts from backup tasks and re-executions — handy for sanity-checking input/output counts.",
+    "tags": [
+      "mapreduce",
+      "counters",
+      "observability"
+    ],
+    "termDefinitions": [
+      {
+        "term": "counter",
+        "meaning": "用户在 map/reduce 代码里自定义并累加的命名计数器，随心跳上报、由 master 聚合并去重。",
+        "meaningEn": "A counter is a user-named tally incremented inside map/reduce, reported via the ping heartbeat, and aggregated with duplicates removed by the master."
+      },
+      {
+        "term": "ping",
+        "meaning": "master 定期探测 worker 是否存活的心跳机制，counter 值也顺路搭在这个心跳响应里上报。",
+        "meaningEn": "Ping is the master's periodic liveness heartbeat to each worker; counter values are piggybacked on the heartbeat response."
+      }
+    ],
+    "optionExplanations": [
+      "论文 §4.9 原文机制：用户建 named counter、在 map/reduce 里 Increment()，master 周期性聚合并去重。",
+      "论文里 counter 明确是提供给用户代码的统计设施，且会被上报聚合，不是本地调试开关（那是 §4.7 的本地执行模式）。",
+      "counter 没有预设上限，就是一个运行时不断累加的计数值，用户不需要提前声明范围。",
+      "论文举的例子（大写单词数、德语文档数）都是用户自定义事件，不限于 master 自身的调度事件。"
+    ],
+    "optionExplanations_en": [
+      "The paper's §4.9 mechanism: user code creates a named counter, calls Increment() in map/reduce, and the master periodically aggregates and dedupes it.",
+      "Counters are explicitly a user-code statistics facility that gets reported and aggregated, not a local debug switch (that's the §4.7 local-execution mode).",
+      "There's no preset cap on a counter — it's just a value incremented at runtime with no range declared upfront.",
+      "The paper's own examples (capitalized-word count, German-document count) are user-defined events, not limited to the master's scheduling events."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-026",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lineage-sstable",
+    "scenario": "MapReduce 论文保证同一 partition 内中间 key 按递增顺序处理，并说这个有序输出方便日后按 key 高效随机查找。",
+    "scenario_en": "The MapReduce paper guarantees intermediate keys within one partition are processed in increasing order, and adds that this ordering makes efficient random-access lookups by key possible later.",
+    "q": "这句“顺带”的话在预告哪个后来的系统？",
+    "q_en": "What later system does this \"throwaway\" line actually foreshadow?",
+    "options": [
+      "combiner——map 端先局部聚合，省网络流量",
+      "SSTable——两年后 BigTable 定义的有序不可变索引文件",
+      "backup task——给慢任务起副本治长尾",
+      "hash 索引——按 partition function 把 key 打散"
+    ],
+    "options_en": [
+      "combiner — a local pre-aggregation on the map side that saves network traffic.",
+      "SSTable — the ordered, immutable, indexed file BigTable defined two years later.",
+      "backup task — spinning up a duplicate for a slow task to beat stragglers.",
+      "hash index — scattering keys across R buckets via the partition function."
+    ],
+    "answer": [
+      1
+    ],
+    "why": "排序制造的同 key 相邻落盘后就是一份有序文件——这正是 SSTable 的定义。2004 年论文已埋下 2006 年 BigTable 的种子。",
+    "why_en": "The key adjacency sorting creates, once written to disk, is already a key-ordered file — the definition of an SSTable, so the 2004 paper already contains BigTable's seed.",
+    "tags": [
+      "mapreduce",
+      "sstable",
+      "lineage"
+    ],
+    "termDefinitions": [
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "有序、不可变、带稀疏索引的文件，BigTable 存储引擎的基本单位。",
+        "meaningEn": "An SSTable is a sorted, immutable file with a sparse index — the basic unit of BigTable's storage engine."
+      },
+      {
+        "term": "combiner",
+        "meaning": "map 端先做一次局部聚合再发出去，省网络传输量。",
+        "meaningEn": "A combiner does a local pre-aggregation on the map side before sending data over the network."
+      },
+      {
+        "term": "backup task",
+        "meaning": "作业尾声给还在跑的慢任务再起一份副本，谁先完成算谁的。",
+        "meaningEn": "A backup task launches a duplicate copy of a still-running slow task near the end of a job; whichever finishes first wins."
+      },
+      {
+        "term": "partition function",
+        "meaning": "决定一条中间 KV 该送去哪个 reduce 分区的哈希函数。",
+        "meaningEn": "The partition function is the hash function that decides which reduce partition an intermediate key-value pair goes to."
+      }
+    ],
+    "optionExplanations": [
+      "combiner 省的是网络流量，跟“输出文件格式”无关，不是这句话在说的事。",
+      "论文原句直接点名“支持按 key 高效随机查找”，这正是它日后成为存储引擎标准件的起点。",
+      "backup task 处理掉队任务，跟排序保证、输出格式是两回事。",
+      "hash 索引靠散列查找而非有序扫描，方向和这句话强调的有序性相反。"
+    ],
+    "optionExplanations_en": [
+      "A combiner saves network bandwidth; it has nothing to do with the output file's shape, which is what this line is actually about.",
+      "The paper names \"efficient random-access lookups by key\" directly — that line is the starting point of a whole storage-engine standard.",
+      "Backup tasks handle stragglers; that's unrelated to the ordering guarantee or output file format.",
+      "Hash indexes rely on scattering, not ordered scanning — the opposite of the ordering this line emphasizes."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-027",
+    "format": "chain",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lineage-sstable",
+    "scenario": "你要在白板上把“随机点查最后变成一次顺序读”这条因果链，从物理约束一路讲到 BigTable。",
+    "scenario_en": "You need to walk a whiteboard through why a random point lookup ends up costing one sequential read, from the bottom physical constraint all the way to BigTable.",
+    "q": "把这条血脉的六步按因果顺序排好。",
+    "q_en": "Put these six links of the lineage in causal order.",
+    "steps": [
+      "BigTable 给有序文件加稀疏索引，成为不可变 SSTable",
+      "寻道比顺序读贵几个数量级，所有设计都要把随机变顺序",
+      "排序后的输出天然是每个 partition 一份按 key 有序的文件",
+      "点查因此只需内存二分 + 一次顺序 pread，无需线性扫描",
+      "GFS 切成 64MB 大块、只支持追加，把顺序写进默认形状",
+      "MapReduce shuffle 阶段按 key 排序，让同 key 记录物理相邻"
+    ],
+    "answerOrder": [
+      1,
+      4,
+      5,
+      2,
+      0,
+      3
+    ],
+    "why": "每一环都是上一环的推论：寻道贵→块要大→只能追加→排序把这层顺序放大成物理相邻→加索引就是 SSTable。",
+    "why_en": "Each link follows from the one before: expensive seeks force big append-only chunks, and MapReduce's sort turns that into physical key adjacency that BigTable indexes into an SSTable.",
+    "tags": [
+      "mapreduce",
+      "gfs",
+      "bigtable",
+      "lineage"
+    ],
+    "diagram": "flowchart TD\n  A[寻道贵/顺序读便宜] --> B[GFS: 64MB 块 + 只追加]\n  B --> C[MapReduce shuffle 按 key 排序]\n  C --> D[输出: 每 partition 一份有序文件]\n  D --> E[BigTable 加稀疏索引 = SSTable]\n  E --> F[点查 = 内存二分 + 一次顺序 pread]",
+    "termDefinitions": [
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "Google 的分布式文件系统，把大块+顺序+追加写进默认形状。",
+        "meaningEn": "GFS is Google's distributed file system, built around big chunks, sequential access, and append-only writes."
+      },
+      {
+        "term": "shuffle",
+        "meaning": "MapReduce 里把 map 输出按 key 搬运并排序、送到对应 reducer 的阶段。",
+        "meaningEn": "Shuffle is the MapReduce phase that sorts map output by key and delivers it to the matching reducer."
+      },
+      {
+        "term": "partition",
+        "meaning": "一个 reduce 任务负责处理的那一份中间数据切片。",
+        "meaningEn": "A partition is the slice of intermediate data that one reduce task is responsible for."
+      },
+      {
+        "term": "稀疏索引",
+        "fullName": "Sparse Index",
+        "meaning": "每个 block 只记一条 key→偏移量，整体能装进内存。",
+        "meaningEn": "A sparse index records one key-to-offset entry per block, small enough to fit entirely in memory."
+      },
+      {
+        "term": "pread",
+        "meaning": "从磁盘指定字节偏移读出一段数据的系统调用。",
+        "meaningEn": "pread is the system call that reads a chunk of data starting at a given byte offset on disk."
+      }
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-028",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "lineage-sstable",
+    "scenario": "同事说“SSTable 不可变只是为了读的时候不用加锁，方便并发”，你觉得这只说对了一半。",
+    "scenario_en": "A teammate says \"SSTable is immutable purely so reads don't need locks\" — you think that's only half right.",
+    "q": "SSTable 不可变性更根本的原因是什么？",
+    "q_en": "What is the more fundamental reason SSTable is immutable?",
+    "options": [
+      "为了让压缩比更高，不用为原地改写预留额外空间",
+      "为了兼容 MapReduce 论文里定义的中间输出文件格式",
+      "免锁只是副产品，根本原因是要落在只保证追加写的 GFS 上",
+      "纯粹是历史遗留说法，RocksDB 早就不再要求不可变了"
+    ],
+    "options_en": [
+      "For a better compression ratio, so no space needs reserving for in-place edits.",
+      "To stay compatible with the intermediate output format defined by the MapReduce paper.",
+      "Lock-free reads are just a side effect; the real reason is fitting a GFS that only guarantees appends.",
+      "Purely a legacy claim — RocksDB has long since dropped the immutability requirement."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "GFS 对并发覆盖写只保证 consistent but undefined；BigTable 从不覆盖写正好绕开这块雷区，免锁只是顺带的好处。",
+    "why_en": "GFS only promises 'consistent but undefined' for concurrent overwrites, so BigTable's never-overwrite design sidesteps that entirely — lock-free reads are just a side benefit.",
+    "tags": [
+      "sstable",
+      "gfs",
+      "immutability"
+    ],
+    "termDefinitions": [
+      {
+        "term": "consistent but undefined",
+        "meaning": "GFS 对并发覆盖写的保证：字节一致但内容不对应任何一次完整写入。",
+        "meaningEn": "A GFS guarantee for concurrent overwrites: bytes agree across replicas, but the content doesn't correspond to any single complete write."
+      },
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "Google 的分布式文件系统，只给追加写强保证。",
+        "meaningEn": "GFS is Google's distributed file system, which only gives strong guarantees for append writes."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "有序、不可变、带稀疏索引的文件。",
+        "meaningEn": "An SSTable is a sorted, immutable file with a sparse index."
+      },
+      {
+        "term": "RocksDB",
+        "meaning": "Facebook 基于 LevelDB fork 的 LSM 存储引擎。",
+        "meaningEn": "RocksDB is Facebook's LSM storage engine, forked from LevelDB."
+      }
+    ],
+    "optionExplanations": [
+      "压缩比是不可变性的次要收益，不是驱动这个设计的约束。",
+      "MapReduce 和 BigTable 是两个独立系统，不存在格式兼容的强制要求。",
+      "GFS 一致性模型对并发覆盖写只给松保证，不可变写正好避开它。",
+      "LevelDB/RocksDB 至今仍是不可变 SSTable，这个前提本身错了。"
+    ],
+    "optionExplanations_en": [
+      "Compression ratio is a secondary benefit of immutability, not the constraint driving the design.",
+      "MapReduce and BigTable are independent systems; there's no forced format-compatibility requirement.",
+      "GFS's consistency model only gives a loose guarantee for concurrent overwrites, and never-overwrite avoids it.",
+      "LevelDB and RocksDB are still immutable SSTables today, so this premise is simply wrong."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-029",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "gfs-fit",
+    "scenario": "面试官问：BigTable 为什么敢把数据放在 GFS 这种“并发覆盖写语义很松”的文件系统上？",
+    "scenario_en": "The interviewer asks: why does BigTable dare to store data on GFS, a filesystem with loose guarantees for concurrent overwrites?",
+    "q": "BigTable 能建在 GFS 松一致性之上的根本原因是？",
+    "q_en": "Why can BigTable safely be built on top of GFS's loose consistency?",
+    "options": [
+      "在应用层额外加一层两阶段提交协调机制，弥补 GFS 一致性上的缺口",
+      "GFS 其实对所有并发写操作都已经给出强一致性保证",
+      "每次落盘前都靠 Chubby 加锁，串行化覆盖写顺序才行",
+      "只写 append-only log，SSTable 写一次就不再改"
+    ],
+    "options_en": [
+      "It runs a two-phase commit coordination layer above GFS to cover its consistency gap.",
+      "GFS actually gives strong consistency for every concurrent write operation.",
+      "Every write grabs a Chubby lock beforehand to serialize concurrent overwrites.",
+      "It only ever writes an append-only log, and each SSTable is written once and never touched again."
+    ],
+    "answer": [
+      3
+    ],
+    "whenOtherWins": "若存储引擎必须支持就地覆盖更新（如传统 B-tree 页式存储），只保证追加语义的 GFS 就不够用，得换支持覆盖写的强一致底层。",
+    "tradeoff": "GFS 松一致性省下协调开销 vs 存储引擎只能设计成 append-only/immutable",
+    "why": "GFS 对并发覆盖写只承诺 consistent but undefined；BigTable 只做追加(WAL)和一次写完(SSTable)，两种写法都落在 GFS 给强保证的那块区域。",
+    "why_en": "GFS only promises 'consistent but undefined' for concurrent overwrites, but BigTable only ever appends or writes once, so it never leaves the region where GFS gives strong guarantees.",
+    "tags": [
+      "bigtable",
+      "gfs",
+      "consistency"
+    ],
+    "diagram": "flowchart LR\n  BT[BigTable 写请求] -->|append| WAL[commit log 追加]\n  BT -->|write once| SST[SSTable 写一次不改]\n  WAL --> OK[落在 GFS 强保证区]\n  SST --> OK\n  OW[并发覆盖写] -. 从不触碰 .-> UNDEF[GFS undefined 区]",
+    "termDefinitions": [
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "Google 的分布式文件系统，对并发覆盖写只给松保证。",
+        "meaningEn": "GFS is Google's distributed file system, which only gives loose guarantees for concurrent overwrites."
+      },
+      {
+        "term": "WAL",
+        "fullName": "Write-Ahead Log",
+        "meaning": "先写日志再写数据结构的持久化机制，这里指 BigTable 的 commit log。",
+        "meaningEn": "A write-ahead log records a change before it's applied — here, BigTable's commit log."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "有序、不可变、带稀疏索引的文件。",
+        "meaningEn": "An SSTable is a sorted, immutable file with a sparse index."
+      },
+      {
+        "term": "Chubby",
+        "meaning": "Google 的分布式锁服务，BigTable 用它选主和定位 tablet，不用于每次数据写。",
+        "meaningEn": "Chubby is Google's distributed lock service; BigTable uses it for master election and tablet location, not per-write locking."
+      },
+      {
+        "term": "两阶段提交",
+        "fullName": "Two-Phase Commit",
+        "meaning": "靠多轮协调换取跨节点强一致的协议。",
+        "meaningEn": "Two-phase commit is a protocol that trades multiple coordination rounds for cross-node strong consistency."
+      }
+    ],
+    "optionExplanations": [
+      "两阶段提交靠多轮协调换强一致，论文里 BigTable 并没有这层机制。",
+      "GFS 论文 Table 1 写明并发写只有较松的那种保证，不是全程强一致。",
+      "Chubby 用于选主和定位，不是给每次数据写操作加锁。",
+      "commit log 追加写 + SSTable 写一次不改，是 BigTable 落到 GFS 上仅有的两种写模式。"
+    ],
+    "optionExplanations_en": [
+      "Two-phase commit trades coordination rounds for strong consistency; the paper describes no such layer in BigTable.",
+      "GFS's own Table 1 states concurrent writes only get the looser guarantee, not strong consistency throughout.",
+      "Chubby is used for master election and tablet location, not for locking every data write.",
+      "Append-only commit log plus write-once SSTable are the only two write shapes BigTable ever sends to GFS."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-030",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "commit-log-design",
+    "scenario": "一个 BigTable tablet server 通常同时管理几十到上千个 tablet，论文特意强调它只维护一份 commit log，不是每个 tablet 一份。",
+    "scenario_en": "A BigTable tablet server typically manages dozens to over a thousand tablets, and the paper specifically notes it keeps only one commit log, not one per tablet.",
+    "q": "tablet server 只用一份 commit log 为了避免什么？",
+    "q_en": "What does keeping a single commit log per tablet server avoid?",
+    "options": [
+      "避免几千份 GFS 文件造成的并发写和寻道，保住批量效果",
+      "避免恢复阶段要按 (table,row,LSN) 重新排序所有日志条目",
+      "避免多个 tablet 共享同一个 memtable，导致数据互相串号",
+      "避免每个 tablet 都单独连接 Chubby，省下锁服务器连接数"
+    ],
+    "options_en": [
+      "Avoids the concurrent writes and seeks thousands of GFS files would cause, keeping the batching.",
+      "Avoids having to re-sort every log entry by (table, row, LSN) during the recovery phase.",
+      "Avoids multiple tablets sharing one memtable and cross-contaminating each other's data.",
+      "Avoids every tablet opening its own Chubby connection, cutting the lock server's connection count."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若各 tablet 写入量差异巨大、需要独立限流或灾备隔离，分开写 log 反而更好；代价是接受更多并发写和更碎的 fsync。",
+    "tradeoff": "单份 log 省并发写/寻道开销 vs 恢复时多一次按 (table,row,LSN) 的排序",
+    "why": "几千份 GFS 日志文件会造成大量并发写和寻道，还破坏 group commit 的批量刷盘；代价是恢复时要把日志按 (table,row,LSN) 重新排序——又是一次排序。",
+    "why_en": "Thousands of per-tablet log files would mean heavy concurrent writes and seeks and break group commit's batching, so BigTable pays for that with a recovery-time sort of the log by (table, row, LSN).",
+    "tags": [
+      "bigtable",
+      "commit-log",
+      "recovery"
+    ],
+    "diagram": "flowchart TD\n  subgraph 单份log方案\n    S1[tablet server] -->|append 一份| L1[commit log]\n    T1[tablet x N] -.写入.-> S1\n  end\n  subgraph 每tablet一份方案\n    T2a[tablet 1] --> L2a[log 1]\n    T2b[tablet 2] --> L2b[log 2]\n    T2c[tablet N] --> L2c[log N]\n  end",
+    "termDefinitions": [
+      {
+        "term": "commit log",
+        "meaning": "先写日志再写内存结构的持久化机制，这里指 BigTable 的 WAL。",
+        "meaningEn": "A commit log records changes before they're applied to the in-memory structure — here, BigTable's WAL."
+      },
+      {
+        "term": "tablet",
+        "meaning": "BigTable 按 row 范围切分出的服务单位，一个 server 管很多个。",
+        "meaningEn": "A tablet is a row-range slice of a BigTable table; one server manages many."
+      },
+      {
+        "term": "group commit",
+        "meaning": "把多笔小写合并成一次 fsync，摊薄持久化成本。",
+        "meaningEn": "Group commit batches many small writes into a single fsync to amortize durability cost."
+      },
+      {
+        "term": "LSN",
+        "fullName": "Log Sequence Number",
+        "meaning": "日志条目的递增序号，用于恢复时按顺序重放。",
+        "meaningEn": "An LSN is the monotonically increasing sequence number of a log entry, used to replay logs in order during recovery."
+      },
+      {
+        "term": "GFS",
+        "fullName": "Google File System",
+        "meaning": "Google 的分布式文件系统。",
+        "meaningEn": "GFS is Google's distributed file system."
+      }
+    ],
+    "optionExplanations": [
+      "论文原因：每个 tablet 各开一份 GFS 文件等于把顺序写拆成几千份并发小写。",
+      "这恰恰是选单份 log 之后必须付的代价，不是它要避免的问题，选项把因果说反了。",
+      "memtable 按 tablet 独立管理，和 commit log 是几份没有关系。",
+      "Chubby 连接数和 commit log 份数是两件独立的事，论文没有绑在一起。"
+    ],
+    "optionExplanations_en": [
+      "The paper's own reason: one GFS file per tablet turns sequential writes into thousands of concurrent small writes.",
+      "This is exactly the cost paid for choosing a single log, not the problem it avoids — the option reverses cause and effect.",
+      "Each tablet manages its own memtable independently; that has nothing to do with how many log files exist.",
+      "Chubby connection count and commit log count are separate concerns the paper never ties together."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-031",
+    "format": "mcq",
+    "atomType": "contrast",
+    "topic": "system-design",
+    "sub": "lsm-tradeoff",
+    "scenario": "面试官追问：“都用 NVMe SSD 了，4KB 随机读只要 100 微秒，你这套避免随机 I/O 的逻辑过时了吗？”",
+    "scenario_en": "The interviewer pushes back: \"Everyone uses NVMe SSD now — a 4KB random read only takes about 100 microseconds. Isn't your whole avoid-random-I/O logic outdated?\"",
+    "q": "该怎么回应“SSD 时代顺序化还重要吗”？",
+    "q_en": "How should you respond to \"does sequential I/O still matter in the SSD era\"?",
+    "options": [
+      "承认已经过时：SSD 没有磁头，随机读和顺序读速度已经完全一样",
+      "结论不变，理由换三条：读放大、固定开销、云上更贵",
+      "只承认一半：本地 SSD 上确实不重要了，但这和分布式存储完全无关",
+      "回避理由，直接说：工业界现在都还在用 LSM，所以肯定有用"
+    ],
+    "options_en": [
+      "Admit it's outdated — SSDs have no seek head, so random and sequential reads now cost exactly the same.",
+      "Keep the conclusion, swap in three reasons: read amplification, fixed cost, pricier cloud I/O.",
+      "Half-concede: it stopped mattering on local SSDs, but that's unrelated to distributed storage.",
+      "Dodge the reasoning and just say the industry still runs LSM everywhere, so it must still matter."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若负载读多、要范围扫描和可预测 p99，写的也不是随机 key，即使在 SSD 上 B-tree 依然更合适。",
+    "tradeoff": "LSM 用后台写放大换随机写 vs B-tree 用随机写换更低写放大；SSD 只改变随机写代价，不消除这权衡",
+    "why": "SSD 无磁头但最小 I/O 单位仍是 4KB page，零散小记录照样读放大；每次 I/O 有固定开销；云上一次 I/O 是网络 RPC，延迟更高，顺序化反而更重要。",
+    "why_en": "SSDs have no seek head, but the minimum I/O unit is still a 4KB page so scattered small records still cause read amplification, every I/O carries a fixed cost, and on cloud storage one I/O is a network RPC — so locality matters even more.",
+    "tags": [
+      "lsm",
+      "ssd",
+      "tradeoff"
+    ],
+    "termDefinitions": [
+      {
+        "term": "NVMe SSD",
+        "fullName": "Non-Volatile Memory Express Solid-State Drive",
+        "meaning": "无磁头的固态盘，随机读延迟约 100 微秒。",
+        "meaningEn": "An NVMe SSD is a headless flash drive with roughly 100-microsecond random read latency."
+      },
+      {
+        "term": "page",
+        "meaning": "磁盘/SSD 最小 I/O 单位，通常 4KB。",
+        "meaningEn": "A page is the smallest I/O unit on disk or SSD, typically 4KB."
+      },
+      {
+        "term": "p99",
+        "meaning": "第 99 百分位延迟，衡量最慢那 1% 请求的表现。",
+        "meaningEn": "p99 is the 99th-percentile latency, measuring how the slowest 1% of requests perform."
+      },
+      {
+        "term": "RPC",
+        "fullName": "Remote Procedure Call",
+        "meaning": "跨网络发起的一次调用，云存储上一次 I/O 本质是一次 RPC。",
+        "meaningEn": "An RPC is a call made across the network; on cloud storage, one I/O is essentially one RPC."
+      }
+    ],
+    "optionExplanations": [
+      "随机读延迟从 10ms 降到约 100µs，但“完全一样”和 page 粒度读放大的事实不符。",
+      "把结论和支撑理由拆开——结论没变，但三条理由全部换成了 SSD 时代版本。",
+      "本地 SSD 上仍有 page 级读放大和固定 I/O 开销，这两条和分布式无关，不能只认一半。",
+      "不给理由的回答最先在追问环节垮——面试官下一句就是“为什么”。"
+    ],
+    "optionExplanations_en": [
+      "Random-read latency dropped from 10ms to ~100µs, but \"identical\" ignores page-level read amplification.",
+      "Separate the conclusion from its support — the conclusion holds, but all three reasons are now SSD-era ones.",
+      "Local SSDs still have page-level read amplification and fixed I/O overhead; those two are unrelated to distribution.",
+      "An answer with no reasoning collapses at the first follow-up, which is always \"why.\""
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-032",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "modern-successors",
+    "scenario": "团队想把跑了很久的 MapReduce 批处理换成 Spark，理由是“MapReduce 太老该淘汰了”。",
+    "scenario_en": "A team wants to replace a long-running MapReduce batch pipeline with Spark, reasoning that \"MapReduce is old and should be retired.\"",
+    "q": "Spark/Flink 抛弃了 MapReduce 的什么，又留下了什么？",
+    "q_en": "What did Spark/Flink drop from MapReduce, and what did they keep?",
+    "options": [
+      "抛弃了按 key 分组这件事，换成纯内存哈希表，从此不再排序数据",
+      "抛弃了失败就重跑的容错思路，换成同步复制好几份副本",
+      "抛弃逐步落盘 HDFS，换内存流水线；shuffle 排序原样保留",
+      "抛弃了把计算搬到数据旁边调度的思路，从此不再关心本地性"
+    ],
+    "options_en": [
+      "Dropped key-based grouping entirely for a pure in-memory hash table, so data is no longer sorted at all.",
+      "Dropped re-run-on-failure fault tolerance for synchronously copying several replicas instead.",
+      "Dropped materializing every step to HDFS for an in-memory pipeline; shuffle-sort survives unchanged.",
+      "Dropped scheduling compute next to data, and no longer cares about locality at all."
+    ],
+    "answer": [
+      2
+    ],
+    "why": "DAG 流水线省掉了不必要的落盘，失败靠血缘重算；但只要涉及按 key 聚合，shuffle 阶段的排序动作还在——这正是“排序制造相邻性”的现代延续。",
+    "why_en": "DAG pipelining skips unnecessary disk materialization and recovers via lineage, but whenever the job needs key-based aggregation the shuffle-sort step survives unchanged — the same 'sorting creates adjacency' idea from MapReduce.",
+    "tags": [
+      "mapreduce",
+      "spark",
+      "lineage"
+    ],
+    "termDefinitions": [
+      {
+        "term": "DAG",
+        "fullName": "Directed Acyclic Graph",
+        "meaning": "有向无环图，dataflow 引擎的执行计划形状。",
+        "meaningEn": "A DAG is a directed acyclic graph — the shape of a dataflow engine's execution plan."
+      },
+      {
+        "term": "shuffle",
+        "meaning": "把中间数据按 key 搬运并排序、送到对应下游任务的阶段。",
+        "meaningEn": "Shuffle is the phase that sorts intermediate data by key and delivers it to the matching downstream task."
+      },
+      {
+        "term": "血缘重算",
+        "fullName": "Lineage Recovery",
+        "meaning": "失败时根据算子依赖关系从可用输入重新计算丢失分区。",
+        "meaningEn": "Lineage recovery recomputes a lost partition from available inputs using the operator dependency graph."
+      },
+      {
+        "term": "HDFS",
+        "fullName": "Hadoop Distributed File System",
+        "meaning": "开源版 GFS，Hadoop/MapReduce 的默认存储。",
+        "meaningEn": "HDFS is the open-source GFS equivalent, the default storage for Hadoop/MapReduce."
+      }
+    ],
+    "optionExplanations": [
+      "内存放不下时，哈希聚合一样要溢出成排序，“不再排序”这个说法不成立。",
+      "Spark/Flink 靠血缘重算容错，不是同步复制多副本，选项把方向说反了。",
+      "DAG 流水线不强制每步写 HDFS 三副本，但按 key 聚合时 shuffle 排序依然发生。",
+      "本地性调度在 Spark/Flink 里依然存在，不是被抛弃的部分。"
+    ],
+    "optionExplanations_en": [
+      "When memory runs out, hash aggregation spills and becomes a sort anyway, so \"no longer needed\" doesn't hold.",
+      "Spark/Flink recover via lineage recomputation, not synchronous multi-replica copying — this reverses the direction.",
+      "DAG pipelining doesn't force every step through triple-replicated HDFS, but shuffle-sort still fires for key aggregation.",
+      "Locality-aware scheduling is still present in Spark/Flink; it was never dropped."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-033",
+    "format": "mcq",
+    "atomType": "consequence",
+    "topic": "system-design",
+    "sub": "modern-successors",
+    "scenario": "Lucene/ES 的 segment：不可变、稀疏 term index、postings、merge、tombstone 删除——和 SSTable 几乎一一对应，却独立开发。",
+    "scenario_en": "Lucene/Elasticsearch's segment design — immutable, a sparse term index, a postings file, merges, tombstone deletes — maps almost one-to-one onto SSTable, yet was built completely independently.",
+    "q": "这种跨系统结构收敛，最合理的解释是？",
+    "q_en": "What best explains this cross-system structural convergence?",
+    "options": [
+      "Lucene 的作者当年直接借鉴了 BigTable 论文里的开源实现代码",
+      "纯粹是巧合，两者除了名字相似之外没有实质相同的设计逻辑",
+      "因为两者都跑在 JVM 上，受同一套垃圾回收机制约束才趋同",
+      "负载都是“按 key 查一串值”且超内存，才收敛出同一种存储形状"
+    ],
+    "options_en": [
+      "Lucene's authors directly copied the open-source implementation described in the BigTable paper.",
+      "Purely a coincidence — beyond similar names, the two share no real design logic.",
+      "Both run on the JVM, and the same garbage collector constraints pushed them to converge.",
+      "Both workloads look like 'find a run of values by key' and outgrow memory, so they converge on the same shape."
+    ],
+    "answer": [
+      3
+    ],
+    "why": "寻道贵、顺序读便宜这个物理事实不挑团队和语言；只要负载是“按 key 找一串值”且放不进内存，就会收敛出同一种形状。",
+    "why_en": "The physical fact that seeks are expensive and sequential reads are cheap doesn't care about team or language, so any workload shaped like 'look up a run of values by key' that outgrows memory converges on the same shape.",
+    "tags": [
+      "convergent-evolution",
+      "sstable",
+      "lucene"
+    ],
+    "termDefinitions": [
+      {
+        "term": "segment",
+        "meaning": "Lucene 的不可变数据文件单位，等价于 SSTable。",
+        "meaningEn": "A segment is Lucene's immutable data-file unit, the equivalent of an SSTable."
+      },
+      {
+        "term": "term index",
+        "meaning": "Lucene 内存里的稀疏词典索引，指向 postings 文件的偏移。",
+        "meaningEn": "The term index is Lucene's in-memory sparse dictionary index, pointing to offsets in the postings file."
+      },
+      {
+        "term": "postings",
+        "meaning": "存实际倒排列表数据的文件，对应 SSTable 的 block。",
+        "meaningEn": "Postings is the file holding the actual inverted-list data, analogous to an SSTable's blocks."
+      },
+      {
+        "term": "tombstone",
+        "meaning": "标记删除的墓碑记录，真正回收发生在 merge/compaction 时。",
+        "meaningEn": "A tombstone marks a deletion; actual space reclamation happens during merge or compaction."
+      },
+      {
+        "term": "JVM",
+        "fullName": "Java Virtual Machine",
+        "meaning": "Java 字节码运行环境。",
+        "meaningEn": "The JVM is the runtime that executes Java bytecode."
+      }
+    ],
+    "optionExplanations": [
+      "Lucene 诞生早于 2006 年 BigTable 论文公开，时间线对不上，借鉴关系不成立。",
+      "结构点逐一对应（segment↔SSTable、term index↔稀疏索引、merge↔compaction），不只是名字像。",
+      "LevelDB/RocksDB 用 C++ 写、不跑 JVM，同样是这个形状，说明 GC 不是驱动因素。",
+      "物理约束不挑语言/团队，能解释为什么诞生时间、实现语言都不同的系统会长成一个样子。"
+    ],
+    "optionExplanations_en": [
+      "Lucene predates the 2006 BigTable paper's publication, so the timeline rules out direct borrowing.",
+      "The structural points map one-to-one (segment/SSTable, term index/sparse index, merge/compaction) — more than a naming coincidence.",
+      "LevelDB and RocksDB are C++ and never touch the JVM, yet share the same shape, so GC isn't the driver.",
+      "A shared physical constraint doesn't care about language or team, explaining convergence across different eras and stacks."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-034",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-usage",
+    "scenario": "面试题：“设计离线系统，每天从 10 亿条日志算出访问量 Top 1000 的 URL”，数据放不进单机内存，允许分钟级延迟。",
+    "scenario_en": "The prompt: \"design an offline system that computes the top 1,000 URLs by traffic from 1 billion log lines every day\", data too big for one machine's memory, minutes of delay acceptable.",
+    "q": "哪些信号提示该用 MapReduce 风格方案？",
+    "q_en": "Which signals point you toward a MapReduce-style design?",
+    "options": [
+      "按 key 聚合、单机内存放不下、能容忍批处理延迟，三者同时具备才算",
+      "只要题目提到“日志”两个字，不管其他约束都该默认用 MapReduce",
+      "只要数据量是“10 亿”这种大数字，不管是否要按 key 聚合都该套用",
+      "只要允许延迟，不管数据量多大，都该优先考虑 MapReduce 方案"
+    ],
+    "options_en": [
+      "Key-based aggregation, memory-exceeding data, and tolerable batch latency — only counts when all three hold together.",
+      "Whenever the prompt says \"logs\", regardless of other constraints, default straight to MapReduce.",
+      "Whenever the number is huge like \"1 billion\", regardless of whether key aggregation is needed, apply it anyway.",
+      "Whenever latency is tolerable, regardless of data size, MapReduce should be the first choice considered."
+    ],
+    "answer": [
+      0
+    ],
+    "whenOtherWins": "若同样是聚合但要秒级更新的实时排行榜，该换流式增量聚合（如 Flink 滑动窗口）；MapReduce 式整批重跑延迟太高。",
+    "tradeoff": "MapReduce 整批重算胜在简单、天然容错 vs 流式增量聚合胜在低延迟但状态管理更复杂",
+    "why": "单个信号都不够，要“按 key 聚合+内存放不下+能接受批延迟”同时成立，才说明问题形状是 sort-then-group，不是随便套 MapReduce。",
+    "why_en": "No single clue is enough — key-based aggregation, data too big for memory, and tolerance for batch latency all have to hold at once before the problem actually matches MapReduce's sort-then-group shape.",
+    "tags": [
+      "mapreduce",
+      "interview-method",
+      "top-k"
+    ],
+    "termDefinitions": [
+      {
+        "term": "sort-then-group",
+        "meaning": "先排序制造 key 相邻、再顺序扫描分组的处理形状。",
+        "meaningEn": "Sort-then-group is the pattern of sorting to create key adjacency, then scanning sequentially to group by key."
+      },
+      {
+        "term": "批处理",
+        "fullName": "Batch Processing",
+        "meaning": "整批数据一次性处理完再出结果，允许分钟到小时级延迟。",
+        "meaningEn": "Batch processing runs over a whole dataset at once and tolerates minutes-to-hours of latency."
+      },
+      {
+        "term": "Flink",
+        "meaning": "流处理框架，支持滑动窗口做增量聚合。",
+        "meaningEn": "Flink is a stream-processing framework that supports sliding-window incremental aggregation."
+      }
+    ],
+    "optionExplanations": [
+      "三个约束合在一起，才把问题锁定成“先排序制造相邻、再顺序扫描分组”这一种形状。",
+      "“日志”只说明数据来源，不说明是否要按 key 聚合，单靠关键词判断会误用。",
+      "数据量大只说明需要分布式，不说明该用批处理还是流处理，这是正交维度。",
+      "延迟容忍只是“可以用批处理”的必要条件之一，不是“必须用 MapReduce”的充分条件。"
+    ],
+    "optionExplanations_en": [
+      "Only all three together lock the problem into \"sort to create adjacency, then scan sequentially to group.\"",
+      "\"Logs\" only describes the data source, not whether key aggregation is needed; keying off one word misfires.",
+      "A huge data volume only implies you need distribution, not whether to pick batch or streaming — an orthogonal axis.",
+      "Latency tolerance is one necessary condition for batch being viable, not sufficient proof MapReduce is required."
+    ]
+  },
+  {
+    "id": "sd-deep-dives-mapreduce-035",
+    "format": "mcq",
+    "atomType": "fit",
+    "topic": "system-design",
+    "sub": "interview-usage",
+    "scenario": "面试官明说“不能用现成数据库或索引，自己实现”，同时数据量远超内存、查询要按某字段随机查找。",
+    "scenario_en": "The interviewer explicitly says \"no off-the-shelf database or index — build it yourself\", while data volume far exceeds memory and queries need random lookups on a field.",
+    "q": "听到“不许用数据库”，第一句该说什么？",
+    "q_en": "When you hear \"no database allowed\", what should your first sentence be?",
+    "options": [
+      "直接说要维护一份内存哈希表，把整个数据集都塞进单机内存里",
+      "先说清优化目标——同 key 数据磁盘连续，一次寻道加一段顺序读",
+      "直接说按行号给数据建索引，查询时靠行号逐步跳转定位记录",
+      "先问面试官能不能改用 Redis 来代替，试图绕开这条已经说明的限制"
+    ],
+    "options_en": [
+      "Jump straight to an in-memory hash table holding the whole dataset on one machine.",
+      "State the optimization target first — same-key data contiguous on disk, one seek plus one sequential read.",
+      "Jump straight to indexing by line number, jumping to a record via its line.",
+      "Ask upfront whether Redis is allowed, trying to route around the restriction."
+    ],
+    "answer": [
+      1
+    ],
+    "whenOtherWins": "若数据量小到能塞进单机内存、且不要求持久化，直接上内存哈希表更简单，不必大费周章讲 SSTable。",
+    "tradeoff": "先讲目标再讲实现换来“被追问单点细节不会整体崩” vs 开场多花几秒钟报清楚约束",
+    "why": "先说优化目标，后面无论用偏移量还是稀疏索引来实现，面试官戳中一个细节也不会让整个方案崩；直接跳到实现是这类题最容易翻车的地方。",
+    "why_en": "State the optimization target first — disk locality, one seek plus one sequential read — so any single implementation detail the interviewer pokes at can be swapped without collapsing the whole answer.",
+    "tags": [
+      "interview-method",
+      "sstable",
+      "mapreduce"
+    ],
+    "termDefinitions": [
+      {
+        "term": "磁盘局部性",
+        "fullName": "Disk Locality",
+        "meaning": "让常一起被访问的数据在磁盘上物理相邻，减少 I/O 次数。",
+        "meaningEn": "Disk locality means keeping commonly co-accessed data physically adjacent on disk to cut the number of I/Os."
+      },
+      {
+        "term": "seek",
+        "meaning": "磁盘/文件定位到某个字节偏移的操作。",
+        "meaningEn": "A seek is the operation of positioning a read at a given byte offset in a file."
+      },
+      {
+        "term": "字节偏移",
+        "fullName": "Byte Offset",
+        "meaning": "文件内以字节为单位的位置，是 seek() 真正接受的参数。",
+        "meaningEn": "A byte offset is a position within a file measured in bytes — the actual parameter seek() accepts."
+      },
+      {
+        "term": "SSTable",
+        "fullName": "Sorted String Table",
+        "meaning": "有序、不可变、带稀疏索引的文件。",
+        "meaningEn": "An SSTable is a sorted, immutable file with a sparse index."
+      }
+    ],
+    "optionExplanations": [
+      "数据量远超内存这个前提下，内存哈希表直接不成立。",
+      "先说目标能让后续任何实现细节都变成“实现这个目标的一种方式”，被戳中一处不会全盘崩。",
+      "行号不是磁盘地址，seek() 只接受字节偏移，跳到第 N 行本质还是要扫完前面。",
+      "题目已明说不能用数据库/索引，Redis 属同类被禁工具，绕限制显得没理解题意。"
+    ],
+    "optionExplanations_en": [
+      "An in-memory hash table is a non-starter given the stated premise that data exceeds memory.",
+      "Stating the target first turns every later implementation detail into 'one way to hit this target', so one poke doesn't collapse it all.",
+      "A line number isn't a disk address; seek() only takes byte offsets, so reaching line N still means scanning everything before it.",
+      "The prompt already ruled out databases and indexes; Redis is the same category of banned tool, and asking for it signals missing the point."
+    ]
+  }
+]
