@@ -474,13 +474,14 @@ console.log('tracks');
     'sd-02-components': 70,
     'sd-03-cases': 93,
     'sd-04-upgrades': 60,
-    'sd-10-foundations': 713,
-    'sd-11-patterns-full': 338,
-    'sd-12-data-storage': 1488,
-    'sd-13-platform-network': 576,
-    'sd-14-product-systems': 1218,
+    // 快照值（2026-10-16 产物改版后重取：problem-breakdowns 删 meta 卡、加 produce 卡）
+    'sd-10-foundations': 602,
+    'sd-11-patterns-full': 347,
+    'sd-12-data-storage': 1485,
+    'sd-13-platform-network': 583,
+    'sd-14-product-systems': 1323,
     'sd-15-reference': 979,
-    'sd-99-gap-fill': 1811,
+    'sd-99-gap-fill': 1952,
   };
   for (const [id, expected] of Object.entries(expectedRoadmapSizes)) {
     t(`${id} is an in-track classic-system-design stage`, filterSystemDesignRoadmapStage(classicDeck, id).length === expected);
