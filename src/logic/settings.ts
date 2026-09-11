@@ -2,7 +2,7 @@ import { DEFAULT_EVENING, DEFAULT_MORNING } from '../config';
 import type { AppSettings, RhythmId } from '../types';
 import {
   DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE,
-  isSystemDesignRoadmapStageId,
+  normalizeSystemDesignRoadmapStage,
 } from './systemDesignRoadmap';
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -40,7 +40,7 @@ export function settingsFromKv(kv: Map<string, string>): AppSettings {
   const track = kv.get('activeTrackId');
   if (track) s.activeTrackId = track;
   const roadmapStage = kv.get('activeRoadmapStage');
-  if (roadmapStage && isSystemDesignRoadmapStageId(roadmapStage)) s.activeRoadmapStage = roadmapStage;
+  if (roadmapStage) s.activeRoadmapStage = normalizeSystemDesignRoadmapStage(roadmapStage);
   const category = kv.get('activeCategory');
   if (category) s.activeCategory = category;
   const rhythm = kv.get('rhythm') as RhythmId | undefined;

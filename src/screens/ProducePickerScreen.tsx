@@ -12,9 +12,9 @@ export interface ProduceTopic {
   seen: number;
 }
 
-/** 按 deliverable 的合同顺序排 produce 卡：实体 → schema → API → 组件图 → 主流程 → 状态机 → 并发 → 恢复 → 估算 → 扩展 → 选型 */
+/** 按白板交付顺序排 produce 卡：先锁需求，再实体/API/图，最后深挖与取舍。 */
 const ORDER: Array<Card['deliverable']> = [
-  'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech',
+  'requirements', 'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech',
 ];
 export function orderProduceCards(cards: Card[]): Card[] {
   const rank = (c: Card) => {
@@ -62,7 +62,7 @@ export function ProducePickerScreen({ topics, onPick, onBack }: ProducePickerScr
         <View style={{ width: 52 }} />
       </View>
       <Text style={{ fontSize: 13, lineHeight: 19, color: colors.muted, marginTop: 10 }}>
-        选一道题，按「实体 → schema → API → 组件图 → 主流程 → 状态机 → 并发 → 恢复 → 估算」的顺序，每张卡先在纸上写、再翻面对清单。一轮约 15–20 分钟。
+        选一道题，按「需求澄清 → 实体 → API → 组件图 → 主流程 → 深挖」的顺序，每张卡先在纸上写、再翻面对清单。
       </Text>
       {topics.length === 0 ? (
         <Text style={{ fontSize: 14, color: colors.amberInk, marginTop: 18 }}>还没有题目带 produce 卡。</Text>

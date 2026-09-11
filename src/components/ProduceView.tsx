@@ -1,7 +1,9 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../theme';
+import type { ClarificationReviewSpec } from '../types';
 import { ActButton } from './ui';
+import { ClarificationReview } from './ClarificationReview';
 
 export interface ProduceViewProps {
   /** 翻面后逐条打勾的验收清单 */
@@ -10,6 +12,9 @@ export interface ProduceViewProps {
   /** 已打勾的条目下标 */
   checked: Set<number>;
   revealed: boolean;
+  /** Only the clarify-first card uses Copilot; the rest remain paper-first. */
+  clarificationReview?: ClarificationReviewSpec;
+  cardId: string;
   onReveal: () => void;
   onToggle: (i: number) => void;
 }
@@ -20,7 +25,16 @@ export interface ProduceViewProps {
  * 翻面后清单逐条打勾（人工自查，她 10/11 拍板不做自动判分），参考答案在下面的 RevealBlock 里。
  * 打了几勾只在这一屏上看，最后的成绩仍是「忘了 / 模糊 / 记得」。
  */
-export function ProduceView({ checklist, checklistEn, checked, revealed, onReveal, onToggle }: ProduceViewProps) {
+export function ProduceView({
+  checklist,
+  checklistEn,
+  checked,
+  revealed,
+  clarificationReview,
+  cardId,
+  onReveal,
+  onToggle,
+}: ProduceViewProps) {
   const { colors } = useTheme();
 
   if (!revealed) {
@@ -31,6 +45,7 @@ export function ProduceView({ checklist, checklistEn, checked, revealed, onRevea
             ✍️ 先在纸上写出来（或打在别处），写完再翻面。翻面后有 {checklist.length} 条验收项逐条对。
           </Text>
         </View>
+        {clarificationReview ? <ClarificationReview cardId={cardId} spec={clarificationReview} /> : null}
         <View style={styles.btnRow}>
           <ActButton label="我写好了，对答案" onPress={onReveal} />
         </View>

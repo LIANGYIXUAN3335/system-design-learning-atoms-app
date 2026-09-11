@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { localDateStr } from '../logic/dates';
 import { chainCorrect, choiceCorrect, minIntervalDays, toFeedbackGrade, toFsrsRating } from '../logic/grading';
-import { dueAdditions, type SrsEntry } from '../logic/queue';
+import { dueAdditions, removeCurrentQueueCard, type SrsEntry } from '../logic/queue';
 import { shuffleWithMap, type Shuffled } from '../logic/shuffle';
 import { applyReview, emptyCard } from '../logic/srs';
 import { becameRemembered, fastAnswerNote, nextWinLevel, readingTimerMs, type TypicalTimes } from '../logic/gameFeel';
@@ -169,6 +169,8 @@ export interface SessionScreenProps {
   typicalTimes: TypicalTimes;
   /** A2 音效开关（设置页「音效」） */
   soundEnabled: boolean;
+  onAddSupplement: (source: Card, title: string, explanation: string) => Promise<'cloud' | 'local'>;
+  onDeleteCard: (cardId: string) => Promise<void>;
   onExit: () => void;
   onDone: (stats: SessionStats) => void;
 }
@@ -195,6 +197,8 @@ export function SessionScreen({
   correctFuzzyFloor,
   typicalTimes,
   soundEnabled,
+  onAddSupplement,
+  onDeleteCard,
   onExit,
   onDone,
 }: SessionScreenProps) {
@@ -213,6 +217,7 @@ export function SessionScreen({
   const winLevelRef = useRef(0);
   const winPulse = useWinPulse();
   const reviewedTodayRef = useRef<Set<string>>(new Set(reviewedToday ?? []));
+  const deleteInFlightRef = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   const revealY = useRef(0);
 
@@ -242,6 +247,9 @@ export function SessionScreen({
   };
 
   const [eph, setEph] = useState<Ephemeral>(() => initEphemeral(cardsById.get(initialQueue[0])));
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingCard, setDeletingCard] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Defensive: end the session if the queue references a card no longer in the deck.
   useEffect(() => {
@@ -435,6 +443,38 @@ export function SessionScreen({
     setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 30);
   };
 
+  /**
+   * Curation is intentionally separate from grading: delete locally first so
+   * the active queue advances immediately, while App uploads the change in the
+   * background. This never increments answer/review stats.
+   */
+  const removeCurrentCard = async () => {
+    if (deleteInFlightRef.current) return;
+    deleteInFlightRef.current = true;
+    setDeletingCard(true);
+    setDeleteError(null);
+
+    try {
+      await onDeleteCard(card.id);
+      const next = removeCurrentQueueCard(queue, pos);
+      if (next.nextIndex === null) {
+        onDone(statsRef.current);
+        return;
+      }
+
+      setQueue(next.queue);
+      setPos(next.nextIndex);
+      setEph(initEphemeral(cardsById.get(next.queue[next.nextIndex])));
+      setDeleteConfirmOpen(false);
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 30);
+    } catch {
+      setDeleteError('这张卡没有移除成功，请再试一次。');
+    } finally {
+      deleteInFlightRef.current = false;
+      setDeletingCard(false);
+    }
+  };
+
   // ---- render ----------------------------------------------------------
 
   // one flag handler + one props object, shared by the inline and side-panel
@@ -552,6 +592,49 @@ export function SessionScreen({
             <View style={styles.tagRowWrap}>
               <TagRow card={card} />
             </View>
+            {eph.phase === 'question' ? (
+              <View style={[styles.curationRow, { borderColor: colors.line, backgroundColor: colors.bg }]}>
+                {deleteConfirmOpen ? (
+                  <>
+                    <Text style={[styles.curationPrompt, { color: colors.ink }]}>从我的题库移除这张卡？</Text>
+                    <View style={styles.curationActions}>
+                      <Pressable
+                        onPress={removeCurrentCard}
+                        disabled={deletingCard}
+                        style={[styles.removeButton, { backgroundColor: deletingCard ? colors.line : colors.bad }]}
+                      >
+                        <Text style={{ color: deletingCard ? colors.muted : '#fff', fontSize: 13, fontWeight: '700' }}>
+                          {deletingCard ? '移除中…' : '确认移除'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => {
+                          if (deletingCard) return;
+                          setDeleteConfirmOpen(false);
+                          setDeleteError(null);
+                        }}
+                        disabled={deletingCard}
+                        hitSlop={8}
+                      >
+                        <Text style={{ color: colors.muted, fontSize: 13 }}>取消</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : (
+                  <Pressable
+                    onPress={() => {
+                      setDeleteConfirmOpen(true);
+                      setDeleteError(null);
+                    }}
+                    hitSlop={8}
+                    accessibilityLabel="从个人题库移除这张卡"
+                  >
+                    <Text style={{ color: colors.bad, fontSize: 13, fontWeight: '700' }}>删除这张卡</Text>
+                  </Pressable>
+                )}
+                {deleteError ? <Text style={{ color: colors.bad, fontSize: 13, marginTop: 7 }}>{deleteError}</Text> : null}
+              </View>
+            ) : null}
             {card.scenario ? <ScenarioBox text={card.scenario} textEn={card.scenario_en} /> : null}
             <View style={styles.questionBlock}>
               <Text style={[styles.q, { color: colors.ink }]}>{card.q}</Text>
@@ -599,6 +682,8 @@ export function SessionScreen({
                 checklistEn={card.checklist_en}
                 checked={eph.checked}
                 revealed={eph.phase === 'revealed'}
+                clarificationReview={card.clarificationReview}
+                cardId={card.id}
                 onReveal={revealProduce}
                 onToggle={toggleChecked}
               />
@@ -639,6 +724,8 @@ export function SessionScreen({
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
                   feedbackSubmitted={eph.fbSubmitted}
                   onSubmitFeedback={submitFeedback}
+                  onAddSupplement={(title, explanation) => onAddSupplement(card, title, explanation)}
+                  onDeleteCard={removeCurrentCard}
                   onGrade={grade}
                 />
               </View>
@@ -677,6 +764,8 @@ export function SessionScreen({
                   onNote={(v) => setEph((e) => ({ ...e, note: v }))}
                   feedbackSubmitted={eph.fbSubmitted}
                   onSubmitFeedback={submitFeedback}
+                  onAddSupplement={(title, explanation) => onAddSupplement(card, title, explanation)}
+                  onDeleteCard={removeCurrentCard}
                   onGrade={grade}
                 />
               </ScrollView>
@@ -718,6 +807,10 @@ const styles = StyleSheet.create({
   timerDock: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 5 },
   card: { borderWidth: 1, borderRadius: 16, padding: 20 },
   tagRowWrap: {},
+  curationRow: { alignSelf: 'flex-start', marginTop: 12, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  curationPrompt: { fontSize: 13, fontWeight: '700' },
+  curationActions: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8 },
+  removeButton: { borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 },
   questionPane: { flex: 1, minWidth: 0 },
   sidePanel: { borderWidth: 1, borderRadius: 16, overflow: 'hidden' },
   sidePanelScroll: { flexGrow: 0 },

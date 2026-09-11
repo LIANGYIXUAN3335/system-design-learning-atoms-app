@@ -3,7 +3,7 @@ import type { Card } from '../types';
 export const CLASSIC_SYSTEM_DESIGN_TRACK_ID = 'classic-sd';
 export const ALL_SYSTEM_DESIGN_ROADMAP_STAGE = 'all';
 
-export type SystemDesignRoadmapPhase = '首轮' | '深挖' | '补漏';
+export type SystemDesignRoadmapPhase = 'Hello Interview' | '原典' | '我的';
 
 export interface SystemDesignRoadmapStage {
   id: string;
@@ -13,23 +13,20 @@ export interface SystemDesignRoadmapStage {
 }
 
 /**
- * A navigation map inside the one classic-system-design track. The tags are
- * build-time metadata only: they do not create a second set of tracks or a
- * second copy of a card's FSRS state.
+ * A navigation map inside the one classic-system-design track. Each source
+ * deck belongs to exactly one station; the tags and authored ordering are
+ * build-time metadata only, never a second copy of a card's FSRS state.
  */
 export const SYSTEM_DESIGN_ROADMAP: SystemDesignRoadmapStage[] = [
-  { id: 'sd-00-framework', tag: 'curriculum:sd-00-framework', label: '01 答题骨架', phase: '首轮' },
-  { id: 'sd-01-patterns', tag: 'curriculum:sd-01-patterns', label: '02 五大 Pattern', phase: '首轮' },
-  { id: 'sd-02-components', tag: 'curriculum:sd-02-components', label: '03 核心组件', phase: '首轮' },
-  { id: 'sd-03-cases', tag: 'curriculum:sd-03-cases', label: '04 六道代表题', phase: '首轮' },
-  { id: 'sd-04-upgrades', tag: 'curriculum:sd-04-upgrades', label: '05 追问升级', phase: '首轮' },
-  { id: 'sd-10-foundations', tag: 'curriculum:sd-10-foundations', label: '06 面试基本功', phase: '深挖' },
-  { id: 'sd-11-patterns-full', tag: 'curriculum:sd-11-patterns-full', label: '07 Pattern 全量', phase: '深挖' },
-  { id: 'sd-12-data-storage', tag: 'curriculum:sd-12-data-storage', label: '08 数据与存储', phase: '深挖' },
-  { id: 'sd-13-platform-network', tag: 'curriculum:sd-13-platform-network', label: '09 API 与网络', phase: '深挖' },
-  { id: 'sd-14-product-systems', tag: 'curriculum:sd-14-product-systems', label: '10 产品系统题', phase: '深挖' },
-  { id: 'sd-15-reference', tag: 'curriculum:sd-15-reference', label: '11 原典精读', phase: '深挖' },
-  { id: 'sd-99-gap-fill', tag: 'curriculum:sd-99-gap-fill', label: '12 全库补漏', phase: '补漏' },
+  { id: 'sd-01-hurry', tag: 'curriculum:sd-01-hurry', label: '01 速成指南', phase: 'Hello Interview' },
+  { id: 'sd-02-core-concepts', tag: 'curriculum:sd-02-core-concepts', label: '02 核心概念', phase: 'Hello Interview' },
+  { id: 'sd-03-patterns', tag: 'curriculum:sd-03-patterns', label: '03 七大 Pattern', phase: 'Hello Interview' },
+  { id: 'sd-04-key-technologies', tag: 'curriculum:sd-04-key-technologies', label: '04 关键技术深挖', phase: 'Hello Interview' },
+  { id: 'sd-05-problem-breakdowns', tag: 'curriculum:sd-05-problem-breakdowns', label: '05 真题白纸演练与拆解', phase: 'Hello Interview' },
+  { id: 'sd-06-coach', tag: 'curriculum:sd-06-coach', label: '06 教练追问', phase: '我的' },
+  { id: 'sd-07-mock-donation', tag: 'curriculum:sd-07-mock-donation', label: '07 模拟面试一 · 三天募捐', phase: '我的' },
+  { id: 'sd-08-reference', tag: 'curriculum:sd-08-reference', label: '08 原典精读', phase: '原典' },
+  { id: 'sd-09-recaps', tag: 'curriculum:sd-09-recaps', label: '09 我的复盘题', phase: '我的' },
 ];
 
 export const DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE = SYSTEM_DESIGN_ROADMAP[0].id;
@@ -38,8 +35,30 @@ export function isSystemDesignRoadmapStageId(id: string): boolean {
   return id === ALL_SYSTEM_DESIGN_ROADMAP_STAGE || SYSTEM_DESIGN_ROADMAP.some((stage) => stage.id === id);
 }
 
+export const LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES: Readonly<Record<string, string>> = {
+  'sd-00-framework': 'sd-01-hurry',
+  'sd-01-patterns': 'sd-03-patterns',
+  'sd-02-components': 'sd-02-core-concepts',
+  'sd-03-cases': 'sd-05-problem-breakdowns',
+  'sd-04-upgrades': 'sd-06-coach',
+  'sd-10-foundations': 'sd-01-hurry',
+  'sd-11-patterns-full': 'sd-03-patterns',
+  'sd-12-data-storage': 'sd-04-key-technologies',
+  'sd-13-platform-network': 'sd-02-core-concepts',
+  'sd-14-product-systems': 'sd-05-problem-breakdowns',
+  'sd-15-reference': 'sd-08-reference',
+  // The former catch-all had no coherent next station. Send it to the route
+  // entrance rather than silently leaving the learner on a disappeared tab.
+  'sd-99-gap-fill': 'sd-01-hurry',
+  // 2026-10-26: this locally authored drill became a personal mock after the
+  // coach station, so preserve a learner's intent across the tab renames.
+  'sd-07-reference': 'sd-08-reference',
+  'sd-08-recaps': 'sd-09-recaps',
+};
+
 export function normalizeSystemDesignRoadmapStage(id: string): string {
-  return isSystemDesignRoadmapStageId(id) ? id : DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE;
+  const migrated = LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES[id] ?? id;
+  return isSystemDesignRoadmapStageId(migrated) ? migrated : DEFAULT_SYSTEM_DESIGN_ROADMAP_STAGE;
 }
 
 export function filterSystemDesignRoadmapStage(cards: Card[], stageId: string): Card[] {
@@ -50,5 +69,8 @@ export function filterSystemDesignRoadmapStage(cards: Card[], stageId: string): 
 
 export function legacyTrackToRoadmapStage(id: string): string | null {
   const legacy = id.replace(/^sd-path-/, 'sd-');
+  if (LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES[legacy]) {
+    return LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES[legacy];
+  }
   return isSystemDesignRoadmapStageId(legacy) ? legacy : null;
 }

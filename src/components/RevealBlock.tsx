@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Speech from 'expo-speech';
 import { TTS_LANGUAGE, TTS_RATE } from '../config';
 import { useTheme } from '../theme';
@@ -8,6 +8,7 @@ import { AnswerDetailPad, type AnswerOptionDetail } from './AnswerDetailPad';
 import { AutoArchitectureVisual } from './AutoArchitectureVisual';
 import { CodeBlock } from './ui';
 import { FeedbackBlock } from './FeedbackBlock';
+import { CardActions, type CardActionReceipt } from './CardActions';
 import { MermaidView } from './MermaidView';
 import { NumberAnchors } from './NumberAnchors';
 import { TableView } from './TableView';
@@ -34,6 +35,8 @@ export interface RevealBlockProps {
   onNote: (v: string) => void;
   feedbackSubmitted: boolean;
   onSubmitFeedback: () => Promise<'cloud' | 'local'>;
+  onAddSupplement: (title: string, explanation: string) => Promise<CardActionReceipt>;
+  onDeleteCard: () => Promise<void>;
   onGrade: (g: SelfGrade) => void;
   optionDetails?: AnswerOptionDetail[];
   panel?: boolean;
@@ -87,28 +90,52 @@ export function RevealBlock(props: RevealBlockProps) {
 
       {!card.diagram ? <AutoArchitectureVisual card={card} /> : null}
 
-      <View style={[styles.enBox, { backgroundColor: colors.tealBg }]}>
-        <Text style={{ fontSize: 12, color: colors.tealInk, opacity: 0.85, marginBottom: 8 }}>
-          English restatement 英文复述
-        </Text>
-        <View style={{ flexDirection: 'row', gap: 11, alignItems: 'flex-start' }}>
-          <Pressable
-            onPress={() => speakEnglish(card.why_en)}
-            style={[styles.speakBtn, { backgroundColor: colors.tealInk }]}
-          >
-            <Text style={{ color: colors.tealBg, fontSize: 13, fontWeight: '600' }}>🔊 朗读</Text>
-          </Pressable>
-          <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.tealInk }}>
-            {card.why_en}
+      {card.why_en ? (
+        <View style={[styles.enBox, { backgroundColor: colors.tealBg }]}>
+          <Text style={{ fontSize: 12, color: colors.tealInk, opacity: 0.85, marginBottom: 8 }}>
+            English restatement 英文复述
           </Text>
+          <View style={{ flexDirection: 'row', gap: 11, alignItems: 'flex-start' }}>
+            <Pressable
+              onPress={() => speakEnglish(card.why_en)}
+              style={[styles.speakBtn, { backgroundColor: colors.tealInk }]}
+            >
+              <Text style={{ color: colors.tealBg, fontSize: 13, fontWeight: '600' }}>🔊 朗读</Text>
+            </Pressable>
+            <Text style={{ flex: 1, fontSize: 14, lineHeight: 21, color: colors.tealInk }}>
+              {card.why_en}
+            </Text>
+          </View>
         </View>
-      </View>
+      ) : null}
 
       {card.whenOtherWins ? (
         <View style={[styles.otherBox, { backgroundColor: colors.amberBg }]}>
           <Text style={{ fontSize: 14, lineHeight: 21, color: colors.amberInk }}>
             <Text style={{ fontWeight: '600' }}>什么时候选别的：</Text> {card.whenOtherWins}
           </Text>
+        </View>
+      ) : null}
+
+      {card.references?.length ? (
+        <View style={[styles.referenceBox, { borderColor: colors.line, backgroundColor: colors.chip }]}>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.muted, marginBottom: 6 }}>资料依据</Text>
+          {card.references.map((reference) => (
+            <Pressable
+              key={reference.url}
+              accessibilityRole="link"
+              accessibilityLabel={`打开资料：${reference.title}`}
+              onPress={() => { void Linking.openURL(reference.url); }}
+              style={({ pressed }) => [styles.referenceLink, { opacity: pressed ? 0.68 : 1 }]}
+            >
+              <Text style={{ fontSize: 13, lineHeight: 19, color: colors.accent, fontWeight: '700' }}>
+                {reference.title}
+              </Text>
+              {reference.note ? (
+                <Text style={{ fontSize: 12, lineHeight: 18, color: colors.muted }}>{reference.note}</Text>
+              ) : null}
+            </Pressable>
+          ))}
         </View>
       ) : null}
 
@@ -124,6 +151,12 @@ export function RevealBlock(props: RevealBlockProps) {
         onToggleFlag={props.onToggleFlag}
         onTerm={props.onTerm}
         onNote={props.onNote}
+      />
+
+      <CardActions
+        cardId={card.id}
+        onAddSupplement={props.onAddSupplement}
+        onDeleteCard={props.onDeleteCard}
       />
 
       <View style={styles.gradeRow}>
@@ -156,6 +189,8 @@ const styles = StyleSheet.create({
   enBox: { borderRadius: 10, paddingVertical: 11, paddingHorizontal: 13, marginTop: 12 },
   speakBtn: { borderRadius: 8, paddingVertical: 7, paddingHorizontal: 12 },
   otherBox: { borderRadius: 10, paddingVertical: 11, paddingHorizontal: 13, marginTop: 11 },
+  referenceBox: { borderWidth: 1, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginTop: 11 },
+  referenceLink: { paddingVertical: 5 },
   gradeRow: { flexDirection: 'row', gap: 8, marginTop: 15 },
   gradeBtn: {
     flex: 1,

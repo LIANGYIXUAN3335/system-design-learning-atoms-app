@@ -7,6 +7,7 @@ export type CardFormat = 'mcq' | 'multi' | 'cloze' | 'chain' | 'code' | 'produce
  * 覆盖合同（docs/DESIGN_deliverable-cards_2026-10-16.md §2-B）靠它机检。
  */
 export type Deliverable =
+  | 'requirements'
   | 'entities'
   | 'schema'
   | 'api'
@@ -19,9 +20,10 @@ export type Deliverable =
   | 'scaling'
   | 'tech';
 export const DELIVERABLES: Deliverable[] = [
-  'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech',
+  'requirements', 'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech',
 ];
 export const DELIVERABLE_LABEL: Record<Deliverable, string> = {
+  requirements: '需求 / 澄清',
   entities: '核心实体',
   schema: 'Schema',
   api: 'API',
@@ -84,6 +86,11 @@ export interface Card {
   checklist_en?: string[];
   /** 这张卡交付的是哪种设计产物（problem-breakdowns 必标；其它 deck 可选） */
   deliverable?: Deliverable;
+  /**
+   * 只挂在「先澄清」produce 卡上：候选人贴出实际问法，Copilot 只审问到/漏掉的
+   * 决策点，不代替她产出架构答案。
+   */
+  clarificationReview?: ClarificationReviewSpec;
   /** chain: steps as authored (already shuffled), reshuffled again per render */
   steps?: string[];
   answerOrder?: number[];
@@ -97,11 +104,18 @@ export interface Card {
   termDefinitions?: CardTermDefinition[];
   /** compact capacity/scalability anchors injected for database and infra cards */
   numberAnchors?: CardNumberAnchor[];
+  /** Optional primary-source links shown after the answer is revealed. */
+  references?: CardReference[];
   codeSample?: string;
   lang?: string;
   /** build-time metadata for navigation; source JSONs do not need to carry it */
   track?: string;
   category?: string;
+  /**
+   * Authored position inside the classic-system-design roadmap. It is injected
+   * by the deck builder, so only a roadmap-scoped new-card queue uses it.
+   */
+  roadmapOrder?: number;
   /** Mermaid spec (visual atom) */
   diagram?: string;
   /** structured table (visual atom) — shape the ag/cr seed content actually ships */
@@ -112,12 +126,38 @@ export interface Card {
    */
   tags?: string[];
   // ---- provenance (spec §8; behavior lands with generation in M2c) ----
-  origin?: 'seed' | 'ai';
+  origin?: 'seed' | 'ai' | 'user';
   reviewed?: boolean;
-  generatedBy?: 'source' | 'feedback';
+  generatedBy?: 'source' | 'feedback' | 'user';
   sourceCardId?: string;
   createdAt?: string;
   source?: { provider?: string; ref?: string };
+}
+
+export interface ClarificationReviewCriterion {
+  /** Stable key used by the server response; not learner-facing by itself. */
+  id: string;
+  /** Short learner-facing decision area, e.g. "截止语义". */
+  label: string;
+  /** The question or decision a strong clarification phase should surface. */
+  question: string;
+  /** What later design choice changes if this remains unknown. */
+  impact: string;
+}
+
+export interface ClarificationReviewSpec {
+  /** Bumped when this card's server-owned rubric changes. */
+  version: string;
+  /** The full prompt as the interviewer gave it, kept on-card so review is grounded. */
+  problem: string;
+  /** Short, concrete instruction above the candidate input. */
+  prompt: string;
+  /** Maximum pasted characters; bounded before the request reaches the model. */
+  maxChars: number;
+  /** At most a handful of decision-changing questions, never a generic checklist. */
+  rubric: ClarificationReviewCriterion[];
+  /** The scope-lock assumptions the reviewer expects after questions are answered. */
+  expectedAssumptions: string[];
 }
 
 export interface CardTable {
@@ -138,6 +178,14 @@ export interface CardNumberAnchor {
   unit: string;
   estimate: string;
   risk: string;
+}
+
+/** A compact, learner-facing primary source for a locally authored drill. */
+export interface CardReference {
+  title: string;
+  url: string;
+  /** Why this source matters for the current decision, not a generic citation. */
+  note?: string;
 }
 
 /** A track = a saved tag filter (union semantics), spec §4. */

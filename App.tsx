@@ -9,14 +9,18 @@ import {
   dayActivity,
   deleteTrack,
   distinctCardsOnDay,
+  hideCard,
   loadElapsedSamples,
   loadFeedback,
+  loadHiddenCardRows,
   loadSettingsKv,
   loadSrs,
   loadTracks,
+  loadUserCards,
   openDb,
   saveSettingsKv,
   saveTrack,
+  saveUserCard,
   seedTracksOnce,
   studiedDays,
   type Db,
@@ -31,7 +35,9 @@ import { deadlineFloorDays, isFinalStretch, planNewPerDay } from './src/logic/pl
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from './src/logic/settings';
 import { setRequestRetention, State } from './src/logic/srs';
 import { buildTerritory, type TerritoryCell } from './src/logic/territory';
+import { createSupplementCard, mergeCardLibrary } from './src/logic/userCards';
 import { TerritoryScreen } from './src/screens/TerritoryScreen';
+import { CardCurationScreen } from './src/screens/CardCurationScreen';
 import { buildProduceTopics, ProducePickerScreen, type ProduceTopic } from './src/screens/ProducePickerScreen';
 import { computeStreak, dailyGoal } from './src/logic/streak';
 import {
@@ -75,13 +81,14 @@ const reciteItems = reciteBundleJson as unknown as ReciteItem[];
 // 各自派生成一条单段 thread —— 336 条一条不丢（src/recite/threads.ts）。
 const reciteThreads = buildThreads(reciteItems, reciteThreadsJson as unknown as ReciteThread[]);
 
-type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item' | 'territory' | 'produce';
+type Screen = 'loading' | 'error' | 'today' | 'session' | 'done' | 'settings' | 'recite' | 'recite-item' | 'territory' | 'produce' | 'curate';
 type SessionMode = 'all' | 'review' | 'new';
 type SyncState = 'idle' | 'syncing' | 'success' | 'error';
 
 function syncSummary(snapshot: SyncSnapshot): string {
   const reviewedCards = new Set(snapshot.reviews.map((review) => review.cardId)).size;
-  return `同步完成：${snapshot.srs.length} 张已排期，${reviewedCards} 张有作答记录，${snapshot.reviews.length} 次作答。`;
+  const personalChanges = (snapshot.userCards?.length ?? 0) + (snapshot.hiddenCards?.length ?? 0);
+  return `同步完成：${snapshot.srs.length} 张已排期，${reviewedCards} 张有作答记录，${snapshot.reviews.length} 次作答${personalChanges ? `，${personalChanges} 项个人题库改动` : ''}。`;
 }
 
 function downloadTextFile(filename: string, text: string): boolean {
@@ -131,6 +138,14 @@ export default function App() {
 
   const pickerTracks = useCallback((): Track[] => [ALL_TRACK, ...tracksRef.current], []);
 
+  const reloadCardLibrary = useCallback(async (db: Db): Promise<Card[]> => {
+    const [userCards, hiddenRows] = await Promise.all([loadUserCards(db), loadHiddenCardRows(db)]);
+    const cards = mergeCardLibrary(bundledCards, userCards, new Set(hiddenRows.map((row) => row.cardId)));
+    cardsRef.current = cards;
+    cardsByIdRef.current = new Map(cards.map((card) => [card.id, card]));
+    return cards;
+  }, []);
+
   const activeTrackDeck = useCallback((): Card[] => {
     const settings = settingsRef.current;
     const track = findTrack(pickerTracks(), settings.activeTrackId);
@@ -155,11 +170,24 @@ export default function App() {
     const s = settingsRef.current;
     const trackDeck = activeTrackDeck();
     const categoryStats = buildCategoryStats(trackDeck, store.srs);
+    const categoryHasNormalCard = new Map<string, boolean>();
+    for (const card of trackDeck) {
+      const category = card.category ?? 'Uncategorized';
+      categoryHasNormalCard.set(category, (categoryHasNormalCard.get(category) ?? false) || card.format !== 'produce');
+    }
+    const produceOnlyCategories = new Set(
+      categoryStats
+        .filter((category) => !categoryHasNormalCard.get(category.id))
+        .map((category) => category.id),
+    );
     const validCategory =
       s.activeCategory === ALL_CATEGORY || categoryStats.some((category) => category.id === s.activeCategory)
         ? s.activeCategory
         : ALL_CATEGORY;
     const deck = filterByCategory(trackDeck, validCategory);
+    const useRoadmapOrder =
+      s.activeTrackId === CLASSIC_SYSTEM_DESIGN_TRACK_ID &&
+      deck.every((card) => Number.isInteger(card.roadmapOrder));
     const deckIds = new Set(deck.map((c) => c.id));
     const trackDeckIds = new Set(trackDeck.map((c) => c.id));
     const doneSetAll = await distinctCardsOnDay(db, localDateStr(now));
@@ -194,6 +222,7 @@ export default function App() {
       : buildQueue(deck, store.srs, now, {
           newPerDay: effectiveNewPerDay,
           reviewedToday: reviewedTodayInDeck,
+          useRoadmapOrder,
         });
     const dueCount = queue.filter((id) => store.srs.has(id)).length;
     const newCount = queue.length - dueCount;
@@ -273,7 +302,10 @@ export default function App() {
           mastered: trackMastered,
           seen: trackSeen,
         },
-        ...categoryStats,
+        ...categoryStats.map((category) => ({
+          ...category,
+          produceOnly: produceOnlyCategories.has(category.id),
+        })),
       ],
     });
     if (validCategory !== s.activeCategory) {
@@ -298,6 +330,7 @@ export default function App() {
         );
         return;
       }
+      await reloadCardLibrary(db);
       const [srs, fb, samples] = await Promise.all([loadSrs(db), loadFeedback(db), loadElapsedSamples(db)]);
       storeRef.current = { srs, fb };
       typicalRef.current = typicalTimesByType(samples, (id) => cardsByIdRef.current.get(id)?.atomType);
@@ -308,7 +341,57 @@ export default function App() {
       setSyncState('error');
       setSyncMessage(`同步没有完成：${error instanceof Error ? error.message : '请检查网络后重试。'}`);
     }
-  }, [refresh]);
+  }, [refresh, reloadCardLibrary]);
+
+  const refreshLearnerState = useCallback(async (db: Db) => {
+    await reloadCardLibrary(db);
+    const [srs, fb, samples] = await Promise.all([loadSrs(db), loadFeedback(db), loadElapsedSamples(db)]);
+    storeRef.current = { srs, fb };
+    typicalRef.current = typicalTimesByType(samples, (id) => cardsByIdRef.current.get(id)?.atomType);
+    await refresh();
+  }, [refresh, reloadCardLibrary]);
+
+  const syncPersonalChange = useCallback(async (db: Db): Promise<'cloud' | 'local'> => {
+    let receipt: 'cloud' | 'local' = 'local';
+    try {
+      const snapshot = await syncNow(db);
+      if (snapshot) {
+        receipt = 'cloud';
+        setSyncState('success');
+        setSyncMessage(syncSummary(snapshot));
+      } else {
+        setSyncState('idle');
+        setSyncMessage('个人题库已更新；同步恢复后会自动上传。');
+      }
+    } catch (error) {
+      setSyncState('error');
+      setSyncMessage(`个人题库已保存在本机：${error instanceof Error ? error.message : '网络恢复后会自动同步。'}`);
+    }
+    await refreshLearnerState(db);
+    return receipt;
+  }, [refreshLearnerState]);
+
+  const addSupplement = useCallback(async (source: Card, title: string, explanation: string): Promise<'cloud' | 'local'> => {
+    const db = dbRef.current;
+    if (!db) return 'local';
+    await saveUserCard(db, createSupplementCard(source, { title, explanation }));
+    return syncPersonalChange(db);
+  }, [syncPersonalChange]);
+
+  const removeCard = useCallback(async (cardId: string): Promise<void> => {
+    const db = dbRef.current;
+    if (!db) return;
+    await hideCard(db, cardId);
+    // The live session must advance immediately. Persist the learner-owned
+    // hide locally, refresh the in-memory deck, then let cloud sync catch up.
+    await refreshLearnerState(db);
+    setSyncState('syncing');
+    setSyncMessage('个人题库已更新，正在同步…');
+    void syncPersonalChange(db).catch((error) => {
+      setSyncState('error');
+      setSyncMessage(`个人题库已保存在本机：${error instanceof Error ? error.message : '网络恢复后会自动同步。'}`);
+    });
+  }, [refreshLearnerState, syncPersonalChange]);
 
   useEffect(() => {
     (async () => {
@@ -327,7 +410,7 @@ export default function App() {
           setSyncState('error');
           setSyncMessage(`启动同步没有完成：${error instanceof Error ? error.message : '请稍后在设置页重试。'}`);
         }
-        const cards = bundledCards;
+        await reloadCardLibrary(db);
         const srs = await loadSrs(db);
         const fb = await loadFeedback(db);
         const kv = await loadSettingsKv(db);
@@ -335,8 +418,6 @@ export default function App() {
         const dbTracks = await loadTracks(db);
 
         dbRef.current = db;
-        cardsRef.current = cards;
-        cardsByIdRef.current = new Map(cards.map((c) => [c.id, c]));
         try {
           const samples = await loadElapsedSamples(db);
           typicalRef.current = typicalTimesByType(samples, (id) => cardsByIdRef.current.get(id)?.atomType);
@@ -371,7 +452,7 @@ export default function App() {
         setScreen('error');
       }
     })();
-  }, [refresh]);
+  }, [refresh, reloadCardLibrary]);
 
   const persistSettings = async (next: AppSettings) => {
     settingsRef.current = next;
@@ -416,16 +497,24 @@ export default function App() {
     const now = new Date();
     const deck = deckOverride ?? activeDeck();
     const reviewedToday = todayDoneIdsRef.current;
+    const useRoadmapOrder =
+      settingsRef.current.activeTrackId === CLASSIC_SYSTEM_DESIGN_TRACK_ID &&
+      deck.every((card) => Number.isInteger(card.roadmapOrder));
     let q = stats.finalStretch && !deckOverride
       ? buildWeakSweepQueue(deck, store.srs, { reviewedToday })
       : buildQueue(deck, store.srs, now, {
           newPerDay: deckOverride ? Number.MAX_SAFE_INTEGER : stats.newPerDay,
           reviewedToday,
+          useRoadmapOrder,
         });
     if (mode === 'review') q = q.filter((id) => store.srs.has(id));
     if (mode === 'new') q = q.filter((id) => !store.srs.has(id));
-    // dues keep oldest-first order; only the new-card tail is shuffled per session
-    q = orderSessionQueue(q, store.srs);
+    // Dues stay oldest-first. A selected roadmap preserves the authored order
+    // of its new-card tail; other tracks retain the session shuffle.
+    const roadmapOrderById = useRoadmapOrder
+      ? new Map(deck.map((card) => [card.id, card.roadmapOrder!]))
+      : undefined;
+    q = orderSessionQueue(q, store.srs, Math.random, { roadmapOrderById });
     if (!q.length) return false;
     // A5：一组最多 PLAN_CHUNK 张（到期的照旧最早先做，新卡在后）
     const chunk = planChunk(q);
@@ -453,6 +542,14 @@ export default function App() {
     setSessionKey((k) => k + 1);
     setScreen('session');
     return true;
+  };
+
+  /** A paper-only module on the roadmap should never open an empty normal queue. */
+  const openProduceTopic = (category: string) => {
+    const store = storeRef.current;
+    if (!store) return;
+    const topic = buildProduceTopics(cardsRef.current, store.srs).find((item) => item.category === category);
+    if (topic) startProduceSession(topic);
   };
 
   const pickTerritoryCell = (cell: TerritoryCell): boolean => {
@@ -535,6 +632,8 @@ export default function App() {
           onSelectTrack={selectTrack}
           onSelectRoadmapStage={selectRoadmapStage}
           onSelectCategory={selectCategory}
+          onOpenProduceTopic={openProduceTopic}
+          onCurate={() => setScreen('curate')}
           onStart={() => startSession('all')}
           onStartReviews={() => startSession('review')}
           onStartNew={() => startSession('new')}
@@ -560,6 +659,22 @@ export default function App() {
           rows={buildTerritory(cardsRef.current, tracksRef.current, storeRef.current.srs, MASTERED_STABILITY_DAYS)}
           onPick={pickTerritoryCell}
           onBack={() => setScreen('today')}
+        />
+      ) : null}
+
+      {screen === 'curate' ? (
+        <CardCurationScreen
+          title={
+            settings.activeTrackId === CLASSIC_SYSTEM_DESIGN_TRACK_ID
+              ? `整理 · ${SYSTEM_DESIGN_ROADMAP.find((stage) => stage.id === settings.activeRoadmapStage)?.label ?? '经典系统设计'}`
+              : '整理当前题库'
+          }
+          cards={activeTrackDeck()}
+          onDeleteCard={removeCard}
+          onBack={() => {
+            void refresh();
+            setScreen('today');
+          }}
         />
       ) : null}
 
@@ -639,6 +754,8 @@ export default function App() {
           correctFuzzyFloor={todayStats?.correctFuzzyFloor ?? 4}
           typicalTimes={typicalRef.current}
           soundEnabled={settings.soundEnabled}
+          onAddSupplement={addSupplement}
+          onDeleteCard={removeCard}
           onExit={() => {
             void refresh();
             setScreen('today');

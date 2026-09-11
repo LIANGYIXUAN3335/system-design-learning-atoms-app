@@ -15,6 +15,8 @@ export interface QueueOpts {
   learnAheadMin?: number;
   /** Cards already graded today; they leave today's study debt until tomorrow. */
   reviewedToday?: Set<string>;
+  /** A named roadmap should introduce cards in its authored source order. */
+  useRoadmapOrder?: boolean;
 }
 
 function hashString(value: string): number {
@@ -68,8 +70,9 @@ export function introducedTodayCount(
 
 /**
  * Daily queue = due reviews (oldest due first), then a stable daily sample of
- * new cards. The date-seeded shuffle avoids serving one source chapter at a
- * time while keeping refreshes on the same day from reshuffling underneath you.
+ * new cards. Generic decks use a date-seeded shuffle so a refresh stays stable
+ * without serving one source chapter at a time. A named roadmap may instead
+ * opt into its authored source order.
  */
 export function buildQueue(
   cards: Card[],
@@ -91,8 +94,15 @@ export function buildQueue(
   const today = localDateStr(now);
   const fresh = cards
     .filter((c) => !reviewedToday.has(c.id) && !srs.has(c.id))
-    .map((c, index) => ({ id: c.id, index, key: newCardSortKey(c.id, today) }))
-    .sort((a, b) => a.key - b.key || a.index - b.index)
+    .map((c, index) => ({ id: c.id, index, key: newCardSortKey(c.id, today), roadmapOrder: c.roadmapOrder }))
+    .sort((a, b) => {
+      if (opts.useRoadmapOrder) {
+        const aOrder = a.roadmapOrder ?? Number.MAX_SAFE_INTEGER;
+        const bOrder = b.roadmapOrder ?? Number.MAX_SAFE_INTEGER;
+        return aOrder - bOrder || a.index - b.index;
+      }
+      return a.key - b.key || a.index - b.index;
+    })
     .slice(0, quota)
     .map((c) => c.id);
 
@@ -129,17 +139,27 @@ export function buildWeakSweepQueue(
 
 /**
  * Session-start ordering: due reviews KEEP buildQueue's oldest-due-first order
- * (the spaced-repetition contract — overdue debt is served first), only the
- * new-card tail is shuffled for per-session variety. Mode-agnostic: a
- * review-only list has an empty tail, a new-only list an empty head.
+ * (the spaced-repetition contract — overdue debt is served first). Generic
+ * decks shuffle the new-card tail for session variety; roadmap modules retain
+ * their authored new-card sequence. Mode-agnostic: a review-only list has an
+ * empty tail, a new-only list an empty head.
  */
 export function orderSessionQueue(
   ids: string[],
   srs: Map<string, SrsEntry>,
   rand: () => number = Math.random,
+  opts: { roadmapOrderById?: ReadonlyMap<string, number> } = {},
 ): string[] {
   const dues = ids.filter((id) => srs.has(id));
   const news = ids.filter((id) => !srs.has(id));
+  if (opts.roadmapOrderById) {
+    news.sort((a, b) => {
+      const aOrder = opts.roadmapOrderById?.get(a) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = opts.roadmapOrderById?.get(b) ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder || a.localeCompare(b);
+    });
+    return [...dues, ...news];
+  }
   return [...dues, ...shuffleWithMap(news, rand).items];
 }
 
@@ -164,6 +184,26 @@ export function dueAdditions(
     if (isDueNow(e.fsrs, now, learnAheadMin)) additions.push(id);
   }
   return additions;
+}
+
+/**
+ * Remove the card currently shown in a live study queue. The next unseen card
+ * takes the same slot, so removing a card never rewinds the learner or counts
+ * as an answer. `nextIndex: null` means the current card was the final card.
+ */
+export function removeCurrentQueueCard(
+  queue: readonly string[],
+  currentIndex: number,
+): { queue: string[]; nextIndex: number | null } {
+  if (currentIndex < 0 || currentIndex >= queue.length) {
+    return { queue: [...queue], nextIndex: null };
+  }
+
+  const nextQueue = [...queue.slice(0, currentIndex), ...queue.slice(currentIndex + 1)];
+  return {
+    queue: nextQueue,
+    nextIndex: currentIndex < nextQueue.length ? currentIndex : null,
+  };
 }
 
 /** Cards not due now but coming due later today (drives "稍后还有 N 张" on Today/Done). */

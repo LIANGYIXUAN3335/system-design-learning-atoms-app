@@ -1,7 +1,8 @@
 import * as SQLite from 'expo-sqlite';
-import type { FeedbackRow, FlagKey, FeedbackGrade, Track } from '../types';
+import type { Card, FeedbackRow, FlagKey, FeedbackGrade, Track } from '../types';
 import { deserializeFsrs, serializeFsrs } from '../logic/srs';
 import type { SrsEntry } from '../logic/queue';
+import { normalizeSystemDesignRoadmapStage } from '../logic/systemDesignRoadmap';
 
 export type Db = SQLite.SQLiteDatabase;
 
@@ -89,6 +90,23 @@ async function migrate(db: Db): Promise<void> {
       PRAGMA user_version = 4;
     `);
   }
+  if (version < 5) {
+    // The packaged deck is read-only. These two overlays hold only learner
+    // additions and learner-specific removals, so the shared source deck can
+    // be rebuilt or updated without losing personal curation.
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS user_cards (
+        id        TEXT PRIMARY KEY,
+        json      TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS hidden_cards (
+        cardId    TEXT PRIMARY KEY,
+        updatedAt TEXT NOT NULL
+      );
+      PRAGMA user_version = 5;
+    `);
+  }
 }
 
 export async function loadSrs(db: Db): Promise<Map<string, SrsEntry>> {
@@ -143,6 +161,63 @@ export interface SyncSnapshot {
   srs: Array<{ cardId: string; fsrs: string; due: string; state: number; firstSeen: string; updatedAt: string }>;
   reviews: Array<ReviewLogEntry & { eventId: string }>;
   feedback: FeedbackRow[];
+  userCards: UserCardSyncRow[];
+  hiddenCards: HiddenCardSyncRow[];
+}
+
+export interface UserCardSyncRow {
+  id: string;
+  json: string;
+  updatedAt: string;
+}
+
+export interface HiddenCardSyncRow {
+  cardId: string;
+  updatedAt: string;
+}
+
+export async function loadUserCardRows(db: Db): Promise<UserCardSyncRow[]> {
+  return db.getAllAsync<UserCardSyncRow>('SELECT id, json, updatedAt FROM user_cards');
+}
+
+export async function loadUserCards(db: Db): Promise<Card[]> {
+  const rows = await loadUserCardRows(db);
+  const cards: Card[] = [];
+  for (const row of rows) {
+    try {
+      const card = JSON.parse(row.json) as Card;
+      if (!card || card.id !== row.id) throw new Error('card id mismatch');
+      cards.push(card);
+    } catch {
+      console.warn(`Ignoring unreadable personal card ${row.id}`);
+    }
+  }
+  return cards;
+}
+
+export async function saveUserCard(db: Db, card: Card, updatedAt: string = new Date().toISOString()): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO user_cards (id, json, updatedAt) VALUES (?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET json = excluded.json, updatedAt = excluded.updatedAt
+     WHERE excluded.updatedAt >= user_cards.updatedAt`,
+    card.id,
+    JSON.stringify(card),
+    updatedAt,
+  );
+}
+
+export async function loadHiddenCardRows(db: Db): Promise<HiddenCardSyncRow[]> {
+  return db.getAllAsync<HiddenCardSyncRow>('SELECT cardId, updatedAt FROM hidden_cards');
+}
+
+export async function hideCard(db: Db, cardId: string, updatedAt: string = new Date().toISOString()): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO hidden_cards (cardId, updatedAt) VALUES (?, ?)
+     ON CONFLICT(cardId) DO UPDATE SET updatedAt = excluded.updatedAt
+     WHERE excluded.updatedAt >= hidden_cards.updatedAt`,
+    cardId,
+    updatedAt,
+  );
 }
 
 /** Export only mutable learning state. Card content remains in the app bundle. */
@@ -154,7 +229,12 @@ export async function exportSyncSnapshot(db: Db): Promise<SyncSnapshot> {
     eventId: string; cardId: string; ts: string; day: string; rating: number;
     wasCorrect: number | null; usedIdk: number; elapsedMs: number;
   }>('SELECT eventId, cardId, ts, day, rating, wasCorrect, usedIdk, elapsedMs FROM review_log');
-  const feedback = [...(await loadFeedback(db)).values()];
+  const [feedbackMap, userCards, hiddenCards] = await Promise.all([
+    loadFeedback(db),
+    loadUserCardRows(db),
+    loadHiddenCardRows(db),
+  ]);
+  const feedback = [...feedbackMap.values()];
   return {
     srs,
     reviews: reviewRows.map((r) => ({
@@ -168,6 +248,8 @@ export async function exportSyncSnapshot(db: Db): Promise<SyncSnapshot> {
       elapsedMs: r.elapsedMs,
     })),
     feedback,
+    userCards,
+    hiddenCards,
   };
 }
 
@@ -198,6 +280,22 @@ export async function mergeSyncSnapshot(db: Db, snapshot: SyncSnapshot): Promise
            term = excluded.term, note = excluded.note, updatedAt = excluded.updatedAt
          WHERE excluded.updatedAt >= feedback.updatedAt`,
         row.cardId, row.grade, JSON.stringify(row.flags), row.term, row.note, row.updatedAt,
+      );
+    }
+    for (const row of snapshot.userCards ?? []) {
+      await db.runAsync(
+        `INSERT INTO user_cards (id, json, updatedAt) VALUES (?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET json = excluded.json, updatedAt = excluded.updatedAt
+         WHERE excluded.updatedAt >= user_cards.updatedAt`,
+        row.id, row.json, row.updatedAt,
+      );
+    }
+    for (const row of snapshot.hiddenCards ?? []) {
+      await db.runAsync(
+        `INSERT INTO hidden_cards (cardId, updatedAt) VALUES (?, ?)
+         ON CONFLICT(cardId) DO UPDATE SET updatedAt = excluded.updatedAt
+         WHERE excluded.updatedAt >= hidden_cards.updatedAt`,
+        row.cardId, row.updatedAt,
       );
     }
   });
@@ -553,6 +651,42 @@ export async function seedTracksOnce(db: Db, seeds: Track[]): Promise<void> {
     );
     await db.runAsync(
       "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '11') ON CONFLICT(key) DO UPDATE SET value = '11'",
+    );
+  }
+
+  // v12: persist the 12-station route's aliases into the eight-station
+  // Hello Interview map. This only rewrites the selected roadmap setting;
+  // FSRS, review history, and feedback tables are intentionally untouched.
+  if (currentVersion < 12) {
+    const active = await db.getFirstAsync<{ value: string }>(
+      "SELECT value FROM settings WHERE key = 'activeRoadmapStage'",
+    );
+    if (active?.value) {
+      const migrated = normalizeSystemDesignRoadmapStage(active.value);
+      if (migrated !== active.value) {
+        await db.runAsync("UPDATE settings SET value = ? WHERE key = 'activeRoadmapStage'", migrated);
+      }
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '12') ON CONFLICT(key) DO UPDATE SET value = '12'",
+    );
+  }
+
+  // v13: the locally authored three-day donation drill moved out of the Hello
+  // Interview guide into its own personal mock station. Persist the station
+  // renames so existing selections keep pointing at the same learning intent.
+  if (currentVersion < 13) {
+    const active = await db.getFirstAsync<{ value: string }>(
+      "SELECT value FROM settings WHERE key = 'activeRoadmapStage'",
+    );
+    if (active?.value) {
+      const migrated = normalizeSystemDesignRoadmapStage(active.value);
+      if (migrated !== active.value) {
+        await db.runAsync("UPDATE settings SET value = ? WHERE key = 'activeRoadmapStage'", migrated);
+      }
+    }
+    await db.runAsync(
+      "INSERT INTO settings (key, value) VALUES ('trackSeedVersion', '13') ON CONFLICT(key) DO UPDATE SET value = '13'",
     );
   }
 }

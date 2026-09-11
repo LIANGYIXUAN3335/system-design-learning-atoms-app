@@ -5,13 +5,12 @@ import { ActButton, GhostButton } from '../components/ui';
 import { RECOMMENDED_NEW_PER_DAY } from '../config';
 import type { Track } from '../types';
 import { categoryStatus } from '../logic/categories';
-
-const ROADMAP_PHASES = ['首轮', '深挖', '补漏'] as const;
+import type { SystemDesignRoadmapPhase } from '../logic/systemDesignRoadmap';
 
 export interface RoadmapStagePill {
   id: string;
   label: string;
-  phase: (typeof ROADMAP_PHASES)[number];
+  phase: SystemDesignRoadmapPhase;
   total: number;
   seen: number;
   mastered: number;
@@ -65,6 +64,8 @@ export interface CategoryPill {
   total: number;
   mastered: number;
   seen: number;
+  /** This category belongs to the paper-first system-design exercise flow. */
+  produceOnly?: boolean;
 }
 
 export interface TodayScreenProps {
@@ -76,6 +77,9 @@ export interface TodayScreenProps {
   onSelectTrack: (id: string) => void;
   onSelectRoadmapStage: (id: string) => void;
   onSelectCategory: (id: string) => void;
+  onOpenProduceTopic: (category: string) => void;
+  /** Opens the current curated system-design station as a full, non-drill list. */
+  onCurate: () => void;
   onStart: () => void;
   onStartReviews: () => void;
   onStartNew: () => void;
@@ -99,6 +103,8 @@ export function TodayScreen({
   onSelectTrack,
   onSelectRoadmapStage,
   onSelectCategory,
+  onOpenProduceTopic,
+  onCurate,
   onStart,
   onStartReviews,
   onStartNew,
@@ -121,6 +127,18 @@ export function TodayScreen({
       ? `新卡 ${stats.newPerDay}/天 · 推荐 ${RECOMMENDED_NEW_PER_DAY}/天`
       : `新卡 ${stats.newPerDay}/天`;
   const showSystemDesignRoadmap = activeTrackId === 'classic-sd';
+  // The source phases are not all contiguous (coach notes are personal,
+  // reference texts follow, then interview recaps return to personal). Group
+  // adjacent entries instead of sorting by phase, so 01→09 stays the route.
+  const roadmapSections: Array<{ phase: SystemDesignRoadmapPhase; stages: RoadmapStagePill[] }> = [];
+  for (const stage of stats.roadmapStages) {
+    const current = roadmapSections[roadmapSections.length - 1];
+    if (!current || current.phase !== stage.phase) {
+      roadmapSections.push({ phase: stage.phase, stages: [stage] });
+    } else {
+      current.stages.push(stage);
+    }
+  }
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
@@ -200,7 +218,7 @@ export function TodayScreen({
         <View style={[styles.pathHint, { borderColor: colors.line, backgroundColor: colors.accentSoft }]}>
           <Text style={{ color: colors.ink, fontSize: 13, fontWeight: '700' }}>经典系统设计路线</Text>
           <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18, marginTop: 3 }}>
-            先走首轮，再按顺序深挖；补漏只在 mock 或真实面试暴露缺口时打开。
+            01–05 是 Hello Interview 主线；06–09 是教练、个人模拟、原典与复盘。每个 deck 只在一个站。
           </Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 9 }}>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -215,16 +233,14 @@ export function TodayScreen({
                 ]}
               >
                 <Text style={{ color: activeRoadmapStage === 'all' ? colors.accent : colors.ink, fontSize: 12.5, fontWeight: '700' }}>
-                  总览
+                  全部卡检索
                 </Text>
               </Pressable>
             </View>
           </ScrollView>
-          {ROADMAP_PHASES.map((phase) => {
-            const stages = stats.roadmapStages.filter((stage) => stage.phase === phase);
-            if (!stages.length) return null;
+          {roadmapSections.map(({ phase, stages }, sectionIndex) => {
             return (
-              <View key={phase} style={{ marginTop: 9 }}>
+              <View key={`${phase}-${sectionIndex}`} style={{ marginTop: 9 }}>
                 <Text style={{ color: colors.muted, fontSize: 11.5, fontWeight: '700' }}>{phase}</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 5 }}>
                   <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -256,6 +272,14 @@ export function TodayScreen({
               </View>
             );
           })}
+          {activeRoadmapStage !== 'all' ? (
+            <Pressable
+              onPress={onCurate}
+              style={({ pressed }) => [styles.curateButton, { borderColor: pressed ? colors.accent : colors.line, backgroundColor: colors.card }]}
+            >
+              <Text style={{ color: colors.ink, fontSize: 13, fontWeight: '700' }}>整理当前站卡片</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
@@ -276,7 +300,16 @@ export function TodayScreen({
               return (
                 <Pressable
                   key={category.id}
-                  onPress={() => onSelectCategory(category.id)}
+                  onPress={() => {
+                    if (category.produceOnly) onOpenProduceTopic(category.id);
+                    else onSelectCategory(category.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    category.produceOnly
+                      ? `${category.name}，白纸演练，${category.total} 步`
+                      : `${category.name}，已刷 ${category.seen}/${category.total}`
+                  }
                   style={[
                     styles.categoryChip,
                     {
@@ -295,7 +328,7 @@ export function TodayScreen({
                     </Text>
                   </View>
                   <Text style={{ color: colors.muted, fontSize: 11.5, marginTop: 3 }}>
-                    已刷 {category.seen}/{category.total} · 掌握 {mastery}%
+                    {category.produceOnly ? `白纸 · ${category.total} 步` : `已刷 ${category.seen}/${category.total} · 掌握 ${mastery}%`}
                   </Text>
                 </Pressable>
               );
@@ -375,6 +408,7 @@ const styles = StyleSheet.create({
   trackChip: { borderWidth: 1.5, borderRadius: 99, paddingVertical: 7, paddingHorizontal: 14 },
   pathHint: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginTop: 12 },
   roadmapChip: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, minWidth: 106 },
+  curateButton: { alignSelf: 'flex-start', borderWidth: 1.5, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8, marginTop: 11 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   categoryChip: { borderWidth: 1.5, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11, minWidth: 132 },
   planBox: { borderWidth: 1, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 14 },
