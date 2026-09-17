@@ -20,6 +20,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Index, buildContext, setGlossary } from './lib/retrieve.mjs'
+import { ClarificationReviewer, ReviewRateLimitError, ReviewRequestLedger } from './clarification-review.mjs'
+import { readBody } from './request-body.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 8080)
@@ -27,6 +29,9 @@ const API_KEY = process.env.ANTHROPIC_API_KEY || ''
 const ASK_TOKEN = process.env.ASK_TOKEN || ''
 const MODEL = process.env.ASK_MODEL || 'claude-sonnet-5'
 const API_URL = 'https://api.anthropic.com/v1/messages'
+const ALLOWED_ORIGINS = new Set(
+  String(process.env.ALLOWED_ORIGINS || '').split(',').map((value) => value.trim()).filter(Boolean),
+)
 
 // A key that isn't ASCII can never be sent as an HTTP header — fetch throws
 // "Cannot convert argument to a ByteString", which says nothing about the real cause.
@@ -49,6 +54,19 @@ const records = readFileSync(join(HERE, 'data', 'corpus.jsonl'), 'utf8')
 setGlossary(JSON.parse(readFileSync(join(HERE, 'data', 'glossary.json'), 'utf8')))
 const index = new Index(records)
 console.log(`[ask] corpus ${records.length} records indexed`)
+let clarificationRubrics = []
+try {
+  clarificationRubrics = JSON.parse(readFileSync(join(HERE, 'data', 'clarification-rubrics.json'), 'utf8'))
+} catch {
+  // Older deployments can still answer normal /ask requests while the new app
+  // falls back to its manual checklist rather than receiving a broken review.
+  console.warn('[ask] clarification rubrics unavailable')
+}
+const clarificationRubricByCardId = new Map(
+  clarificationRubrics.filter((item) => item?.cardId && item?.version).map((item) => [item.cardId, item]),
+)
+const clarificationReviewer = new ClarificationReviewer({ apiKey: API_KEY, model: process.env.COPILOT_REVIEW_MODEL || MODEL })
+const clarificationRequests = new ReviewRequestLedger()
 
 const SYSTEM = `You answer questions from Casey's own study notes and interview practice cards.
 
@@ -73,11 +91,28 @@ function send(res, code, obj, headers = {}) {
 }
 
 /** Both clients authenticate the same way; the glasses send it as a Bearer token. */
+function bearer(req) {
+  const h = req.headers.authorization || ''
+  return h.startsWith('Bearer ') ? h.slice(7) : ''
+}
+
 function authed(req) {
   if (!ASK_TOKEN) return true                      // unset = local dev
-  const h = req.headers.authorization || ''
-  const bearer = h.startsWith('Bearer ') ? h.slice(7) : ''
-  return bearer === ASK_TOKEN || req.headers['x-ask-token'] === ASK_TOKEN
+  const token = bearer(req)
+  return token === ASK_TOKEN || req.headers['x-ask-token'] === ASK_TOKEN
+}
+
+/** The browser review endpoint is intentionally restricted to the known app origin. */
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || '')
+  if (!origin) return true // Even G2 and command-line health checks do not send Origin.
+  if (!ALLOWED_ORIGINS.has(origin)) return false
+  res.setHeader('access-control-allow-origin', origin)
+  res.setHeader('vary', 'Origin')
+  res.setHeader('access-control-allow-methods', 'POST, OPTIONS')
+  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-request-id')
+  res.setHeader('access-control-max-age', '600')
+  return true
 }
 
 async function askClaude(question, { stream = false } = {}) {
@@ -110,16 +145,6 @@ async function askClaude(question, { stream = false } = {}) {
   return { res, hits }
 }
 
-function readBody(req) {
-  return new Promise((resolve) => {
-    let raw = ''
-    req.on('data', (c) => { raw += c })
-    req.on('end', () => {
-      try { resolve(JSON.parse(raw || '{}')) } catch { resolve({}) }
-    })
-  })
-}
-
 /** Last user message wins — the glasses send the whole conversation for follow-ups. */
 function lastUserText(messages) {
   for (let i = (messages || []).length - 1; i >= 0; i--) {
@@ -136,6 +161,12 @@ function lastUserText(messages) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
 
+  if (!applyCors(req, res)) return send(res, 403, { error: 'forbidden origin' })
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    return res.end()
+  }
+
   if (req.method === 'GET' && url.pathname === '/health') {
     return send(res, KEY_PROBLEM ? 503 : 200, {
       ok: !KEY_PROBLEM, records: records.length, model: MODEL,
@@ -147,7 +178,40 @@ const server = createServer(async (req, res) => {
   if (!authed(req)) return send(res, 401, { error: 'unauthorized' })
   if (KEY_PROBLEM) return send(res, 503, { error: { message: KEY_PROBLEM } })
 
-  const body = await readBody(req)
+  let body
+  try {
+    body = await readBody(req, url.pathname === '/review/clarifications' ? 8 * 1024 : 64 * 1024)
+  } catch (error) {
+    return send(res, Number(error?.status) || 400, { error: 'invalid request body' })
+  }
+
+  // ── Atoms app: clarification-only Copilot review ─────────────────────
+  // The browser never submits a rubric. `cardId + rubricVersion` must match
+  // the small rubric bundle baked into this service at deploy time.
+  if (url.pathname === '/review/clarifications') {
+    const cardId = String(body.cardId || '').trim()
+    const rubricVersion = String(body.rubricVersion || '').trim()
+    const answer = String(body.answer || '')
+    const requestId = String(req.headers['x-request-id'] || '').trim()
+    const rubric = clarificationRubricByCardId.get(cardId)
+    if (!/^[-a-z0-9_]{8,120}$/i.test(requestId) || !rubric || rubric.version !== rubricVersion) {
+      return send(res, 400, { error: 'invalid review request' })
+    }
+    try {
+      const result = await clarificationRequests.run(bearer(req) || 'local-dev', requestId, () =>
+        clarificationReviewer.review({ cardId, rubricVersion, answer, requestId, rubric }),
+      )
+      return send(res, 200, result)
+    } catch (error) {
+      if (error instanceof ReviewRateLimitError || error?.status === 429) {
+        return send(res, 429, { error: 'rate limited' }, { 'retry-after': '600' })
+      }
+      if (error?.status === 400 || error?.status === 413) return send(res, error.status, { error: 'invalid review request' })
+      // Do not log candidates' pasted answer or an upstream provider payload.
+      console.error('[clarification-review] unavailable')
+      return send(res, 503, { error: 'review unavailable' })
+    }
+  }
 
   // ── Atoms app: plain JSON in, plain JSON out ──
   if (url.pathname === '/ask') {
