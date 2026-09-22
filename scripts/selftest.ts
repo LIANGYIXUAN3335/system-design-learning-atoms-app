@@ -27,6 +27,7 @@ import {
   isDueNow,
   laterTodayCount,
   orderSessionQueue,
+  removeCurrentQueueCard,
   type SrsEntry,
 } from '../src/logic/queue';
 import { localDateStr } from '../src/logic/dates';
@@ -35,7 +36,9 @@ import { ALL_TRACK, cardMatchesTrack, filterDeck, trackIdFromName } from '../src
 import { ALL_CATEGORY, buildCategoryStats, categoryStatus, filterByCategory } from '../src/logic/categories';
 import {
   filterSystemDesignRoadmapStage,
+  LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES,
   legacyTrackToRoadmapStage,
+  normalizeSystemDesignRoadmapStage,
   SYSTEM_DESIGN_ROADMAP,
 } from '../src/logic/systemDesignRoadmap';
 import { DEFAULT_SETTINGS, settingsFromKv, settingsToKv } from '../src/logic/settings';
@@ -61,6 +64,7 @@ import {
 import { buildTerritory, cellStatus, cellWidth, STABLE_SHARE } from '../src/logic/territory';
 import { chooseConceptVisual, detectTerms } from '../src/logic/terms';
 import { buildArchitectureVisual } from '../src/logic/architectureVisuals';
+import { createSupplementCard, mergeCardLibrary } from '../src/logic/userCards';
 import { NEW_PER_DAY, RECOMMENDED_NEW_PER_DAY, RHYTHMS } from '../src/config';
 import reciteBundleJson from '../src/content/recite.bundle.json';
 import reciteThreadsJson from '../src/content/recite.threads.json';
@@ -121,6 +125,36 @@ for (const c of cards) {
   }
 }
 t('diagram patch applied (db-017, db-024)', cards.filter((c) => c.diagram).map((c) => c.id).join(',') === 'db-017,db-024');
+
+// ---- learner-owned cards ---------------------------------------------
+console.log('personal cards');
+{
+  const source = {
+    id: 'sd-source',
+    format: 'mcq',
+    atomType: 'fit',
+    topic: 'system-design',
+    sub: 'caching',
+    q: '什么时候该加缓存？',
+    why: '读多写少且可接受短暂旧数据时，缓存可以减轻主库压力。',
+    why_en: 'Cache read-heavy, stale-tolerant paths to reduce load on the primary store.',
+    track: 'classic-sd',
+    category: '缓存',
+    roadmapOrder: 17,
+    tags: ['track:classic-sd', 'curriculum:sd-01-hurry'],
+  } as Card;
+  const supplement = createSupplementCard(
+    source,
+    { title: '缓存击穿', explanation: '热点刚过期时，大量请求同时回源；用互斥重建或逻辑过期把回源收敛。' },
+    new Date('2026-10-27T18:00:00.000Z'),
+    'test',
+  );
+  const merged = mergeCardLibrary([source], [supplement], new Set());
+  t('supplement inherits its source placement', supplement.sourceCardId === source.id && supplement.roadmapOrder === source.roadmapOrder);
+  t('supplement stays after its source', merged.map((card) => card.id).join(',') === `${source.id},${supplement.id}`);
+  t('hidden source also hides its supplement', mergeCardLibrary([source], [supplement], new Set([source.id])).length === 0);
+  t('supplement is a usable cloze card', supplement.format === 'cloze' && parseCloze(supplement.text ?? '').some((part) => part.type === 'blank'));
+}
 
 // ---- shuffle ----------------------------------------------------------
 console.log('shuffle');
@@ -360,12 +394,32 @@ console.log('queue');
   const qZero = buildQueue(cards, srs, now, { newPerDay: 2 });
   t('quota exhausted → no new cards', qZero.filter((id) => !srs.has(id)).length === 0);
 
-  // orderSessionQueue: dues keep buildQueue order, only the new tail shuffles
+  const roadmapCards = [
+    { ...cards[5], id: 'roadmap-third', roadmapOrder: 3 },
+    { ...cards[6], id: 'roadmap-first', roadmapOrder: 1 },
+    { ...cards[7], id: 'roadmap-second', roadmapOrder: 2 },
+    { ...cards[8], id: 'roadmap-due', roadmapOrder: 4 },
+  ];
+  const roadmapSrs = new Map<string, SrsEntry>([
+    ['roadmap-due', mk({ state: State.Review, due: new Date('2026-06-30T09:00:00') }, '2026-06-20')],
+  ]);
+  const roadmapQueue = buildQueue(roadmapCards, roadmapSrs, now, { newPerDay: 2, useRoadmapOrder: true });
+  t('roadmap queue keeps due first and new cards authored', roadmapQueue.join(',') === 'roadmap-due,roadmap-first,roadmap-second');
+
+  // orderSessionQueue: dues keep buildQueue order; generic news shuffle, while
+  // a roadmap preserves the already-authored new-card order.
   const ordered = orderSessionQueue(q, srs, () => 0.42);
   t('session order: dues stay ahead of news', ordered.slice(0, dueIds.length).every((id) => srs.has(id)));
   t('session order: due order preserved oldest-first', ordered.slice(0, dueIds.length).join(',') === dueIds.join(','));
   t('session order: same id set', [...ordered].sort().join(',') === [...q].sort().join(','));
   t('session order: review-only list passes through', orderSessionQueue(dueIds, srs, () => 0.42).join(',') === dueIds.join(','));
+  const orderedRoadmap = orderSessionQueue(
+    ['roadmap-third', 'roadmap-due', 'roadmap-first', 'roadmap-second'],
+    roadmapSrs,
+    () => 0.42,
+    { roadmapOrderById: new Map([['roadmap-first', 1], ['roadmap-second', 2], ['roadmap-third', 3], ['roadmap-due', 4]]) },
+  );
+  t('session preserves due then authored roadmap order', orderedRoadmap.join(',') === 'roadmap-due,roadmap-first,roadmap-second,roadmap-third');
 
   // dueAdditions: the mid-session requeue sweep, bounded by scope
   const allIds = new Set(cards.map((c) => c.id));
@@ -375,6 +429,15 @@ console.log('queue');
   t('sweep skips every id already in the session queue', dueAdditions(srs, allIds, new Set(['db-001', 'db-002', 'db-003']), now).length === 0);
   t('sweep bounded to a new-only session scope', dueAdditions(srs, new Set(['db-006', 'db-007']), none, now).length === 0);
   t('sweep sees a lapsed card inside its scope', dueAdditions(srs, new Set(['db-003', 'db-006']), none, now).join(',') === 'db-003');
+
+  // Curation inside a live session: remove only the current card and keep the
+  // immediate successor in view. A final-card delete has no next card to show.
+  const middleRemoval = removeCurrentQueueCard(['a', 'b', 'c'], 1);
+  t('removing current card keeps the immediate next card', middleRemoval.queue.join(',') === 'a,c' && middleRemoval.nextIndex === 1);
+  const firstRemoval = removeCurrentQueueCard(['a', 'b'], 0);
+  t('removing first card advances to following card', firstRemoval.queue.join(',') === 'b' && firstRemoval.nextIndex === 0);
+  const finalRemoval = removeCurrentQueueCard(['a', 'b'], 1);
+  t('removing final card signals end of session', finalRemoval.queue.join(',') === 'a' && finalRemoval.nextIndex === null);
 }
 
 // ---- feedback export ---------------------------------------------------
@@ -468,28 +531,97 @@ console.log('tracks');
   t('bundle covers coding-fundamentals seed track', filterDeck(bundle, seedById('coding-fundamentals')).length >= 260);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
   const classicDeck = filterDeck(bundle, seedById('classic-sd'));
+  t('classic roadmap retains all 6,225 source cards', classicDeck.length === 6225);
   const expectedRoadmapSizes: Record<string, number> = {
-    'sd-00-framework': 45,
-    'sd-01-patterns': 60,
-    'sd-02-components': 70,
-    'sd-03-cases': 93,
-    'sd-04-upgrades': 60,
-    // 快照值（2026-10-16 产物改版后重取：problem-breakdowns 删 meta 卡、加 produce 卡）
-    'sd-10-foundations': 602,
-    'sd-11-patterns-full': 347,
-    'sd-12-data-storage': 1485,
-    'sd-13-platform-network': 583,
-    'sd-14-product-systems': 1323,
-    'sd-15-reference': 979,
-    'sd-99-gap-fill': 1952,
+    'sd-01-hurry': 311,
+    // 534 Hello Interview core-concept cards + 34 legacy database seed cards.
+    'sd-02-core-concepts': 568,
+    'sd-03-patterns': 435,
+    'sd-04-key-technologies': 912,
+    'sd-05-problem-breakdowns': 2272,
+    'sd-06-coach': 217,
+    // Local mock interview: 9 original drill cards + capacity and debrief.
+    'sd-07-mock-donation': 11,
+    'sd-08-reference': 1464,
+    'sd-09-recaps': 35,
   };
+  t(
+    'classic roadmap exposes the nine authored stations',
+    SYSTEM_DESIGN_ROADMAP.map((stage) => stage.id).join(',') === Object.keys(expectedRoadmapSizes).join(','),
+  );
   for (const [id, expected] of Object.entries(expectedRoadmapSizes)) {
     t(`${id} is an in-track classic-system-design stage`, filterSystemDesignRoadmapStage(classicDeck, id).length === expected);
   }
   const guidedClassicIds = new Set(
     SYSTEM_DESIGN_ROADMAP.flatMap((stage) => filterSystemDesignRoadmapStage(classicDeck, stage.id).map((card) => card.id)),
   );
-  t('in-track system-design roadmap covers every classic-deck card', guidedClassicIds.size === classicDeck.length);
+  const routedClassicCardCount = SYSTEM_DESIGN_ROADMAP.reduce(
+    (total, stage) => total + filterSystemDesignRoadmapStage(classicDeck, stage.id).length,
+    0,
+  );
+  t(
+    'in-track system-design roadmap covers every classic-deck card exactly once',
+    guidedClassicIds.size === classicDeck.length && routedClassicCardCount === classicDeck.length,
+  );
+  t(
+    'every classic card has one roadmap tag and an authored position',
+    classicDeck.every((card) =>
+      card.tags?.filter((tag) => tag.startsWith('curriculum:sd-')).length === 1 &&
+      Number.isInteger(card.roadmapOrder),
+    ),
+  );
+  t(
+    'every classic card has a unique roadmap position',
+    new Set(classicDeck.map((card) => card.roadmapOrder)).size === classicDeck.length,
+  );
+  const classicById = new Map(classicDeck.map((card) => [card.id, card]));
+  const authoredBoundaryIds = [
+    'sd-in-a-hurry-introduction-001',
+    'sd-in-a-hurry-delivery-001',
+    'sd-core-concepts-api-design-001',
+    'db-001',
+    'sd-problem-breakdowns-bitly-001',
+    'sd-problem-breakdowns-bulk-email-move-001',
+    'sd-coach-chat-realtime-001',
+    'sd-problem-breakdowns-three-day-donation-001',
+    'ddia-ch01-001',
+    'sd-recap-amazon-2026-07-001',
+  ];
+  t(
+    'roadmap keeps authored source boundaries in order',
+    authoredBoundaryIds.every((id, index) =>
+      index === 0 ||
+      (classicById.get(authoredBoundaryIds[index - 1])?.roadmapOrder ?? Infinity) <
+        (classicById.get(id)?.roadmapOrder ?? -Infinity),
+    ),
+  );
+  const donationMock = filterSystemDesignRoadmapStage(classicDeck, 'sd-07-mock-donation');
+  t(
+    'three-day donation is a personal mock, not Hello Interview material',
+    donationMock.length === 11 &&
+      !filterSystemDesignRoadmapStage(classicDeck, 'sd-01-hurry').some((card) => card.id.includes('three-day-donation')) &&
+      donationMock.every((card) => card.category === '模拟面试一·三天募捐'),
+  );
+  t(
+    'three-day donation covers the full whiteboard interview chain',
+    [
+      'clarify-first',
+      'scope-lock',
+      'non-functional-requirements',
+      'capacity-sketch',
+      'entities-and-state',
+      'api-contract',
+      'high-level-architecture',
+      'payment-recovery',
+      'running-total-hotspot',
+      'tradeoffs-and-close',
+      'mock-interview-debrief',
+    ].every((sub) => donationMock.some((card) => card.sub === sub)),
+  );
+  t(
+    'three-day donation keeps official payment references visible',
+    donationMock.some((card) => card.references?.some((reference) => reference.url.startsWith('https://docs.stripe.com/'))),
+  );
   t(
     'roadmap tags never leak outside classic system design',
     bundle
@@ -498,13 +630,22 @@ console.log('tracks');
   );
   t(
     'legacy route selection maps into the classic-SD roadmap',
-    legacyTrackToRoadmapStage('sd-path-12-data-storage') === 'sd-12-data-storage' &&
+    legacyTrackToRoadmapStage('sd-path-12-data-storage') === 'sd-04-key-technologies' &&
       legacyTrackToRoadmapStage('classic-sd') === null,
+  );
+  for (const [oldId, newId] of Object.entries(LEGACY_SYSTEM_DESIGN_ROADMAP_STAGE_ALIASES)) {
+    const mappedSettings = settingsFromKv(new Map([['activeRoadmapStage', oldId]])).activeRoadmapStage;
+    t(`${oldId} migrates to ${newId}`, normalizeSystemDesignRoadmapStage(oldId) === newId && mappedSettings === newId);
+  }
+  t(
+    'roadmap preserves all and falls back from a malformed stage',
+    normalizeSystemDesignRoadmapStage('all') === 'all' &&
+      normalizeSystemDesignRoadmapStage('not-a-roadmap-stage') === 'sd-01-hurry',
   );
   const persistedRoadmap = settingsToKv({ ...DEFAULT_SETTINGS, activeRoadmapStage: 'sd-14-product-systems' });
   t(
-    'roadmap stage persists in settings',
-    settingsFromKv(persistedRoadmap).activeRoadmapStage === 'sd-14-product-systems',
+    'legacy roadmap stage migrates in settings',
+    settingsFromKv(persistedRoadmap).activeRoadmapStage === 'sd-05-problem-breakdowns',
   );
   const categories = buildCategoryStats(classicDeck, new Map());
   t('classic track has category groups', categories.length > 40 && categories.every((c) => c.total > 0));

@@ -207,6 +207,7 @@ const CATEGORY_OVERRIDES = {
   'system-design/coach-api-design.json': '带练·API设计',
   'system-design/coach-collab-judge.json': '带练·协作与判题',
   'system-design/coach-rideshare.json': '带练·网约车',
+  'system-design/problem-breakdowns_three-day-donation.json': '模拟面试一·三天募捐',
 };
 
 // user decision 2026-08-21: inside the merged 编码基本功 track, each former
@@ -248,94 +249,170 @@ const CARD_OVERRIDES = {
 };
 
 /**
- * A deliberately small first pass through classic system design. These tags
- * create an ordered route in the app without changing the source decks or
- * asking the learner to survive the whole 6k-card catalog at once.
+ * The classic-system-design roadmap follows the Hello Interview learning
+ * hierarchy rather than slicing the opening cards or inferring a route from
+ * broad topical tags. Every source deck has exactly one destination and its
+ * position here becomes the authored new-card order within that station.
  *
- * Each slice takes the opening cards from a coherent source deck. Those cards
- * establish the reusable idea first; the rest of the source stays available in
- * the broad "经典系统设计" track for a later, targeted deep dive.
+ * The locally authored additions remain visible but never masquerade as Hello
+ * Interview material: the three-day donation whiteboard drill is the first
+ * personal mock immediately after coach follow-ups, while the legacy database
+ * seed deck follows the Hello Interview core concepts. Keeping them explicit
+ * prevents an invisible catch-all route from returning.
  */
-const SD_CURRICULUM_SLICES = {
-  'system-design/in-a-hurry_how-to-prepare.json': [['curriculum:sd-00-framework', 10]],
-  'system-design/in-a-hurry_delivery.json': [['curriculum:sd-00-framework', 15]],
-  'system-design/in-a-hurry_core-concepts.json': [['curriculum:sd-00-framework', 10]],
-  'system-design/core-concepts_numbers-to-know.json': [['curriculum:sd-00-framework', 10]],
+const SD_ROADMAP_DECKS = [
+  {
+    tag: 'curriculum:sd-01-hurry',
+    decks: [
+      'system-design/in-a-hurry_introduction.json',
+      'system-design/in-a-hurry_how-to-prepare.json',
+      'system-design/in-a-hurry_delivery.json',
+      'system-design/in-a-hurry_core-concepts.json',
+      'system-design/in-a-hurry_key-technologies.json',
+      'system-design/in-a-hurry_patterns.json',
+      'system-design/in-a-hurry_problem-breakdowns.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-02-core-concepts',
+    decks: [
+      'system-design/core-concepts_api-design.json',
+      'system-design/core-concepts_caching.json',
+      'system-design/core-concepts_cap-theorem.json',
+      'system-design/core-concepts_consistent-hashing.json',
+      'system-design/core-concepts_data-modeling.json',
+      'system-design/core-concepts_db-indexing.json',
+      'system-design/core-concepts_networking-essentials.json',
+      'system-design/core-concepts_numbers-to-know.json',
+      'system-design/core-concepts_sharding.json',
+      'seed/cards.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-03-patterns',
+    decks: [
+      'system-design/patterns_realtime-updates.json',
+      'system-design/patterns_dealing-with-contention.json',
+      'system-design/patterns_multi-step-processes.json',
+      'system-design/patterns_scaling-reads.json',
+      'system-design/patterns_scaling-writes.json',
+      'system-design/patterns_large-blobs.json',
+      'system-design/patterns_long-running-tasks.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-04-key-technologies',
+    decks: [
+      'system-design/deep-dives_postgres.json',
+      'system-design/deep-dives_dynamodb.json',
+      'system-design/deep-dives_cassandra.json',
+      'system-design/deep-dives_elasticsearch.json',
+      'system-design/deep-dives_api-gateway.json',
+      'system-design/deep-dives_kafka.json',
+      'system-design/deep-dives_flink.json',
+      'system-design/deep-dives_zookeeper.json',
+      'system-design/deep-dives_redis.json',
+      'system-design/deep-dives_proximity-search.json',
+      'system-design/deep-dives_time-series-databases.json',
+      'system-design/deep-dives_vector-databases.json',
+      'system-design/deep-dives_data-structures-for-big-data.json',
+      'system-design/deep-dives_mapreduce.json',
+      'system-design/deep-dives_kubernetes.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-05-problem-breakdowns',
+    decks: [
+      'system-design/problem-breakdowns_bitly.json',
+      'system-design/problem-breakdowns_dropbox.json',
+      'system-design/problem-breakdowns_gopuff.json',
+      'system-design/problem-breakdowns_google-news.json',
+      'system-design/problem-breakdowns_ticketmaster.json',
+      'system-design/problem-breakdowns_fb-news-feed.json',
+      'system-design/problem-breakdowns_tinder.json',
+      'system-design/problem-breakdowns_leetcode.json',
+      'system-design/problem-breakdowns_whatsapp.json',
+      'system-design/problem-breakdowns_yelp.json',
+      'system-design/problem-breakdowns_strava.json',
+      'system-design/problem-breakdowns_distributed-rate-limiter.json',
+      'system-design/problem-breakdowns_online-auction.json',
+      'system-design/problem-breakdowns_fb-live-comments.json',
+      'system-design/problem-breakdowns_fb-post-search.json',
+      'system-design/problem-breakdowns_camelcamelcamel.json',
+      'system-design/problem-breakdowns_online-chess.json',
+      'system-design/problem-breakdowns_instagram.json',
+      'system-design/problem-breakdowns_top-k.json',
+      'system-design/problem-breakdowns_uber.json',
+      'system-design/problem-breakdowns_robinhood.json',
+      'system-design/problem-breakdowns_google-docs.json',
+      'system-design/problem-breakdowns_distributed-cache.json',
+      'system-design/problem-breakdowns_youtube.json',
+      'system-design/problem-breakdowns_job-scheduler.json',
+      'system-design/problem-breakdowns_web-crawler.json',
+      'system-design/problem-breakdowns_ad-click-aggregator.json',
+      'system-design/problem-breakdowns_payment-system.json',
+      'system-design/problem-breakdowns_metrics-monitoring.json',
+      'system-design/problem-breakdowns_chatgpt.json',
+      'system-design/problem-breakdowns_bulk-email-move.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-06-coach',
+    decks: [
+    ],
+  },
+  {
+    tag: 'curriculum:sd-07-mock-donation',
+    decks: [
+    ],
+  },
+  {
+    tag: 'curriculum:sd-08-reference',
+    decks: [
+      'system-design/data-intensive-design.json',
+      'system-design/consistency-replication.json',
+      'system-design/educative-foundations.json',
+      'system-design/educative-dns-lb-databases.json',
+      'system-design/educative-kv-and-id.json',
+      'system-design/educative-rate-limiter-blob-store.json',
+      'system-design/educative-messaging-pubsub.json',
+      'system-design/educative-cdn-monitoring.json',
+      'system-design/educative-distributed-cache.json',
+      'system-design/alex-system-design.json',
+    ],
+  },
+  {
+    tag: 'curriculum:sd-09-recaps',
+    decks: [
+    ],
+  },
+];
 
-  'system-design/patterns_long-running-tasks.json': [['curriculum:sd-01-patterns', 12]],
-  'system-design/patterns_scaling-reads.json': [['curriculum:sd-01-patterns', 12]],
-  'system-design/patterns_scaling-writes.json': [['curriculum:sd-01-patterns', 12]],
-  'system-design/patterns_realtime-updates.json': [['curriculum:sd-01-patterns', 12]],
-  'system-design/patterns_dealing-with-contention.json': [['curriculum:sd-01-patterns', 12]],
+const SD_ROADMAP_SOURCE = new Map();
+for (const [stageIndex, stage] of SD_ROADMAP_DECKS.entries()) {
+  for (const [deckIndex, source] of stage.decks.entries()) {
+    if (SD_ROADMAP_SOURCE.has(source)) throw new Error(`Duplicate SD roadmap source: ${source}`);
+    SD_ROADMAP_SOURCE.set(source, {
+      tag: stage.tag,
+      // A deck has fewer than 1,000 cards today. Leaving that spacing makes
+      // the deck order legible and keeps a later insertion deterministic.
+      orderBase: (stageIndex + 1) * 1_000_000 + (deckIndex + 1) * 1_000,
+    });
+  }
+}
 
-  'system-design/core-concepts_caching.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_api-design.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_data-modeling.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_sharding.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_consistent-hashing.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_db-indexing.json': [['curriculum:sd-02-components', 10]],
-  'system-design/core-concepts_networking-essentials.json': [['curriculum:sd-02-components', 10]],
+for (const source of SD_ROADMAP_SOURCE.keys()) {
+  const absolute = source === 'seed/cards.json'
+    ? seedFile
+    : path.join(contentDir, source);
+  if (!fs.existsSync(absolute)) throw new Error(`Missing SD roadmap source: ${source}`);
+}
 
-  'system-design/problem-breakdowns_distributed-rate-limiter.json': [['curriculum:sd-03-cases', 15]],
-  'system-design/problem-breakdowns_bitly.json': [['curriculum:sd-03-cases', 15]],
-  'system-design/problem-breakdowns_bulk-email-move.json': [['curriculum:sd-03-cases', 18]],
-  'system-design/problem-breakdowns_google-docs.json': [['curriculum:sd-03-cases', 15]],
-  'system-design/problem-breakdowns_ticketmaster.json': [['curriculum:sd-03-cases', 15]],
-  'system-design/problem-breakdowns_chatgpt.json': [['curriculum:sd-03-cases', 15]],
-
-  'system-design/coach-chat-realtime.json': [['curriculum:sd-04-upgrades', 10]],
-  'system-design/coach-contention-booking.json': [['curriculum:sd-04-upgrades', 10]],
-  'system-design/coach-storage-fundamentals.json': [['curriculum:sd-04-upgrades', 10]],
-  'system-design/coach-api-design.json': [['curriculum:sd-04-upgrades', 10]],
-  'system-design/coach-social-feed.json': [['curriculum:sd-04-upgrades', 10]],
-  'system-design/coach-collab-judge.json': [['curriculum:sd-04-upgrades', 10]],
-};
-
-/**
- * The long-form continuation routes are built from existing topical tags, but
- * receive private `curriculum:*` tags only on classic-system-design cards.
- * That prevents a generic tag such as `api` or `caching` from pulling PMLE or
- * LLM cards into this learner-facing system-design map.
- */
-const SD_DEEP_DIVE_TAGS = {
-  'curriculum:sd-10-foundations': [
-    'interview-method', 'requirements', 'capacity', 'estimation', 'numbers',
-    'delivery', 'scope', 'nfr', 'high-level-design', 'architecture',
-  ],
-  'curriculum:sd-11-patterns-full': [
-    'scaling-reads', 'scaling-writes', 'long-running-tasks', 'realtime-updates',
-    'contention', 'multi-step-processes', 'large-blobs', 'queue', 'messaging',
-    'fanout', 'batching', 'idempotency',
-  ],
-  'curriculum:sd-12-data-storage': [
-    'caching', 'distributed-cache', 'data-modeling', 'data-model', 'databases',
-    'database', 'sharding', 'partitioning', 'consistent-hashing', 'replication',
-    'consistency', 'transactions', 'indexing', 'postgres', 'dynamodb', 'cassandra',
-    'redis', 'elasticsearch',
-  ],
-  'curriculum:sd-13-platform-network': [
-    'api-design', 'api', 'api-gateway', 'networking', 'dns', 'cdn',
-    'load-balancing', 'websocket', 'sse', 'security', 'auth', 'pagination',
-  ],
-  'curriculum:sd-14-product-systems': [
-    'problem-breakdowns', 'youtube', 'instagram', 'whatsapp', 'ticketmaster',
-    'chatgpt', 'google-docs', 'bitly', 'rate-limiter', 'dropbox', 'tinder',
-    'yelp', 'crawler', 'google-news', 'feed', 'auction', 'payment-system',
-    'uber', 'top-k',
-  ],
-  'curriculum:sd-15-reference': ['ddia', 'educative'],
-};
-
-function curriculumTagsFor(topic, file, index, tags = []) {
-  const firstPass = (SD_CURRICULUM_SLICES[`${topic}/${file}`] ?? [])
-    .filter(([, limit]) => index < limit)
-    .map(([tag]) => tag);
-  if (topic !== 'system-design') return firstPass;
-
-  const deepDive = Object.entries(SD_DEEP_DIVE_TAGS)
-    .filter(([, routeTags]) => routeTags.some((tag) => tags.includes(tag)))
-    .map(([routeTag]) => routeTag);
-  return [...new Set([...firstPass, ...deepDive])];
+function roadmapMetaFor(source, index) {
+  const spec = SD_ROADMAP_SOURCE.get(source);
+  if (!spec) return null;
+  if (index >= 1_000) throw new Error(`SD roadmap deck exceeds 1,000 cards: ${source}`);
+  return { tag: spec.tag, roadmapOrder: spec.orderBase + index };
 }
 
 function categoryFromFile(file, topic) {
@@ -410,32 +487,37 @@ function add(cards, label, meta = {}) {
     const next = { ...c };
     if (meta.track) next.track = meta.track;
     if (meta.category) next.category = meta.category;
+    const roadmap = next.track === SEED_TRACK_ID ? meta.roadmapMeta?.(index, next) : null;
+    if (next.track === SEED_TRACK_ID && !roadmap) {
+      throw new Error(`Classic SD card has no roadmap station: ${label} / ${next.id}`);
+    }
     const injectedTags = [
       ...(meta.trackTag ? [meta.trackTag] : []),
-      ...(meta.curriculumTags?.(index, next) ?? []),
     ];
-    if (injectedTags.length) next.tags = [...new Set([...(next.tags ?? []), ...injectedTags])];
+    const sourceTags = (next.tags ?? []).filter((tag) => !tag.startsWith('curriculum:sd-'));
+    if (next.track === SEED_TRACK_ID) {
+      next.tags = [...new Set([...sourceTags, ...injectedTags, roadmap.tag])];
+      next.roadmapOrder = roadmap.roadmapOrder;
+    } else if (injectedTags.length) {
+      next.tags = [...new Set([...(next.tags ?? []), ...injectedTags])];
+    }
     const cardOverride = CARD_OVERRIDES[next.id];
     if (cardOverride?.category) next.category = cardOverride.category;
     if (cardOverride?.trackTags) {
       next.tags = [...new Set([...(next.tags ?? []), ...cardOverride.trackTags])];
     }
-    // The roadmap lives inside the single classic-system-design track. Any
-    // classic card outside the named stages belongs to the final gap-fill stop
-    // instead of disappearing from the route altogether.
-    if (next.track === SEED_TRACK_ID && !(next.tags ?? []).some((tag) => tag.startsWith('curriculum:'))) {
-      next.tags = [...new Set([...(next.tags ?? []), 'curriculum:sd-99-gap-fill'])];
-    }
     merged.push(attachNumberAnchors(next));
   }
 }
 
-// 1) seed deck first (keeps db-* cards at the front, matching current app order)
+// 1) seed deck first (keeps db-* cards at the front in the bundle; its authored
+// roadmap order is still the legacy-database section after stage 02's HI cards).
 if (fs.existsSync(seedFile)) {
   add(JSON.parse(fs.readFileSync(seedFile, 'utf8')), 'cards.json', {
     trackTag: SEED_TRACK_TAG,
     track: SEED_TRACK_ID,
     category: SEED_CATEGORY,
+    roadmapMeta: (index) => roadmapMetaFor('seed/cards.json', index),
   });
 }
 
@@ -460,7 +542,7 @@ for (const topic of topics) {
       trackTag: DIR_TRACK_TAG[topic],
       track: DIR_TRACK_ID[topic],
       category: categoryFromFile(f, topic),
-      curriculumTags: (index, card) => curriculumTagsFor(topic, f, index, card.tags ?? []),
+      roadmapMeta: (index) => roadmapMetaFor(`${topic}/${f}`, index),
     });
     n += cards.length;
   }
@@ -474,6 +556,19 @@ if (untagged.length) {
   process.exit(1);
 }
 
+const classicRoadmapErrors = merged.filter((card) => {
+  if (card.track !== SEED_TRACK_ID) return false;
+  const curriculumTags = (card.tags ?? []).filter((tag) => tag.startsWith('curriculum:sd-'));
+  return curriculumTags.length !== 1 || !Number.isInteger(card.roadmapOrder);
+});
+if (classicRoadmapErrors.length) {
+  console.error(
+    `\n${classicRoadmapErrors.length} classic SD card(s) are not uniquely mapped: ` +
+      classicRoadmapErrors.slice(0, 5).map((card) => card.id).join(', '),
+  );
+  process.exit(1);
+}
+
 fs.writeFileSync(outFile, JSON.stringify(merged, null, 2) + '\n', 'utf8');
 
 console.log(`\nbundle: ${merged.length} cards -> ${path.relative(path.resolve(__dirname, '..'), outFile)}`);
@@ -483,4 +578,10 @@ const trackCounts = {};
 for (const c of merged)
   for (const t of c.tags) if (t.startsWith('track:')) trackCounts[t] = (trackCounts[t] ?? 0) + 1;
 console.log('  by track:', JSON.stringify(trackCounts));
+const roadmapCounts = {};
+for (const card of merged.filter((card) => card.track === SEED_TRACK_ID)) {
+  const tag = card.tags.find((item) => item.startsWith('curriculum:sd-'));
+  roadmapCounts[tag] = (roadmapCounts[tag] ?? 0) + 1;
+}
+console.log('  classic SD roadmap:', JSON.stringify(roadmapCounts));
 if (dupes) { console.error(`\n${dupes} duplicate id(s) skipped — fix before shipping`); process.exit(1); }

@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '..');
 
 const FORMATS = new Set(['mcq', 'multi', 'cloze', 'chain', 'code', 'produce']);
 // 可交付设计产物（docs/DESIGN_deliverable-cards_2026-10-16.md）：problem-breakdowns 每张卡必标
-const DELIVERABLES = new Set(['entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech']);
+const DELIVERABLES = new Set(['requirements', 'entities', 'schema', 'api', 'components', 'flow', 'state', 'concurrency', 'recovery', 'capacity', 'scaling', 'tech']);
 const ATOM_TYPES = new Set(['fact', 'fit', 'contrast', 'consequence', 'number']);
 const LEGACY = ['en', 'other', 'opts', 'prompt', 'answerIndex'];
 const OPTION_STRING_ARRAY_KEYS = [
@@ -167,6 +167,33 @@ for (const rel of files) {
       err(base, id, 'fit choice card should lead with a scenario');
     if (c.deliverable !== undefined && !DELIVERABLES.has(c.deliverable))
       err(base, id, `bad deliverable: ${c.deliverable}`);
+    if (c.clarificationReview !== undefined) {
+      const review = c.clarificationReview;
+      if (!review || typeof review !== 'object') err(base, id, 'clarificationReview must be an object');
+      else {
+        if (typeof review.version !== 'string' || !review.version.trim()) err(base, id, 'clarificationReview.version must be a non-empty string');
+        if (typeof review.problem !== 'string' || !review.problem.trim()) err(base, id, 'clarificationReview.problem must be a non-empty string');
+        if (typeof review.prompt !== 'string' || !review.prompt.trim()) err(base, id, 'clarificationReview.prompt must be a non-empty string');
+        if (!Number.isInteger(review.maxChars) || review.maxChars < 200 || review.maxChars > 6000)
+          err(base, id, 'clarificationReview.maxChars must be an integer from 200 to 6000');
+        if (!Array.isArray(review.rubric) || review.rubric.length < 3 || review.rubric.length > 8)
+          err(base, id, 'clarificationReview.rubric needs 3-8 criteria');
+        else {
+          const criterionIds = new Set();
+          for (const [i, item] of review.rubric.entries()) {
+            if (!item || typeof item !== 'object') { err(base, id, `clarificationReview.rubric[${i}] must be an object`); continue; }
+            for (const key of ['id', 'label', 'question', 'impact']) {
+              if (typeof item[key] !== 'string' || !item[key].trim())
+                err(base, id, `clarificationReview.rubric[${i}].${key} must be a non-empty string`);
+            }
+            if (criterionIds.has(item.id)) err(base, id, `clarificationReview.rubric[${i}].id is duplicated`);
+            criterionIds.add(item.id);
+          }
+        }
+        if (!Array.isArray(review.expectedAssumptions) || review.expectedAssumptions.length < 2 || review.expectedAssumptions.length > 6)
+          err(base, id, 'clarificationReview.expectedAssumptions needs 2-6 items');
+      }
+    }
     if (base.startsWith('problem-breakdowns_') && !c.deliverable && c.format === 'produce')
       err(base, id, 'produce card needs a deliverable');
     if (c.format === 'produce') {
