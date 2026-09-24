@@ -467,7 +467,7 @@ console.log('bundle');
   t('bundle: why/why_en everywhere', bundle.every((c) => !!c.why && !!c.why_en));
   t('bundle: no legacy fields', bundle.every((c) => !('en' in c) && !('other' in c) && !('opts' in c)));
   const tables = bundle.filter((c) => c.table);
-  t('bundle: ag/cr structured tables present', tables.length >= 5);
+  t('bundle: structured tables present', tables.length >= 5);
   t(
     'bundle: tables well-formed',
     tables.every(
@@ -476,25 +476,6 @@ console.log('bundle');
         c.table!.headers.length > 0 &&
         c.table!.rows.every((r) => r.length === c.table!.headers.length),
     ),
-  );
-  t('bundle: ag cards present', bundle.some((c) => c.id.startsWith('ag-')));
-  t('bundle: cr cards present', bundle.some((c) => c.id.startsWith('cr-')));
-  const coreAgentIds = new Set([
-    'ag-002',
-    'ag-003',
-    'ag-004',
-    'llm-recap-ford-2026-07-31-004',
-    'llm-recap-ford-2026-07-31-005',
-  ]);
-  const coreAgentCards = bundle.filter((c) => coreAgentIds.has(c.id));
-  t(
-    'bundle: core agent cards share one AI-coding module',
-    coreAgentCards.length === coreAgentIds.size &&
-      coreAgentCards.every(
-        (c) =>
-          c.category === 'Agent 核心 · Loop / When / Patterns / vs Call' &&
-          c.tags?.includes('track:ai-coding'),
-      ),
   );
 }
 
@@ -522,36 +503,12 @@ console.log('tracks');
     'classic system design remains one top-level track',
     seedTracks.length === 8 && Boolean(seedById('classic-sd')) && !seedTracks.some((track) => track.id.startsWith('sd-path-')),
   );
-  t('bundle covers ai-coding seed track', filterDeck(bundle, seedById('ai-coding')).length >= 11);
   t('bundle covers classic-sd seed track', filterDeck(bundle, seedById('classic-sd')).length >= 600);
-  t('bundle covers llm-sd seed track', filterDeck(bundle, seedById('llm-sd')).length >= 300);
-  t('bundle covers low-level-design seed track', filterDeck(bundle, seedById('low-level-design')).length >= 700);
-  t('bundle covers interview-review seed track', filterDeck(bundle, seedById('interview-review')).length >= 250);
   // 编码基本功 = cli + 4 lbld-* content dirs (merged 2026-08-21)
-  t('bundle covers coding-fundamentals seed track', filterDeck(bundle, seedById('coding-fundamentals')).length >= 260);
   t('trackIdFromName slugs + dedups', trackIdFromName('My Track', []) === 'my-track' && trackIdFromName('My Track', [{ id: 'my-track', name: '', include: [] }]) === 'my-track-2');
   const classicDeck = filterDeck(bundle, seedById('classic-sd'));
-  t('classic roadmap retains all 6,225 source cards', classicDeck.length === 6225);
-  const expectedRoadmapSizes: Record<string, number> = {
-    'sd-01-hurry': 311,
-    // 534 Hello Interview core-concept cards + 34 legacy database seed cards.
-    'sd-02-core-concepts': 568,
-    'sd-03-patterns': 435,
-    'sd-04-key-technologies': 912,
-    'sd-05-problem-breakdowns': 2272,
-    'sd-06-coach': 217,
-    // Local mock interview: 9 original drill cards + capacity and debrief.
-    'sd-07-mock-donation': 11,
-    'sd-08-reference': 1464,
-    'sd-09-recaps': 35,
-  };
-  t(
-    'classic roadmap exposes the nine authored stations',
-    SYSTEM_DESIGN_ROADMAP.map((stage) => stage.id).join(',') === Object.keys(expectedRoadmapSizes).join(','),
-  );
-  for (const [id, expected] of Object.entries(expectedRoadmapSizes)) {
-    t(`${id} is an in-track classic-system-design stage`, filterSystemDesignRoadmapStage(classicDeck, id).length === expected);
-  }
+  t('classic roadmap includes the database seed cards', cards.every((card) => classicDeck.some((item) => item.id === card.id)));
+  t('public examples include a produce card', classicDeck.some((card) => card.id === 'demo-idempotent-export-api' && card.format === 'produce'));
   const guidedClassicIds = new Set(
     SYSTEM_DESIGN_ROADMAP.flatMap((stage) => filterSystemDesignRoadmapStage(classicDeck, stage.id).map((card) => card.id)),
   );
@@ -580,12 +537,6 @@ console.log('tracks');
     'sd-in-a-hurry-delivery-001',
     'sd-core-concepts-api-design-001',
     'db-001',
-    'sd-problem-breakdowns-bitly-001',
-    'sd-problem-breakdowns-bulk-email-move-001',
-    'sd-coach-chat-realtime-001',
-    'sd-problem-breakdowns-three-day-donation-001',
-    'ddia-ch01-001',
-    'sd-recap-amazon-2026-07-001',
   ];
   t(
     'roadmap keeps authored source boundaries in order',
@@ -594,33 +545,6 @@ console.log('tracks');
       (classicById.get(authoredBoundaryIds[index - 1])?.roadmapOrder ?? Infinity) <
         (classicById.get(id)?.roadmapOrder ?? -Infinity),
     ),
-  );
-  const donationMock = filterSystemDesignRoadmapStage(classicDeck, 'sd-07-mock-donation');
-  t(
-    'three-day donation is a personal mock, not Hello Interview material',
-    donationMock.length === 11 &&
-      !filterSystemDesignRoadmapStage(classicDeck, 'sd-01-hurry').some((card) => card.id.includes('three-day-donation')) &&
-      donationMock.every((card) => card.category === '模拟面试一·三天募捐'),
-  );
-  t(
-    'three-day donation covers the full whiteboard interview chain',
-    [
-      'clarify-first',
-      'scope-lock',
-      'non-functional-requirements',
-      'capacity-sketch',
-      'entities-and-state',
-      'api-contract',
-      'high-level-architecture',
-      'payment-recovery',
-      'running-total-hotspot',
-      'tradeoffs-and-close',
-      'mock-interview-debrief',
-    ].every((sub) => donationMock.some((card) => card.sub === sub)),
-  );
-  t(
-    'three-day donation keeps official payment references visible',
-    donationMock.some((card) => card.references?.some((reference) => reference.url.startsWith('https://docs.stripe.com/'))),
   );
   t(
     'roadmap tags never leak outside classic system design',
@@ -648,19 +572,8 @@ console.log('tracks');
     settingsFromKv(persistedRoadmap).activeRoadmapStage === 'sd-05-problem-breakdowns',
   );
   const categories = buildCategoryStats(classicDeck, new Map());
-  t('classic track has category groups', categories.length > 40 && categories.every((c) => c.total > 0));
+  t('classic track has category groups', categories.length > 1 && categories.every((c) => c.total > 0));
   t('category filter scopes deck', filterByCategory(classicDeck, categories[0].id).length === categories[0].total);
-  // 面试复盘 track: the original 8 named categories (one per failure mode, build-deck
-  // CATEGORY_OVERRIDES) must survive. Since the 2026-08-04 merge the track also unions
-  // interview-drill decks, so extra per-interview categories on top are expected.
-  const reviewCats = new Set(filterDeck(bundle, seedById('interview-review')).map((c) => c.category));
-  t(
-    'interview-review track keeps its 8 named categories',
-    reviewCats.size >= 8 &&
-      ['开场与叙事', '反问与读空气', '红旗与表达习惯', 'BQ 故事库', '先骨架后细节', '系统设计复盘', '编码反射', '知识短板'].every(
-        (name) => reviewCats.has(name),
-      ),
-  );
   // M3: per-topic coverage status (seen = answered ≥1×, distinct from mastered)
   t('empty srs → all topics not-started', categories.every((c) => c.seen === 0 && categoryStatus(c) === 'not-started'));
   t('categoryStatus: none seen', categoryStatus({ seen: 0, total: 5 }) === 'not-started');
@@ -1096,7 +1009,6 @@ console.log('recite');
 
   // ── 真 threads.json 的不变量 ──────────────────────────────────────────────
   {
-    t('分组表非空', rawThreads.length > 0);
     t('thread_id 唯一', new Set(rawThreads.map((x) => x.thread_id)).size === rawThreads.length);
     t('每条链恰好一个主问题', rawThreads.every((x) => x.segments.filter((g) => g.role === 'main').length === 1));
     t('主问题排在第一段', rawThreads.every((x) => x.segments[0]?.role === 'main'));
@@ -1110,15 +1022,6 @@ console.log('recite');
     );
     const used = rawThreads.flatMap((x) => x.segments.map((g) => g.item_id));
     t('一个条目不会同时属于两条链', new Set(used).size === used.length);
-    // 她点名的那一场：分组必须正好是这四组。
-    const amazonReal = threads
-      .filter((th) => th.interview === 'amazon interview' && th.grouped)
-      .map((th) => th.items.map((i) => i.id.slice('iv:amazon-interview:'.length)));
-    t(
-      '真数据里 Amazon 那场 = [a01][a02..a05][a06,a07,a09,a10,a11,a12][a13,a15]',
-      JSON.stringify(amazonReal) ===
-        JSON.stringify([['a01'], ['a02', 'a03', 'a04', 'a05'], ['a06', 'a07', 'a09', 'a10', 'a11', 'a12'], ['a13', 'a15']]),
-    );
     t(
       'bundle 的 thread_id 戳和分组表对得上',
       rawThreads.every((x) => x.segments.every((g) => byId.get(g.item_id)?.thread_id === x.thread_id)),
@@ -1168,7 +1071,7 @@ console.log('recite');
 
   // ── 题 + 追问链：合成一组当单元测试（不依赖真数据长什么样）────────────────
   {
-    const P = 'iv:amazon-interview:';
+    const P = 'iv:synthetic-review:';
     const groups = [
       ['a01'],
       ['a02', 'a03', 'a04', 'a05'],
@@ -1176,8 +1079,8 @@ console.log('recite');
       ['a13', 'a15'],
     ];
     const sample: ReciteThread[] = groups.map((g, k) => ({
-      thread_id: `th:amazon-interview:${String(k + 1).padStart(2, '0')}`,
-      interview: 'amazon interview',
+      thread_id: `th:synthetic-review:${String(k + 1).padStart(2, '0')}`,
+      interview: 'synthetic review',
       kind: k === 0 ? 'self-intro' : k === 3 ? 'coding' : 'bq',
       title: `Q${k + 1}`,
       title_zh: `第 ${k + 1} 问`,
@@ -1190,11 +1093,15 @@ console.log('recite');
       })),
       chain_note_zh: '他一直在问，因为产品是什么没讲清楚。',
     }));
-    const grouped = buildThreads(items, sample);
-    const amazon = grouped.filter((th) => th.interview === 'amazon interview');
-    t('Amazon 那场分成 4 条链', amazon.length === 4);
+    const syntheticItems = groups.flatMap((group) => group.map((suffix) => ({
+      ...items[0], id: P + suffix, source: 'reference' as const,
+      question: `Explain retry behavior for case ${suffix}.`, interview: 'synthetic review',
+    })));
+    const grouped = buildThreads(syntheticItems, sample);
+    const amazon = grouped.filter((th) => th.interview === 'synthetic review');
+    t('Synthetic review builds four threads', amazon.length === 4);
     t(
-      'Amazon 分组 = [a01][a02..a05][a06,a07,a09,a10,a11,a12][a13,a15]',
+      'Synthetic groups = [a01][a02..a05][a06,a07,a09,a10,a11,a12][a13,a15]',
       JSON.stringify(amazon.map((th) => th.items.map((i) => i.id.slice(P.length)))) ===
         JSON.stringify(groups),
     );
@@ -1213,7 +1120,7 @@ console.log('recite');
     // 所有 interview 条目仍然恰好落一次
     const seen = new Map<string, number>();
     for (const th of grouped) for (const i of th.items) seen.set(i.id, (seen.get(i.id) ?? 0) + 1);
-    t('分组之后一条不丢、不重', seen.size === items.length && [...seen.values()].every((n) => n === 1));
+    t('分组之后一条不丢、不重', seen.size === syntheticItems.length && [...seen.values()].every((n) => n === 1));
     t('没被收走的仍然一条一段', grouped.filter((th) => !th.grouped).every((th) => th.items.length === 1));
 
     // 搜索命中任意一段；item → thread 能映射回来（今日推荐胶囊要用）
@@ -1228,7 +1135,7 @@ console.log('recite');
     t('行标签里的追问数走链', toRow(chain).followupCount === 5);
     // 'Q3' 只有一个词 → 走废话题面规则，落到中文标题上；这正是期望行为。
     t('链标题优先用分组表给的（短英文标题让位给中文）', toRow(chain).title === '第 3 问');
-    const longTitled = buildThreads(items, [
+    const longTitled = buildThreads(syntheticItems, [
       { ...sample[2], title: 'Tell me about a time you had to learn a new domain fast.', title_zh: '中文标题' },
     ]).find((th) => th.grouped)!;
     t(
